@@ -1,0 +1,29 @@
+== VulnScout
+
+Scanning project to export Software Bill of Materials (SBOM) and list of Vulnerabilities that affect them.
+Support for Cyclone DX, SPDX, Yocto JSON files and Open VEX.
+
+== Deployment
+
+This project is made to run on local in a docker container.
+
+== Developpers ? How to setup your environment and be ready to code
+
+- Ensure to have Docker and Python 3 installed on your machine.
+- Clone the project.
+- Run `pip install -r requirements-dev.txt` to install the dev dependencies.
+- Run `pre-commit install` to enable pre-commit (code quality and linter).
+- Done ! You are ready to code.
+
+== Linter, Unit tests, Code coverage and Code Quality
+
+- Linter: `flake8`
+- Unit tests: `pytest`
+- Code coverage in terminal: `pytest --cov=src`
+- Code coverage as HTML: `pytest --cov-report html --cov=src`
+
+== Pre commit
+
+To ensure a good quality of code, we use pre-commit to run flake8 before commiting.
+To install pre-commit, run `pip install pre-commit`.
+Then, to enable pre-commit, run `pre-commit install`.
