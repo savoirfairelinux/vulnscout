@@ -7,11 +7,6 @@ from src.models.vulnerability import Vulnerability
 
 
 @pytest.fixture
-def empty_controller():
-    return PackagesController()
-
-
-@pytest.fixture
 def pkg_ABC():
     pkg = Package("abc", "1.0.0")
     pkg.generate_generic_cpe()
@@ -33,11 +28,6 @@ def pkg_controller(pkg_ABC, pkg_XYZ):
     controller.add(pkg_ABC)
     controller.add(pkg_XYZ)
     return controller
-
-
-@pytest.fixture
-def vuln_controller_empty(pkg_controller):
-    return VulnerabilitiesController(pkg_controller)
 
 
 @pytest.fixture
