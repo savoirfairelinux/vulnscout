@@ -1,0 +1,14 @@
+[project]
+org="savoirfairelinux"
+name="vulnscout"
+build_context=.
+
+[build]
+command="make"
+flavors="test jenkins"
+
+[test]
+command="make test"
+
+[jenkins]
+command="make test_jenkins"

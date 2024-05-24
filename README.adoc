@@ -9,6 +9,49 @@ This project is made to run on local in a docker container.
 
 == Developpers ? How to setup your environment and be ready to code
 
+You can either use CQFD to run testing tools in a container or install the tools on your machine.
+CQFD is better for testing quickly but if you plan to modify the code and commit,
+you would probably prefer local installation with integrate with pre-commit.
+
+=== Nothing to install, all in CQFD
+
+* Install Docker by following the official
+  documentation: https://docs.docker.com/engine/install/
+
+Make sure that Docker does not require `sudo`.
+
+Please use the following commands to add your user account to the `docker`
+group:
+
+  $ sudo groupadd docker
+  $ sudo usermod -aG docker $USER
+
+Log out and log back in, so that your group membership can be re-evaluated.
+
+* Install cqfd:
+
+  $ git clone https://github.com/savoirfairelinux/cqfd.git
+  $ cd cqfd
+  $ sudo make install
+
+The project page on GitHub (https://github.com/savoirfairelinux/cqfd[link])
+contains detailed information on usage and installation.
+
+The first step with `cqfd` is to create the build container. Do this using:
+
+  $ cqfd init
+
+NOTE: The step above is only required once, as once the container image has been
+created on your machine, it will become persistent. Further calls to `cqfd init`
+will do nothing, unless the container definition (`.cqfd/docker/Dockerfile`) has
+changed in the source tree.
+
+* Run the tests with:
+
+  $ cqfd -b test
+
+=== Install and setup locally without CQFD
+
 - Ensure to have Docker and Python 3 installed on your machine.
 - Clone the project.
 - Run `pip install -r requirements-dev.txt` to install the dev dependencies.
@@ -22,7 +65,11 @@ This project is made to run on local in a docker container.
 - Code coverage in terminal: `pytest --cov=src`
 - Code coverage as HTML: `pytest --cov-report html --cov=src`
 
-== Pre commit
+NOTE: You can run all the tools using `make test` command. If you have installed pre-commit,
+flake8 will also run before every commit to ensure linting is good.
+If you use CQFD, running `cqfd -b test` will run all the tests (equivalent to `make test`).
+
+=== Pre commit
 
 To ensure a good quality of code, we use pre-commit to run flake8 before commiting.
 To install pre-commit, run `pip install pre-commit`.
