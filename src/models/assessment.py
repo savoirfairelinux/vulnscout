@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+from .vulnerability import Vulnerability
 from .package import Package
 from datetime import datetime
 from uuid import uuid4
@@ -78,6 +78,8 @@ class VulnAssessment:
 
     def __init__(self, vuln_id: str, packages=[]):
         """Create a new assesment for the given vulnerability (str) and packages (optional)."""
+        if isinstance(vuln_id, Vulnerability):
+            vuln_id = vuln_id.id
         self.vuln_id = vuln_id
         self.packages = []
         self.timestamp = datetime.now().isoformat()
@@ -235,6 +237,7 @@ class VulnAssessment:
     def to_dict(self) -> dict:
         """Return a dict representation of this assessment."""
         return {
+            "id": self.id,
             "vuln_id": self.vuln_id,
             "packages": self.packages,
             "timestamp": self.timestamp,
@@ -251,6 +254,7 @@ class VulnAssessment:
     def from_dict(data: dict):
         """Create a new assessment from a dict representation."""
         assessment = VulnAssessment(data["vuln_id"], data["packages"])
+        assessment.id = data["id"]
         assessment.timestamp = data["timestamp"]
         assessment.last_update = data["last_update"]
         assessment.status = data["status"]

@@ -224,10 +224,11 @@ def test_export_import_assessment(assessment_not_affected):
     """
     GIVEN an assessment instance
     WHEN exporting to dict and importing back to a new assessment
-    THEN data should remain the same (except id)
+    THEN data should remain the same
     """
     new_assessment = VulnAssessment.from_dict(assessment_not_affected.to_dict())
     assert new_assessment.to_dict().items() == assessment_not_affected.to_dict().items()
+    assert new_assessment.id == assessment_not_affected.id
     assert new_assessment.vuln_id == assessment_not_affected.vuln_id
     assert new_assessment.packages == assessment_not_affected.packages
     assert new_assessment.status == assessment_not_affected.status
