@@ -363,7 +363,8 @@ class VulnAssessment:
             self.set_status(assessment.status)
         if assessment.status_notes != "":
             for note in assessment.status_notes.split('\n'):
-                self.set_status_notes(note, True)
+                if note not in self.impact_statement:
+                    self.set_status_notes(note, True)
 
         if not self.is_compatible_justification(assessment.justification):
             self.set_justification(assessment.justification)
