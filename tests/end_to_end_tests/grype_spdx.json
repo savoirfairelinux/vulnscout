@@ -1,0 +1,86 @@
+{
+    "matches": [
+        {
+            "vulnerability": {
+                "id": "CVE-2022-30065",
+                "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2022-30065",
+                "namespace": "nvd:cpe",
+                "severity": "High",
+                "urls": [
+                    "https://bugs.busybox.net/show_bug.cgi?id=14781",
+                    "https://cert-portal.siemens.com/productcert/pdf/ssa-333517.pdf"
+                ],
+                "description": "A use-after-free in Busybox 1.35-x's awk applet leads to denial of service and possibly code execution when processing a crafted awk pattern in the copyvar function.",
+                "cvss": [
+                    {
+                        "source": "nvd@nist.gov",
+                        "type": "Primary",
+                        "version": "2.0",
+                        "vector": "AV:N/AC:M/Au:N/C:P/I:P/A:P",
+                        "metrics": {
+                            "baseScore": 6.8,
+                            "exploitabilityScore": 8.6,
+                            "impactScore": 6.4
+                        },
+                        "vendorMetadata": {}
+                    },
+                    {
+                        "source": "nvd@nist.gov",
+                        "type": "Primary",
+                        "version": "3.1",
+                        "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                        "metrics": {
+                            "baseScore": 7.8,
+                            "exploitabilityScore": 1.8,
+                            "impactScore": 5.9
+                        },
+                        "vendorMetadata": {}
+                    }
+                ],
+                "fix": {
+                    "versions": [],
+                    "state": "unknown"
+                },
+                "advisories": []
+            },
+            "relatedVulnerabilities": [],
+            "matchDetails": [
+                {
+                    "type": "cpe-match",
+                    "matcher": "stock-matcher",
+                    "searchedBy": {
+                        "namespace": "nvd:cpe",
+                        "cpes": [
+                            "cpe:2.3:a:busybox:busybox:1.35.0:*:*:*:*:*:*:*"
+                        ],
+                        "Package": {
+                            "name": "busybox",
+                            "version": "1.35.0"
+                        }
+                    },
+                    "found": {
+                        "vulnerabilityID": "CVE-2022-30065",
+                        "versionConstraint": "= 1.35.0 (unknown)",
+                        "cpes": [
+                            "cpe:2.3:a:busybox:busybox:1.35.0:*:*:*:*:*:*:*"
+                        ]
+                    }
+                }
+            ],
+            "artifact": {
+                "id": "407bfe5030663241",
+                "name": "busybox",
+                "version": "1.35.0",
+                "type": "",
+                "locations": [],
+                "language": "",
+                "licenses": [],
+                "cpes": [
+                    "cpe:2.3:a:busybox:busybox:1.35.0:*:*:*:*:*:*:*"
+                ],
+                "purl": "",
+                "upstreams": []
+            }
+        }
+    ]
+}
