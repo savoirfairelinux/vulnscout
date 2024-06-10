@@ -1,7 +1,8 @@
 .vscode
 /tmp
 htmldocs/
-
+src/static/*
+!src/static/.gitkeep
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
