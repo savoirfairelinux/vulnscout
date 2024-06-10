@@ -1,0 +1,42 @@
+From f1f3bf30f438f53e04ec9cbac5a237bcdc2d993a Mon Sep 17 00:00:00 2001
+From: Louis Maillard <lmaillard@savoirfairelinux.com>
+Date: Mon, 10 Jun 2024 12:08:56 -0400
+Subject: [PATCH] read_docs: reduce error when reading non-spdx file
+
+Reduce risk of error by matching ony .spdx.json and not all .json files.
+Reading and parsing are running in a try-catch block to allow ignore
+parsing error or stopping script, based on IGNORE_PARSING_ERRORS variable
+
+Signed-off-by: Louis Maillard <louis.maillard@savoirfairelinux.com>
+---
+ spdxmerge/utils.py | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/spdxmerge/utils.py b/spdxmerge/utils.py
+index df0b0c0..1ef98b3 100755
+--- a/spdxmerge/utils.py
++++ b/spdxmerge/utils.py
+@@ -4,9 +4,19 @@ from spdxmerge.checksum import sha1sum
+
+ def read_docs(dir):
+     doc_list = []
+-    doc_files = [f for f in os.listdir(dir) if f.endswith(('.json', '.spdx'))]
++    # patched format to avoid including non-spdx .json files
++    doc_files = [f for f in os.listdir(dir) if f.endswith(('.spdx.json', '.spdx'))]
+     for file in doc_files:
+-        doc, _error = parse_anything.parse_file(dir+"/"+file)
++        try:
++            # put the parser in try catch to avoid crashing for one corrupted file
++            doc, _error = parse_anything.parse_file(dir+"/"+file)
++        except Exception as e:
++            print("Error parsing file: ", file)
++            print(e)
++            if os.environ.get('IGNORE_PARSING_ERRORS', '') != 'true':
++                print("Hint: Set IGNORE_PARSING_ERRORS=true to ignore parsing errors. See documentation for more details.")
++                raise e
++            continue
+         check_sum = sha1sum(dir+"/"+file)
+         doc.comment = check_sum
+         doc_list.append(doc)
+--
+2.34.1

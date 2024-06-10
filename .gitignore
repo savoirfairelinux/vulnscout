@@ -1,8 +1,12 @@
 .vscode
 /tmp
+/outputs
+/inputs
 htmldocs/
 src/static/*
 !src/static/.gitkeep
+
+docker-compose.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
