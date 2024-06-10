@@ -47,7 +47,7 @@ function main() {
     set_status "0" "Server started"
     (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
 
-    if [[ "${DEBUG_SKIP_SCAN}" != "true" ]]; then
+    if [[ "${DEBUG_SKIP_SCAN-}" != "true" ]]; then
         full_scan_steps
     fi
 

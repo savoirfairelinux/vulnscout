@@ -1,0 +1,35 @@
+# This is a template file, you should copy it to docker-compose.yml and edit it to fit your needs
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+
+services:
+
+  vulnscout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulnscout
+    restart: "no"
+    ports:
+      - "7275:7275"
+    volumes:
+      # Hint: format is path/on/your/host:/path/in/container:ro (ro = read-only, use only on inputs files)
+      # Put .spdx.json files in /scan/inputs/spdx
+      # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
+      # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
+      # Also accepted .tar, .tar.gz, .tar.zst for all inputs
+      - /path/to/yocto/build/tmp/deploy/images/name/image.spdx.tar.zst:/scan/inputs/spdx/name_image_spdx.tar.zst:ro
+      - /path/to/yocto/cdx-export-folder:/scan/inputs/cdx/yocto_layer:ro
+      - /path/to/yocto/build/tmp/deploy/images/name/image.rootfs.json:/scan/inputs/yocto_cve_check/name_image_rootfs.json:ro
+      # - ./tmp:/scan/tmp # Debug only
+      - ./outputs:/scan/outputs
+    environment:
+      - FLASK_RUN_PORT=7275
+      - FLASK_RUN_HOST=0.0.0.0
+      - IGNORE_PARSING_ERRORS=false # Set to true if you encounter issues with SPDX parsing
+      # - DEBUG_SKIP_SCAN=false # Enable to skip scan and re-use last scan result instead
+      # - PRODUCT_NAME=""
+      # - PRODUCT_VERSION="1.0.0"
+      # - COMPANY_NAME="Savoir-faire Linux"
+      # - CONTACT_EMAIL="abc@xyz.org"
+      # - DOCUMENT_URL="https://example.com/unique/identifier"
