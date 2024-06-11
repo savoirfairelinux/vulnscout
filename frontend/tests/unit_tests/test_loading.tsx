@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import "@testing-library/jest-dom";
-// @ts-ignore
+// @ts-expect-error TS6133
 import React from 'react';
 
 import Loading from '../../src/pages/Loading';
