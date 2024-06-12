@@ -1,5 +1,22 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 
+FROM node:20 AS buildfront
+
+RUN mkdir -p /frontend /src/static
+WORKDIR /frontend
+COPY frontend .
+
+# Create build .env with API_URL set as blank. This way, fetch call are made to '/api/...' on same origin.
+COPY <<EOF .env
+    VITE_API_URL=""
+EOF
+
+RUN <<EOF
+    npm ci
+    npm run build
+EOF
+
+
 FROM alpine:3.20
 
 RUN mkdir -p /scan/inputs /scan/tmp /scan/outputs
@@ -37,6 +54,7 @@ RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
 COPY --chmod=755 scan.sh ./
 COPY src ./src
+COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
