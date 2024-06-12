@@ -6,6 +6,7 @@ import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
 import TableVulnerabilities from "./TableVulnerabilities";
+import Metrics from "./Metrics";
 import Assessments from "../handlers/assessments";
 
 type Props = {
@@ -37,13 +38,14 @@ function Explorer({ darkMode, setDarkMode }: Props) {
         })
     }, []);
 
-    const [tab, setTab] = useState("packages");
+    const [tab, setTab] = useState("metrics");
 
     return (
       <div className="w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee]">
         <NavigationBar tab={tab} changeTab={setTab} darkMode={darkMode} setDarkMode={setDarkMode} />
 
         <div className="p-8">
+          {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
           {tab == 'packages' && <TablePackages packages={pkgs} />}
           {tab == 'vulnerabilities' && <TableVulnerabilities vulnerabilities={vulns} />}
         </div>
