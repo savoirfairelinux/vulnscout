@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
+import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 
 type Props = {
@@ -26,6 +27,7 @@ const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simpl
 
 function TableVulnerabilities ({ vulnerabilities }: Props) {
 
+    const [modalvuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,6 +64,16 @@ function TableVulnerabilities ({ vulnerabilities }: Props) {
                 header: 'Sources',
                 cell: info => info.renderValue(),
                 enableSorting: false
+            }),
+            columnHelper.accessor(row => row, {
+                header: 'Actions',
+                cell: info => <button
+                    className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg"
+                    onClick={() => setModalVuln(info.getValue())}
+                >
+                        edit
+                </button>,
+                enableSorting: false
             })
         ]
     }, []);
@@ -73,6 +85,8 @@ function TableVulnerabilities ({ vulnerabilities }: Props) {
         </div>
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={vulnerabilities} estimateRowHeight={66} />
+
+        {modalvuln != undefined && <VulnModal vuln={modalvuln} onClose={() => setModalVuln(undefined)}></VulnModal>}
     </>)
 }
 
