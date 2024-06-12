@@ -10,6 +10,8 @@ type Package = {
 };
 
 export type { Package };
+import type { Vulnerability } from "./vulnerabilities";
+import { SEVERITY_ORDER } from "./vulnerabilities";
 
 class Packages {
     /**
@@ -28,6 +30,21 @@ class Packages {
             maxSeverity: "none",
             source: [],
         }));
+    }
+
+    static enrich_with_vulns(pkgs: Package[], vulns: Vulnerability[]): Package[] {
+        return pkgs.map((pkg) => {
+            const vulnerabilities = vulns.filter((vuln) => vuln.packages.includes(pkg.id));
+            return {
+                ...pkg,
+                vulnerabilities: vulnerabilities.length,
+                maxSeverity: vulnerabilities.reduce((max, vuln) => {
+                    const severity = SEVERITY_ORDER.indexOf(vuln.severity.severity.toUpperCase());
+                    return severity > SEVERITY_ORDER.indexOf(max.toUpperCase()) ? vuln.severity.severity : max;
+                }, 'NONE'),
+                source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by))],
+            };
+        });
     }
 }
 

@@ -1,8 +1,12 @@
 import { useState, useEffect } from "react";
 import NavigationBar from "../components/NavigationBar";
 import type { Package } from "../handlers/packages";
+import type { Vulnerability } from "../handlers/vulnerabilities";
 import Packages from "../handlers/packages";
+import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
+import TableVulnerabilities from "./TableVulnerabilities";
+import Assessments from "../handlers/assessments";
 
 type Props = {
   darkMode: boolean;
@@ -11,17 +15,25 @@ type Props = {
 
 function Explorer({ darkMode, setDarkMode }: Props) {
     const [pkgs, setPkgs] = useState<Package[]>([]);
+    const [vulns, setVulns] = useState<Vulnerability[]>([]);
 
     useEffect(() => {
         Promise.allSettled([
-            Packages.list()
-        ]).then(([pkgs]) => {
-            if (pkgs.status === 'rejected') {
-                console.error(pkgs);
+            Packages.list(),
+            Vulnerabilities.list(),
+            Assessments.list()
+        ]).then(([pkgs, vulns, assess]) => {
+            if (pkgs.status === 'rejected' || vulns.status === 'rejected' || assess.status === 'rejected') {
+                console.error(pkgs, vulns);
                 alert("Failed to load data");
                 return;
             }
-            setPkgs(pkgs.value);
+            setPkgs(
+              Packages.enrich_with_vulns(pkgs.value, vulns.value)
+            );
+            setVulns(
+              Vulnerabilities.enrich_with_assessments(vulns.value, assess.value)
+            );
         })
     }, []);
 
@@ -33,6 +45,7 @@ function Explorer({ darkMode, setDarkMode }: Props) {
 
         <div className="p-8">
           {tab == 'packages' && <TablePackages packages={pkgs} />}
+          {tab == 'vulnerabilities' && <TableVulnerabilities vulnerabilities={vulns} />}
         </div>
       </div>
     )

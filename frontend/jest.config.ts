@@ -179,7 +179,22 @@ const config: Config = {
 
   // A map from regular expressions to paths to transformers
   transform: {
-    "^.+\\.(ts|tsx)$": "ts-jest",
+    "^.+\\.(ts|tsx)$": [
+      'ts-jest',
+      {
+        diagnostics: {
+          ignoreCodes: [1343]
+        },
+        astTransformers: {
+          before: [
+            {
+              path: 'ts-jest-mock-import-meta',
+              options: { metaObjectReplacement: { env: { VITE_API_URL: 'http://localhost' } } }
+            }
+          ]
+        }
+      }
+    ],
     '^.+\\.(js|jsx)$': 'babel-jest',
   },
 
