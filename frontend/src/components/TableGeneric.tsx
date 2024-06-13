@@ -76,29 +76,32 @@ function TableGeneric<DataType> ({
                     {table.getHeaderGroups().map(headerGroup => (
                         <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
                         {headerGroup.headers.map(header => (
-                            <th key={header.id} className={`p-1 border border-slate-600 flex-auto`} style={{width: header.getSize()}}>
-                                <div
-                                    className={['p-3', header.column.getCanSort() ? 'cursor-pointer select-none' : ''].join(' ')}
-                                    onClick={header.column.getToggleSortingHandler()}
-                                >
-                                    <span className="mr-2">
-                                        {header.isPlaceholder
-                                        ? null
-                                        : flexRender(
-                                            header.column.columnDef.header,
-                                            header.getContext()
-                                        )}
-                                    </span>
-                                    {header.column.getCanSort()
-                                        ? (header.column.getIsSorted() === false
-                                            ? <FontAwesomeIcon icon={faSort} />
-                                            : (header.column.getIsSorted() === 'asc'
-                                                ? <FontAwesomeIcon icon={faArrowUpShortWide} />
-                                                : <FontAwesomeIcon icon={faArrowDownWideShort} />
-                                            )
+                            <th
+                                key={header.id}
+                                className={[
+                                    `p-4 border border-slate-600 flex-auto`,
+                                    header.column.getCanSort() ? 'cursor-pointer select-none' : ''
+                                ].join(' ')}
+                                style={{width: header.getSize()}}
+                                onClick={header.column.getToggleSortingHandler()}
+                            >
+                                <span className="mr-2">
+                                    {header.isPlaceholder
+                                    ? null
+                                    : flexRender(
+                                        header.column.columnDef.header,
+                                        header.getContext()
+                                    )}
+                                </span>
+                                {header.column.getCanSort()
+                                    ? (header.column.getIsSorted() === false
+                                        ? <FontAwesomeIcon icon={faSort} />
+                                        : (header.column.getIsSorted() === 'asc'
+                                            ? <FontAwesomeIcon icon={faArrowUpShortWide} />
+                                            : <FontAwesomeIcon icon={faArrowDownWideShort} />
                                         )
-                                        : ''}
-                                </div>
+                                    )
+                                    : ''}
                             </th>
                         ))}
                         </tr>
