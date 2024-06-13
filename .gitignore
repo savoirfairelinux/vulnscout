@@ -5,6 +5,8 @@
 htmldocs/
 src/static/*
 !src/static/.gitkeep
+*.pdf
+*.local
 
 docker-compose.yml
 

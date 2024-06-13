@@ -1,19 +1,147 @@
-== VulnScout
+= VulnScout
+Savoir-Faire Linux
+0.1.0, {docdate}: Proof-of-concept version 2
+:url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
+:source-highlighter: highlight.js
+:toc:
+
+== Introduction
 
 Scanning project to export Software Bill of Materials (SBOM) and list of Vulnerabilities that affect them.
 Support for Cyclone DX, SPDX, Yocto JSON files and Open VEX.
+
+This document use a lot of format names, accronyms and abbreviations which is evident for people working on them, but not for everyone. Here is a definition of the most used ones:
+
+[unordered]
+CVE:: Common Vulnerabilities and Exposures. Most (but not all) vulnerabilities discovered by a security researcher are assigned a CVE number. This number is unique and is used to reference the vulnerability in various databases.
+SBOM:: Software Bill of Materials. A list of all the components used in a software project. This list can be used to track dependencies, licenses, and vulnerabilities.
+SPDX:: Software Package Data Exchange. A standard format for SBOMs developed by the Linux Foundation. Mostly found as JSON or XML files.
+CDX:: Cyclone DX. A standard format for SBOMs developed as an OWASP project. Mostly found as JSON or XML files.
+Yocto:: A build system for embedded Linux systems. It is used to build custom Linux distributions for embedded systems.
+
+<<<
+
+== Usage
+
+You can use VulnScout to scan your project, make report about your dependencies and vulnerabilities, and to manage them.
+
+**Support following inputs** :
+
+* ##WIP##: SPDX 2.4 (Packages)
+* ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
+* ##WIP##: Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
+* Grype native JSON format (Packages + vulnerabilities)
+* Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
+
+**Support following outputs** :
+
+* SPDX 2.3 (Packages)
+* ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
+* Cyclone DX 1.5 (Packages)
+* ##WIP##: Cyclone DX 1.5 (vulnerabilities)
+* ##WIP##: Cyclone DX 1.4, 1.6 (Packages + vulnerabilities)
+* ##WIP##: openVex (vulnerabilities + Assessments)
+
 
 == Deployment
 
 This project is made to run on local in a docker container.
 
+**Solution 1: Build locally using docker**
+
+1. Start by building the image at root of repository: +
+`BUILD_TAG="local-build" cqfd -b docker_build run`
+
+2. Then, go to your project repository and copy the `docker-compose.template.yml` at the root of the repo with name `docker-compose.yml`.
+
+3. In your new copied file, customize it to bind the correct path under `volumes:` section. +
+Replace the `build` section by a `image` section like below: +
+[source,#docker-compose.yml,diff]
+----
+-     build:
+-       context: .
+-       dockerfile: Dockerfile
++     image: vulnscout:local-build
+----
+
+Now, after each build, you can run `docker compose up` to run a new scan and open http://localhost:7275 to view the results.
+
+
+**Solution 2: Use a pre-built image** ##recommended##
+
+ This solution is recomended for classic usage but not available now.
+
+
+=== Configuration for Yocto projects
+
+After having setup the docker container, you need to configure the scanner to find files and scan them. This is paragraph is especialy for Yocto projects.
+
+1. In the Yocto repository, if you use git submodules features, you can run: +
+`git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx` +
+(tips: if you have a `.gitmodules`, you should use this command).
+
+2. If you don't have a `.gitmodules` file and don't want to use git submodules, you can add the source manually by going in `sources` folder and running the following command: `git clone https://github.com/savoirfairelinux/meta-cyclonedx.git`
+
+3. Add the following lines if their are not present in your `layers.conf` file: +
+[source,conf]
+----
+INHERIT += "create-spdx" <1>
+INHERIT += "cyclonedx-export" <2>
+INHERIT += "cve-check" <3>
+include conf/distro/include/cve-extra-exclusions.inc <4>
+----
+<1> Native export to SPDX, handled by Yocto
+<2> Export to Cyclone DX format, made by the meta-cyclonedx layer
+<3> Check for CVE using Native Yocto tool
+<4> Exclude some old CVE that was corrected
+
+Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. during or at the end of the build, you can make a last edit to the `docker-compose.yml` file to bind the correct path to the generated files. Follow the model below and adjust with recipe name: +
+[source,yaml]
+----
+- ./build/tmp/deploy/images/<name>/<name>-<timestamp>.spdx.tar.zst:/scan/inputs/spdx/<name>_spdx.tar.zst:ro
+- ./build/tmp/deploy/cyclonedx-export:/scan/inputs/cdx/yocto_layer:ro
+- ./build/tmp/deploy/images/<name>/<name>-<timestamp>.rootfs.json:/scan/inputs/yocto_cve_check/<name>_rootfs.json:ro
+----
+
+
+=== Configuration for others projects
+
+If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matchign opackages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
+
+If you followed correctly the <<Deployment>> section, you should have a `docker-compose.yml` file at the root of your project.
+You can edit it and make the following bindings in `volumes` section:
+
+* Bind all your SPDX files in `scan/inputs/spdx/...` folder.
+
+* Bind all your CDX files in `scan/inputs/cdx/...` folder.
+
+* If you don't use Yocto, you can delete the `scan/inputs/yocto_cve_check` line.
+
+
+[TIP]
+====
+- You can use as many sub-folder as needed in `spdx/`, `cdx/` and `yocto_cve_check/` folders.
+- You can bind files directly or entire folders.
+- Keep the `:ro` suffix at the end of the line to ensure the scanner can't modify your files. (ro: read-only)
+- Scanner will support reading in `.tar`, `.tar.zst` and `.tar.gz` archives.
+- If your inputs may contains invalid files, you can set `IGNORE_PARSING_ERRORS` to `true` in the `docker-compose.yml` file.
+====
+
+You can now run `docker compose up` to start the scanner and open http://localhost:7275 to view the results.
+
+<<<
+
 == Developpers ? How to setup your environment and be ready to code
 
 You can either use CQFD to run testing tools in a container or install the tools on your machine.
 CQFD is better for testing quickly but if you plan to modify the code and commit,
-you would probably prefer local installation with integrate with pre-commit.
+you would probably prefer local installation which integrate with pre-commit.
 
 === Nothing to install, all in CQFD
+
+.Already used to CQFD? Go ahead, else read this setup tutorial
+[%collapsible]
+====
 
 * Install Docker by following the official
   documentation: https://docs.docker.com/engine/install/
@@ -23,47 +151,84 @@ Make sure that Docker does not require `sudo`.
 Please use the following commands to add your user account to the `docker`
 group:
 
+[bash]
+----
   $ sudo groupadd docker
   $ sudo usermod -aG docker $USER
+----
 
 Log out and log back in, so that your group membership can be re-evaluated.
 
 * Install cqfd:
 
+[bash]
+----
   $ git clone https://github.com/savoirfairelinux/cqfd.git
   $ cd cqfd
   $ sudo make install
+----
 
 The project page on GitHub (https://github.com/savoirfairelinux/cqfd[link])
 contains detailed information on usage and installation.
 
+====
+
 The first step with `cqfd` is to create the build container. Do this using:
 
+[bash]
+----
   $ cqfd init
+----
 
 NOTE: The step above is only required once, as once the container image has been
 created on your machine, it will become persistent. Further calls to `cqfd init`
 will do nothing, unless the container definition (`.cqfd/docker/Dockerfile`) has
 changed in the source tree.
 
-* Run the tests with:
+* Run all the tests with:
 
+[bash]
+----
   $ cqfd -b test
+----
+
+* You can also run only backend or frontend tests:
+
+[bash]
+----
+  $ make test_backend
+  $ make test_frontend
+----
+
+* To test Docker image build, you can use:
+----
+  $ export BUILD_TAG="$(pwgen -n 12 -1)"
+  $ make docker_build docker_test docker_clean
+----
 
 === Install and setup locally without CQFD
 
-- Ensure to have Docker and Python 3 installed on your machine.
+- Ensure to have Docker, Python 3 and Node.js with NPM installed on your machine.
 - Clone the project.
-- Run `pip install -r requirements-dev.txt` to install the dev dependencies.
+- Run `pip install -r requirements-dev.txt` to install the backend dev dependencies.
 - Run `pre-commit install` to enable pre-commit (code quality and linter).
+- Move to frontend and install npm dev dependencies +
+`cd frontend && npm install --include=dev`
 - Done ! You are ready to code.
 
 == Linter, Unit tests, Code coverage and Code Quality
 
-- Linter: `flake8`
-- Unit tests: `pytest`
-- Code coverage in terminal: `pytest --cov=src`
-- Code coverage as HTML: `pytest --cov-report html --cov=src`
+* Python Backend (Python3 + Flask)
+** Linter: `flake8`
+** Unit tests: `pytest`
+** Code coverage in terminal: `pytest --cov=src`
+** Code coverage as HTML: `pytest --cov-report html --cov=src`
+* Web Frontend (Typescript + React)
+** Run with `npm run dev`
+** Build with `npm run build`
+** Unit test: `npm run test` (use jest + testing-library/react)
+** Linter: `npm run lint` (use ESlinter)
+** Code coverage: `npm run coverage`
 
 NOTE: You can run all the tools using `make test` command. If you have installed pre-commit,
 flake8 will also run before every commit to ensure linting is good.

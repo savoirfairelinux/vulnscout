@@ -1,0 +1,23 @@
+{
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.4",
+    "serialNumber": "urn:uuid:b9d5bcbc-aac7-485b-be27-96f06fae246d",
+    "version": 1,
+    "metadata": {
+      "timestamp": "2024-05-07T16:05:22.201979",
+      "tools": [
+        {
+          "name": "yocto"
+        }
+      ]
+    },
+    "components": [
+      {
+        "type": "library",
+        "name": "cairo",
+        "version": "1.16.0",
+        "cpe": "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
+        "purl": "pkg:generic/cairo@1.16.0"
+      }
+    ]
+  }

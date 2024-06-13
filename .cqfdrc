@@ -5,10 +5,10 @@ build_context=.
 
 [build]
 command="make"
-flavors="test jenkins"
+flavors="test jenkins_test"
 
 [test]
 command="make test"
 
-[jenkins]
-command="make test_jenkins"
+[jenkins_test]
+command="make jenkins_test"
