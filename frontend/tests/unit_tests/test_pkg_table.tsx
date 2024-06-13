@@ -55,9 +55,9 @@ describe('Packages Table', () => {
         render(<TablePackages packages={[]} />);
 
         // ACT
-        const name_header = await screen.getByText(/name/i);
-        const version_header = await screen.getByText(/version/i);
-        const vuln_count_header = await screen.getByText(/vulnerabilities/i);
+        const name_header = await screen.getByRole('columnheader', {name: /name/i});
+        const version_header = await screen.getByRole('columnheader', {name: /version/i});
+        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
 
         // ASSERT
         expect(name_header).toBeInTheDocument();
@@ -70,9 +70,9 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         // ACT
-        const name_col = await screen.getByText(/aaabbbccc/);
-        const version_col = await screen.getByText(/1.0.0/);
-        const source_col = await screen.getByText(/hardcoded/);
+        const name_col = await screen.getByRole('cell', {name: /aaabbbccc/});
+        const version_col = await screen.getByRole('cell', {name: /1.0.0/});
+        const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
         // ASSERT
         expect(name_col).toBeInTheDocument();
@@ -86,15 +86,15 @@ describe('Packages Table', () => {
 
         // ACT
         const user = userEvent.setup();
-        const severity_toggle = await screen.getByText(/severity disabled/i);
+        const severity_toggle = await screen.getByRole('button', {name: /severity disabled/i});
 
-        const pending_deletion = waitForElementToBeRemoved(() => screen.queryByText(/severity disabled/i), { timeout: 500 });
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('button', {name: /severity disabled/i}), { timeout: 500 });
 
         await user.click(severity_toggle); // switch to enabled mode
 
         await pending_deletion;
 
-        const btn_enabled = await screen.getByText(/severity enabled/i);
+        const btn_enabled = await screen.getByRole('button', {name: /severity enabled/i});
         const severity_high = await screen.getByText(/high/i);
         const severity_low = await screen.getByText(/low/i);
 
@@ -109,7 +109,7 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const name_header = await screen.getByText(/name/i);
+        const name_header = await screen.getByRole('columnheader', {name: /name/i});
 
         await user.click(name_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
@@ -129,7 +129,7 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const version_header = await screen.getByText(/version/i);
+        const version_header = await screen.getByRole('columnheader', {name: /version/i});
 
         await user.click(version_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
@@ -149,7 +149,7 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const vuln_count_header = await screen.getByText(/vulnerabilities/i);
+        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
 
         await user.click(vuln_count_header); // numerical order -> reverse numerical order
         await waitFor(() => {
@@ -169,13 +169,13 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const search_bar = await screen.getByPlaceholderText(/search/i);
+        const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'yyy');
 
-        await waitForElementToBeRemoved(() => screen.queryByText(/aaabbbccc/), { timeout: 1000 });
+        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /aaabbbccc/}), { timeout: 1000 });
 
-        const pkg_xyz = await screen.getByText(/xxxyyyzzz/);
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
         expect(pkg_xyz).toBeInTheDocument();
     })
 });

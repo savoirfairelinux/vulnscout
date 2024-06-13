@@ -91,18 +91,18 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={[]} />);
 
         // ACT
-        const id_header = await screen.getByText(/id/i);
-        const severity_header = await screen.getByText(/severity/i);
-        const packages_header = await screen.getByText(/packages/i);
-        const status_header = await screen.getByText(/status/i);
-        const source_header = await screen.getAllByText(/source/i);
+        const id_header = await screen.getByRole('columnheader', {name: /id/i});
+        const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
+        const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
+        const status_header = await screen.getByRole('columnheader', {name: /status/i});
+        const source_header = await screen.getByRole('columnheader', {name: /source/i});
 
         // ASSERT
         expect(id_header).toBeInTheDocument();
         expect(severity_header).toBeInTheDocument();
         expect(packages_header).toBeInTheDocument();
         expect(status_header).toBeInTheDocument();
-        expect(source_header[0]).toBeInTheDocument();
+        expect(source_header).toBeInTheDocument();
     })
 
     test('render with vulnerabilities', async () => {
@@ -110,11 +110,11 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         // ACT
-        const id_col = await screen.getByText(/CVE-2010-1234/);
-        const severity_col = await screen.getByText(/low/);
-        const packages_col = await screen.getByText(/aaabbbccc@1\.0\.0/i);
-        const status_col = await screen.getByText(/pending analysis/i);
-        const source_col = await screen.getByText(/hardcoded/);
+        const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const severity_col = await screen.getByRole('cell', {name: /low/});
+        const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
+        const status_col = await screen.getByRole('cell', {name: /pending analysis/i});
+        const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
         // ASSERT
         expect(id_col).toBeInTheDocument();
@@ -129,7 +129,7 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const id_header = await screen.getByText(/id/i);
+        const id_header = await screen.getByRole('columnheader', {name: /id/i});
 
         await user.click(id_header); // un-ordoned -> reverse alphabetical order
         await waitFor(() => {
@@ -149,7 +149,7 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const severity_header = await screen.getByText(/severity/i);
+        const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
 
         await user.click(severity_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
@@ -169,7 +169,7 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const status_header = await screen.getByText(/status/i);
+        const status_header = await screen.getByRole('columnheader', {name: /status/i});
 
         await user.click(status_header); // un-ordoned -> numerical order
         await waitFor(() => {
@@ -189,13 +189,13 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const search_bar = await screen.getByPlaceholderText(/search/i);
+        const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '\'2018-5678');
 
-        await waitForElementToBeRemoved(() => screen.queryByText(/CVE-2010-1234/), { timeout: 1000 });
+        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
 
-        const vuln_xyz = await screen.getByText(/CVE-2018-5678/);
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
     })
 
@@ -204,13 +204,13 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const search_bar = await screen.getByPlaceholderText(/search/i);
+        const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'yyy');
 
-        await waitForElementToBeRemoved(() => screen.queryByText(/CVE-2010-1234/), { timeout: 1000 });
+        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
 
-        const vuln_xyz = await screen.getByText(/CVE-2018-5678/);
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
     })
 
@@ -219,13 +219,13 @@ describe('Packages Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
 
         const user = userEvent.setup();
-        const search_bar = await screen.getByPlaceholderText(/search/i);
+        const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '\'authentification process');
 
-        await waitForElementToBeRemoved(() => screen.queryByText(/CVE-2018-5678/), { timeout: 1000 });
+        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
 
-        const vuln_abc = await screen.getByText(/CVE-2010-1234/);
+        const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
     })
 });
