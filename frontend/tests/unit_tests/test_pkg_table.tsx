@@ -178,4 +178,24 @@ describe('Packages Table', () => {
         const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
         expect(pkg_xyz).toBeInTheDocument();
     })
+
+    test('filter by source', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const selects = await screen.getAllByRole('combobox');
+        const filter_select = selects.find((el) => el.getAttribute('name')?.includes('source')) as HTMLElement;
+        expect(filter_select).toBeDefined();
+        expect(filter_select).toBeInTheDocument();
+
+        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /aaabbbccc/}), { timeout: 250 });
+
+        await user.selectOptions(filter_select, 'cve-finder');
+
+        await deletion;
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        expect(pkg_xyz).toBeInTheDocument();
+    })
 });
