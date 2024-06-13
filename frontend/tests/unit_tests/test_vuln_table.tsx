@@ -228,4 +228,24 @@ describe('Packages Table', () => {
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
     })
+
+    test('filter by source', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+
+        const user = userEvent.setup();
+        const selects = await screen.getAllByRole('combobox');
+        const filter_select = selects.find((el) => el.getAttribute('name')?.includes('source')) as HTMLElement;
+        expect(filter_select).toBeDefined();
+        expect(filter_select).toBeInTheDocument();
+
+        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 250 });
+
+        await user.selectOptions(filter_select, 'cve-finder');
+
+        await deletion;
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(pkg_xyz).toBeInTheDocument();
+    })
 });
