@@ -1,0 +1,45 @@
+{
+    "version": "1",
+    "package": [
+      {
+        "name": "c-ares",
+        "layer": "meta-oe",
+        "version": "1.18.1",
+        "products": [
+          {
+            "product": "c-ares",
+            "cvesInRecord": "Yes"
+          }
+        ],
+        "issue": [
+          {
+            "id": "CVE-2007-3152",
+            "summary": "c-ares before 1.4.0 uses a predictable seed for the random number generator for the DNS Transaction ID field, which might allow remote attackers to spoof DNS responses by guessing the field value.",
+            "scorev2": "7.5",
+            "scorev3": "0.0",
+            "vector": "NETWORK",
+            "status": "Patched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2007-3152"
+          },
+          {
+            "id": "CVE-2020-14354",
+            "summary": "A possible use-after-free and double-free in c-ares lib version 1.16.0 if ares_destroy() is called prior to ares_getaddrinfo() completing. This flaw possibly allows an attacker to crash the service that uses c-ares lib. The highest threat from this vulnerability is to this service availability.",
+            "scorev2": "2.1",
+            "scorev3": "3.3",
+            "vector": "LOCAL",
+            "status": "Patched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2020-14354"
+          },
+          {
+            "id": "CVE-2023-31124",
+            "summary": "c-ares is an asynchronous resolver library. When cross-compiling c-ares and using the autotools build system, CARES_RANDOM_FILE will not be set, as seen when cross compiling aarch64 android.  This will downgrade to using rand() as a fallback which could allow an attacker to take advantage of the lack of entropy by not using a CSPRNG. This issue was patched in version 1.19.1.\n",
+            "scorev2": "0.0",
+            "scorev3": "3.7",
+            "vector": "NETWORK",
+            "status": "Ignored",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2023-31124"
+          }
+        ]
+      }
+    ]
+}

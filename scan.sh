@@ -294,17 +294,33 @@ function copy_cdx_files() {
             filename=$(basename "$file")
 
             if [[ "$file" == *.json ]]; then
-                cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
+                if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+                    echo "File $file is not a valid CycloneDX JSON file"
+                    if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
+                        echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
+                        exit 1
+                    fi
+                else
+                    cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
 
-                CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
-                ((CDX_FILE_COUNTER++))
+                    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
+                    ((CDX_FILE_COUNTER++))
+                fi
             fi
             if [[ "$file" == *.xml ]]; then
-                local new_file_name=${filename//.xml/.json}
-                cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
+                if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+                    echo "File $file is not a valid CycloneDX XML file"
+                    if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
+                        echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
+                        exit 1
+                    fi
+                else
+                    local new_file_name=${filename//.xml/.json}
+                    cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
 
-                CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
-                ((CDX_FILE_COUNTER++))
+                    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
+                    ((CDX_FILE_COUNTER++))
+                fi
             fi
         fi
     done
