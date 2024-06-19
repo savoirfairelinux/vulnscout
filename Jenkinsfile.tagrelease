@@ -1,0 +1,40 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent { node { label 'ryzen' } }
+    stages {
+        stage("Checkout and Init") {
+            steps {
+                sh '''
+                    git submodule update --init --force --recursive
+                    chmod +x tests/docker/testDocker.sh
+                '''
+            }
+        }
+        stage("Publish docker image") {
+            environment {
+                RELEASE_TAG = sh(
+                    returnStdout: true,
+                    script: 'echo $GERRIT_REFNAME | sed "s|refs/tags/||i" | sed "s|[/+]|-|g"'
+                ).trim()
+                // DOCKER_BUILDKIT="1"
+            }
+            steps {
+                script {
+                    docker.withRegistry('https://gitlab.savoirfairelinux.com:5050', '4a2371e0-45dd-4abc-81b0-cad2dcc19ba1') {
+                        def dockerImage = docker.build("gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}")
+
+                        sh 'tests/docker/testDocker.sh "gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}"'
+
+                        dockerImage.push()
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            cleanWs()
+        }
+    }
+}

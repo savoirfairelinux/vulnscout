@@ -229,6 +229,7 @@ changed in the source tree.
 ** Unit test: `npm run test` (use jest + testing-library/react)
 ** Linter: `npm run lint` (use ESlinter)
 ** Code coverage: `npm run coverage`
+* Publish new version: `bin/release_tag.sh v*.*.*`
 
 NOTE: You can run all the tools using `make test` command. If you have installed pre-commit,
 flake8 will also run before every commit to ensure linting is good.

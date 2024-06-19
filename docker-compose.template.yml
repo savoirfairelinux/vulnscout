@@ -5,9 +5,7 @@
 services:
 
   vulnscout:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: gitlab.savoirfairelinux.com:5050/pe/vulnscout:latest
     container_name: vulnscout
     restart: "no"
     ports:
