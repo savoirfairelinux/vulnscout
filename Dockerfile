@@ -52,4 +52,9 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
+LABEL org.opencontainers.image.title="VulnScout"
+LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
+LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
+LABEL org.opencontainers.image.version="v0.1.0-build.8"
+
 CMD ./scan.sh
