@@ -1,0 +1,38 @@
+# This file is sourced by vulnscout.sh
+# Use this to configure the binding between your project and VulnScout
+# shellcheck disable=SC2034 # variables are used by vulnscout.sh
+# shellcheck disable=SC2148 # file is sourced by another file, shebang is not used
+
+SPDX_SOURCES=(
+    "path/to/file.spdx.json"
+    "path/to/folder/with/spdx/inside"
+)
+
+CDX_SOURCES=(
+    "path/to/file.cdx.json"
+    "path/to/folder/with/cdx/inside"
+)
+
+YOCTO_CVE_SOURCES=(
+    "path/to/file.cve.json"
+    "path/to/folder/with/cve/inside"
+)
+
+# Output folder used to save state of app (ie. where it export and save it's data for next run).
+# Don't put in .gitignored folder, must be tracked by git.
+OUTPUT_FOLDER=".vulnscout/output"
+
+# Choose port to open when running `scan` interactively
+FLASK_RUN_PORT=7275
+# As scan runs in a container, we highly recommend to expose flask
+FLASK_RUN_HOST=0.0.0.0
+
+# If scan encounters a file with invalid format, should it ignore it?
+# Recommended for Yocto as it tend to generate non-SPDX files in SPDX folder
+IGNORE_PARSING_ERRORS='false'
+
+# PRODUCT_NAME=""
+# PRODUCT_VERSION="1.0.0"
+# COMPANY_NAME="Savoir-faire Linux"
+# CONTACT_EMAIL="abc@xyz.org"
+# DOCUMENT_URL="https://example.com/unique/identifier"

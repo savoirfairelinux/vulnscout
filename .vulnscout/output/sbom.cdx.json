@@ -1,0 +1,27 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:eaab72a0-39bf-41c3-a1c4-e0c2f25cc132",
+  "version": 1,
+  "metadata": {
+    "tools": [
+      {
+        "name": "yocto"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "name": "PRODUCT_NAME",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "cairo",
+      "version": "1.16.0",
+      "cpe": "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/cairo@1.16.0"
+    }
+  ]
+}
