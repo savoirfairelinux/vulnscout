@@ -42,39 +42,49 @@ You can use VulnScout to scan your project, make report about your dependencies 
 * ##WIP##: Cyclone DX 1.4, 1.6 (Packages + vulnerabilities)
 * ##WIP##: openVex (vulnerabilities + Assessments)
 
-
 == Deployment
 
 This project is made to run on local in a docker container.
 
-**Solution 1: Build locally using docker**
+=== Recommended setup using vulnscout.sh wrapper
+
+1. Copy `bin/vulnscout.sh` at root of your project repository.
+
+2. Create a `.vulnscout` folder at root of your project repository. +
+Copy one of the example file in `bin/.vulnscout-example` folder into your `.vulnscout` folder. +
+Adjust theses variables to your needs.
+
+3. Run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
+
+4. If you get error when running container, try use `docker login` to authenticate to the registry. +
+More information on <<Authentification>> section.
+
+=== Alternative setup: Build and use a local image
 
 1. Start by building the image at root of repository: +
 `BUILD_TAG="local-build" cqfd -b docker_build run`
 
-2. Then, go to your project repository and copy the `docker-compose.template.yml` at the root of the repo with name `docker-compose.yml`.
+2. Then, copy `bin/vulnscout.sh` into root of your project repository. Create a `.vulnscout` folder also at root. +
+Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.l`.
 
-3. In your new copied file, customize it to bind the correct path under `volumes:` section. +
-Replace the `build` section by a `image` section like below: +
-[source,#docker-compose.yml,diff]
-----
--     build:
--       context: .
--       dockerfile: Dockerfile
-+     image: vulnscout:local-build
-----
+3. In your new copied file, customize variables to bind the correct paths. +
+Replace the `DOCKER_IMAGE` value by your image name like `vulnscout:local-build`.
 
-Now, after each build, you can run `docker compose up` to run a new scan and open http://localhost:7275 to view the results.
+Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and open http://localhost:7275 to view the results.
 
+=== Alternative setup: Use docker-compose instead of vulnscout.sh
 
-**Solution 2: Use a pre-built image** ##recommended##
+1. Copy `docker-compose.template.yml` from this repository as `docker-compose.yml` at root of your project repository.
 
- This solution is recomended for classic usage but not available now.
+2. Edit this file to bind your volumes. Follow instructions in the file. Then adjust environment variables.
 
+3. Run `docker-compose up` to start the scanner and open http://localhost:7275 to view the results.
+
+== Specific configuration
 
 === Configuration for Yocto projects
 
-After having setup the docker container, you need to configure the scanner to find files and scan them. This is paragraph is especialy for Yocto projects.
+After having setup one of the <<Deployment>> tutorial, you have some steps needed make Yocto output necessary files.
 
 1. In the Yocto repository, if you use git submodules features, you can run: +
 `git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx` +
@@ -95,148 +105,44 @@ include conf/distro/include/cve-extra-exclusions.inc <4>
 <3> Check for CVE using Native Yocto tool
 <4> Exclude some old CVE that was corrected
 
-Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. during or at the end of the build, you can make a last edit to the `docker-compose.yml` file to bind the correct path to the generated files. Follow the model below and adjust with recipe name: +
-[source,yaml]
-----
-- ./build/tmp/deploy/images/<name>/<name>-<timestamp>.spdx.tar.zst:/scan/inputs/spdx/<name>_spdx.tar.zst:ro
-- ./build/tmp/deploy/cyclonedx-export:/scan/inputs/cdx/yocto_layer:ro
-- ./build/tmp/deploy/images/<name>/<name>-<timestamp>.rootfs.json:/scan/inputs/yocto_cve_check/<name>_rootfs.json:ro
-----
+Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. +
+To allow vulnscout to find your SBOM files, ensure you have copied and configured `.rc` file in the `.vulnscout` folder. +
+If you haven't already done it, check at the example in `bin/.vulnscout-example/yocto.rc` folder of `sfl/vulnscout` project.
 
+=== Configuration tips for others projects
 
-=== Configuration for others projects
+If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matchign packages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
 
-If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matchign opackages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
-
-If you followed correctly the <<Deployment>> section, you should have a `docker-compose.yml` file at the root of your project.
-You can edit it and make the following bindings in `volumes` section:
-
-* Bind all your SPDX files in `scan/inputs/spdx/...` folder.
-
-* Bind all your CDX files in `scan/inputs/cdx/...` folder.
-
-* If you don't use Yocto, you can delete the `scan/inputs/yocto_cve_check` line.
-
+If you followed correctly the <<Deployment>> section, you should have a `.vulnscout` folder at the root of your project.
+You can edit this file in it and make the path bindings for SPDX / CDX variables:
 
 [TIP]
 ====
-- You can use as many sub-folder as needed in `spdx/`, `cdx/` and `yocto_cve_check/` folders.
-- You can bind files directly or entire folders.
-- Keep the `:ro` suffix at the end of the line to ensure the scanner can't modify your files. (ro: read-only)
-- Scanner will support reading in `.tar`, `.tar.zst` and `.tar.gz` archives.
-- If your inputs may contains invalid files, you can set `IGNORE_PARSING_ERRORS` to `true` in the `docker-compose.yml` file.
+- You can delete the YOCTO_CVE variable if you don't use Yocto CVE-check.
+- You can refer as many files and folder as needed. They are Bash arrays.
+- Scanner support reading in `.tar`, `.tar.zst` and `.tar.gz` archives.
+- If your inputs may contains invalid files, you can set `IGNORE_PARSING_ERRORS` to `true` in your `.rc` file.
 ====
 
-You can now run `docker compose up` to start the scanner and open http://localhost:7275 to view the results.
+You can now run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
+
+== Authentification
+
+If you get an error while using vulnscout.sh or docker-compose, you may need to authenticate to the registry.
+The image is not public but hosted on Gitlab registry. To authentificate:
+
+1. Open https://gitlab.savoirfairelinux.com/-/user_settings/personal_access_tokens in your browser.
+
+2. Create a new token with the following scope: `read_registry` and set expiration to what you want.
+
+3. Enter a name, create the token and copy it.
+
+4. In a terminal, run `docker login gitlab.savoirfairelinux.com:5050` and enter your Gitlab username and the token as password.
+
+TIP: If you have already logged in the registry but want to change the password, add `-u <username>` to the command. It will re-ask for password.
+
+NOTE: If after authentification you still fail to pull image, verify you have access to https://gitlab.savoirfairelinux.com/pe/vulnscout . If not, ask for access to the project.
 
 <<<
 
-== Developpers ? How to setup your environment and be ready to code
-
-You can either use CQFD to run testing tools in a container or install the tools on your machine.
-CQFD is better for testing quickly but if you plan to modify the code and commit,
-you would probably prefer local installation which integrate with pre-commit.
-
-=== Nothing to install, all in CQFD
-
-.Already used to CQFD? Go ahead, else read this setup tutorial
-[%collapsible]
-====
-
-* Install Docker by following the official
-  documentation: https://docs.docker.com/engine/install/
-
-Make sure that Docker does not require `sudo`.
-
-Please use the following commands to add your user account to the `docker`
-group:
-
-[bash]
-----
-  $ sudo groupadd docker
-  $ sudo usermod -aG docker $USER
-----
-
-Log out and log back in, so that your group membership can be re-evaluated.
-
-* Install cqfd:
-
-[bash]
-----
-  $ git clone https://github.com/savoirfairelinux/cqfd.git
-  $ cd cqfd
-  $ sudo make install
-----
-
-The project page on GitHub (https://github.com/savoirfairelinux/cqfd[link])
-contains detailed information on usage and installation.
-
-====
-
-The first step with `cqfd` is to create the build container. Do this using:
-
-[bash]
-----
-  $ cqfd init
-----
-
-NOTE: The step above is only required once, as once the container image has been
-created on your machine, it will become persistent. Further calls to `cqfd init`
-will do nothing, unless the container definition (`.cqfd/docker/Dockerfile`) has
-changed in the source tree.
-
-* Run all the tests with:
-
-[bash]
-----
-  $ cqfd -b test
-----
-
-* You can also run only backend or frontend tests:
-
-[bash]
-----
-  $ make test_backend
-  $ make test_frontend
-----
-
-* To test Docker image build, you can use:
-----
-  $ export BUILD_TAG="$(pwgen -n 12 -1)"
-  $ make docker_build docker_test docker_clean
-----
-
-=== Install and setup locally without CQFD
-
-- Ensure to have Docker, Python 3 and Node.js with NPM installed on your machine.
-- Clone the project.
-- Run `pip install -r requirements-dev.txt` to install the backend dev dependencies.
-- Run `pre-commit install` to enable pre-commit (code quality and linter).
-- Move to frontend and install npm dev dependencies +
-`cd frontend && npm install --include=dev`
-- Done ! You are ready to code.
-
-== Linter, Unit tests, Code coverage and Code Quality
-
-* Python Backend (Python3 + Flask)
-** Linter: `flake8`
-** Unit tests: `pytest`
-** Code coverage in terminal: `pytest --cov=src`
-** Code coverage as HTML: `pytest --cov-report html --cov=src`
-* Web Frontend (Typescript + React)
-** Run with `npm run dev`
-** Build with `npm run build`
-** Unit test: `npm run test` (use jest + testing-library/react)
-** Linter: `npm run lint` (use ESlinter)
-** Code coverage: `npm run coverage`
-* Publish new version: `bin/release_tag.sh v*.*.*`
-
-NOTE: You can run all the tools using `make test` command. If you have installed pre-commit,
-flake8 will also run before every commit to ensure linting is good.
-If you use CQFD, running `cqfd -b test` will run all the tests (equivalent to `make test`).
-
-=== Pre commit
-
-To ensure a good quality of code, we use pre-commit to run flake8 before commiting.
-To install pre-commit, run `pip install pre-commit`.
-Then, to enable pre-commit, run `pre-commit install`.
+include::README_DEV.adoc[]
