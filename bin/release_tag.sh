@@ -28,11 +28,14 @@ semversion=$(echo "${version:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')
 sed -i "s/\"version\": \".*\",/\"version\": \"${version}\",/i" frontend/package.json
 sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" README.adoc
 sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers.image.version=\"${version}\"/i" Dockerfile
+sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
+sed -i "s/^DOCKER_IMAGE=\".*\"$/DOCKER_IMAGE=\"gitlab\.savoirfairelinux\.com:5050\/pe\/vulnscout:${version}\"/i" bin/vulnscout.sh
 
 # Commit the changes
 git add frontend/package.json
 git add README.adoc
 git add Dockerfile
+git add bin/vulnscout.sh
 
 
 
@@ -45,13 +48,22 @@ if [[ "$answer" = "commit" || "$answer" == "c" || "$answer" == "C" ]]; then
     git config --local commit.template ".gitmessage.$version"
     echo "release: publish $version" > ".gitmessage.$version"
 
-    git commit
+    fail_commit=false
+    if ! git commit; then
+        fail_commit=true
+    fi
 
     # clean commit.template config
+    rm -f ".gitmessage.$version"
     if [[ -n "$old_config_template" ]]; then
         git config --local commit.template "$old_config_template"
     else
         git config --local --unset commit.template
+    fi
+
+    if [[ "$fail_commit" = true ]]; then
+        echo "Commit failed, aborting release"
+        exit 1
     fi
 
 elif [[ "$answer" = "amend" || "$answer" == "a" || "$answer" == "A" ]]; then
@@ -60,7 +72,6 @@ else
     echo "Invalid answer: $answer - expected '(c)ommit' or '(a)mend'"
     exit 1
 fi
-
 
 
 # if file are unstagged, git review will fail. Stash them and re-apply them after
