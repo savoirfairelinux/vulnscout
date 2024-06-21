@@ -11,10 +11,13 @@
 
 set -euo pipefail # Enable error checking
 
-DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:latest"
+# Configuration are changed automatically by bin/release_tag.sh
+DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.2.0"
+VULNSCOUT_VERSION="v0.2.0"
+
 
 function main() {
-	local container_id=""
+	local container_id="" actual_semver="" latest_semver=""
 	if [ $# -eq 0 ]; then
 		echo "No arguments provided. Use --help for more information."
 		exit 1
@@ -25,6 +28,17 @@ function main() {
 		exit 0
 	fi
 
+	actual_semver="$(echo "${VULNSCOUT_VERSION:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')"
+	latest_semver="$(check_newer_version)"
+	if [[ -n "$latest_semver" ]]; then
+		if [[ "$(semver_cmp "$actual_semver" "$latest_semver")" == '<' ]]; then
+			echo "Notice: A newer version of VulnScout is available: v$latest_semver (actual: $VULNSCOUT_VERSION)" >&2
+			echo "To updade, run: $0 update" >&2
+		fi
+	else
+		echo "Warning: Unable to reach Vulnscout repository using ssh on gerrit. Unable to check for newer version." >&2
+	fi
+
 	load_conf
 
 	case "$1" in
@@ -32,15 +46,19 @@ function main() {
 			container_id="$(scan)"
 			;;
 		report)
-			echo "Report command not implemented yet."
+			echo "report command not implemented yet."
 			exit 1
 			;;
 		ci)
-			echo "Report command not implemented yet."
+			echo "ci command not implemented yet."
+			exit 1
+			;;
+		update | upgrade)
+			echo "update command not implemented yet."
 			exit 1
 			;;
 		--version)
-			echo "VulnScout 0.1.0"
+			echo "$VULNSCOUT_VERSION"
 			exit 0
 			;;
 		*)
@@ -81,6 +99,7 @@ function help() {
 			scan        Run a security scan on the project (interactive)
 			report      Generate a report from the scan results
 			ci          Run a security scan in CI/CD pipeline
+			update      Update VulnScout to the latest version
 			help        Display this help message
 
 		Options:
@@ -134,6 +153,7 @@ function scan() {
 		echo "Warning: You runned without OUTPUT_FOLDER which mean the script will not save your change between runs" >&2
 	fi
 
+	# shellcheck disable=SC2086 # docker args is a string with series of argument, so requires to be unquoted
 	container_id="$(docker run --rm -d ${docker_args} "${DOCKER_IMAGE}")"
 	echo "${container_id}"
 }
@@ -169,6 +189,75 @@ function load_conf() {
 		echo "No configuration file found. Please create a .vulnscout folder with configuration files."
 		exit 1
 	fi
+}
+
+
+#######################################
+# Compare two semver versions
+# Source: https://stackoverflow.com/questions/4023830/how-to-compare-two-strings-in-dot-separated-version-format-in-bash
+# Arguments:
+#   version A "*.*.*"
+#   version B "*.*.*"
+# Outputs:
+#   = if equal, > if version A is greater, < if version B is greater (to stdout)
+#######################################
+semver_cmp () {
+    if [[ "$1" == "$2" ]]; then echo '='; return 0; fi
+    local IFS=.
+    # shellcheck disable=SC2206
+    local i ver1=($1) ver2=($2)
+
+    for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
+        ver1[i]=0 # fill empty fields in ver1 with zeros
+    done
+    for ((i=0; i<${#ver1[@]}; i++)); do
+        if [[ -z ${ver2[i]} ]]; then
+            ver2[i]=0 # fill empty fields in ver2 with zeros
+        fi
+        if ((10#${ver1[i]} > 10#${ver2[i]})); then
+			echo '>'
+            return 0
+        fi
+        if ((10#${ver1[i]} < 10#${ver2[i]})); then
+			echo '<'
+            return 0
+        fi
+    done
+    echo '='
+}
+
+
+#######################################
+# Find the latest stable version of VulnScout, using git ls-remote
+# Outputs:
+#   write most recent version found to stdout
+#######################################
+function check_newer_version() {
+	local versions="" greatest_version="" verA="" cmp_result=""
+	versions="$(git ls-remote --refs -t --sort=-v:refname ssh://g1.sfl.io/sfl/vulnscout)"
+	versions="$(echo "$versions" | grep -Eo 'v[0-9]+(\.[0-9]+){0,2}([-+\.][a-zA-Z0-9]+)*')"
+
+	for version in $versions; do
+		# parse to get only the numbers
+		verA="$(echo "${version:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')"
+
+		# if this version is not a stable release, skip
+		if [[ "${version}" != "v${verA}" ]]; then
+			continue # this version
+		fi
+		# if this is the first stable version found, skip comparaison
+		if [[ -z "$greatest_version" ]]; then
+			greatest_version="$verA"
+			continue
+		fi
+		cmp_result="$(semver_cmp "$verA" "$greatest_version")"
+
+		# if version A is greater than greatest_version
+		if [[ "$cmp_result" == '>' ]]; then
+			greatest_version="$verA"
+		fi
+	done
+	echo "$greatest_version"
 }
 
 main "$@"
