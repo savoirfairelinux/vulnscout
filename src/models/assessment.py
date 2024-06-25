@@ -156,7 +156,8 @@ class VulnAssessment:
     def set_status_notes(self, notes: str, append: bool = False):
         """Set an arbitrary note about the status of the vulnerability. Replace by default or append if specified."""
         if append and self.status_notes != "":
-            self.status_notes += '\n' + notes
+            if notes not in self.status_notes:
+                self.status_notes += '\n' + notes
         else:
             self.status_notes = notes
 
@@ -207,7 +208,8 @@ class VulnAssessment:
     def set_not_affected_reason(self, reason: str, append: bool = False):
         """Set the reason why the vulnerability is not affected. Replace by default or append if specified."""
         if append and self.impact_statement != "":
-            self.impact_statement += '\n' + reason
+            if reason not in self.impact_statement:
+                self.impact_statement += '\n' + reason
         else:
             self.impact_statement = reason
 
@@ -360,11 +362,15 @@ class VulnAssessment:
         if not self.is_compatible_status(assessment.status):
             self.set_status(assessment.status)
         if assessment.status_notes != "":
-            self.set_status_notes(assessment.status_notes, True)
+            for note in assessment.status_notes.split('\n'):
+                self.set_status_notes(note, True)
+
         if not self.is_compatible_justification(assessment.justification):
             self.set_justification(assessment.justification)
         if assessment.impact_statement != "":
-            self.set_not_affected_reason(assessment.impact_statement, True)
+            for reason in assessment.impact_statement.split('\n'):
+                self.set_not_affected_reason(reason, True)
+
         for r in assessment.responses:
             self.add_response(r)
         if assessment.workaround != "":
