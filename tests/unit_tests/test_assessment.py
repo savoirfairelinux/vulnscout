@@ -306,3 +306,22 @@ def test_merge_assessments(assessment_initial, assessment_active, assessment_fix
         "responses": [],
         "workaround": "this is a useless workaround",
     }.items() <= assessment_initial.to_dict().items()
+
+
+def test_merge_same_assessment(assessment_initial, assessment_active, assessment_not_affected):
+    """
+    GIVEN an assessment
+    WHEN merge it with itself
+    THEN text should not be duplicated
+    """
+    assert assessment_initial.merge(assessment_initial) is True
+    assert assessment_initial.status_notes == "Initial assessment"
+
+    fake_assessment = VulnAssessment(assessment_active.vuln_id, assessment_active.packages)
+    fake_assessment.id = assessment_active.id
+    fake_assessment.set_status_notes("package ABC is vulnerable to CVE-123")
+    assert fake_assessment.merge(assessment_active) is True
+    assert fake_assessment.status_notes == "package ABC is vulnerable to CVE-123\npackage ABC is vulnerable to CVE-456"
+
+    assert assessment_not_affected.merge(assessment_not_affected) is True
+    assert assessment_not_affected.impact_statement == "package XYZ does not contain the vulnerable code"
