@@ -64,7 +64,7 @@ def create_app():
                 }
 
     @app.middleware("/api")
-    def fail_scan_not_finished():
+    def fail_scan_not_finished(*args, **kw):
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 
