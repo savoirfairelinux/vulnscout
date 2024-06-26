@@ -1,7 +1,5 @@
 from flask import request
 import json
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..models.assessment import VulnAssessment
 
@@ -13,16 +11,40 @@ def init_app(app):
     if "ASSESSMENTS_FILE" not in app.config:
         app.config["ASSESSMENTS_FILE"] = ASSESSMENTS_FILE
 
+    def get_assessments():
+        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
+            return AssessmentsController.from_dict(None, None, json.loads(f.read()))
+
     @app.route('/api/assessments')
     def index_assess():
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            pkgCtrl = PackagesController()
-            vulnCtrl = VulnerabilitiesController(pkgCtrl)
-            assessCtrl = AssessmentsController.from_dict(pkgCtrl, vulnCtrl, json.loads(f.read()))
+        assessCtrl = get_assessments()
+        if assessCtrl is None:
+            return {"error": "Internal error"}, 500
 
-            if request.args.get('format', 'list') == "dict":
-                return assessCtrl.to_dict()
-            return list(assessCtrl.to_dict().values())
+        if request.args.get('format', 'list') == "dict":
+            return assessCtrl.to_dict()
+        return list(assessCtrl.to_dict().values())
+
+    @app.route('/api/assessments/<assessment_id>')
+    def assess_by_id(assessment_id):
+        assessCtrl = get_assessments()
+        if assessCtrl is None:
+            return {"error": "Internal error"}, 500
+
+        item = assessCtrl.get_by_id(assessment_id)
+        if item is None:
+            return {"error": "Not found"}, 404
+        return item.to_dict(), 200
+
+    @app.route('/api/vulnerabilities/<vuln_id>/assessments')
+    def list_assess_by_vuln(vuln_id):
+        assessCtrl = get_assessments()
+        if assessCtrl is None:
+            return {"error": "Internal error"}, 500
+
+        if request.args.get('format', 'list') == "dict":
+            return {k: v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id}, 200
+        return [v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id], 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id):
@@ -38,12 +60,9 @@ def init_app(app):
         if status != 200:
             return assessment, status
 
-        data = None
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            data = json.loads(f.read())
-        if data is None:
+        assessCtrl = get_assessments()
+        if assessCtrl is None:
             return {"error": "Internal error"}, 500
-        assessCtrl = AssessmentsController.from_dict(None, None, data)
         assessCtrl.add(assessment)
 
         with open(app.config["ASSESSMENTS_FILE"], "w") as f:
