@@ -38,52 +38,59 @@ git add Dockerfile
 git add bin/vulnscout.sh
 
 
+# Is there anything to commit?
+if ! git diff --quiet HEAD --; then
 
-# Ask if the user want to commit or amend the last commit
-read -rp "Do you want to commit the changes or amend the last commit? [(c)ommit / (a)mend] " answer
-if [[ "$answer" = "commit" || "$answer" == "c" || "$answer" == "C" ]]; then
+    # Ask if the user want to commit or amend the last commit
+    read -rp "Do you want to commit the changes or amend the last commit? [(c)ommit / (a)mend] " answer
+    if [[ "$answer" = "commit" || "$answer" == "c" || "$answer" == "C" ]]; then
 
-    # New commit with pre-filled message using commit.template
-    old_config_template="$(git config --get commit.template || true)"
-    git config --local commit.template ".gitmessage.$version"
-    echo "release: publish $version" > ".gitmessage.$version"
+        # New commit with pre-filled message using commit.template
+        old_config_template="$(git config --get commit.template || true)"
+        git config --local commit.template ".gitmessage.$version"
+        echo "release: publish $version" > ".gitmessage.$version"
 
-    fail_commit=false
-    if ! git commit; then
-        fail_commit=true
-    fi
+        fail_commit=false
+        if ! git commit; then
+            fail_commit=true
+        fi
 
-    # clean commit.template config
-    rm -f ".gitmessage.$version"
-    if [[ -n "$old_config_template" ]]; then
-        git config --local commit.template "$old_config_template"
+        # clean commit.template config
+        rm -f ".gitmessage.$version"
+        if [[ -n "$old_config_template" ]]; then
+            git config --local commit.template "$old_config_template"
+        else
+            git config --local --unset commit.template
+        fi
+
+        if [[ "$fail_commit" = true ]]; then
+            echo "Commit failed, aborting release"
+            exit 1
+        fi
+
+    elif [[ "$answer" = "amend" || "$answer" == "a" || "$answer" == "A" ]]; then
+        git commit --amend
     else
-        git config --local --unset commit.template
-    fi
-
-    if [[ "$fail_commit" = true ]]; then
-        echo "Commit failed, aborting release"
+        echo "Invalid answer: $answer - expected '(c)ommit' or '(a)mend'"
         exit 1
     fi
 
-elif [[ "$answer" = "amend" || "$answer" == "a" || "$answer" == "A" ]]; then
-    git commit --amend
+
+    # if file are unstagged, git review will fail. Stash them and re-apply them after
+    if ! git diff --quiet HEAD --; then
+        git add .
+        git stash
+        trap 'git stash pop' EXIT
+    fi
+
+
+    # Publish the commit
+    git review
+
 else
-    echo "Invalid answer: $answer - expected '(c)ommit' or '(a)mend'"
-    exit 1
+    echo "No changes to commit, moving to tag step"
 fi
 
-
-# if file are unstagged, git review will fail. Stash them and re-apply them after
-if ! git diff --quiet HEAD --; then
-    git add .
-    git stash
-    trap 'git stash pop' EXIT
-fi
-
-
-# Publish the commit
-git review
 
 # Tag the release
 read -rp "What message do you want for release tag? [Release $version] " tag_msg
