@@ -1,4 +1,5 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn } from '@tanstack/react-table'
 import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
@@ -9,6 +10,7 @@ import debounce from 'lodash-es/debounce';
 
 type Props = {
     vulnerabilities: Vulnerability[];
+    appendAssessment: (added: Assessment) => void;
 };
 
 const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -25,7 +27,7 @@ const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities }: Props) {
+function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
 
     const [modalvuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
@@ -103,7 +105,7 @@ function TableVulnerabilities ({ vulnerabilities }: Props) {
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredvulnerabilities} estimateRowHeight={66} />
 
-        {modalvuln != undefined && <VulnModal vuln={modalvuln} onClose={() => setModalVuln(undefined)}></VulnModal>}
+        {modalvuln != undefined && <VulnModal vuln={modalvuln} onClose={() => setModalVuln(undefined)} appendAssessment={appendAssessment}></VulnModal>}
     </>)
 }
 

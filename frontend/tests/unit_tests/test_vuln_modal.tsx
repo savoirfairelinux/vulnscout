@@ -1,3 +1,6 @@
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
@@ -54,7 +57,7 @@ describe('Vulnerability Modal', () => {
 
     test('render important data in header', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
 
         // ACT
         const id = await screen.getByText(/^\s*CVE-2010-1234\s*$/i);
@@ -77,7 +80,7 @@ describe('Vulnerability Modal', () => {
 
     test('render text description', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
 
         // ACT
         const title = await screen.getByText(/description/i);
@@ -90,7 +93,7 @@ describe('Vulnerability Modal', () => {
 
     test('render urls and datasource', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
 
         // ACT
         const datasource = await screen.getByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i);
@@ -103,7 +106,7 @@ describe('Vulnerability Modal', () => {
 
     test('render assessment data', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
 
         // ACT
         const status = await screen.getAllByText(/active/i);
@@ -123,7 +126,7 @@ describe('Vulnerability Modal', () => {
     test('closing button', async () => {
         // ARRANGE
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const closeBtns = await screen.getAllByText(/Close/i);
@@ -135,5 +138,51 @@ describe('Vulnerability Modal', () => {
 
         // ASSERT
         expect(closeBtn).toHaveBeenCalledTimes(closeBtns.length);
+    })
+
+    test('adding assessment', async () => {
+        fetchMock.resetMocks();
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve({
+                    "status": "success",
+                    "assessment": {
+                        id: '00-0-0-0-000-00',
+                        vuln_id: vulnerability.id,
+                        packages: vulnerability.packages,
+                        status: 'fixed',
+                        status_notes: 'patched by upgrading layer version',
+                        workadound: 'upgrade layer version',
+                        timestamp: '2021-01-02T00:00:00Z',
+                        responses: []
+                    }
+                })
+            } as Response)
+        );
+
+        // ARRANGE
+        const updateCb = jest.fn();
+        const closeBtn = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={updateCb} />);
+        const user = userEvent.setup();
+
+        // ACT
+        const selects = await screen.getAllByRole('combobox');
+        const selectSource = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        expect(selectSource).toBeDefined();
+        expect(selectSource).toBeInTheDocument();
+        const inputStatus = await screen.getByPlaceholderText(/notes/i);
+        const inputWorkaround = await screen.getByPlaceholderText(/workaround/i);
+        const btn = await screen.getByText(/add assessment/i);
+
+        await user.selectOptions(selectSource, 'fixed');
+        await user.type(inputStatus, 'patched by upgrading layer version');
+        await user.type(inputWorkaround, 'upgrade layer version');
+        await user.click(btn);
+
+        // ASSERT
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+        expect(closeBtn).toHaveBeenCalledTimes(1);
+        expect(updateCb).toHaveBeenCalledTimes(1);
     })
 });

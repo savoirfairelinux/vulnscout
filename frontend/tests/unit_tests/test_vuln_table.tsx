@@ -88,7 +88,7 @@ describe('Packages Table', () => {
 
     test('render headers with empty array', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={[]} />);
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} />);
 
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -107,7 +107,7 @@ describe('Packages Table', () => {
 
     test('render with vulnerabilities', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -126,7 +126,7 @@ describe('Packages Table', () => {
 
     test('sorting by name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -146,7 +146,7 @@ describe('Packages Table', () => {
 
     test('sorting by severity', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
@@ -166,7 +166,7 @@ describe('Packages Table', () => {
 
     test('sorting by status', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -186,7 +186,7 @@ describe('Packages Table', () => {
 
     test('searching for vulnerability ID', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -201,7 +201,7 @@ describe('Packages Table', () => {
 
     test('searching for package name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -216,7 +216,7 @@ describe('Packages Table', () => {
 
     test('searching for description', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -231,7 +231,7 @@ describe('Packages Table', () => {
 
     test('filter by source', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
 
         const user = userEvent.setup();
         const selects = await screen.getAllByRole('combobox');

@@ -68,7 +68,7 @@ def init_app(app):
         with open(app.config["ASSESSMENTS_FILE"], "w") as f:
             f.write(json.dumps(assessCtrl.to_dict()))
 
-        return {"status": "success"}, 200
+        return {"status": "success", "assessment": assessment.to_dict()}, 200
 
 
 def payload_to_assessment(data):
