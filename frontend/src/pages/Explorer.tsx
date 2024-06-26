@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import NavigationBar from "../components/NavigationBar";
 import type { Package } from "../handlers/packages";
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { Assessment } from "../handlers/assessments";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
@@ -38,6 +39,10 @@ function Explorer({ darkMode, setDarkMode }: Props) {
         })
     }, []);
 
+    function appendAssessment(added: Assessment) {
+        setVulns(Vulnerabilities.append_assessment(vulns, added));
+    }
+
     const [tab, setTab] = useState("metrics");
 
     return (
@@ -47,7 +52,7 @@ function Explorer({ darkMode, setDarkMode }: Props) {
         <div className="p-8">
           {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
           {tab == 'packages' && <TablePackages packages={pkgs} />}
-          {tab == 'vulnerabilities' && <TableVulnerabilities vulnerabilities={vulns} />}
+          {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} vulnerabilities={vulns} />}
         </div>
       </div>
     )

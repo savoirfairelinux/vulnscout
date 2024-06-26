@@ -59,15 +59,30 @@ class Vulnerabilities {
     static enrich_with_assessments(vulns: Vulnerability[], assessments: Assessment[]): Vulnerability[] {
         return vulns.map((vuln) => {
             const vulnAssessments = assessments.filter((assessment) => assessment.vuln_id === vuln.id).sort((a, b) => {
-                return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+                return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
             return {
                 ...vuln,
-                status: vulnAssessments.length > 0 ? vulnAssessments[0].status : 'unknown',
-                simplified_status: vulnAssessments.length > 0 ? vulnAssessments[0].simplified_status : 'unknown',
+                status: vulnAssessments.length > 0 ? vulnAssessments[vulnAssessments.length -1].status : 'unknown',
+                simplified_status: vulnAssessments.length > 0 ? vulnAssessments[vulnAssessments.length -1].simplified_status : 'unknown',
                 assessments: vulnAssessments,
             };
         });
+    }
+
+    static append_assessment(vulns: Vulnerability[], assessment: Assessment): Vulnerability[] {
+        return vulns.map((vuln) => {
+            if (vuln.id === assessment.vuln_id) {
+                return {
+                    ...vuln,
+                    status: assessment.status,
+                    simplified_status: assessment.simplified_status,
+                    assessments: [...vuln.assessments, assessment],
+                };
+            }
+
+            return vuln
+        })
     }
 }
 

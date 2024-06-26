@@ -38,10 +38,14 @@ class Assessments {
             mode: "cors",
         });
         const data = await response.json();
-        return data.map((assess: Assessment) => ({
-            ...assess,
-            simplified_status: STATUS_VEX_TO_GRAPH[assess.status] || '[invalid status] '+assess.status,
-        }));
+        return data.map(Assessments.from_json);
+    }
+
+    static from_json(data: Assessment): Assessment {
+        return {
+            ...data,
+            simplified_status: STATUS_VEX_TO_GRAPH[data.status] || '[invalid status] '+data.status,
+        };
     }
 }
 

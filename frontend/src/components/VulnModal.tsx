@@ -1,11 +1,25 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { Assessment } from "../handlers/assessments";
+import Assessments from "../handlers/assessments";
+import { useState } from "react";
 import CvssGauge from "./CvssGauge";
 import SeverityTag from "./SeverityTag";
 
 type Props = {
     vuln: Vulnerability;
     onClose: () => void;
+    appendAssessment: (added: Assessment) => void;
 };
+
+type PostAssessment = {
+    vuln_id: String,
+    packages: String[],
+    status: String,
+    justification?: String,
+    impact_statement?: String,
+    status_notes?: String,
+    workaround?: String
+}
 
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
@@ -17,10 +31,50 @@ const dt_options: Intl.DateTimeFormatOptions = {
 };
 
 function VulnModal(props: Props) {
-  const { vuln, onClose } = props;
+  const { vuln, onClose, appendAssessment } = props;
 
-  const addAssessment = () => {
+  const [new_status, set_new_status] = useState("under_investigation");
+  const [new_justification, set_new_justification] = useState("none");
+  const [new_status_notes, set_new_status_notes] = useState("");
+  const [new_workaround, set_new_workaround] = useState("");
+  const [new_impact, set_new_impact] = useState("");
 
+
+  const addAssessment = async () => {
+    if (new_status == '' || new_justification == '')
+        return;
+    let content: PostAssessment = {
+        vuln_id: vuln.id,
+        packages: vuln.packages,
+        status: new_status,
+        impact_statement: new_status == "not_affected" ? new_impact : undefined,
+        status_notes: new_status_notes,
+        workaround: new_workaround
+    }
+    if (new_status == "not_affected") {
+        if (new_justification != 'none') {
+            content.justification = new_justification;
+        } else {
+            alert("You must provide a justification for this status");
+            return;
+        }
+    }
+
+    const response = await fetch(`/api/vulnerabilities/${vuln.id}/assessments`, {
+        method: 'POST',
+        mode: 'cors',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(content)
+    })
+    const data = await response.json()
+    if (data.status == 'success') {
+        appendAssessment(Assessments.from_json(data.assessment));
+        onClose();
+    } else {
+        alert(`Failed to add assessment: HTTP code ${response.status} | ${JSON.stringify(data)}`);
+    }
   };
 
   return (
@@ -111,10 +165,11 @@ function VulnModal(props: Props) {
                                     <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                     <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                     <h3 className="text-lg font-semibold text-white">
-                                        {assess.simplified_status} - {assess.justification || 'no justification'}
+                                        {assess.simplified_status}{assess.justification && <> - {assess.justification}</>}
                                     </h3>
                                     <p className="text-base font-normal text-gray-300">
-                                        {assess.impact_statement || 'no impact statement'}<br/>
+                                        {assess.impact_statement && <>{assess.impact_statement}<br/></>}
+                                        {!assess.impact_statement && assess.status == 'not_affected' && <>no impact statement<br/></>}
                                         {assess.status_notes || 'no status notes'}<br/>
                                         {assess.workaround || 'no workaround available'}
                                     </p>
@@ -127,24 +182,62 @@ function VulnModal(props: Props) {
                             <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
                             <h3 className="m-1">
                                 Status:
-                                <select className="p-1 px-2 bg-gray-800 mr-4" id="new_assessment_status">
+                                <select
+                                    onChange={(event) => set_new_status(event.target.value)}
+                                    className="p-1 px-2 bg-gray-800 mr-4"
+                                    name="new_assessment_status"
+                                >
                                     <option value="under_investigation">Pending Analysis</option>
                                     <option value="affected">Affected / Exploitable</option>
                                     <option value="fixed">Fixed / Patched</option>
                                     <option value="not_affected">Not applicable</option>
+                                    <option value="false_positive">Faux positif</option>
                                 </select>
-                                Justification:
-                                <select className="p-1 px-2 bg-gray-800" id="new_assessment_justification">
-                                    <option value="none">No justification</option>
-                                    <option value="component_not_present">Component not present</option>
-                                    <option value="vulnerable_code_not_present">vulnerable code not present</option>
-                                    <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
-                                </select>
+                                {new_status == "not_affected" && <>
+                                    Justification:
+                                    <select
+                                        onChange={(event) => set_new_justification(event.target.value)}
+                                        className="p-1 px-2 bg-gray-800"
+                                        name="new_assessment_justification"
+                                    >
+                                        <option value="none">No justification</option>
+                                        <option value="component_not_present">Component not present</option>
+                                        <option value="vulnerable_code_not_present">vulnerable code not present</option>
+                                        <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
+                                        <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
+                                        <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
+                                        <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
+                                    </select>
+                                </>}
                             </h3>
-                            <input id="new_assessment_impact" className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400" type="text" placeholder="Impact Statement"/><br/>
-                            <input id="new_assessment_status_notes" className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400" type="text" placeholder="Status notes"/><br/>
-                            <input id="new_assessment_workaround" className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white" type="text" placeholder="Describe workaround if available"/><br/>
-                            <button onClick={addAssessment} type="button" className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center">Add assessment</button>
+                            {(new_status == "not_affected" || new_status == "false_positive") && <>
+                                <input
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_impact(event.target.value)}
+                                    name="new_assessment_impact"
+                                    className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
+                                    type="text"
+                                    placeholder="why this vulnerability is not exploitable ?"
+                                /><br/>
+                            </>}
+                            <input
+                                onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_status_notes(event.target.value)}
+                                name="new_assessment_status_notes"
+                                className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
+                                type="text"
+                                placeholder="Free text notes about your review, details, actions taken, ..."
+                            /><br/>
+                            <input
+                                onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_workaround(event.target.value)}
+                                name="new_assessment_workaround"
+                                className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white"
+                                type="text"
+                                placeholder="Describe workaround here if available"
+                            /><br/>
+                            <button
+                                onClick={addAssessment}
+                                type="button"
+                                className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+                            >Add assessment</button>
                         </li>
                     </ol>
 				</div>
