@@ -119,3 +119,35 @@ def test_get_assessments_dict(client):
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["status"] == "fixed"
     assert "cairo@1.16.0" in data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["packages"]
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["impact_statement"] == "Yocto reported vulnerability as Patched"
+
+
+def test_get_assessment_by_id(client):
+    response = client.get("/api/assessments/da4d18f0-d89e-4d54-819d-86fc884cc737")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["id"] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    assert data["vuln_id"] == "CVE-2020-35492"
+    assert data["status"] == "fixed"
+
+    response = client.get("/api/assessments/00-0-0-0-000")
+    assert response.status_code == 404
+
+
+def test_get_assessments_by_vuln(client):
+    response = client.get("/api/vulnerabilities/CVE-2020-35492/assessments")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 1
+    assert data[0]["id"] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    assert data[0]["vuln_id"] == "CVE-2020-35492"
+    assert data[0]["status"] == "fixed"
+
+    response = client.get("/api/vulnerabilities/CVE-2020-35492/assessments?format=dict")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["vuln_id"] == "CVE-2020-35492"
+
+    response = client.get("/api/vulnerabilities/CVE-0000-00000/assessments")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 0
