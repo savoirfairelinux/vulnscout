@@ -12,8 +12,8 @@
 set -euo pipefail # Enable error checking
 
 # Configuration are changed automatically by bin/release_tag.sh
-DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.2.0"
-VULNSCOUT_VERSION="v0.2.0"
+DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.2.1"
+VULNSCOUT_VERSION="v0.2.1"
 
 
 function main() {
