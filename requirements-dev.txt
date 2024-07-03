@@ -5,3 +5,4 @@ pre-commit==3.7.1
 pytest-cov==5.0.0
 pytest==8.2.0
 semver==3.0.2
+uuid7==0.1.0
