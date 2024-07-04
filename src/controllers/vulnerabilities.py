@@ -22,31 +22,35 @@ class VulnerabilitiesController:
         if vuln_id in self.alias_registered:
             return self.vulnerabilities[self.alias_registered[vuln_id]]
 
-    def add(self, vulnerability: Vulnerability):
-        """Add a vulnerability to the list, merging it with an existing one if present."""
+    def add(self, vulnerability: Vulnerability) -> Vulnerability:
+        """
+        Add a vulnerability to the list, merging it with an existing one if present.
+        Return the vulnerability as is if added, or the merged vulnerability if already existing.
+        """
         if vulnerability is None:
             return
         if vulnerability.id in self.vulnerabilities:
             self.vulnerabilities[vulnerability.id].merge(vulnerability)
-            return
+            return self.vulnerabilities[vulnerability.id]
         if vulnerability.id in self.alias_registered:
             self.vulnerabilities[self.alias_registered[vulnerability.id]].merge(vulnerability)
-            return
+            return self.vulnerabilities[self.alias_registered[vulnerability.id]]
 
         for alias in vulnerability.aliases:
             if alias in self.vulnerabilities:
                 self.register_alias(vulnerability.aliases, alias)
                 self.register_alias([vulnerability.id], alias)
                 self.vulnerabilities[alias].merge(vulnerability)
-                return
+                return self.vulnerabilities[alias]
             if alias in self.alias_registered:
                 self.register_alias(vulnerability.aliases, self.alias_registered[alias])
                 self.register_alias([vulnerability.id], self.alias_registered[alias])
                 self.vulnerabilities[self.alias_registered[alias]].merge(vulnerability)
-                return
+                return self.vulnerabilities[self.alias_registered[alias]]
 
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
+        return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):
         """Allow to register an list of alias pointing to a vulnerability id."""

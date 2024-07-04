@@ -13,6 +13,7 @@ def init_files(tmp_path):
         "GRYPE_SPDX_PATH": tmp_path / "spdx.grype.json",
         "YOCTO_FOLDER": tmp_path / "yocto_cve",
         "YOCTO_CVE_CHECKER": tmp_path / "yocto_cve" / "demo.json",
+        "OPENVEX_PATH": tmp_path / "openvex.json",
         "OUTPUT_PATH": tmp_path / "all-merged.json",
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
         "OUTPUT_VULN_PATH": tmp_path / "vulnerabilities-merged.json",
@@ -52,3 +53,16 @@ def test_running_script(init_files):
 
     assert len(out_assessment) == 5
     assert len(out_all["assessments"]) == len(out_assessment)
+
+
+def test_invalid_openvex(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    init_files["OPENVEX_PATH"].write_text("invalid{ json")
+    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    with pytest.raises(Exception):
+        main()
+
+    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    main()
