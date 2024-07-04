@@ -59,23 +59,46 @@ class YoctoVulns:
                     vuln.register_cvss(cvss_item)
 
                 vuln.add_package(package.id)
-                self.vulnerabilitiesCtrl.add(vuln)
+                vuln = self.vulnerabilitiesCtrl.add(vuln)
 
-                assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln.id, package.id)
-                if len(assessment) >= 1:
-                    assessment = assessment[0]
-                else:
-                    assessment = VulnAssessment(vuln.id, [package.id])
+                if "status" not in issue:
+                    continue
+                assessments = self.assessmentsCtrl.gets_by_vuln_pkg(vuln.id, package.id)
 
-                if "status" in issue:
-                    if issue["status"] == "Patched":
-                        assessment.set_status("fixed")
-                        assessment.set_not_affected_reason("Yocto reported vulnerability as Patched")
-                    elif issue["status"] == "Ignored":
-                        assessment.set_status("not_affected")
-                        assessment.set_justification("vulnerable_code_not_present")
-                        assessment.set_not_affected_reason("Yocto reported vulnerability as Ignored")
-                    elif issue["status"] == "Unpatched":
-                        assessment.set_status("under_investigation")
+                found_corresponding_assessment = False
+                for assessment in assessments:
+
+                    if (
+                            issue["status"] == "Patched"
+                            and assessment.is_compatible_status("fixed")
+                            and "Yocto reported vulnerability as Patched" in assessment.impact_statement
+                    ):
+                        found_corresponding_assessment = True
+                    elif (
+                            issue["status"] == "Ignored"
+                            and assessment.is_compatible_status("fixed")
+                            and "Yocto reported vulnerability as Ignored" in assessment.impact_statement
+                    ):
+                        found_corresponding_assessment = True
+                    elif (
+                            issue["status"] == "Unpatched"
+                            and assessment.is_compatible_status("under_investigation")
+                    ):
+                        found_corresponding_assessment = True
+
+                if found_corresponding_assessment:
+                    continue
+
+                assessment = VulnAssessment(vuln.id, [package.id])
+
+                if issue["status"] == "Patched":
+                    assessment.set_status("fixed")
+                    assessment.set_not_affected_reason("Yocto reported vulnerability as Patched")
+                elif issue["status"] == "Ignored":
+                    assessment.set_status("not_affected")
+                    assessment.set_justification("vulnerable_code_not_present")
+                    assessment.set_not_affected_reason("Yocto reported vulnerability as Ignored")
+                elif issue["status"] == "Unpatched":
+                    assessment.set_status("under_investigation")
 
                 self.assessmentsCtrl.add(assessment)
