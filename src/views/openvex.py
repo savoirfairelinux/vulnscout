@@ -56,6 +56,10 @@ class OpenVex:
                         vuln.add_alias(alias)
                 if "@id" in statement["vulnerability"] and statement["vulnerability"]["@id"].startswith("http"):
                     vuln.add_url(statement["vulnerability"]["@id"])
+                # scanners is not part of OpenVex standard
+                if "scanners" in statement:
+                    for scanner in statement["scanners"]:
+                        vuln.found_by = scanner
 
                 assess = VulnAssessment(vuln.id)
                 if "products" in statement:
@@ -87,7 +91,7 @@ class OpenVex:
 
                 self.assessmentsCtrl.add(assess)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, strict_export=False) -> dict:
         output = {
             "@context": "https://openvex.dev/ns/v0.2.0",
             "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(uuid7(as_type='str')),
@@ -108,6 +112,8 @@ class OpenVex:
                 stmt["vulnerability"]["aliases"] = vuln.aliases
                 if vuln.datasource.startswith("http"):
                     stmt["vulnerability"]["@id"] = vuln.datasource
+                if not strict_export:
+                    stmt["scanners"] = ["openvex", vuln.found_by]
 
             pkg_list = []
             for pkg_id in assess.packages:
