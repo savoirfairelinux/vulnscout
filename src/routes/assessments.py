@@ -1,19 +1,44 @@
 from flask import request
 import json
+from ..controllers.packages import PackagesController
+from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from ..views.openvex import OpenVex
 from ..models.assessment import VulnAssessment
 
 ASSESSMENTS_FILE = "/scan/tmp/assessments-merged.json"
+OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 
 def init_app(app):
 
     if "ASSESSMENTS_FILE" not in app.config:
         app.config["ASSESSMENTS_FILE"] = ASSESSMENTS_FILE
+    if "OPENVEX_FILE" not in app.config:
+        app.config["OPENVEX_FILE"] = OPENVEX_FILE
 
     def get_assessments():
         with open(app.config["ASSESSMENTS_FILE"], "r") as f:
             return AssessmentsController.from_dict(None, None, json.loads(f.read()))
+
+    def get_all_datas():
+        controllers = {}
+        with open(app.config["PKG_FILE"], "r") as f:
+            controllers["packages"] = PackagesController.from_dict(
+                json.loads(f.read())
+            )
+        with open(app.config["VULNS_FILE"], "r") as f:
+            controllers["vulnerabilities"] = VulnerabilitiesController.from_dict(
+                controllers["packages"],
+                json.loads(f.read())
+            )
+        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
+            controllers["assessments"] = AssessmentsController.from_dict(
+                controllers["packages"],
+                controllers["vulnerabilities"],
+                json.loads(f.read())
+            )
+        return controllers
 
     @app.route('/api/assessments')
     def index_assess():
@@ -60,15 +85,21 @@ def init_app(app):
         if status != 200:
             return assessment, status
 
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
+        ctrls = get_all_datas()
+        if ctrls["assessments"] is None:
             return {"error": "Internal error"}, 500
-        assessCtrl.add(assessment)
+        ctrls["assessments"].add(assessment)
 
-        with open(app.config["ASSESSMENTS_FILE"], "w") as f:
-            f.write(json.dumps(assessCtrl.to_dict()))
-
+        save_assessments_to_files(ctrls)
         return {"status": "success", "assessment": assessment.to_dict()}, 200
+
+    def save_assessments_to_files(ctrls):
+        with open(app.config["ASSESSMENTS_FILE"], "w") as f:
+            f.write(json.dumps(ctrls["assessments"].to_dict()))
+
+        vex = OpenVex(ctrls)
+        with open(app.config["OPENVEX_FILE"], "w") as f:
+            f.write(json.dumps(vex.to_dict()))
 
 
 def payload_to_assessment(data):

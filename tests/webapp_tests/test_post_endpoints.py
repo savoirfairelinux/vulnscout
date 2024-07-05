@@ -12,6 +12,7 @@ def init_files(tmp_path):
         "packages": tmp_path / "packages-merged.json",
         "vulnerabilities": tmp_path / "vulnerabilities-merged.json",
         "assessments": tmp_path / "assessments-merged.json",
+        "openvex": tmp_path / "openvex.json",
     }
     write_demo_files(files)
     return files
@@ -26,6 +27,7 @@ def app(init_files):
         "PKG_FILE": init_files["packages"],
         "VULNS_FILE": init_files["vulnerabilities"],
         "ASSESSMENTS_FILE": init_files["assessments"],
+        "OPENVEX_FILE": init_files["openvex"],
     })
 
     yield app

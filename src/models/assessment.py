@@ -301,7 +301,7 @@ class VulnAssessment:
             },
             "products": [{"@id": p} for p in self.packages],
             "timestamp": self.timestamp,
-            "last_update": self.last_update,
+            "last_updated": self.last_update,
 
             "status": openvex_status,
             "status_notes": self.status_notes,
