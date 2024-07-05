@@ -155,12 +155,19 @@ def test_parse_statement_details(openvex_parser):
                 "impact_statement": "Color red was removed from image before being sent to cairo",
                 "action_statement": "Use product version 7.10+",
                 "action_statement_timestamp": "2023-01-08T18:02:03.647787998-06:00",
-                "status_notes": "This vulnerability was mitigated by the use of a color filter in image-pipeline.c"
+                "status_notes": "This vulnerability was mitigated by the use of a color filter in image-pipeline.c",
+                "timestamp": "2023-01-06T15:05:42.647787998Z",
+                "last_updated": "2023-01-08T18:02:03.647787998Z",
+
+                "scanners": ["some_scanner"]
             }
         ]
     }"""))
     assert len(openvex_parser.packagesCtrl.packages) == 1
     assert len(openvex_parser.vulnerabilitiesCtrl.vulnerabilities) == 1
+    vuln = openvex_parser.vulnerabilitiesCtrl.get("CVE-2020-35492")
+    assert vuln.found_by == "some_scanner"
+
     assert len(openvex_parser.assessmentsCtrl.assessments) == 1
     assess = openvex_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-35492")[0]
     assert assess.status == "not_affected"
@@ -169,6 +176,8 @@ def test_parse_statement_details(openvex_parser):
     assert assess.workaround == "Use product version 7.10+"
     assert assess.workaround_timestamp == "2023-01-08T18:02:03.647787998-06:00"
     assert assess.status_notes == "This vulnerability was mitigated by the use of a color filter in image-pipeline.c"
+    assert assess.timestamp == "2023-01-06T15:05:42.647787998Z"
+    assert assess.last_update == "2023-01-08T18:02:03.647787998Z"
 
 
 def test_encode_empty(openvex_parser):

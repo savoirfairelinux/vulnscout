@@ -88,6 +88,10 @@ class OpenVex:
                         assess.set_workaround(statement["action_statement"], statement["action_statement_timestamp"])
                     else:
                         assess.set_workaround(statement["action_statement"])
+                if "timestamp" in statement:
+                    assess.timestamp = statement["timestamp"]
+                if "last_updated" in statement:
+                    assess.last_update = statement["last_updated"]
 
                 self.assessmentsCtrl.add(assess)
 
