@@ -30,7 +30,7 @@ class YoctoVulns:
                     issue.get("id").upper(),
                     "yocto",
                     issue.get("link", ""),
-                    "other"
+                    "unknown"
                 )
                 if "link" in issue:
                     vuln.add_url(issue.get("link"))
