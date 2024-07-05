@@ -167,3 +167,16 @@ def test_contains(cairo_pkg, generic_pkg):
     assert generic_pkg.purl[0] not in cairo_pkg
     assert 5 not in cairo_pkg
     assert {"foo": "bar"} not in cairo_pkg
+
+
+def test_package_with_vendor():
+    """
+    GIVEN a Package with a vendor:name format
+    WHEN creating the Package
+    THEN check the vendor is correctly added to the CPE and PURL
+    """
+    pkg = Package("vendor:name", "1.0.0")
+    assert len(pkg.cpe) == 1
+    assert pkg.cpe[0] == "cpe:2.3:a:vendor:name:1.0.0:*:*:*:*:*:*:*"
+    assert len(pkg.purl) == 1
+    assert pkg.purl[0] == "pkg:generic/vendor/name@1.0.0"
