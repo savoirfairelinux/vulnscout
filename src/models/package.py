@@ -15,8 +15,15 @@ class Package:
         cpe and purl are optional lists of identifiers.
         """
         self.name = name
+
+        # handle vendor:package format
+        if len(name.split(':')) == 2:
+            self.name = name.split(':')[1]
+            cpe.append(f"cpe:2.3:a:{name}:{version}:*:*:*:*:*:*:*")
+            purl.append(f"pkg:generic/{name.replace(':', '/')}@{version}")
+
         self.version = version.split("+git")[0]
-        self.id = f"{name}@{self.version}"
+        self.id = f"{self.name}@{self.version}"
         self.cpe = []
         self.purl = []
         for c in cpe:
