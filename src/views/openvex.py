@@ -25,7 +25,7 @@ class OpenVex:
         if "cpe23" in identifiers:
             cpe_parts = identifiers["cpe23"].split(":")
             if len(cpe_parts) >= 6:
-                pkg = Package(cpe_parts[4], cpe_parts[5], [identifiers["cpe23"]])
+                pkg = Package(cpe_parts[4], cpe_parts[5], [identifiers["cpe23"]], [])
 
         if "purl" in identifiers:
             if pkg is None:
@@ -38,7 +38,7 @@ class OpenVex:
         if pkg is None:
             match = re.search(r"([^\/\s]+)@([0-9\.]+)", product["@id"])
             if match:
-                pkg = Package(match.group(1), match.group(2))
+                pkg = Package(match.group(1), match.group(2), [], [])
         return pkg
 
     def load_from_dict(self, data: dict):
