@@ -99,7 +99,7 @@ def init_app(app):
 
         vex = OpenVex(ctrls)
         with open(app.config["OPENVEX_FILE"], "w") as f:
-            f.write(json.dumps(vex.to_dict()))
+            f.write(json.dumps(vex.to_dict(), indent=2))
 
 
 def payload_to_assessment(data):

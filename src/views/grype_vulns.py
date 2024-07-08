@@ -19,7 +19,7 @@ class GrypeVulns:
     def parse_artifact_section(self, artifact: dict) -> str:
         """Parse the `artifact` part of grype JSON output."""
         if "name" in artifact and "version" in artifact:
-            package = Package(artifact["name"], artifact["version"])
+            package = Package(artifact["name"], artifact["version"], [], [])
 
             if "purl" in artifact:
                 package.add_purl(artifact["purl"])
@@ -42,7 +42,7 @@ class GrypeVulns:
             if "Package" in searchedby:
                 found_pkg = searchedby.get("Package", {})
                 if "name" in found_pkg and "version" in found_pkg:
-                    package = Package(found_pkg["name"], found_pkg["version"])
+                    package = Package(found_pkg["name"], found_pkg["version"], [], [])
 
                     if "purl" in searchedby:
                         package.add_purl(searchedby["purl"])
@@ -116,7 +116,7 @@ class GrypeVulns:
             for package in packages:
                 vuln_data.add_package(package)
 
-            self.vulnerabilitiesCtrl.add(vuln_data)
+            vuln_data = self.vulnerabilitiesCtrl.add(vuln_data)
 
             assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, packages[0])
             if len(assessment) < 1:

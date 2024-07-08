@@ -19,7 +19,7 @@ class YoctoVulns:
             if "name" not in pkg or "version" not in pkg:
                 continue
 
-            package = Package(pkg["name"], pkg["version"])
+            package = Package(pkg["name"], pkg["version"], [], [])
             package.generate_generic_cpe()
             package.generate_generic_purl()
             self.packagesCtrl.add(package)
@@ -76,7 +76,7 @@ class YoctoVulns:
                         found_corresponding_assessment = True
                     elif (
                             issue["status"] == "Ignored"
-                            and assessment.is_compatible_status("fixed")
+                            and assessment.is_compatible_status("not_affected")
                             and "Yocto reported vulnerability as Ignored" in assessment.impact_statement
                     ):
                         found_corresponding_assessment = True
