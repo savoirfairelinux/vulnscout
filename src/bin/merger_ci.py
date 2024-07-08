@@ -83,7 +83,7 @@ def output_results(controllers, files):
         f.write(json.dumps(output["assessments"]))
 
     with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "w") as f:
-        f.write(json.dumps(files["openvex"].to_dict()))
+        f.write(json.dumps(files["openvex"].to_dict(), indent=2))
 
 
 def main():
