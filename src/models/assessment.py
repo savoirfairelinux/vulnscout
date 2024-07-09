@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from .vulnerability import Vulnerability
 from .package import Package
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 
@@ -82,8 +82,8 @@ class VulnAssessment:
             vuln_id = vuln_id.id
         self.vuln_id = vuln_id
         self.packages = []
-        self.timestamp = datetime.now().isoformat()
-        self.last_update = datetime.now().isoformat()
+        self.timestamp = datetime.now(timezone.utc).isoformat()
+        self.last_update = datetime.now(timezone.utc).isoformat()
         self.id = str(uuid4())
 
         self.status = "under_investigation"
@@ -234,7 +234,7 @@ class VulnAssessment:
         If no timestamp is provided, the current time is used.
         """
         self.workaround = workaround
-        self.workaround_timestamp = timestamp if timestamp is not None else datetime.now().isoformat()
+        self.workaround_timestamp = timestamp if timestamp is not None else datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict:
         """Return a dict representation of this assessment."""

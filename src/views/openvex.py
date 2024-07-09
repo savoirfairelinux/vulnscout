@@ -3,7 +3,7 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
 from uuid_extensions import uuid7
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 
@@ -100,7 +100,7 @@ class OpenVex:
             "@context": "https://openvex.dev/ns/v0.2.0",
             "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(uuid7(as_type='str')),
             "author": "Savoir-Faire Linux",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": 1,
             "statements": []
         }
