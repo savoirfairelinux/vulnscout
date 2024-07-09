@@ -9,6 +9,7 @@ from cyclonedx.model.component import Component
 import cyclonedx.model.vulnerability
 from cyclonedx.model.impact_analysis import ImpactAnalysisState, ImpactAnalysisJustification
 from uuid_extensions import uuid7
+from datetime import datetime, timezone
 from packageurl import PackageURL
 
 
@@ -347,6 +348,7 @@ class CycloneDx:
             self.sbom = Bom()
             self.sbom.serial_number = uuid7()
 
+        self.sbom.metadata.timestamp = datetime.now(timezone.utc)
         self.sbom.components = []
         self.register_components()
         self.sbom.vulnerabilities = []
