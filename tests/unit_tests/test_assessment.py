@@ -101,24 +101,24 @@ def test_export_as_cdx(assessment_initial, assessment_active, assessment_fixed, 
     """
     assert {
         "state": "in_triage",
-        "details": "Initial assessment",
+        "detail": "Initial assessment",
     }.items() <= assessment_initial.to_cdx_vex_dict()['analysis'].items()
 
     assert {
         "state": "exploitable",
-        "details": "package ABC is vulnerable to CVE-456\npackage ABC is vulnerable to CVE-123",
+        "detail": "package ABC is vulnerable to CVE-456\npackage ABC is vulnerable to CVE-123",
         "response": ["workaround_available"],
     }.items() <= assessment_active.to_cdx_vex_dict()['analysis'].items()
 
     assert {
         "state": "resolved",
-        "details": "package ABC in versions >= 1.4.0 is no longer vulnerable to CVE-456",
+        "detail": "package ABC in versions >= 1.4.0 is no longer vulnerable to CVE-456",
         "response": ["update"],
     }.items() <= assessment_fixed.to_cdx_vex_dict()['analysis'].items()
 
     assert {
         "state": "not_affected",
-        "details": "package XYZ is not affected by CVE-789",
+        "detail": "package XYZ is not affected by CVE-789\npackage XYZ does not contain the vulnerable code",
         "justification": "code_not_present",
     }.items() <= assessment_not_affected.to_cdx_vex_dict()['analysis'].items()
 

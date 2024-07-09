@@ -335,11 +335,17 @@ class VulnAssessment:
         if len(cdx_response) < 1 and self.workaround != "":
             cdx_response = ["workaround_available"]
 
+        detail = self.status_notes
+        if self.impact_statement != "" and detail != "":
+            detail += "\n" + self.impact_statement
+        elif self.impact_statement != "":
+            detail = self.impact_statement
+
         return {
             "workaround": self.workaround,
             "analysis": {
                 "state": cdx_state,
-                "details": self.status_notes if self.status_notes != "" else self.impact_statement,
+                "detail": detail,
                 "justification": cdx_justif,
                 "response": cdx_response,
                 "firstIssued": self.timestamp,
