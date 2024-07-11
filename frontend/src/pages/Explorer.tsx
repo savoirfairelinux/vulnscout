@@ -30,11 +30,10 @@ function Explorer({ darkMode, setDarkMode }: Props) {
                 alert("Failed to load data");
                 return;
             }
+            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulns.value, assess.value);
+            setVulns(enriched_vulns);
             setPkgs(
-              Packages.enrich_with_vulns(pkgs.value, vulns.value)
-            );
-            setVulns(
-              Vulnerabilities.enrich_with_assessments(vulns.value, assess.value)
+              Packages.enrich_with_vulns(pkgs.value, enriched_vulns)
             );
         })
     }, []);
