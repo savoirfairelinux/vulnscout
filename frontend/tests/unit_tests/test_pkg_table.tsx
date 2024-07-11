@@ -30,8 +30,14 @@ describe('Packages Table', () => {
             version: '1.0.0',
             cpe: ['cpe:2.3:a:vendor:aaabbbccc:1.0.0:*:*:*:*:*:*:*:*'],
             purl: ['pkg:vendor/aaabbbccc@1.0.0'],
-            vulnerabilities: 2,
-            maxSeverity: 'low',
+            vulnerabilities: {
+                "active": 2,
+                "fixed": 6
+            },
+            maxSeverity: {
+                "active": {label: 'low', index: 2},
+                "fixed": {label: 'medium', index: 3}
+            },
             source: ['hardcoded']
         },
         {
@@ -40,8 +46,8 @@ describe('Packages Table', () => {
             version: '2.0.0',
             cpe: ['cpe:2.3:a:vendor:xxxyyyzzz:2.0.0:*:*:*:*:*:*:*:*'],
             purl: ['pkg:vendor/xxxyyyzzz@2.0.0'],
-            vulnerabilities: 4,
-            maxSeverity: 'high',
+            vulnerabilities: {"active": 4},
+            maxSeverity: {"active": {label: 'high', index: 4}},
             source: ['cve-finder']
         }
     ];
@@ -96,12 +102,12 @@ describe('Packages Table', () => {
 
         const btn_enabled = await screen.getByRole('button', {name: /severity enabled/i});
         const severity_high = await screen.getByText(/high/i);
-        const severity_low = await screen.getByText(/low/i);
+        const severity_medium = await screen.getByText(/medium/i);
 
         // ASSERT
         expect(btn_enabled).toBeInTheDocument();
         expect(severity_high).toBeInTheDocument();
-        expect(severity_low).toBeInTheDocument();
+        expect(severity_medium).toBeInTheDocument();
     })
 
     test('sorting by name', async () => {
@@ -154,13 +160,13 @@ describe('Packages Table', () => {
         await user.click(vuln_count_header); // numerical order -> reverse numerical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
         });
 
         await user.click(vuln_count_header); // un-ordoned -> numerical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
         });
     })
 
@@ -197,5 +203,34 @@ describe('Packages Table', () => {
 
         const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
         expect(pkg_xyz).toBeInTheDocument();
+    })
+
+    test('filter by status', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const hide_fixed = await screen.getByRole('checkbox', {name: /hide fixed/i});
+        const severity_toggle = await screen.getByRole('button', {name: /severity disabled/i});
+        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
+
+        await user.click(severity_toggle); // switch to enabled mode
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByText(/medium/i), { timeout: 500 });
+
+        // ACT
+        await user.click(hide_fixed);
+        await user.click(vuln_count_header); // numerical order -> reverse numerical order
+
+        // ASSERT
+        await pending_deletion;
+        const severity_high = await screen.getByText(/high/i);
+        const severity_low = await screen.getByText(/low/i);
+        expect(severity_high).toBeInTheDocument();
+        expect(severity_low).toBeInTheDocument();
+
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
     })
 });

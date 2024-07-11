@@ -1,5 +1,5 @@
-import type { Package } from "../handlers/packages";
-import { createColumnHelper, SortingFn } from '@tanstack/react-table'
+import type { Package, VulnCounts, Severities } from "../handlers/packages";
+import { createColumnHelper, Row } from '@tanstack/react-table'
 import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
@@ -9,9 +9,29 @@ type Props = {
     packages: Package[];
 };
 
-const sortVunerabilitiesFn: SortingFn<Package> = (rowA, rowB) => {
-    const vulnsA = rowA.original.vulnerabilities
-    const vulnsB = rowB.original.vulnerabilities
+const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
+    return Object.keys(counts).reduce((acc, key) => {
+        if (!ignore.includes(key)) {
+            acc += counts[key]
+        }
+        return acc
+    }, 0)
+}
+
+const highestSeverity = (severities: Severities, ignore: string[]) => {
+    return Object.keys(severities).reduce((acc, key) => {
+        if (!ignore.includes(key)) {
+            if (severities[key].index > acc.index) {
+                return severities[key]
+            }
+        }
+        return acc
+    }, {label: 'NONE', index: 0})
+}
+
+const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: string[]) => {
+    const vulnsA = addVulnCounts(rowA.original.vulnerabilities, ignore)
+    const vulnsB = addVulnCounts(rowB.original.vulnerabilities, ignore)
     return vulnsA - vulnsB
 }
 
@@ -19,6 +39,8 @@ const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
 function TablePackages ({ packages }: Props) {
     const [showSeverity, setShowSeverity] = useState(false);
+    const [hidePatched, setHidePatched] = useState(false);
+    const [hideIgnored, setHideIgnored] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [filterSource, setfilterSource] = useState<string|undefined>(undefined)
 
@@ -37,6 +59,13 @@ function TablePackages ({ packages }: Props) {
         return acc;
     }, []), [packages])
 
+    const hide_filter = useMemo(() => {
+        let hide_filter = []
+        if (hidePatched) hide_filter.push('fixed')
+        if (hideIgnored) hide_filter.push('not affected')
+        return hide_filter
+    }, [hidePatched, hideIgnored])
+
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
         return [
@@ -48,13 +77,13 @@ function TablePackages ({ packages }: Props) {
                 header: 'Version',
                 cell: info => info.getValue()
             }),
-            columnHelper.accessor(row => ({ count: row.vulnerabilities, severity: row.maxSeverity }), {
+            columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
                 header: 'Vulnerabilities',
                 cell: info => <>
-                    <span className="min-w-8 mr-2 inline-block">{info.getValue().count}</span>
-                    {showSeverity && <SeverityTag severity={info.getValue().severity} />}
+                    <span className="min-w-8 mr-2 inline-block">{addVulnCounts(info.getValue().counts, hide_filter)}</span>
+                    {showSeverity && <SeverityTag severity={highestSeverity(info.getValue().severity, hide_filter).label} />}
                 </>,
-                sortingFn: sortVunerabilitiesFn
+                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, hide_filter)
             }),
             columnHelper.accessor('source', {
                 header: 'Sources',
@@ -62,7 +91,7 @@ function TablePackages ({ packages }: Props) {
                 enableSorting: false
             })
         ]
-    }, [showSeverity]);
+    }, [showSeverity, hide_filter]);
 
     const filteredPackages = useMemo(() => {
         if (filterSource == undefined) return packages
@@ -79,6 +108,14 @@ function TablePackages ({ packages }: Props) {
                 {sources_list.map(source => <option value={source} key={source}>{source}</option>)}
             </select>
             <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>Severity {showSeverity ? 'enabled' : 'disabled'}</button>
+            <label className="ml-2">
+                <input name="hide_patched" type="checkbox" className="mr-1" checked={hidePatched} onChange={() => {setHidePatched(!hidePatched)}} />
+                Hide fixed vulns
+            </label>
+            <label className="ml-2">
+                <input name="hide_ignored" type="checkbox" className="mr-1" checked={hideIgnored} onChange={() => {setHideIgnored(!hideIgnored)} } />
+                Hide ignored vulns
+            </label>
         </div>
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
