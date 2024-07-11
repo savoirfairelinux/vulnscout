@@ -33,11 +33,15 @@ class Package:
 
     def add_cpe(self, cpe: str):
         """Add a single cpe (str) identifier to the package if not already present."""
+        if not cpe:
+            return
         if cpe not in self.cpe:
             self.cpe.append(cpe)
 
     def add_purl(self, purl: str):
         """Add a single purl (str) identifier to the package if not already present."""
+        if not purl:
+            return
         if purl not in self.purl:
             self.purl.append(purl)
 
