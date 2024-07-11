@@ -10,6 +10,7 @@
 from ..views.grype_vulns import GrypeVulns
 from ..views.yocto_vulns import YoctoVulns
 from ..views.openvex import OpenVex
+from ..views.cyclonedx import CycloneDx
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
@@ -17,6 +18,7 @@ import glob
 import json
 import os
 
+CDX_PATH = "/scan/tmp/merged.cdx.json"
 GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
 GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
 YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
@@ -26,6 +28,7 @@ OUTPUT_PATH = "/scan/tmp/vulns-merged.json"
 OUTPUT_PKG_PATH = "/scan/tmp/packages-merged.json"
 OUTPUT_VULN_PATH = "/scan/tmp/vulnerabilities-merged.json"
 OUTPUT_ASSESSEMENT_PATH = "/scan/tmp/assessments-merged.json"
+OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 
 
 def post_treatment(controllers, files):
@@ -38,6 +41,7 @@ def read_inputs(controllers):
     scanGrype = GrypeVulns(controllers)
     scanYocto = YoctoVulns(controllers)
     openvex = OpenVex(controllers)
+    cdx = CycloneDx(controllers)
 
     try:
         with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
@@ -52,6 +56,9 @@ def read_inputs(controllers):
         else:
             print(f"Ignored: Error parsing OpenVEX file: {e}")
 
+    with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
+        cdx.load_from_dict(json.loads(f.read()))
+        cdx.parse_and_merge()
     with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
         scanGrype.load_from_dict(json.loads(f.read()))
     with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
@@ -62,7 +69,8 @@ def read_inputs(controllers):
             scanYocto.load_from_dict(json.loads(f.read()))
 
     return {
-        "openvex": openvex
+        "openvex": openvex,
+        "cdx": cdx,
     }
 
 
@@ -84,6 +92,8 @@ def output_results(controllers, files):
 
     with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "w") as f:
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
+    with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
+        f.write(files["cdx"].output_as_json())
 
 
 def main():
