@@ -88,7 +88,6 @@ function full_scan_steps() {
             --docnamespace "$DOCUMENT_URL"
 
         mv "$TMP_PATH/merged-SBoM-deep.json" "$TMP_PATH/merged.spdx.json"
-        cp "$TMP_PATH/merged.spdx.json" "$OUTPUTS_PATH/sbom.spdx.json" # keep a copy in tmp for CVE analysis
     else
         set_status "2" "No SPDX files found, skipping"
     fi
