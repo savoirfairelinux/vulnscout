@@ -31,7 +31,11 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
 
     const [modalvuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
-    const [filterSource, setfilterSource] = useState<string|undefined>(undefined)
+    const [filterSource, setfilterSource] = useState<string|undefined>(undefined);
+    const [hidePatched, setHidePatched] = useState(false);
+    const [hideIgnored, setHideIgnored] = useState(false);
+    const [hideActive, setHideActive] = useState(false);
+    const [hidePending, setHidePending] = useState(false);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -88,9 +92,15 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
     }, []);
 
     const filteredvulnerabilities = useMemo(() => {
-        if (filterSource == undefined) return vulnerabilities
-        return vulnerabilities.filter((el) => el.found_by == filterSource)
-    }, [vulnerabilities, filterSource])
+        return vulnerabilities.filter((el) => {
+            if (filterSource != undefined && el.found_by != filterSource) return false
+            if (hideIgnored && el.simplified_status == 'not affected') return false
+            if (hidePatched && el.simplified_status == 'fixed') return false
+            if (hideActive && el.simplified_status == 'active') return false
+            if (hidePending && el.simplified_status == 'pending analysis') return false
+            return true
+        })
+    }, [vulnerabilities, filterSource, hideIgnored, hidePatched, hideActive, hidePending])
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -101,6 +111,22 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
                 <option value={undefined}>All sources</option>
                 {sources_list.map(source => <option value={source} key={source}>{source}</option>)}
             </select>
+            <label className="ml-2">
+                <input name="hide_patched" type="checkbox" className="mr-1" checked={hidePatched} onChange={() => {setHidePatched(!hidePatched)} } />
+                Hide fixed
+            </label>
+            <label className="ml-2">
+                <input name="hide_ignored" type="checkbox" className="mr-1" checked={hideIgnored} onChange={() => {setHideIgnored(!hideIgnored)} } />
+                Hide ignored
+            </label>
+            <label className="ml-2">
+                <input name="hide_active" type="checkbox" className="mr-1" checked={hideActive} onChange={() => {setHideActive(!hideActive)} } />
+                Hide active
+            </label>
+            <label className="ml-2">
+                <input name="hide_pending" type="checkbox" className="mr-1" checked={hidePending} onChange={() => {setHidePending(!hidePending)} } />
+                Hide pending review
+            </label>
         </div>
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredvulnerabilities} estimateRowHeight={66} />
