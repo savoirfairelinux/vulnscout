@@ -174,13 +174,13 @@ describe('Packages Table', () => {
         await user.click(status_header); // un-ordoned -> numerical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('pending analysis')).toBeLessThan(html.indexOf('active'));
+            expect(html.indexOf('CVE-2018-5678')).toBeLessThan(html.indexOf('CVE-2010-1234'));
         });
 
         await user.click(status_header); // numerical order -> reverse numerical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('active')).toBeLessThan(html.indexOf('pending analysis'));
+            expect(html.indexOf('CVE-2010-1234')).toBeLessThan(html.indexOf('CVE-2018-5678'));
         });
     })
 
@@ -247,5 +247,39 @@ describe('Packages Table', () => {
 
         const pkg_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(pkg_xyz).toBeInTheDocument();
+    })
+
+    test('filter out active', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+
+        const user = userEvent.setup();
+        const hide_active = await screen.getByRole('checkbox', {name: /hide active/i});
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 500 });
+
+        // ACT
+        await user.click(hide_active);
+
+        // ASSERT
+        await pending_deletion;
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(vuln_xyz).toBeInTheDocument();
+    })
+
+    test('filter out pending analysis', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+
+        const user = userEvent.setup();
+        const hide_pending = await screen.getByRole('checkbox', {name: /hide pending/i});
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 500 });
+
+        // ACT
+        await user.click(hide_pending);
+
+        // ASSERT
+        await pending_deletion;
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        expect(vuln_xyz).toBeInTheDocument();
     })
 });
