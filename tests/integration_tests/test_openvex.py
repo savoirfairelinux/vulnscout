@@ -26,7 +26,7 @@ def pkg_ABC():
 
 @pytest.fixture
 def vuln_123():
-    vuln = Vulnerability("CVE-1234-000", "scanner", "https://nvd.nist.gov/vuln/detail/CVE-1234-000", "unknown")
+    vuln = Vulnerability("CVE-1234-000", ["scanner"], "https://nvd.nist.gov/vuln/detail/CVE-1234-000", "unknown")
     vuln.add_package("abc@1.2.3")
     vuln.add_text("A flaw was found in abc's image-compositor.c (...)", "description")
     vuln.add_alias("CVE-1234-999")
@@ -166,7 +166,7 @@ def test_parse_statement_details(openvex_parser):
     assert len(openvex_parser.packagesCtrl.packages) == 1
     assert len(openvex_parser.vulnerabilitiesCtrl.vulnerabilities) == 1
     vuln = openvex_parser.vulnerabilitiesCtrl.get("CVE-2020-35492")
-    assert vuln.found_by == "some_scanner"
+    assert vuln.found_by == ["openvex", "some_scanner"]
 
     assert len(openvex_parser.assessmentsCtrl.assessments) == 1
     assess = openvex_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-35492")[0]

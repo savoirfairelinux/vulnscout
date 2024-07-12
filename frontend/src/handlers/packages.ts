@@ -56,7 +56,7 @@ class Packages {
                 ...pkg,
                 vulnerabilities: counts,
                 maxSeverity: severities,
-                source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by))],
+                source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by).flat())],
             };
         });
     }

@@ -29,7 +29,7 @@ def write_demo_files(files):
         files["vulnerabilities"].write_text(json.dumps({
             "CVE-2020-35492": {
                 "id": "CVE-2020-35492",
-                "found_by": "grype",
+                "found_by": ["grype"],
                 "datasource": "https://nvd.nist.gov/vuln/detail/CVE-2020-35492",
                 "namespace": "nvd:cpe",
                 "aliases": [],

@@ -134,9 +134,11 @@ function Metrics ({ vulnerabilities }: Props) {
                 data: vulnerabilities.reduce((acc, vuln) => {
                     if (hideStatus[vuln.simplified_status]) return acc;
                     if (hideSeverity[vuln.severity.severity]) return acc;
-                    const source = vuln.found_by;
-                    const index = source == 'grype' ? 1 : source == 'yocto' ? 2 : source == 'osv' ? 3 : 0;
-                    acc[index]++;
+                    let added = false;
+                    if (vuln.found_by.includes('grype')) acc[1]++; added = true;
+                    if (vuln.found_by.includes('yocto')) acc[2]++; added = true;
+                    if (vuln.found_by.includes('osv')) acc[3]++; added = true;
+                    if (!added) acc[0]++;
                     return acc;
                 }, [0, 0, 0, 0]),
                 backgroundColor: [

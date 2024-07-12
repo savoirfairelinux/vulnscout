@@ -28,12 +28,12 @@ def pkg_controller(pkg_ABC, pkg_XYZ):
 
 @pytest.fixture
 def vuln_123():
-    return Vulnerability("CVE-123", "test", "test", "test")
+    return Vulnerability("CVE-123", ["test"], "test", "test")
 
 
 @pytest.fixture
 def vuln_456(vuln_123, pkg_ABC):
-    vuln = Vulnerability("CVE-456", "test", "test", "test")
+    vuln = Vulnerability("CVE-456", ["test"], "test", "test")
     vuln.add_alias(vuln_123.id)
     vuln.add_package(pkg_ABC)
     return vuln
