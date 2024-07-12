@@ -1,7 +1,8 @@
+import { useMemo, useState } from "react";
 import type { Package } from "../handlers/packages";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale } from 'chart.js';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
 import { Pie, Line, Bar } from 'react-chartjs-2';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
@@ -57,47 +58,57 @@ const BarOptions = {
 };
 
 function Metrics ({ vulnerabilities }: Props) {
+    const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
-    const vulnBySeverity = {
-        labels: ['Unknown', 'Low', 'Medium', 'High', 'Critical'],
-        datasets: [{
-            label: '# of Vulnerabilities',
-            data: vulnerabilities.reduce((acc, vuln) => {
-                const severity = vuln.severity.severity.toUpperCase();
-                const index = Math.max(SEVERITY_ORDER.indexOf(severity) - 1, 0)
-                acc[index]++;
-                return acc;
-            }, [0, 0, 0, 0, 0]),
-            backgroundColor: [
-                'rgba(180, 180, 180)',
-                'rgba(0, 150, 150)',
-                '#F8DE22',
-                '#F94C10',
-                '#FC2947',
-            ],
-            hoverOffset: 4
-        }]
-    };
+    const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
+    const [hideStatus, setHideStatus] = useState<{[key: string] : boolean}>({});
 
-    const vulnByStatus = {
-        labels: ['Pending analysis', 'Fixed', 'Not Affected', 'Active'],
-        datasets: [{
-            label: '# of Vulnerabilities',
-            data: vulnerabilities.reduce((acc, vuln) => {
-                const status = vuln.simplified_status;
-                const index = status == 'pending analysis' ? 0 : status == 'fixed' ? 1 : status == 'not affected' ? 2 : 3;
-                acc[index]++;
-                return acc;
-            }, [0, 0, 0, 0]),
-            backgroundColor: [
-                'rgba(180, 180, 180)',
-                '#40A578',
-                'rgba(0, 150, 150)',
-                '#F94C10',
-            ],
-            hoverOffset: 4
-        }]
-    }
+    const dataSetVulnBySeverity = useMemo(() => {
+        return {
+            labels: ['Unknown', 'Low', 'Medium', 'High', 'Critical'],
+            datasets: [{
+                label: '# of Vulnerabilities',
+                data: vulnerabilities.reduce((acc, vuln) => {
+                    if (hideStatus[vuln.simplified_status]) return acc;
+                    const severity = vuln.severity.severity.toUpperCase();
+                    const index = Math.max(SEVERITY_ORDER.indexOf(severity) - 1, 0)
+                    acc[index]++;
+                    return acc;
+                }, [0, 0, 0, 0, 0]),
+                backgroundColor: [
+                    'rgba(180, 180, 180)',
+                    'rgba(0, 150, 150)',
+                    '#F8DE22',
+                    '#F94C10',
+                    '#FC2947',
+                ],
+                hoverOffset: 4
+            }]
+        }
+    }, [vulnerabilities, hideStatus]);
+
+    const dataSetVulnByStatus = useMemo(() => {
+        return {
+            labels: ['Pending analysis', 'Fixed', 'Not Affected', 'Active'],
+            datasets: [{
+                label: '# of Vulnerabilities',
+                data: vulnerabilities.reduce((acc, vuln) => {
+                    if (hideSeverity[vuln.severity.severity]) return acc;
+                    const status = vuln.simplified_status;
+                    const index = status == 'pending analysis' ? 0 : status == 'fixed' ? 1 : status == 'not affected' ? 2 : 3;
+                    acc[index]++;
+                    return acc;
+                }, [0, 0, 0, 0]),
+                backgroundColor: [
+                    'rgba(180, 180, 180)',
+                    '#40A578',
+                    'rgba(0, 150, 150)',
+                    '#F94C10',
+                ],
+                hoverOffset: 4
+            }]
+        }
+    }, [vulnerabilities, hideSeverity]);
 
     const vulnEvolutionTime = {
         labels: ['feb 24', 'march 24', 'april 24', 'may 24', 'june 24'],
@@ -115,25 +126,58 @@ function Metrics ({ vulnerabilities }: Props) {
         }]
     }
 
-    const vulnBySource = {
-        labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
-        datasets: [{
-            label: '# of Vulnerabilities',
-            data: vulnerabilities.reduce((acc, vuln) => {
-                const source = vuln.found_by;
-                const index = source == 'grype' ? 1 : source == 'yocto' ? 2 : source == 'osv' ? 3 : 0;
-                acc[index]++;
-                return acc;
-            }, [0, 0, 0, 0]),
-            backgroundColor: [
-                'rgba(180, 180, 180)',
-                'rgba(0, 150, 150)',
-                '#F8DE22',
-                '#F94C10',
-                '#FC2947',
-            ],
-            hoverOffset: 4
-        }]
+    const dataSetVulnBySource = useMemo(() => {
+        return {
+            labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
+            datasets: [{
+                label: '# of Vulnerabilities',
+                data: vulnerabilities.reduce((acc, vuln) => {
+                    if (hideStatus[vuln.simplified_status]) return acc;
+                    if (hideSeverity[vuln.severity.severity]) return acc;
+                    const source = vuln.found_by;
+                    const index = source == 'grype' ? 1 : source == 'yocto' ? 2 : source == 'osv' ? 3 : 0;
+                    acc[index]++;
+                    return acc;
+                }, [0, 0, 0, 0]),
+                backgroundColor: [
+                    'rgba(180, 180, 180)',
+                    'rgba(0, 150, 150)',
+                    '#F8DE22',
+                    '#F94C10',
+                    '#FC2947',
+                ],
+                hoverOffset: 4
+            }]
+        }
+    }, [vulnerabilities, hideSeverity, hideStatus]);
+
+
+    const vulnBySeverityOptions = {
+        ...pieOptions,
+        plugins: {
+            ...pieOptions.plugins,
+            legend: {
+                ...pieOptions.plugins.legend,
+                onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
+                    setHideSeverity({...hideSeverity, [legendItem.text.toLowerCase()]: !legendItem.hidden});
+                    defaultPieHandler.call(this, e, legendItem, legend);
+                }
+            }
+        }
+    }
+
+    const vulnByStatusOptions = {
+        ...pieOptions,
+        plugins: {
+            ...pieOptions.plugins,
+            legend: {
+                ...pieOptions.plugins.legend,
+                onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
+                    setHideStatus({...hideStatus, [legendItem.text.toLowerCase()]: !legendItem.hidden});
+                    defaultPieHandler.call(this, e, legendItem, legend);
+                }
+            }
+        }
     }
 
     return (
@@ -142,14 +186,14 @@ function Metrics ({ vulnerabilities }: Props) {
             <div className="w-1/3 lg:w-1/4 p-4">
                 <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Severity</div>
                 <div className="bg-zinc-700 p-4 w-full aspect-square">
-                    <Pie data={vulnBySeverity} options={pieOptions} />
+                    <Pie data={dataSetVulnBySeverity} options={vulnBySeverityOptions} />
                 </div>
             </div>
 
             <div className="w-1/3 lg:w-1/4 p-4">
                 <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Status</div>
                 <div className="bg-zinc-700 p-4 w-full aspect-square">
-                    <Pie data={vulnByStatus} options={pieOptions} />
+                    <Pie data={dataSetVulnByStatus} options={vulnByStatusOptions} />
                 </div>
             </div>
 
@@ -163,7 +207,7 @@ function Metrics ({ vulnerabilities }: Props) {
             <div className="w-1/3 lg:w-1/4 p-4">
                 <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Source</div>
                 <div className="bg-zinc-700 p-4 w-full aspect-square">
-                    <Bar data={vulnBySource} options={BarOptions} />
+                    <Bar data={dataSetVulnBySource} options={BarOptions} />
                 </div>
             </div>
 
