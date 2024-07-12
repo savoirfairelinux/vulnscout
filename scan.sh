@@ -174,7 +174,7 @@ function extract_tar_folder() {
         if [[ -d "$file" ]]; then # Is a folder
             extract_tar_folder "$file"
         else
-            if [[ "$file" == *.tar* ]]; then
+            if [[ "$file" == *.tar || "$file" == *.tar.gz || "$file" == *.tar.zst ]]; then
                 mkdir -p "${file}_extracted"
                 extract_tar_file "$file" "${file}_extracted"
             fi
