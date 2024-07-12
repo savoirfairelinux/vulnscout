@@ -108,7 +108,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
     pkg_1 = Package("cairo", "1.16.0", [], [])
     cdx_exporter.packagesCtrl.add(pkg_1)
 
-    vuln_1 = Vulnerability("CVE-2020-35492", "grype", "https://nvd.nist.gov/vuln/detail/CVE-2020-35492", "NVD")
+    vuln_1 = Vulnerability("CVE-2020-35492", ["grype"], "https://nvd.nist.gov/vuln/detail/CVE-2020-35492", "NVD")
     vuln_1.add_package(pkg_1)
     vuln_1.add_alias("CVE-2018-99999")
     vuln_1.add_text("A flaw was found in cairo's image-compositor.c", "description")
@@ -120,7 +120,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
     cvss_2 = CVSS("3.1", "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H", "NVD", 7.8, 0.0, 0.0)
     vuln_1.register_cvss(cvss_2)
 
-    vuln_2 = Vulnerability("CVE-9999-1234", "grype", "https://nvd.nist.gov/vuln/detail/CVE-9999-1234", "NVD")
+    vuln_2 = Vulnerability("CVE-9999-1234", ["grype"], "https://nvd.nist.gov/vuln/detail/CVE-9999-1234", "NVD")
     cvss_3 = CVSS("3.0", "AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H", "fake", 2.0, 0.0, 0.0)
     vuln_2.register_cvss(cvss_3)
     vuln_2.severity_without_cvss("Critical", 9.7)
@@ -213,7 +213,7 @@ def test_export_assessments_json(cdx_exporter):
     pkg_1 = Package("cairo", "1.16.0", [], [])
     cdx_exporter.packagesCtrl.add(pkg_1)
 
-    vuln_1 = Vulnerability("CVE-2020-35492", "grype", "https://nvd.nist.gov/vuln/detail/CVE-2020-35492", "NVD")
+    vuln_1 = Vulnerability("CVE-2020-35492", ["grype"], "https://nvd.nist.gov/vuln/detail/CVE-2020-35492", "NVD")
     vuln_1.add_package(pkg_1)
     cdx_exporter.vulnerabilitiesCtrl.add(vuln_1)
 

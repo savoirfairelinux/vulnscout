@@ -45,8 +45,10 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
     }, 750, { maxWait: 5000 });
 
     const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
-        if (vuln.found_by != '' && !acc.includes(vuln.found_by))
-            acc.push(vuln.found_by)
+        vuln.found_by.forEach(source => {
+            if (!acc.includes(source) && source != '')
+                acc.push(source)
+        });
         return acc;
     }, []), [vulnerabilities])
 
@@ -75,7 +77,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
             }),
             columnHelper.accessor('found_by', {
                 header: 'Sources',
-                cell: info => info.renderValue(),
+                cell: info => info.renderValue()?.join(', '),
                 enableSorting: false
             }),
             columnHelper.accessor(row => row, {
@@ -93,7 +95,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
 
     const filteredvulnerabilities = useMemo(() => {
         return vulnerabilities.filter((el) => {
-            if (filterSource != undefined && el.found_by != filterSource) return false
+            if (filterSource != undefined && el.found_by.every(val => val != filterSource)) return false
             if (hideIgnored && el.simplified_status == 'not affected') return false
             if (hidePatched && el.simplified_status == 'fixed') return false
             if (hideActive && el.simplified_status == 'active') return false

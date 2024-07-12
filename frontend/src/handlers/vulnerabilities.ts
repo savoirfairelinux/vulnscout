@@ -15,7 +15,7 @@ type Vulnerability = {
     aliases: string[];
     related_vulnerabilities: string[];
     namespace: string;
-    found_by: string;
+    found_by: string[];
     datasource: string;
     packages: string[];
     urls: string[];

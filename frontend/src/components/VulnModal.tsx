@@ -113,7 +113,7 @@ function VulnModal(props: Props) {
                             </li>
                             <li key="sources">
                                 <span className="font-bold mr-1">Found by:</span>
-                                {vuln.found_by}
+                                {vuln.found_by.join(', ')}
                             </li>
                             <li key="status">
                                 <span className="font-bold mr-1">Status:</span>

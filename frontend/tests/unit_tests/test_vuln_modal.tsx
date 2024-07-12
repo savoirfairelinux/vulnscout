@@ -18,7 +18,7 @@ describe('Vulnerability Modal', () => {
         aliases: ['CVE-2008-3456'],
         related_vulnerabilities: ['OSV-xyz-1234'],
         namespace: 'nvd:cve',
-        found_by: 'hardcoded',
+        found_by: ['hardcoded'],
         datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
         packages: ['aaabbbccc@1.0.0'],
         urls: ['https://security-tracker.debian.org/tracker/CVE-2010-1234'],

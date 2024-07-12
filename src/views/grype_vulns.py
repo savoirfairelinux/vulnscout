@@ -68,7 +68,7 @@ class GrypeVulns:
         """Parse the `vulnerability` part of grype JSON output."""
         vuln_data = Vulnerability(
             vulnerability.get("id", "").upper(),
-            "grype",
+            ["grype"],
             vulnerability.get("dataSource", "unknown"),
             vulnerability.get("namespace", "unknown").lower()
         )
