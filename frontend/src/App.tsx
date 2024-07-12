@@ -17,6 +17,7 @@ function App() {
   const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
+    if (!loading) return;
 
     const interval = setInterval(async () => {
       fetch(import.meta.env.VITE_API_URL + "/api/scan/status", {
@@ -40,11 +41,11 @@ function App() {
           details: String(error)
         });
       });
-    }, 5000);
+    }, 1000);
 
     // Clean up the interval on unmount
     return () => clearInterval(interval);
-  }, []);
+  }, [loading]);
 
   return (
     <div className={darkMode ? "dark" : "light"}>
