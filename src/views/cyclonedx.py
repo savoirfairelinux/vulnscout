@@ -143,7 +143,7 @@ class CycloneDx:
                 vulnerability.source = {}
             vuln = Vulnerability(
                 vulnerability.id,
-                "CycloneDX",
+                ["CycloneDX"],
                 str(vulnerability.source.url) if vulnerability.source and vulnerability.source.url else 'unknown',
                 vulnerability.source.name if vulnerability.source and vulnerability.source.name else 'unknown',
             )

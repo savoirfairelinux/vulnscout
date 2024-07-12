@@ -81,7 +81,7 @@ def test_get_vulnerabilities_list(client):
     data = json.loads(response.data)
     assert len(data) == 1
     assert data[0]["id"] == "CVE-2020-35492"
-    assert data[0]["found_by"] == "grype"
+    assert "grype" in data[0]["found_by"]
     assert data[0]["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data[0]["packages"]
 
@@ -92,7 +92,7 @@ def test_get_vulnerabilities_dict(client):
     data = json.loads(response.data)
     assert len(data) == 1
     assert "CVE-2020-35492" in data
-    assert data["CVE-2020-35492"]["found_by"] == "grype"
+    assert "grype" in data["CVE-2020-35492"]["found_by"]
     assert data["CVE-2020-35492"]["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data["CVE-2020-35492"]["packages"]
 

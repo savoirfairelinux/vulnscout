@@ -48,7 +48,7 @@ class OpenVex:
                 if "vulnerability" not in statement or "name" not in statement["vulnerability"]:
                     continue
 
-                vuln = Vulnerability(statement["vulnerability"]["name"], "openvex", "unknown", "unknown")
+                vuln = Vulnerability(statement["vulnerability"]["name"], ["openvex"], "unknown", "unknown")
                 if "description" in statement["vulnerability"]:
                     vuln.add_text(statement["vulnerability"]["description"], "description")
                 if "aliases" in statement["vulnerability"]:
@@ -59,7 +59,7 @@ class OpenVex:
                 # scanners is not part of OpenVex standard
                 if "scanners" in statement:
                     for scanner in statement["scanners"]:
-                        vuln.found_by = scanner
+                        vuln.add_found_by(scanner)
 
                 assess = VulnAssessment(vuln.id)
                 if "products" in statement:
@@ -117,7 +117,7 @@ class OpenVex:
                 if vuln.datasource.startswith("http"):
                     stmt["vulnerability"]["@id"] = vuln.datasource
                 if not strict_export:
-                    stmt["scanners"] = ["openvex", vuln.found_by]
+                    stmt["scanners"] = vuln.found_by
 
             pkg_list = []
             for pkg_id in assess.packages:

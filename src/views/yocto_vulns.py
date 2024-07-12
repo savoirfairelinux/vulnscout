@@ -28,7 +28,7 @@ class YoctoVulns:
 
                 vuln = Vulnerability(
                     issue.get("id").upper(),
-                    "yocto",
+                    ["yocto"],
                     issue.get("link", ""),
                     "unknown"
                 )
