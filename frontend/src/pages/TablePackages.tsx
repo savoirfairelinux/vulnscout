@@ -103,8 +103,12 @@ function TablePackages ({ packages }: Props) {
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
             <div className="ml-4">Source</div>
-            <select name="source_selector" onChange={(event) => setfilterSource(event.target.value)} className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8">
-                <option value={undefined}>All sources</option>
+            <select
+                name="source_selector"
+                onChange={(event) => setfilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
+                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
+            >
+                <option value="__none__">All sources</option>
                 {sources_list.map(source => <option value={source} key={source}>{source}</option>)}
             </select>
             <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>Severity {showSeverity ? 'enabled' : 'disabled'}</button>
