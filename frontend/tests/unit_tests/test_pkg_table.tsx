@@ -195,13 +195,18 @@ describe('Packages Table', () => {
         expect(filter_select).toBeDefined();
         expect(filter_select).toBeInTheDocument();
 
+        // ACT
         const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /aaabbbccc/}), { timeout: 250 });
-
         await user.selectOptions(filter_select, 'cve-finder');
-
         await deletion;
 
         const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        expect(pkg_xyz).toBeInTheDocument();
+
+        // REVERT CHANGE
+        await user.selectOptions(filter_select, 'All sources');
+        const pkg_abc = await screen.getByRole('cell', {name: /aaabbbccc/});
+        expect(pkg_abc).toBeInTheDocument();
         expect(pkg_xyz).toBeInTheDocument();
     })
 
