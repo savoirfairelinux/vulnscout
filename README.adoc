@@ -1,6 +1,6 @@
 = VulnScout
 Savoir-Faire Linux
-0.2.1, {docdate}: Proof-of-concept version 2
+0.3.0, {docdate}: Proof-of-concept version 2
 :url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
 :source-highlighter: highlight.js
 :toc:
