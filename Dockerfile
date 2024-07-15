@@ -55,6 +55,6 @@ RUN rm -rf /tmp/patches
 LABEL org.opencontainers.image.title="VulnScout"
 LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
 LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
-LABEL org.opencontainers.image.version="v0.2.1"
+LABEL org.opencontainers.image.version="v0.3.0"
 
 CMD ./scan.sh
