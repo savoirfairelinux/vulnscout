@@ -45,6 +45,10 @@ describe('Packages Table', () => {
                 max_score: 3,
                 cvss: []
             },
+            epss: {
+                score: 0.356789,
+                percentile: 0.7546
+            },
             fix: {
                 state: 'unknown'
             },
@@ -73,6 +77,10 @@ describe('Packages Table', () => {
                 max_score: 8,
                 cvss: []
             },
+            epss: {
+                score: undefined,
+                percentile: undefined
+            },
             fix: {
                 state: 'unknown'
             },
@@ -93,6 +101,7 @@ describe('Packages Table', () => {
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
+        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
         const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
         const source_header = await screen.getByRole('columnheader', {name: /source/i});
@@ -100,6 +109,7 @@ describe('Packages Table', () => {
         // ASSERT
         expect(id_header).toBeInTheDocument();
         expect(severity_header).toBeInTheDocument();
+        expect(exploit_header).toBeInTheDocument();
         expect(packages_header).toBeInTheDocument();
         expect(status_header).toBeInTheDocument();
         expect(source_header).toBeInTheDocument();
@@ -112,6 +122,7 @@ describe('Packages Table', () => {
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
+        const epss_col = await screen.getByRole('cell', {name: /3[56][ ]?\%/});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
         const status_col = await screen.getByRole('cell', {name: /pending analysis/i});
         const source_col = await screen.getByRole('cell', {name: /hardcoded/});
@@ -119,6 +130,7 @@ describe('Packages Table', () => {
         // ASSERT
         expect(id_col).toBeInTheDocument();
         expect(severity_col).toBeInTheDocument();
+        expect(epss_col).toBeInTheDocument();
         expect(packages_col).toBeInTheDocument();
         expect(status_col).toBeInTheDocument();
         expect(source_col).toBeInTheDocument();
@@ -158,6 +170,26 @@ describe('Packages Table', () => {
         });
 
         await user.click(severity_header); // alphabetical order -> reverse alphabetical order
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
+    })
+
+    test('sorting by exploitability score', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+
+        const user = userEvent.setup();
+        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
+
+        await user.click(exploit_header); // un-ordoned -> more important first
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
+        });
+
+        await user.click(exploit_header); // more important first -> reverse (lower first)
         await waitFor(() => {
             const html = document.body.innerHTML;
             expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));

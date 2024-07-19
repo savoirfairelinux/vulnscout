@@ -29,6 +29,10 @@ type Vulnerability = {
         max_score: number;
         cvss: CVSS[];
     }
+    epss: {
+        score: number | undefined;
+        percentile: number | undefined;
+    }
     fix: {
         state: string;
     }
