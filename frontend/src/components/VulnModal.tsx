@@ -111,6 +111,11 @@ function VulnModal(props: Props) {
                                 <span className="font-bold mr-1">Severity:</span>
                                 <SeverityTag severity={vuln.severity.severity} className="text-white" />
                             </li>
+                            {vuln.epss?.score && <li key="epss">
+                                <span className="font-bold mr-1">Exploitability:</span>
+                                <b>{Number(vuln.epss.score * 100).toFixed(2)} %</b>
+                                {vuln.epss.percentile && <i className="text-sm">(more than {Math.floor(vuln.epss.percentile * 100)}% of vulns)</i>}
+                            </li>}
                             <li key="sources">
                                 <span className="font-bold mr-1">Found by:</span>
                                 {vuln.found_by.join(', ')}

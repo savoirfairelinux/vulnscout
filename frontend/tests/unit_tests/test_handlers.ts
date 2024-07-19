@@ -39,6 +39,10 @@ const VULNERABILITIES = [
             max_score: 8,
             cvss: []
         },
+        epss: {
+            score: 0.356789,
+            percentile: 0.7546
+        },
         fix: {
             state: 'unknown'
         }
@@ -58,6 +62,10 @@ const VULNERABILITIES = [
             min_score: 3,
             max_score: 3,
             cvss: []
+        },
+        epss: {
+            score: undefined,
+            percentile: undefined
         },
         fix: {
             state: 'unknown'

@@ -34,6 +34,10 @@ describe('Vulnerability Modal', () => {
             max_score: 3,
             cvss: []
         },
+        epss: {
+            score: 0.356789,
+            percentile: 0.7546
+        },
         fix: {
             state: 'unknown'
         },
@@ -62,6 +66,7 @@ describe('Vulnerability Modal', () => {
         // ACT
         const id = await screen.getByText(/^\s*CVE-2010-1234\s*$/i);
         const severity = await screen.getByText(/low/i);
+        const epss_score = await screen.getByText(/35\.6[78]/i);
         const packages = await screen.getByText(/aaabbbccc@1\.0\.0/i);
         const status = await screen.getAllByText(/active/i);
         const source = await screen.getByText(/hardcoded/i);
@@ -71,6 +76,7 @@ describe('Vulnerability Modal', () => {
         // ASSERT
         expect(id).toBeInTheDocument();
         expect(severity).toBeInTheDocument();
+        expect(epss_score).toBeInTheDocument();
         expect(packages).toBeInTheDocument();
         expect(status[0]).toBeInTheDocument();
         expect(source).toBeInTheDocument();

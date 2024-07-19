@@ -65,6 +65,17 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
                 cell: info => <SeverityTag severity={info.getValue()} />,
                 sortingFn: sortSeverityFn
             }),
+            columnHelper.accessor('epss', {
+                header: 'Exploitability',
+                cell: info => {
+                    const epss = info.getValue()
+                    return epss.score && <>
+                        <b>{Math.round(epss.score * 100)}%</b>
+                        {epss.percentile && <i className="text-sm">(more than {Math.floor(epss.percentile * 100)}% of vulns)</i>}
+                    </>
+                },
+                sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0)
+            }),
             columnHelper.accessor('packages', {
                 header: 'Packages affected',
                 cell: info => info.getValue().map(p => p.split('+git')[0]).join(', '),
