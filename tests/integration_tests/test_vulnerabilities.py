@@ -32,8 +32,8 @@ def pkg_controller(pkg_ABC, pkg_XYZ):
 
 @pytest.fixture
 def vuln_123():
-    vuln = Vulnerability("CVE-123", ["test"], "test", "test")
-    vuln.add_url("https://cve.com/123")
+    vuln = Vulnerability("CVE-2022-1230", ["test"], "test", "test")
+    vuln.add_url("https://cve.com/1230")
     vuln.add_text("CVE-123", "text1")
     vuln.add_package("test@1.0.0")
     vuln.add_advisory("advisory 1")
@@ -42,10 +42,10 @@ def vuln_123():
 
 @pytest.fixture
 def vuln_456(vuln_123, pkg_ABC):
-    vuln = Vulnerability("CVE-456", ["test"], "test", "test")
+    vuln = Vulnerability("CVE-2022-4560", ["test"], "test", "test")
     vuln.add_alias(vuln_123.id)
     vuln.add_related_vulnerability("CVE-000")
-    vuln.add_url("https://cve.com/456")
+    vuln.add_url("https://cve.com/4560")
     vuln.add_text("CVE-456", "text2")
     vuln.add_package(pkg_ABC)
     vuln.add_advisory("advisory 2")
@@ -54,9 +54,9 @@ def vuln_456(vuln_123, pkg_ABC):
 
 @pytest.fixture
 def vuln_789(vuln_456, pkg_XYZ):
-    vuln = Vulnerability("CVE-789", ["test"], "test", "test")
+    vuln = Vulnerability("CVE-2022-1789", ["test"], "test", "test")
     vuln.add_alias(vuln_456.id)
-    vuln.add_url("https://cve.com/789")
+    vuln.add_url("https://cve.com/1789")
     vuln.add_package(pkg_XYZ)
     return vuln
 
@@ -165,3 +165,21 @@ def test_add_vulnerability_already_present(vuln_controller, vuln_123, vuln_456, 
     vuln_controller.add(vuln_789)
     assert len(vuln_controller) == 1
     assert len(vuln_controller.alias_registered) == 2
+
+
+def test_fetch_epss_scores(vuln_controller):
+    for i in range(1000, 1085):
+        # missing CVE in NVD and EPSS score
+        if i == 1017 or i == 1060:
+            continue
+        vuln = Vulnerability(f"CVE-2022-{i}", ["test"], "test", "test")
+        vuln_controller.add(vuln)
+
+    assert len(vuln_controller) >= 80
+    vuln_controller.fetch_epss_scores()
+    for v in vuln_controller.vulnerabilities.values():
+        if v.epss["score"] is None:
+            print(v.id, "is missing EPSS score")
+    have_scores = [v.epss["score"] is not None for v in vuln_controller.vulnerabilities.values()]
+    assert len(have_scores) >= 80
+    assert all(have_scores) is True

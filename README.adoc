@@ -29,7 +29,7 @@ You can use VulnScout to scan your project, make report about your dependencies 
 
 * ##WIP##: SPDX 2.4 (Packages)
 * ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
-* ##WIP##: Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
+* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 * Grype native JSON format (Packages + vulnerabilities)
 * Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
 
@@ -37,10 +37,15 @@ You can use VulnScout to scan your project, make report about your dependencies 
 
 * SPDX 2.3 (Packages)
 * ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
-* Cyclone DX 1.5 (Packages)
-* ##WIP##: Cyclone DX 1.5 (vulnerabilities)
-* ##WIP##: Cyclone DX 1.4, 1.6 (Packages + vulnerabilities)
-* ##WIP##: openVex (vulnerabilities + Assessments)
+* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
+* openVex (vulnerabilities + Assessments)
+
+**Grab data from following sources** :
+* NVD (National Vulnerability Database)
+* All datasource supported by Grype
+* EPSS (Exploit Prediction Scoring System)
+* ##OSV## (Open Source Vulnerabilities) Comming soon
+* Information embedded in inputs files
 
 == Deployment
 
