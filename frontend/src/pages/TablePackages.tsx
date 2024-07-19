@@ -72,6 +72,7 @@ function TablePackages ({ packages }: Props) {
             columnHelper.accessor('name', {
                 header: 'Name',
                 cell: info => info.getValue(),
+                footer: (info) => `Total: ${info.table.getRowCount()}`
             }),
             columnHelper.accessor('version', {
                 header: 'Version',
