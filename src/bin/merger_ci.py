@@ -32,8 +32,8 @@ OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 
 
 def post_treatment(controllers, files):
-    """Merge the vulnerabilities by vuln id."""
-    pass
+    """Do some actions on data after collect and aggregation."""
+    controllers["vulnerabilities"].fetch_epss_scores()
 
 
 def read_inputs(controllers):
