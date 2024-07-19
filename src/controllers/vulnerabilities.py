@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 from ..models.vulnerability import Vulnerability
+import http.client
+import json
+import time
 
 
 class VulnerabilitiesController:
@@ -71,6 +74,44 @@ class VulnerabilitiesController:
                 del self.alias_registered[alias]
             return True
         return False
+
+    def _fetch_epss_for_cves(self, conn, cve_ids: list):
+        conn.request('GET', '/data/v1/epss?envelope=false&cve=' + ','.join(cve_ids))
+        resp = conn.getresponse()
+        data = json.loads(resp.read())
+        for epss in data:
+            if 'cve' in epss and epss['cve'] in self.vulnerabilities:
+                self.vulnerabilities[epss['cve']].epss = {
+                    "score": epss['epss'],
+                    "percentile": epss['percentile']
+                }
+
+    def fetch_epss_scores(self):
+        """
+        Fetch the EPS Scores for all vulnerabilities in the list.
+        This method must be called after all vulnerabilities have been added.
+        It make API call with chunks of 80 CVE ID per call to improve network performance.
+        """
+        start_time = time.time()
+        nb_of_chuncks = 0
+        conn = http.client.HTTPSConnection('api.first.org', 443)
+        cve_ids = []
+        for vuln in self.vulnerabilities.values():
+            cve_ids.append(vuln.id)
+            if len(cve_ids) >= 80:
+                try:
+                    self._fetch_epss_for_cves(conn, cve_ids)
+                    nb_of_chuncks += 1
+                except Exception as e:
+                    print(e)
+                cve_ids = []
+        if len(cve_ids) > 0:
+            try:
+                self._fetch_epss_for_cves(conn, cve_ids)
+            except Exception as e:
+                print(e)
+        nb_vuln = nb_of_chuncks * 80 + len(cve_ids)
+        print(f"Fetched EPSS data for {nb_vuln} vulnerabilities in {time.time() - start_time} seconds.")
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities as a dictionary of dictionaries."""
