@@ -72,7 +72,7 @@ function TableGeneric<DataType> ({
     return (
         <div className="relative overflow-auto" style={{height: tableHeight}} ref={tableContainerRef}>
             <table className="border-collapse border border-slate-500 w-full text-white grid">
-                <thead className="grid sticky top-0 z-10">
+                <thead className="grid sticky top-0 z-20">
                     {table.getHeaderGroups().map(headerGroup => (
                         <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
                         {headerGroup.headers.map(header => (
@@ -140,11 +140,15 @@ function TableGeneric<DataType> ({
                         )
                     })}
                 </tbody>
-                <tfoot className="relative grid">
+                <tfoot className="grid sticky bottom-0 z-10">
                     {table.getFooterGroups().map(footerGroup => (
                         <tr key={footerGroup.id} className="bg-slate-700 flex w-full">
                         {footerGroup.headers.map(header => (
-                            <th key={header.id} className="p-4 border border-slate-600 flex-auto">
+                            <th
+                                key={header.id}
+                                className="p-2 border border-slate-600 flex-auto"
+                                style={{width: header.getSize()}}
+                            >
                             {header.isPlaceholder
                                 ? null
                                 : flexRender(
