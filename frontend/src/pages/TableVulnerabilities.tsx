@@ -58,7 +58,8 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
             columnHelper.accessor('id', {
                 header: 'ID',
                 cell: info => info.getValue(),
-                sortDescFirst: true
+                sortDescFirst: true,
+                footer: (info) => `Total: ${info.table.getRowCount()}`
             }),
             columnHelper.accessor('severity.severity', {
                 header: 'Severity',
