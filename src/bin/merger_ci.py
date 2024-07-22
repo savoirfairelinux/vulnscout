@@ -11,6 +11,7 @@ from ..views.grype_vulns import GrypeVulns
 from ..views.yocto_vulns import YoctoVulns
 from ..views.openvex import OpenVex
 from ..views.cyclonedx import CycloneDx
+from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
@@ -42,6 +43,7 @@ def read_inputs(controllers):
     scanYocto = YoctoVulns(controllers)
     openvex = OpenVex(controllers)
     cdx = CycloneDx(controllers)
+    templates = Templates(controllers)
 
     try:
         with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
@@ -71,6 +73,7 @@ def read_inputs(controllers):
     return {
         "openvex": openvex,
         "cdx": cdx,
+        "templates": templates
     }
 
 
@@ -94,6 +97,18 @@ def output_results(controllers, files):
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
     with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
         f.write(files["cdx"].output_as_json())
+
+    list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
+    for doc in list_docs:
+        if not doc:
+            continue
+        try:
+            doc = doc.strip()
+            content = files["templates"].render(doc)
+            with open(f"/scan/outputs/{doc}", "w") as f:
+                f.write(content)
+        except Exception as e:
+            print(f"Warning: failed to generate document from {doc}: {e}")
 
 
 def main():

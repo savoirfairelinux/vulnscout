@@ -31,3 +31,4 @@ services:
       # - COMPANY_NAME="Savoir-faire Linux"
       # - CONTACT_EMAIL="abc@xyz.org"
       # - DOCUMENT_URL="https://example.com/unique/identifier"
+      - GENERATE_DOCUMENTS=summary.adoc, time-tracking.csv

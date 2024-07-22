@@ -19,6 +19,10 @@ YOCTO_CVE_SOURCES=(
 # Don't put in .gitignored folder, must be tracked by git.
 OUTPUT_FOLDER=".vulnscout/output"
 
+# Generate automaticaly theses documents based on templates. You can find documentation about templating in WRITING_TEMPLATES.[adoc, pdf]
+# If you don't want to generate a document, just remove it from the list. Separator is comma, space are facultative and trimmed.
+GENERATE_DOCUMENTS="summary.adoc, time-tracking.csv"
+
 # Choose port to open when running `scan` interactively
 FLASK_RUN_PORT=7275
 # As scan runs in a container, we highly recommend to expose flask
