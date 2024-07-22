@@ -1,0 +1,135 @@
+= VulnScout - Writing guide for creating templates
+Savoir-Faire Linux
+0.3.0, {docdate}
+:url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
+:source-highlighter: highlight.js
+:toc:
+
+== Templating system
+
+We use Jinja 2 as templating engine, which have great community, documentations and support any file format (html, asciidoc, markdown, CSV, ...).
+We store official templates in `src/views/templates` folder, and custom per-project templates should be saved in `.vulnscout/templates` folder, directly in your project. Finaly, some templates can be configured to be generated at each analysis, they will be writed in `outputs` folder.
+All templates can be run from graphical interface, using export button in toolbar, at top of screen. You can use ##to specify## environment variable to automatically build templates on start. As said, they will be output in `outputs` folder. Specify multiple templates with comma separated values (with or without spaces, values are trimmed).
+
+=== Global variables accessible in templates
+
+* `vulnerabilities`: dict of all vulnerabilities found in the project.
+** Use `vulnerabilities | as_list` to get a list instead of dict.
+* `packages`: dict of all packages found in the project.
+** Use `packages | as_list` to get a list instead of dict.
+* `assessments`: dict of all assessments found in the project.
+** Use `assessments | as_list` to get a list instead of dict.
+** Use `.last_assessment` from a vulnerability object to get the last assessment.
+
+**Vulnerability object**:
+
+* `id` (string): CVE ID of the vulnerability.
+* `found_by` (list of strings): List of tools that found the vulnerability.
+* `datasource` (string): Source of the vulnerability (usually an URL).
+* `namespace` (string): Namespace of the vulnerability (usually the database name, like NVD).
+* `aliases` (list of strings): List of other ID for this vulnerability.
+* `related_vulnerabilities` (list of strings): List of ID of other vulnerabilities related to this one.
+* `urls` (list of strings): List of URLs about to this vulnerability.
+* `texts` (dict of strings): Texts about the vulnerability. Key is the text title while value are content in plain text.
+* `fix`: ##reserved, not implemented yet##.
+* `severity` (dict): Severity of the vulnerability.
+** `severity.severity` (string): Severity level of the vulnerability (low, medium, high, critical, unknown).
+** `severity.min_score` (float): Minimal rating of the severity (0 to 10).
+** `severity.max_score` (float): Maximal rating of the severity (0 to 10).
+** `severity.cvss` (list of CVSS objects): CVSS scoring attributed.
+* `epss` (dict): EPSS scoring of the vulnerability.
+** `epss.score` (string): EPSS score of the vulnerability (0 to 1).
+** `epss.percentile` (string): EPSS rank of the vulnerability (0 to 1).
+* `advisories`: ##reserved, not implemented yet##.
+* `packages` (list of strings): List of packages affected by the vulnerability, in form `name@version`.
+* `status` (string): Status of the vulnerability (see assessment object to see possible status).
+* `last_assessment` (Assessment object): Last assessment of the vulnerability.
+
+**Package object**:
+
+* `name` (string): Name of the package.
+* `version` (string): Version of the package.
+* `cpe` (list of strings): List of CPE of the package.
+* `purl` (list of strings): List of PURL of the package.
+
+**Assessment object**:
+
+* `id` (string): ID of the assessment (UUID).
+* `vuln_id` (string): ID of the vulnerability this assessment affect.
+* `packages` (list of strings): List of packages concerned.
+* `timestamp` (string): Datetime as ISO format.
+* `last_update` (string): Datetime as ISO format.
+* `status` (string): Status of the assessment (see list below).
+* `status_note` (string): Note about the status.
+* `justification` (string): Justification of the status (see below).
+* `impact_statement` (string): Text explaining why vuln is classified as ignored.
+* `responses` (list of strings): List of responses to the assessment (see below).
+* `workaround` (string): Workaround to apply to the vulnerability.
+* `workaround_timestamp` (string): Datetime as ISO format of this workaround.
+
+**Possible values for `status`**:
+
+* `in_triage`, `under_investigation`: Vulnerability was found but presence is not garanteed. Defult status.
+** Filter them using `status_pending` or `status_active`.
+* `affected`, `exploitable`: Vulnerability is confirmed and affecting our product.
+** Filter them using `status_affected` or `status_active`.
+* `fixed`, `resolved`, `resolved_with_pedigree`: Vulnerability is fixed in our product and thus not exploitable anymore.
+** Filter them using `status_fixed` of `status_inactive`.
+* `not_affected`, `false_positive`: Vulnerability found is a false positive or not affecting us.
+** Filter them using `status_ignored` or `status_inactive`.
+
+**Possible values for `justification`**:
+
+* `component_not_present`
+* `vulnerable_code_not_present`
+* `vulnerable_code_not_in_execute_path`
+* `vulnerable_code_cannot_be_controlled_by_adversary`
+* `inline_mitigations_already_exist`
+* `code_not_present`
+* `code_not_reachable`
+* `requires_configuration`
+* `requires_dependency`
+* `requires_environment`
+* `protected_by_compiler`
+* `protected_at_runtime`
+* `protected_at_runtime`
+* `protected_at_perimeter`
+* `protected_by_mitigating_control`
+
+**Possible values for `responses`**:
+
+* `can_not_fix`
+* `will_not_fix`
+* `update`
+* `rollback`
+* `workaround_available`
+
+=== Filter and tests (utils scripts)
+
+In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-builtin-filters[jinja build-in filters], you can use the followings cutsom filters.
+
+* Formating:
+** `as_list`: Convert dict to list using `.values()`.
+** `limit(n)`: [n: int] Limit the number of results to `n`.
+
+* Filtering on list:
+** `status(x)`: [x: str or list of str] Keep only vulnerabilities with status in `x`.
+*** `status_pending`: see `status` possible values.
+*** `status_affected`: see `status` possible values.
+*** `status_fixed`: see `status` possible values.
+*** `status_ignored`: see `status` possible values.
+*** `status_active`: `status_pending` + `status_affected`.
+*** `status_inactive`: `status_fixed` + `status_ignored`.
+** `severity(x)`: [x: str or list of str] Keep only vulnerabilities with severity in `x`.
+** `epss_score(x)`: [x: float] Keep only vulnerabilities with EPSS score greater than or equal to `x`. x us a percentage in [0, 100]
+
+* Sorting:
+** `sort_by_epss`: Sort vulnerabilities by EPSS score, with greater score first.
+
+=== Common exemples and tips
+
+Get total count of active / open vulnerabilities:
+`{{ vulnerabilities | as_list | status_active | length }}`
+
+Get active vulnerability with highest EPSS score:
+`{{ vulnerabilities | as_list | status_active | sort_by_epss | first }}`
