@@ -128,6 +128,7 @@ function scan() {
 	if [[ -n "${COMPANY_NAME-}" ]]; then docker_args+=" -e COMPANY_NAME=${COMPANY_NAME}"; fi
 	if [[ -n "${CONTACT_EMAIL-}" ]]; then docker_args+=" -e CONTACT_EMAIL=${CONTACT_EMAIL}"; fi
 	if [[ -n "${DOCUMENT_URL-}" ]]; then docker_args+=" -e DOCUMENT_URL=${DOCUMENT_URL}"; fi
+	if [[ -n "${GENERATE_DOCUMENTS-}" ]]; then docker_args+=" -e GENERATE_DOCUMENTS=${GENERATE_DOCUMENTS}"; fi
 
 	if [[ -n "${SPDX_SOURCES-}" ]]; then
 		for source in "${SPDX_SOURCES[@]}"; do

@@ -72,3 +72,11 @@ def test_invalid_openvex(init_files):
 
     os.environ["IGNORE_PARSING_ERRORS"] = 'true'
     main()
+
+
+def test_generate_docs(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    os.environ["GENERATE_DOCUMENTS"] = "summary.adoc, none.doesntexist"
+    main()
