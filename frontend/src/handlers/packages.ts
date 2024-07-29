@@ -35,8 +35,18 @@ class Packages {
     }
 
     static enrich_with_vulns(pkgs: Package[], vulns: Vulnerability[]): Package[] {
+        const vulns_per_pkg = vulns.reduce((acc, vuln) => {
+            vuln.packages.forEach((pkg_id) => {
+                if (!acc[pkg_id]) {
+                    acc[pkg_id] = [];
+                }
+                acc[pkg_id].push(vuln);
+            });
+            return acc;
+        }, {} as {[key: string]: Vulnerability[]});
+
         return pkgs.map((pkg) => {
-            const vulnerabilities = vulns.filter((vuln) => vuln.packages.includes(pkg.id));
+            const vulnerabilities = vulns_per_pkg[pkg.id] || [];
             let severities: Severities = {};
             const counts: VulnCounts = vulnerabilities.reduce((acc, vuln) => {
                 const status = vuln.simplified_status || "unknown";

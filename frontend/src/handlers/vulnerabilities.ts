@@ -61,8 +61,24 @@ class Vulnerabilities {
     }
 
     static enrich_with_assessments(vulns: Vulnerability[], assessments: Assessment[]): Vulnerability[] {
+        const assessments_per_vuln = assessments.reduce((acc, assessment: Assessment) => {
+            if (!acc[assessment.vuln_id]) {
+                acc[assessment.vuln_id] = [];
+            }
+            acc[assessment.vuln_id].push(assessment);
+            return acc;
+        }, {} as {[key: string]: Assessment[]});
+
         return vulns.map((vuln) => {
-            const vulnAssessments = assessments.filter((assessment) => assessment.vuln_id === vuln.id).sort((a, b) => {
+            if (!assessments_per_vuln[vuln.id]) {
+                return {
+                    ...vuln,
+                    status: 'unknown',
+                    simplified_status: 'unknown',
+                    assessments: [],
+                };
+            }
+            const vulnAssessments = assessments_per_vuln[vuln.id].sort((a, b) => {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
             return {
