@@ -45,7 +45,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Props) {
             <FontAwesomeIcon icon={faFileImport} className='mr-1' />
             Import
         </li>
-        <li className={["px-4 py-2", bgHoverColor].join(' ')}>
+        <li className={["px-4 py-2", bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')} onClick={() => changeTab('exports')}>
             <FontAwesomeIcon icon={faFileExport} className='mr-1' />
             Export
         </li>
