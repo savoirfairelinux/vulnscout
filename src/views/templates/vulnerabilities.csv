@@ -1,0 +1,4 @@
+Vulnerability ID,Packages,Severity,Status,EPSS Score,EPSS Percentile,Sources
+{% for vuln in vulnerabilities | as_list -%}
+"{{vuln.id}}","{{vuln.packages | join(', ')}}","{{vuln.severity.severity}}","{{vuln.status}}","{{vuln.epss.score}}","{{vuln.epss.percentile}}","{{vuln.found_by | join(', ')}}"
+{% endfor %}

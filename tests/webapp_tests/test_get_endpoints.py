@@ -169,8 +169,7 @@ def test_render_document_adoc(client):
     assert response.status_code == 200
     content = response.data.decode("utf-8")
     assert "Vulnerabilities Report" in content
-    assert "1 Fixed" in content
-    assert "1 High" in content
+    assert "| Fixed\n^.^| 0\n^.^| 1\n" in content
 
 
 def test_render_document_pdf(client):
