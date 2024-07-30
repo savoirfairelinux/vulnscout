@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from jinja2 import sandbox, FileSystemLoader
+from jinja2 import sandbox, FileSystemLoader, ChoiceLoader
 
 
 class Templates:
@@ -7,12 +7,20 @@ class Templates:
         self.packagesCtrl = controllers["packages"]
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
+
+        self.internal_loader = FileSystemLoader([
+            "src/views/templates",
+            "views/templates"
+        ])
+        self.external_loader = FileSystemLoader([
+            ".vulnscout/templates",
+            "templates"
+        ])
+
         self.env = sandbox.ImmutableSandboxedEnvironment(
-            loader=FileSystemLoader([
-                ".vulnscout/templates",
-                "templates",
-                "src/views/templates",
-                "views/templates"
+            loader=ChoiceLoader([
+                self.external_loader,
+                self.internal_loader
             ]),
             autoescape=False
         )
@@ -34,6 +42,17 @@ class Templates:
                 vuln_obj['last_assessment'] = last_assessment
 
         return template.render(**kwargs)
+
+    def list_documents(self):
+        docs = []
+        try:
+            internal = self.internal_loader.list_templates()
+            docs.extend([{"id": doc, "is_template": True, "category": ["built-in"]} for doc in internal])
+            external = self.external_loader.list_templates()
+            docs.extend([{"id": doc, "is_template": True, "category": ["custom"]} for doc in external])
+        except Exception as e:
+            print(e)
+        return docs
 
 
 class TemplatesExtensions:

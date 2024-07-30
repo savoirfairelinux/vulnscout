@@ -151,3 +151,46 @@ def test_get_assessments_by_vuln(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert len(data) == 0
+
+
+def test_get_documents_list(client):
+    response = client.get("/api/documents")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) >= 1
+    summary_item = filter(lambda x: x["id"] == "summary.adoc", data).__next__() or None
+    assert summary_item
+    assert summary_item["is_template"] is True
+    assert "built-in" in summary_item["category"]
+
+
+def test_render_document_adoc(client):
+    response = client.get("/api/documents/summary.adoc")
+    assert response.status_code == 200
+    content = response.data.decode("utf-8")
+    assert "Vulnerabilities Report" in content
+    assert "1 Fixed" in content
+    assert "1 High" in content
+
+
+def test_render_cdx_v1_6(client):
+    response = client.get("/api/documents/CycloneDX 1.6?ext=json")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["bomFormat"] == "CycloneDX"
+    assert data["specVersion"] == "1.6"
+    assert len(data["vulnerabilities"]) == 1
+
+
+def test_render_document_not_found(client):
+    response = client.get("/api/documents/doesnt_exist.adoc")
+    assert response.status_code >= 400
+    data = json.loads(response.data)
+    assert data["error"] is not None
+
+
+def test_render_document_invalid_ext(client):
+    response = client.get("/api/documents/CycloneDX 1.4?ext=pdf")
+    assert response.status_code >= 400
+    data = json.loads(response.data)
+    assert data["error"] is not None
