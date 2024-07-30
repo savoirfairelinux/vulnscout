@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
 from jinja2 import sandbox, FileSystemLoader, ChoiceLoader
+import subprocess
+import os
+import random
+import string
 
 
 class Templates:
@@ -42,6 +46,27 @@ class Templates:
                 vuln_obj['last_assessment'] = last_assessment
 
         return template.render(**kwargs)
+
+    def adoc_to_pdf(self, adoc: str) -> bytes:
+        random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
+        with open(f"{random_name}.adoc", "w+") as f:
+            f.write(adoc)
+
+        execution = subprocess.run(["asciidoctor-pdf", f"{random_name}.adoc"], capture_output=True)
+        if execution.returncode != 0:
+            print(execution.stdout)
+            print(execution.stderr)
+            try:
+                os.remove(f"{random_name}.adoc")
+                os.remove(f"{random_name}.pdf")
+            finally:
+                raise Exception("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
+
+        with open(f"{random_name}.pdf", "rb") as f:
+            pdf = f.read()
+        os.remove(f"{random_name}.adoc")
+        os.remove(f"{random_name}.pdf")
+        return pdf
 
     def list_documents(self):
         docs = []

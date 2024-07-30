@@ -20,7 +20,8 @@ WORKDIR /scan
 
 COPY patches /tmp/patches
 
-RUN apk add --no-cache bash curl git zstd icu python3 py3-pip osv-scanner
+RUN apk add --no-cache bash curl git zstd icu python3 py3-pip osv-scanner asciidoctor ruby && \
+    gem install asciidoctor-pdf --version 2.3.15
 
 # Install CycloneDX
 ARG CYCLONEDX_VERSION=v0.25.1
