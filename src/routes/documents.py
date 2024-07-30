@@ -1,4 +1,4 @@
-from flask import request
+from flask import request, make_response
 import json
 import mimetypes
 from ..controllers.packages import PackagesController
@@ -68,6 +68,8 @@ def init_app(app):
                         doc["extension"] = doc["id"].split(".")[-1]
                     else:
                         doc["extension"] = "bin"
+                    if doc["extension"] == "adoc":
+                        doc["extension"] = "adoc|pdf"
 
                     if doc["id"] in CategoriesDictionary:
                         for cat in CategoriesDictionary[doc["id"]]:
@@ -97,6 +99,12 @@ def init_app(app):
                     "Content-Type": base_mime,
                     "Content-Disposition": f"attachment; filename={doc_name}"
                 }
+
+            if base_mime == "text/asciidoc" and expected_mime == "application/pdf":
+                resp = make_response(templ.adoc_to_pdf(content))
+                resp.headers["Content-Type"] = "application/pdf"
+                resp.headers["Content-Disposition"] = f"attachment; filename={doc_name}.pdf"
+                return resp
 
             return {"error": f"Cannot convert {base_mime} to {expected_mime}"}, 400
         except Exception as e:
