@@ -4,39 +4,52 @@ Company name
 
 == Legal Notice
 
+[.text-justify]
 This report is a summary of the vulnerabilities found in the project. Scan was made on 2024-07-15 at 11:02:45 and export of this report was made on 2024-07-15 at 11:18:12. Keep in mind that this report is not exhaustive and may not contain all vulnerabilities found in the project. Also, new vulnerabilities are discovered every day and thus the precision and accuracy of this report will decrease over time.
 
 == Summary
 
-Number of vulnerabilities found: {{ vulnerabilities | as_list | length }}
+Number of vulnerabilities found: **{{ vulnerabilities | as_list | length }}**
+
 They are classified as follow:
-* {{ vulnerabilities | as_list | status_pending | length }} Pending investigation
-** {{ vulnerabilities | as_list | status_pending | severity("critical") | length }} Critical
-** {{ vulnerabilities | as_list | status_pending | severity("high") | length }} High
-** {{ vulnerabilities | as_list | status_pending | severity("medium") | length }} Medium
-** {{ vulnerabilities | as_list | status_pending | severity("low") | length }} Low
-** {{ vulnerabilities | as_list | status_pending | severity("unknown") | length }} Unknown
 
-* {{ vulnerabilities | as_list | status_affected | length }} Confirmed and exploitable
-** {{ vulnerabilities | as_list | status_affected | severity("critical") | length }} Critical
-** {{ vulnerabilities | as_list | status_affected | severity("high") | length }} High
-** {{ vulnerabilities | as_list | status_affected | severity("medium") | length }} Medium
-** {{ vulnerabilities | as_list | status_affected | severity("low") | length }} Low
-** {{ vulnerabilities | as_list | status_affected | severity("unknown") | length }} Unknown
+[cols="2,1,1,1,1,1,1"]
+[.text-justify]
+|===
+^.^| Status ^.^| Critical ^.^| High ^.^| Medium ^.^| Low ^.^| Unknown ^.^| Total
 
-* {{ vulnerabilities | as_list | status_fixed | length }} Fixed
-** {{ vulnerabilities | as_list | status_fixed | severity("critical") | length }} Critical
-** {{ vulnerabilities | as_list | status_fixed | severity("high") | length }} High
-** {{ vulnerabilities | as_list | status_fixed | severity("medium") | length }} Medium
-** {{ vulnerabilities | as_list | status_fixed | severity("low") | length }} Low
-** {{ vulnerabilities | as_list | status_fixed | severity("unknown") | length }} Unknown
+^.^| Pending investigation
+^.^| {{ vulnerabilities | as_list | status_pending | severity("critical") | length }}
+^.^| {{ vulnerabilities | as_list | status_pending | severity("high") | length }}
+^.^| {{ vulnerabilities | as_list | status_pending | severity("medium") | length }}
+^.^| {{ vulnerabilities | as_list | status_pending | severity("low") | length }}
+^.^| {{ vulnerabilities | as_list | status_pending | severity("unknown") | length }}
+^.^| **{{ vulnerabilities | as_list | status_pending | length }}**
 
-* {{ vulnerabilities | as_list | status_ignored | length }} Ignored or false positive
-** {{ vulnerabilities | as_list | status_ignored | severity("critical") | length }} Critical
-** {{ vulnerabilities | as_list | status_ignored | severity("high") | length }} High
-** {{ vulnerabilities | as_list | status_ignored | severity("medium") | length }} Medium
-** {{ vulnerabilities | as_list | status_ignored | severity("low") | length }} Low
-** {{ vulnerabilities | as_list | status_ignored | severity("unknown") | length }} Unknown
+^.^| Confirmed and exploitable
+^.^| {{ vulnerabilities | as_list | status_affected | severity("critical") | length }}
+^.^| {{ vulnerabilities | as_list | status_affected | severity("high") | length }}
+^.^| {{ vulnerabilities | as_list | status_affected | severity("medium") | length }}
+^.^| {{ vulnerabilities | as_list | status_affected | severity("low") | length }}
+^.^| {{ vulnerabilities | as_list | status_affected | severity("unknown") | length }}
+^.^| **{{ vulnerabilities | as_list | status_affected | length }}**
+
+^.^| Fixed
+^.^| {{ vulnerabilities | as_list | status_fixed | severity("critical") | length }}
+^.^| {{ vulnerabilities | as_list | status_fixed | severity("high") | length }}
+^.^| {{ vulnerabilities | as_list | status_fixed | severity("medium") | length }}
+^.^| {{ vulnerabilities | as_list | status_fixed | severity("low") | length }}
+^.^| {{ vulnerabilities | as_list | status_fixed | severity("unknown") | length }}
+^.^| **{{ vulnerabilities | as_list | status_fixed | length }}**
+
+^.^| Ignored or false positive
+^.^| {{ vulnerabilities | as_list | status_ignored | severity("critical") | length }}
+^.^| {{ vulnerabilities | as_list | status_ignored | severity("high") | length }}
+^.^| {{ vulnerabilities | as_list | status_ignored | severity("medium") | length }}
+^.^| {{ vulnerabilities | as_list | status_ignored | severity("low") | length }}
+^.^| {{ vulnerabilities | as_list | status_ignored | severity("unknown") | length }}
+^.^| **{{ vulnerabilities | as_list | status_ignored | length }}**
+|===
 
 == Most critical vulnerabilities
 
@@ -44,7 +57,11 @@ The following list use EPSS ranking to outline the vulnerabilities which are mos
 
 {% for vuln in vulnerabilities | as_list | status_active | sort_by_epss | epss_score(5) | limit(15) %}
 
-** {{ vuln.id }} ({{ vuln.severity.severity | capitalize }}) - EPSS: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %**
+**{{loop.index}}. {{ vuln.id }} ({{ vuln.severity.severity | capitalize }}) - EPSS: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %**
+
+[.text-justify]
 {{ vuln.texts["description"] or vuln.texts["summary"] }}
+
+Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 
 {% endfor %}
