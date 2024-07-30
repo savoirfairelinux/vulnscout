@@ -173,6 +173,11 @@ def test_render_document_adoc(client):
     assert "1 High" in content
 
 
+def test_render_document_pdf(client):
+    response = client.get("/api/documents/summary.adoc?ext=pdf")
+    assert response.status_code == 200
+
+
 def test_render_cdx_v1_6(client):
     response = client.get("/api/documents/CycloneDX 1.6?ext=json")
     assert response.status_code == 200
