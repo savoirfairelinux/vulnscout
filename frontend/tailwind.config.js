@@ -7,9 +7,11 @@ export default {
   ],
   theme: {
     extend: {
-      'sfl': {
-        'light': '#56b0c9',
-        'dark': '#1d799e',
+      colors: {
+        'sfl': {
+          'light': '#56b0c9',
+          'dark': '#1d799e',
+        }
       }
     },
   },

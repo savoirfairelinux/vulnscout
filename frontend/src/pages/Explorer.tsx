@@ -8,6 +8,7 @@ import Vulnerabilities from "../handlers/vulnerabilities";
 import TablePackages from "./TablePackages";
 import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
+import Exports from "./Exports";
 import Assessments from "../handlers/assessments";
 
 type Props = {
@@ -52,6 +53,7 @@ function Explorer({ darkMode, setDarkMode }: Props) {
           {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
           {tab == 'packages' && <TablePackages packages={pkgs} />}
           {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} vulnerabilities={vulns} />}
+          {tab == 'exports' && <Exports />}
         </div>
       </div>
     )
