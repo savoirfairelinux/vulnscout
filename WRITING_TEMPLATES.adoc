@@ -40,6 +40,10 @@ All templates can be run from graphical interface, using export button in toolba
 * `epss` (dict): EPSS scoring of the vulnerability.
 ** `epss.score` (string): EPSS score of the vulnerability (0 to 1).
 ** `epss.percentile` (string): EPSS rank of the vulnerability (0 to 1).
+* `effort` (dict): Effort estimations to fix the vulnerability.
+** `effort.optimistic` (string): Optimistic estimation in ISO 8601 duration format (eg: PT5H).
+** `effort.likely` (string): Likely estimation in ISO 8601 duration format (eg. P1D).
+** `effort.pessimistic` (string): Pessimistic estimation in ISO 8601 duration format (eg. P2DT4H).
 * `advisories`: ##reserved, not implemented yet##.
 * `packages` (list of strings): List of packages affected by the vulnerability, in form `name@version`.
 * `status` (string): Status of the vulnerability (see assessment object to see possible status).
