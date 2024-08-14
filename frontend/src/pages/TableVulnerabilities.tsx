@@ -87,6 +87,14 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment }: Props) {
                 cell: info => <code>{info.renderValue()}</code>,
                 sortingFn: sortStatusFn
             }),
+            columnHelper.accessor('effort.likely', {
+                header: 'Estimated effort',
+                cell: info => info.getValue().formatHumanShort(),
+                enableSorting: true,
+                sortingFn: (rowA, rowB) => {
+                    return rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds
+                }
+            }),
             columnHelper.accessor('found_by', {
                 header: 'Sources',
                 cell: info => info.renderValue()?.join(', '),
