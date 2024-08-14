@@ -107,7 +107,7 @@ describe('Packages Table', () => {
 
     test('render headers with empty array', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -128,7 +128,7 @@ describe('Packages Table', () => {
 
     test('render with vulnerabilities', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -151,7 +151,7 @@ describe('Packages Table', () => {
 
     test('sorting by name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -171,7 +171,7 @@ describe('Packages Table', () => {
 
     test('sorting by severity', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
@@ -191,7 +191,7 @@ describe('Packages Table', () => {
 
     test('sorting by exploitability score', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
@@ -211,7 +211,7 @@ describe('Packages Table', () => {
 
     test('sorting by efforts needed', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const effort_header = await screen.getByRole('columnheader', {name: /effort/i});
@@ -231,7 +231,7 @@ describe('Packages Table', () => {
 
     test('sorting by status', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -251,7 +251,7 @@ describe('Packages Table', () => {
 
     test('searching for vulnerability ID', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -266,7 +266,7 @@ describe('Packages Table', () => {
 
     test('searching for package name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -281,7 +281,7 @@ describe('Packages Table', () => {
 
     test('searching for description', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -296,7 +296,7 @@ describe('Packages Table', () => {
 
     test('filter by source', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const selects = await screen.getAllByRole('combobox');
@@ -316,7 +316,7 @@ describe('Packages Table', () => {
 
     test('filter out active', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const hide_active = await screen.getByRole('checkbox', {name: /hide active/i});
@@ -333,7 +333,7 @@ describe('Packages Table', () => {
 
     test('filter out pending analysis', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const hide_pending = await screen.getByRole('checkbox', {name: /hide pending/i});

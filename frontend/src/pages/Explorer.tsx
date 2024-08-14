@@ -43,6 +43,15 @@ function Explorer({ darkMode, setDarkMode }: Props) {
         setVulns(Vulnerabilities.append_assessment(vulns, added));
     }
 
+    function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
+        setVulns(vulns.map(vuln => {
+            if (vuln.id === vulnId) {
+                return replace_vuln;
+            }
+            return vuln;
+        }));
+    }
+
     const [tab, setTab] = useState("metrics");
 
     return (
@@ -52,7 +61,7 @@ function Explorer({ darkMode, setDarkMode }: Props) {
         <div className="p-8">
           {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
           {tab == 'packages' && <TablePackages packages={pkgs} />}
-          {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} vulnerabilities={vulns} />}
+          {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} patchVuln={patchVuln} vulnerabilities={vulns} />}
           {tab == 'exports' && <Exports />}
         </div>
       </div>
