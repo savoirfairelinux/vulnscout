@@ -23,7 +23,7 @@ function main() {
 		exit 1
 	fi
 
-	if [ "$1" == "--help" ]; then
+	if [[ "$1" == "--help" || "$1" == "-h" ]]; then
 		help
 		exit 0
 	fi
@@ -54,10 +54,9 @@ function main() {
 			exit 1
 			;;
 		update | upgrade)
-			echo "update command not implemented yet."
-			exit 1
+			update_vulnscout
 			;;
-		--version)
+		--version | -v)
 			echo "$VULNSCOUT_VERSION"
 			exit 0
 			;;
@@ -93,18 +92,18 @@ function help() {
 		VulnScout - A security scanning tool for projects
 
 		Usage:
-			vulnscout.sh [command] [options]
+		    vulnscout.sh [command] [options]
 
 		Commands:
-			scan        Run a security scan on the project (interactive)
-			report      Generate a report from the scan results
-			ci          Run a security scan in CI/CD pipeline
-			update      Update VulnScout to the latest version
-			help        Display this help message
+		    scan        Run a security scan on the project (interactive)
+		    report      Generate a report from the scan results
+		    ci          Run a security scan in CI/CD pipeline
+		    update      Update VulnScout to the latest version
+		    help        Display this help message
 
 		Options:
-			--help      Display this help message, or specific help for a command
-			--version   Display the version of VulnScout
+		    --help      Display this help message, or specific help for a command
+		    --version   Display the version of VulnScout
 
 		Copyright (C) 2024 Savoir-faire Linux, Inc.
 	EOF
@@ -262,6 +261,94 @@ function check_newer_version() {
 		fi
 	done
 	echo "$greatest_version"
+}
+
+
+#######################################
+# Try some well known location where vulnscout.sh (this script) could be found
+# Because sometime, bash script can just be run from pipe or curl
+# It's not always possible to know where the script is located
+# Outputs:
+#   write full path of what we guessed to stdout
+# Exit with 0 if a path was found, 1 otherwise
+#######################################
+function find_vulnscout_sh_path() {
+	local script_path=""
+
+	if [[ -f "${BASH_SOURCE[0]}" ]]; then
+		script_path="$(realpath "${BASH_SOURCE[0]}")"
+		echo "$script_path"
+		return 0
+	fi
+
+	if [[ -f "$(realpath "$0")" ]]; then
+		script_path="$(realpath "$0")"
+		echo "$script_path"
+		return 0
+	fi
+
+	# check if script is in the current folder
+	if [[ -f "vulnscout.sh" ]]; then
+		script_path="$(pwd)/vulnscout.sh"
+		echo "$script_path"
+		return 0
+	fi
+
+	# check if script is in the bin folder
+	if [[ -f "bin/vulnscout.sh" ]]; then
+		script_path="$(pwd)/bin/vulnscout.sh"
+		echo "$script_path"
+		return 0
+	fi
+
+	# check if script is in the parent folder
+	if [[ -f "../vulnscout.sh" ]]; then
+		script_path="$(pwd)/../vulnscout.sh"
+		echo "$script_path"
+		return 0
+	fi
+
+	# check if script is in the parent bin folder
+	if [[ -f "../bin/vulnscout.sh" ]]; then
+		script_path="$(pwd)/../bin/vulnscout.sh"
+		echo "$script_path"
+		return 0
+	fi
+
+	echo "Unable to find vulnscout.sh script. Please run this script from the project root folder."
+	exit 1
+}
+
+
+#######################################
+# Update vulnscout.sh to latest version, using git
+#######################################
+function update_vulnscout() {
+	echo "Updating VulnScout to the latest version..."
+	local script_path=""
+	local tmp_folder=""
+
+	script_path="$(find_vulnscout_sh_path)"
+	tmp_folder="$(mktemp -d)"
+
+	echo "Found vulnscout.sh at: $script_path"
+
+	git clone ssh://g1.sfl.io/sfl/vulnscout "$tmp_folder"
+	if [[ ! -f "$tmp_folder/bin/vulnscout.sh" ]]; then
+		echo "Error: Unable to find vulnscout.sh in the repository."
+		rm -rf "$tmp_folder"
+		exit 1
+	fi
+
+	rm "$script_path"
+	cp -f "$tmp_folder/bin/vulnscout.sh" "$script_path"
+	rm -rf "$tmp_folder"
+
+	echo "VulnScout updated to the latest version."
+	exit 0
+	# running `rm` before `cp` is needed to ensure inode change, preventing bash to try to read in the new file accidentally at wrong line number.
+	# Ensure we exit now and this function was not called as sub-script or sub-process, or this exit will not stop the full script.
+	# Failure to do so will result in the script to continue running the old version of the script, or bash to complain about script deleted.
 }
 
 main "$@"
