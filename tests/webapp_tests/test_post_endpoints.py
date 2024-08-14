@@ -13,6 +13,7 @@ def init_files(tmp_path):
         "vulnerabilities": tmp_path / "vulnerabilities-merged.json",
         "assessments": tmp_path / "assessments-merged.json",
         "openvex": tmp_path / "openvex.json",
+        "time_estimates": tmp_path / "time_estimates.json",
     }
     write_demo_files(files)
     return files
@@ -28,6 +29,7 @@ def app(init_files):
         "VULNS_FILE": init_files["vulnerabilities"],
         "ASSESSMENTS_FILE": init_files["assessments"],
         "OPENVEX_FILE": init_files["openvex"],
+        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
     })
 
     yield app
@@ -135,4 +137,58 @@ def test_post_assessment_invalid_payloads(client):
         'status': 'not_affected',
         'justification': 'random_text'
     }, )
+    assert response.status_code == 400
+
+
+def test_patch_vulnerability_empty(client):
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={})
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["id"] == "CVE-2020-35492"
+
+
+def test_patch_vulnerability_efforts(init_files, client):
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        'effort': {
+            'optimistic': 'PT2H',
+            'likely': 'P1D',
+            'pessimistic': 'P2.5D'
+        }
+    })
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["effort"]["optimistic"] == "PT2H"
+    assert data["effort"]["likely"] == "P1D"
+    assert data["effort"]["pessimistic"] == "P2DT4H"
+
+    estimates_content = json.loads(init_files["time_estimates"].read_text())
+    assert "CVE-2020-35492" in estimates_content["tasks"]
+    assert estimates_content["tasks"]["CVE-2020-35492"]["pessimistic"] == "P2DT4H"
+
+
+def test_patch_vulnerability_invalids(client):
+    response = client.patch("/api/vulnerabilities/CVE-0000-00000", json={
+        'effort': {
+            'optimistic': 'PT2H',
+            'likely': 'P1D',
+            'pessimistic': 'P2.5D'
+        }
+    })
+    assert response.status_code == 404
+
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        'effort': {
+            'optimistic': 'PT2H',
+            'likely': 'P1D',
+        }
+    })
+    assert response.status_code == 400
+
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        'effort': {
+            'optimistic': 'P2H',
+            'likely': 'PT1D',
+            'pessimistic': 'P'
+        }
+    })
     assert response.status_code == 400

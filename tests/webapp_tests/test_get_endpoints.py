@@ -97,6 +97,19 @@ def test_get_vulnerabilities_dict(client):
     assert "cairo@1.16.0" in data["CVE-2020-35492"]["packages"]
 
 
+def test_get_vulnerability_by_id(client):
+    response = client.get("/api/vulnerabilities/CVE-2020-35492")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["id"] == "CVE-2020-35492"
+    assert "grype" in data["found_by"]
+    assert data["severity"]["severity"] == "high"
+    assert "cairo@1.16.0" in data["packages"]
+
+    response = client.get("/api/vulnerabilities/CVE-0000-00000")
+    assert response.status_code == 404
+
+
 def test_get_assessments_list(client):
     response = client.get("/api/assessments?format=list")
     assert response.status_code == 200
