@@ -6,11 +6,13 @@ import Assessments from "../handlers/assessments";
 import { useState } from "react";
 import CvssGauge from "./CvssGauge";
 import SeverityTag from "./SeverityTag";
+import Iso8601Duration from '../handlers/iso8601duration';
 
 type Props = {
     vuln: Vulnerability;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
+    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 
 type PostAssessment = {
@@ -33,9 +35,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
 };
 
 function VulnModal(props: Props) {
-    const { vuln, onClose, appendAssessment } = props;
+    const { vuln, onClose, appendAssessment, patchVuln } = props;
 
     const [estimate_help, set_estimate_help] = useState(false);
+    const [new_optimistic, set_new_optimistic] = useState("");
+    const [new_likely, set_new_likely] = useState("");
+    const [new_pessimistic, set_new_pessimistic] = useState("");
     const [new_status, set_new_status] = useState("under_investigation");
     const [new_justification, set_new_justification] = useState("none");
     const [new_status_notes, set_new_status_notes] = useState("");
@@ -77,6 +82,59 @@ function VulnModal(props: Props) {
             onClose();
         } else {
             alert(`Failed to add assessment: HTTP code ${response.status} | ${JSON.stringify(data)}`);
+        }
+    };
+
+    const saveEstimation = async () => {
+        let content: {
+            optimistic?: Iso8601Duration,
+            likely?: Iso8601Duration,
+            pessimistic?: Iso8601Duration
+        } = {};
+        try {
+            content.optimistic = new Iso8601Duration(new_optimistic);
+            content.likely = new Iso8601Duration(new_likely);
+            content.pessimistic = new Iso8601Duration(new_pessimistic);
+
+            if(content.optimistic.total_seconds <= 0)
+                throw new Error('Invalid optimistic duration, must be strictly positive');
+            if(content.likely.total_seconds <= 0)
+                throw new Error('Invalid likely duration, must be strictly positive');
+            if(content.pessimistic.total_seconds <= 0)
+                throw new Error('Invalid pessimistic duration, must be strictly positive');
+            if(content.optimistic.total_seconds > content.likely.total_seconds)
+                throw new Error('Optimistic duration must be lower than likely duration');
+            if(content.likely.total_seconds > content.pessimistic.total_seconds)
+                throw new Error('Likely duration must be lower than pessimistic duration');
+        } catch (e) {
+            alert(`Failed to parse estimation: ${e}`);
+            return;
+        }
+
+        const response = await fetch(`/api/vulnerabilities/${vuln.id}`, {
+            method: 'PATCH',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({effort: {
+                optimistic: content.optimistic.formatAsIso8601(),
+                likely: content.likely.formatAsIso8601(),
+                pessimistic: content.pessimistic.formatAsIso8601()
+            }})
+        })
+        if (response.status == 200) {
+            const data = await response.json()
+            vuln.effort = {
+                optimistic: new Iso8601Duration(data.effort.optimistic),
+                likely: new Iso8601Duration(data.effort.likely),
+                pessimistic: new Iso8601Duration(data.effort.pessimistic)
+            }
+            patchVuln(vuln.id, vuln);
+            onClose();
+        } else {
+            const data = await response.text();
+            alert(`Failed to save estimation: HTTP code ${response.status} | ${data}`);
         }
     };
 
@@ -168,14 +226,32 @@ function VulnModal(props: Props) {
                             <div className="flex-1">
                                 <h4 className="font-bold">Optimistic</h4>
                                 <p>{vuln.effort?.optimistic?.formatHumanShort() || "not defined"}</p>
+                                <input
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_optimistic(event.target.value)}
+                                    type="text"
+                                    className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
+                                    placeholder="shortest estimate [eg: 5h]"
+                                />
                             </div>
                             <div className="flex-1">
                                 <h4 className="font-bold">Most Likely</h4>
                                 <p>{vuln.effort?.likely?.formatHumanShort() || "not defined"}</p>
+                                <input
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_likely(event.target.value)}
+                                    type="text"
+                                    className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
+                                    placeholder="balanced estimate [eg: 2d 4h, or 2.5d]"
+                                />
                             </div>
                             <div className="flex-1">
                                 <h4 className="font-bold">Pessimistic</h4>
                                 <p>{vuln.effort?.pessimistic?.formatHumanShort() || "not defined"}</p>
+                                <input
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_pessimistic(event.target.value)}
+                                    type="text"
+                                    className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
+                                    placeholder="longest estimate [eg: 1w]"
+                                />
                             </div>
                             <div>
                                 <button type='button' className='pt-8 pl-2 hover:text-blue-400' onClick={() => set_estimate_help(!estimate_help)}>
@@ -188,7 +264,18 @@ function VulnModal(props: Props) {
                             We follow the same time scale as Gitlab, which count only worked days.<br/>
                             When estimating a task to 12h, it's in fact 1 day (8h) and a half (4h).<br/>
                             Time scale: 1 month = 4 weeks; 1 week = 5 days = 40 hours.<br/>
+                            <b>Tips:</b><br/>
+                            You can enter duration as days of work without units (eg: 1 or 2.5).<br/>
+                            You can also use following units for duration: h[ours], d[ays], w[weeks], m[onths], y[ears] (eg: 5h, 3d, 1w, 0.5m, 2y).<br/>
+                            Finaly, you can enter ISO 8601 duration format (eg: P1DT12H, P2W, P3M, PT5H).
                         </div>}
+                        <div className="pb-2 text-white font-medium">
+                            <button
+                                onClick={saveEstimation}
+                                type="button"
+                                className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 rounded-lg px-4 py-2 text-center"
+                            >Save estimation</button>
+                        </div>
 
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
