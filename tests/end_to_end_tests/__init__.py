@@ -21,4 +21,8 @@ def write_demo_files(files):
         with open("tests/end_to_end_tests/yocto.json", "r") as f:
             files["YOCTO_CVE_CHECKER"].write_text(f.read())
 
+    if "TIME_ESTIMATES_PATH" in files:
+        with open("tests/end_to_end_tests/time_estimates.json", "r") as f:
+            files["TIME_ESTIMATES_PATH"].write_text(f.read())
+
     return files

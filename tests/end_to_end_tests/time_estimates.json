@@ -1,0 +1,12 @@
+{
+    "author": "Savoir-Faire Linux",
+    "timestamp": "2024-08-13T21:12:43.191824+00:00",
+    "version": 1,
+    "tasks": {
+      "CVE-2024-2398": {
+        "optimistic": "PT8H",
+        "likely": "P2.5D",
+        "pessimistic": "P1W"
+      }
+    }
+  }
