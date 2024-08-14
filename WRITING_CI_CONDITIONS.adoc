@@ -1,6 +1,6 @@
 = vulnscout-ci(1)
 Savoir-Faire Linux
-v0.3.0
+v0.4.0
 :doctype: manpage
 :manmanual: VULNSCOUT
 :mansource: VULNSCOUT
