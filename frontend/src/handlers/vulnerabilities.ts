@@ -10,6 +10,31 @@ type CVSS = {
     impact_score: number;
 };
 
+type received_vulnerability = {
+    id: string;
+    aliases: string[];
+    related_vulnerabilities: string[];
+    namespace: string;
+    found_by: string[];
+    datasource: string;
+    packages: string[];
+    urls: string[];
+    texts: {[key: string]: string};
+    severity: {
+        severity: string;
+        min_score: number;
+        max_score: number;
+        cvss: CVSS[];
+    };
+    epss: {
+        score: number | undefined;
+        percentile: number | undefined;
+    };
+    fix: {
+        state: string;
+    };
+};
+
 type Vulnerability = {
     id: string;
     aliases: string[];
@@ -20,22 +45,22 @@ type Vulnerability = {
     packages: string[];
     urls: string[];
     texts: {
-        title: string,
-        content: string
-    }[],
+        title: string;
+        content: string;
+    }[];
     severity: {
         severity: string;
         min_score: number;
         max_score: number;
         cvss: CVSS[];
-    }
+    };
     epss: {
         score: number | undefined;
         percentile: number | undefined;
-    }
+    };
     fix: {
         state: string;
-    }
+    };
     status: string;
     simplified_status: string;
     assessments: Assessment[];
@@ -51,7 +76,7 @@ class Vulnerabilities {
             mode: "cors",
         });
         const data = await response.json();
-        return data.map((vuln: Vulnerability) => ({
+        return data.map((vuln: received_vulnerability) => ({
             ...vuln,
             texts: Object.entries(vuln.texts).map(([key, value]) => ({ title: key, content: value })),
             status: 'unknown',
