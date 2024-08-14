@@ -1,4 +1,5 @@
 import type { Assessment } from "./assessments";
+import Iso8601Duration from "./iso8601duration";
 
 type CVSS = {
     author: string;
@@ -30,6 +31,11 @@ type received_vulnerability = {
         score: number | undefined;
         percentile: number | undefined;
     };
+    effort: {
+        optimistic: string | undefined;
+        likely: string | undefined;
+        pessimistic: string | undefined;
+    };
     fix: {
         state: string;
     };
@@ -58,6 +64,11 @@ type Vulnerability = {
         score: number | undefined;
         percentile: number | undefined;
     };
+    effort: {
+        optimistic: Iso8601Duration;
+        likely: Iso8601Duration;
+        pessimistic: Iso8601Duration;
+    };
     fix: {
         state: string;
     };
@@ -81,7 +92,12 @@ class Vulnerabilities {
             texts: Object.entries(vuln.texts).map(([key, value]) => ({ title: key, content: value })),
             status: 'unknown',
             simplified_status: 'unknown',
-            assessments: []
+            assessments: [],
+            effort: {
+                optimistic: new Iso8601Duration(vuln?.effort?.optimistic),
+                likely: new Iso8601Duration(vuln?.effort?.likely),
+                pessimistic: new Iso8601Duration(vuln?.effort?.pessimistic),
+            }
         }));
     }
 

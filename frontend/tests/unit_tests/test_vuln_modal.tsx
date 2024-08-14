@@ -1,13 +1,14 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
 
 
@@ -37,6 +38,11 @@ describe('Vulnerability Modal', () => {
         epss: {
             score: 0.356789,
             percentile: 0.7546
+        },
+        effort: {
+            optimistic: new Iso8601Duration('PT4H'),
+            likely: new Iso8601Duration('P1DT2H'),
+            pessimistic: new Iso8601Duration('P1W2D')
         },
         fix: {
             state: 'unknown'
@@ -108,6 +114,19 @@ describe('Vulnerability Modal', () => {
         // ASSERT
         expect(datasource).toBeInTheDocument();
         expect(url).toBeInTheDocument();
+    })
+
+    test('render efforts estimations', async () => {
+        // ARRANGE
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+
+        // ACT
+        const likely = await screen.getByText(/1d 2h/i);
+        const pessimistic = await screen.getByText(/1w 2d/i);
+
+        // ASSERT
+        expect(likely).toBeInTheDocument();
+        expect(pessimistic).toBeInTheDocument();
     })
 
     test('render assessment data', async () => {
@@ -190,5 +209,23 @@ describe('Vulnerability Modal', () => {
         expect(thisFetch).toHaveBeenCalledTimes(1);
         expect(closeBtn).toHaveBeenCalledTimes(1);
         expect(updateCb).toHaveBeenCalledTimes(1);
+    })
+
+    test('help button for time estimates', async () => {
+        // ARRANGE
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+
+        const user = userEvent.setup();
+        const show_help = await screen.getByRole('button', {name: /show help/i});
+
+        // SHOW HELP
+        await user.click(show_help);
+        const help = await screen.getByText(/we follow the same time scale as gitlab/i);
+        expect(help).toBeInTheDocument();
+
+        // HIDE HELP
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByText(/we follow the same time scale as gitlab/i), { timeout: 500 });
+        await user.click(show_help);
+        await pending_deletion;
     })
 });
