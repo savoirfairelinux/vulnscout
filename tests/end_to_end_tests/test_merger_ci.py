@@ -15,6 +15,7 @@ def init_files(tmp_path):
         "YOCTO_FOLDER": tmp_path / "yocto_cve",
         "YOCTO_CVE_CHECKER": tmp_path / "yocto_cve" / "demo.json",
         "OPENVEX_PATH": tmp_path / "openvex.json",
+        "TIME_ESTIMATES_PATH": tmp_path / "time_estimates.json",
         "OUTPUT_CDX_PATH": tmp_path / "output.cdx.json",
         "OUTPUT_PATH": tmp_path / "all-merged.json",
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
@@ -57,6 +58,11 @@ def test_running_script(init_files):
     assert "CVE-2024-2398" in out_vuln
     assert "CVE-2024-2398" in out_all["vulnerabilities"]
 
+    vuln2398 = out_vuln["CVE-2024-2398"]
+    assert vuln2398["effort"]["optimistic"] == "P1D"
+    assert vuln2398["effort"]["likely"] == "P2DT4H"
+    assert vuln2398["effort"]["pessimistic"] == "P1W"
+
     assert len(out_assessment) == 6
     assert len(out_all["assessments"]) == len(out_assessment)
 
@@ -71,6 +77,23 @@ def test_invalid_openvex(init_files):
         main()
 
     os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    main()
+
+
+def test_invalid_time_estimates(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    init_files["TIME_ESTIMATES_PATH"].write_text("invalid{ json")
+    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    with pytest.raises(Exception):
+        main()
+
+    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    main()
+
+    # test with deleted file
+    os.remove(init_files["TIME_ESTIMATES_PATH"])
     main()
 
 
