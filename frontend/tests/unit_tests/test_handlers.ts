@@ -43,6 +43,11 @@ const VULNERABILITIES = [
             score: 0.356789,
             percentile: 0.7546
         },
+        effort: {
+            optimistic: 'PT4H',
+            likely: 'P1DT2H',
+            pessimistic: 'P1W2D'
+        },
         fix: {
             state: 'unknown'
         }

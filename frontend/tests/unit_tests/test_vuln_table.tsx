@@ -6,6 +6,7 @@ import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
+import Iso8601Duration from '../../src/handlers/iso8601duration';
 
 
 const getDOMRect = (width: number, height: number) => ({
@@ -49,6 +50,11 @@ describe('Packages Table', () => {
                 score: 0.356789,
                 percentile: 0.7546
             },
+            effort: {
+                optimistic: new Iso8601Duration('PT4H'),
+                likely: new Iso8601Duration('P1DT2H'),
+                pessimistic: new Iso8601Duration('P2.5D')
+            },
             fix: {
                 state: 'unknown'
             },
@@ -80,6 +86,11 @@ describe('Packages Table', () => {
             epss: {
                 score: undefined,
                 percentile: undefined
+            },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration('P0D')
             },
             fix: {
                 state: 'unknown'
