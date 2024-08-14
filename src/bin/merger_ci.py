@@ -10,6 +10,7 @@
 from ..views.grype_vulns import GrypeVulns
 from ..views.yocto_vulns import YoctoVulns
 from ..views.openvex import OpenVex
+from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
 from ..views.templates import Templates
 from ..controllers.packages import PackagesController
@@ -24,6 +25,7 @@ GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
 GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
 YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
 OPENVEX_PATH = "/scan/outputs/openvex.json"
+TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 OUTPUT_PATH = "/scan/tmp/vulns-merged.json"
 OUTPUT_PKG_PATH = "/scan/tmp/packages-merged.json"
@@ -42,6 +44,7 @@ def read_inputs(controllers):
     scanGrype = GrypeVulns(controllers)
     scanYocto = YoctoVulns(controllers)
     openvex = OpenVex(controllers)
+    timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
     templates = Templates(controllers)
 
@@ -70,8 +73,22 @@ def read_inputs(controllers):
         with open(file, "r") as f:
             scanYocto.load_from_dict(json.loads(f.read()))
 
+    try:
+        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "r") as f:
+            timeEstimates.load_from_dict(json.loads(f.read()))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+            print(f"Error parsing time_estimates.json file: {e}")
+            print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+            raise e
+        else:
+            print(f"Ignored: Error parsing time_estimates.json file: {e}")
+
     return {
         "openvex": openvex,
+        "time_estimates": timeEstimates,
         "cdx": cdx,
         "templates": templates
     }
@@ -97,6 +114,8 @@ def output_results(controllers, files):
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
     with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
         f.write(files["cdx"].output_as_json())
+    with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
+        f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
 
     list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
     for doc in list_docs:
