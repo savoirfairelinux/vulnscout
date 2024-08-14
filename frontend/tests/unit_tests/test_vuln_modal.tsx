@@ -67,7 +67,7 @@ describe('Vulnerability Modal', () => {
 
     test('render important data in header', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const id = await screen.getByText(/^\s*CVE-2010-1234\s*$/i);
@@ -92,7 +92,7 @@ describe('Vulnerability Modal', () => {
 
     test('render text description', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const title = await screen.getByText(/description/i);
@@ -105,7 +105,7 @@ describe('Vulnerability Modal', () => {
 
     test('render urls and datasource', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const datasource = await screen.getByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i);
@@ -118,7 +118,7 @@ describe('Vulnerability Modal', () => {
 
     test('render efforts estimations', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const likely = await screen.getByText(/1d 2h/i);
@@ -131,7 +131,7 @@ describe('Vulnerability Modal', () => {
 
     test('render assessment data', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         // ACT
         const status = await screen.getAllByText(/active/i);
@@ -151,7 +151,7 @@ describe('Vulnerability Modal', () => {
     test('closing button', async () => {
         // ARRANGE
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const closeBtns = await screen.getAllByText(/Close/i);
@@ -188,7 +188,7 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={updateCb} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={updateCb} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
         // ACT
@@ -213,7 +213,7 @@ describe('Vulnerability Modal', () => {
 
     test('help button for time estimates', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const show_help = await screen.getByRole('button', {name: /show help/i});
@@ -227,5 +227,47 @@ describe('Vulnerability Modal', () => {
         const pending_deletion = waitForElementToBeRemoved(() => screen.getByText(/we follow the same time scale as gitlab/i), { timeout: 500 });
         await user.click(show_help);
         await pending_deletion;
+    })
+
+    test('edit effort estimations', async () => {
+        fetchMock.resetMocks();
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve({
+                    id: vulnerability.id,
+                    packages: vulnerability.packages,
+                    effort: {
+                        optimistic: 'PT5H',
+                        likely: 'P2DT4H',
+                        pessimistic: 'P2W3D'
+                    },
+                    responses: []
+                }),
+                text: () => Promise.resolve('Text only usefull when error happens'),
+                status: 200
+            } as Response)
+        );
+
+        // ARRANGE
+        const updateCb = jest.fn();
+        const closeBtn = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} patchVuln={updateCb} />);
+        const user = userEvent.setup();
+
+        // ACT
+        const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+        const likely = await screen.getByPlaceholderText(/balanced estimate/i);
+        const pessimistic = await screen.getByPlaceholderText(/longest estimate/i);
+        const btn = await screen.getByText(/save estimation/i);
+
+        await user.type(optimistic, '5h');
+        await user.type(likely, '2.5');
+        await user.type(pessimistic, '2w 3d');
+        await user.click(btn);
+
+        // ASSERT
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+        expect(closeBtn).toHaveBeenCalledTimes(1);
+        expect(updateCb).toHaveBeenCalledTimes(1);
     })
 });
