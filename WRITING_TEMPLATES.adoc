@@ -1,6 +1,6 @@
 = VulnScout - Writing guide for creating templates
 Savoir-Faire Linux
-0.3.0, {docdate}
+0.4.0, {docdate}
 :url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
 :source-highlighter: highlight.js
 :toc:
