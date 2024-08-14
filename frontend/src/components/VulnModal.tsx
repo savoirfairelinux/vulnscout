@@ -1,3 +1,5 @@
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faCircleQuestion } from '@fortawesome/free-regular-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
@@ -33,6 +35,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 function VulnModal(props: Props) {
     const { vuln, onClose, appendAssessment } = props;
 
+    const [estimate_help, set_estimate_help] = useState(false);
     const [new_status, set_new_status] = useState("under_investigation");
     const [new_justification, set_new_justification] = useState("none");
     const [new_status_notes, set_new_status_notes] = useState("");
@@ -159,6 +162,33 @@ function VulnModal(props: Props) {
                                 <li key={url}><a className="underline" href={url} target="_blank">{url}</a></li>
                             ))}
                         </ul>
+
+                        <h3 className="font-bold">Estimated efforts to fix</h3>
+                        <div className="flex flex-row space-x-4 max-w-[900px]">
+                            <div className="flex-1">
+                                <h4 className="font-bold">Optimistic</h4>
+                                <p>{vuln.effort?.optimistic?.formatHumanShort() || "not defined"}</p>
+                            </div>
+                            <div className="flex-1">
+                                <h4 className="font-bold">Most Likely</h4>
+                                <p>{vuln.effort?.likely?.formatHumanShort() || "not defined"}</p>
+                            </div>
+                            <div className="flex-1">
+                                <h4 className="font-bold">Pessimistic</h4>
+                                <p>{vuln.effort?.pessimistic?.formatHumanShort() || "not defined"}</p>
+                            </div>
+                            <div>
+                                <button type='button' className='pt-8 pl-2 hover:text-blue-400' onClick={() => set_estimate_help(!estimate_help)}>
+                                    <FontAwesomeIcon icon={faCircleQuestion} size='xl' className='pr-2' />
+                                    Show help
+                                </button>
+                            </div>
+                        </div>
+                        {estimate_help && <div className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
+                            We follow the same time scale as Gitlab, which count only worked days.<br/>
+                            When estimating a task to 12h, it's in fact 1 day (8h) and a half (4h).<br/>
+                            Time scale: 1 month = 4 weeks; 1 week = 5 days = 40 hours.<br/>
+                        </div>}
 
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
