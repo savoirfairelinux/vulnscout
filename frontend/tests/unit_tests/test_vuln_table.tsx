@@ -89,7 +89,7 @@ describe('Packages Table', () => {
             },
             effort: {
                 optimistic: new Iso8601Duration(undefined),
-                likely: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration('P2D'),
                 pessimistic: new Iso8601Duration('P0D')
             },
             fix: {
@@ -134,6 +134,7 @@ describe('Packages Table', () => {
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
         const epss_col = await screen.getByRole('cell', {name: /3[56][ ]?\%/});
+        const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
         const status_col = await screen.getByRole('cell', {name: /pending analysis/i});
         const source_col = await screen.getByRole('cell', {name: /hardcoded/});
@@ -142,6 +143,7 @@ describe('Packages Table', () => {
         expect(id_col).toBeInTheDocument();
         expect(severity_col).toBeInTheDocument();
         expect(epss_col).toBeInTheDocument();
+        expect(effort_col).toBeInTheDocument();
         expect(packages_col).toBeInTheDocument();
         expect(status_col).toBeInTheDocument();
         expect(source_col).toBeInTheDocument();
@@ -204,6 +206,26 @@ describe('Packages Table', () => {
         await waitFor(() => {
             const html = document.body.innerHTML;
             expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
+    })
+
+    test('sorting by efforts needed', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} />);
+
+        const user = userEvent.setup();
+        const effort_header = await screen.getByRole('columnheader', {name: /effort/i});
+
+        await user.click(effort_header); // un-ordoned -> more long first
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
+
+        await user.click(effort_header); // more long first -> reverse (short first)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
         });
     })
 
