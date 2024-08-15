@@ -128,7 +128,6 @@ function scan() {
 	if [[ -n "${COMPANY_NAME-}" ]]; then docker_args+=" -e COMPANY_NAME=${COMPANY_NAME}"; fi
 	if [[ -n "${CONTACT_EMAIL-}" ]]; then docker_args+=" -e CONTACT_EMAIL=${CONTACT_EMAIL}"; fi
 	if [[ -n "${DOCUMENT_URL-}" ]]; then docker_args+=" -e DOCUMENT_URL=${DOCUMENT_URL}"; fi
-	if [[ -n "${GENERATE_DOCUMENTS-}" ]]; then docker_args+=" -e GENERATE_DOCUMENTS=${GENERATE_DOCUMENTS}"; fi
 
 	if [[ -n "${SPDX_SOURCES-}" ]]; then
 		for source in "${SPDX_SOURCES[@]}"; do
@@ -155,7 +154,11 @@ function scan() {
 	fi
 
 	# shellcheck disable=SC2086 # docker args is a string with series of argument, so requires to be unquoted
-	container_id="$(docker run --rm -d ${docker_args} "${DOCKER_IMAGE}")"
+	container_id="$(
+		docker run --rm -d ${docker_args} \
+		-e GENERATE_DOCUMENTS="${GENERATE_DOCUMENTS-}" \
+		"${DOCKER_IMAGE}"
+	)"
 	echo "${container_id}"
 }
 

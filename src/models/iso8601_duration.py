@@ -165,6 +165,28 @@ class Iso8601Duration:
     def __repr__(self):
         return f"Iso8601Duration({str(self)})"
 
+    def human_readable(self):
+        """
+        Return the ISO 8601 duration as human readable string
+        """
+        fmt = ""
+        if self.years:
+            fmt += f"{self.years}y "
+        if self.months:
+            fmt += f"{self.months}mo "
+        if self.weeks:
+            fmt += f"{self.weeks}w "
+        if self.days:
+            fmt += f"{self.days}d "
+        if self.hours:
+            fmt += f"{self.hours}h "
+        if self.minutes:
+            fmt += f"{self.minutes}m "
+
+        if fmt == "":
+            fmt += "N/A"
+        return fmt.strip()
+
     def try_parse(something):
         """
         Try to parse the input as Iso8601Duration
