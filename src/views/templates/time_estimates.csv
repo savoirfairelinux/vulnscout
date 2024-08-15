@@ -1,0 +1,7 @@
+Action,Vulnerability ID,Optimistic estimate,Most Likely estimate,Pessimistic estimate,CVSS,EPSS Score,Notes,Workaround
+{% for vuln in vulnerabilities | as_list | status_affected | sort_by_epss | sort_by_effort -%}
+"Fix vulnerability","{{vuln.id}}","{{vuln.effort.optimistic | print_iso8601}}","{{vuln.effort.likely | print_iso8601}}","{{vuln.effort.pessimistic | print_iso8601}}","{{vuln.severity.max_score or ''}}","{{vuln.epss.score or ''}}","{{vuln.last_assessment.status_notes or ''}}","{{vuln.last_assessment.workaround or ''}}"
+{% endfor -%}
+{% for vuln in vulnerabilities | as_list | status_pending | sort_by_epss | sort_by_effort -%}
+"Assess presence of vulnerability","{{vuln.id}}","{{vuln.effort.optimistic | print_iso8601}}","{{vuln.effort.likely | print_iso8601}}","{{vuln.effort.pessimistic | print_iso8601}}","{{vuln.severity.max_score or ''}}","{{vuln.epss.score or ''}}","{{vuln.last_assessment.status_notes or ''}}","{{vuln.last_assessment.workaround or ''}}"
+{% endfor %}

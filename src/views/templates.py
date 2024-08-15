@@ -4,6 +4,7 @@ import subprocess
 import os
 import random
 import string
+from ..models.iso8601_duration import Iso8601Duration
 
 
 class Templates:
@@ -113,6 +114,8 @@ class TemplatesExtensions:
         jinjaEnv.filters["limit"] = TemplatesExtensions.filter_limit
         jinjaEnv.filters["sort_by_epss"] = TemplatesExtensions.sort_by_epss
         jinjaEnv.filters["epss_score"] = TemplatesExtensions.filter_epss_score
+        jinjaEnv.filters["sort_by_effort"] = TemplatesExtensions.sort_by_effort
+        jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
 
     def filter_status(value, status):
         if type(status) is str:
@@ -143,3 +146,13 @@ class TemplatesExtensions:
         if type(value) is dict:
             value = value.values()
         return [v for v in value if float(v["epss"]["score"]) * 100 >= minimum]
+
+    def sort_by_effort(value: list):
+        if type(value) is dict:
+            value = value.values()
+        return sorted(value, key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds, reverse=True)
+
+    def print_iso8601(value: str) -> str:
+        if type(value) is not str:
+            return "N/A"
+        return Iso8601Duration(value).human_readable()

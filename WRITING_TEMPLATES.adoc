@@ -64,7 +64,7 @@ All templates can be run from graphical interface, using export button in toolba
 * `timestamp` (string): Datetime as ISO format.
 * `last_update` (string): Datetime as ISO format.
 * `status` (string): Status of the assessment (see list below).
-* `status_note` (string): Note about the status.
+* `status_notes` (string): Note about the status.
 * `justification` (string): Justification of the status (see below).
 * `impact_statement` (string): Text explaining why vuln is classified as ignored.
 * `responses` (list of strings): List of responses to the assessment (see below).
@@ -115,6 +115,7 @@ In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-bui
 * Formating:
 ** `as_list`: Convert dict to list using `.values()`.
 ** `limit(n)`: [n: int] Limit the number of results to `n`.
+** `print_iso8601`: Transform an ISO 8601 string into a more human readable format (eg: P2DT4H = 2d 4h).
 
 * Filtering on list:
 ** `status(x)`: [x: str or list of str] Keep only vulnerabilities with status in `x`.
@@ -129,6 +130,7 @@ In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-bui
 
 * Sorting:
 ** `sort_by_epss`: Sort vulnerabilities by EPSS score, with greater score first.
+** `sort_by_effort`: Sort vulnerabilities by effort [most.likely], with most important effort first.
 
 === Common exemples and tips
 
