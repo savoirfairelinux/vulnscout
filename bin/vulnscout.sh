@@ -3,6 +3,9 @@
 # VulnScout script intended to be used in projects.
 # Some features include running an interactive scan, generate report, CI/CD scan, etc.
 # Use `vulnscout.sh --help` for more information.
+# Exit 0: everything ok
+# Exit 1: execution error (missing conf, docker issue)
+# Exit 2: only in ci mode, used when report failed to met user conditions
 #
 # Note: Keep this file indented with tabs, not spaces, or you break the help message.
 #
@@ -14,6 +17,7 @@ set -euo pipefail # Enable error checking
 # Configuration are changed automatically by bin/release_tag.sh
 DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.3.0"
 VULNSCOUT_VERSION="v0.3.0"
+INTERACTIVE_MODE="true"
 
 
 function main() {
@@ -50,8 +54,9 @@ function main() {
 			exit 1
 			;;
 		ci)
-			echo "ci command not implemented yet."
-			exit 1
+			INTERACTIVE_MODE="false"
+			FAIL_CONDITION="${2-}"
+			container_id="$(scan)"
 			;;
 		update | upgrade)
 			update_vulnscout
@@ -67,20 +72,22 @@ function main() {
 	esac
 
 	if [[ -n "${container_id}" ]]; then
-		# shellcheck disable=SC2064
-		trap "{ echo 'Exiting VulnScout, shutting down container'; docker rm -vf $container_id > /dev/null; }" EXIT
-		trap "{ echo ''; echo 'Stopped with Ctrl+C, save and quit'; exit 0; }" SIGINT
+		# shellcheck disable=SC2064 disable=SC2154
+		trap "{ real_code=\"\$?\"; echo 'Exiting VulnScout, shutting down container'; docker rm -vf $container_id > /dev/null 2>&1 || exit \"\$real_code\"; }" EXIT
+		trap "{ echo ''; echo 'Stopped with Ctrl+C, save and quit'; exit 130; }" SIGINT
 	fi
 
 	# loop until the container is stopped
 	echo "Container started. Press Ctrl+C to stop the scan."
-	echo "You can access the scan results at http://localhost:${FLASK_RUN_PORT-7275}"
+	if [[ "$INTERACTIVE_MODE" == "true" ]]; then
+		echo "You can access the scan results at http://localhost:${FLASK_RUN_PORT-7275}"
+	fi
 	sleep 1
-	while [[ -n "$(docker ps --filter "id=${container_id}" -q)" ]]; do
-		sleep 3
-	done
 
-	echo "Container stopped. Exiting VulnScout."
+	local container_exit_code=0
+	container_exit_code="$(docker wait "$container_id")"
+	echo "Container stopped (exit code: ${container_exit_code}). Exiting VulnScout."
+	exit "$container_exit_code"
 }
 
 
@@ -95,15 +102,16 @@ function help() {
 		    vulnscout.sh [command] [options]
 
 		Commands:
-		    scan        Run a security scan on the project (interactive)
-		    report      Generate a report from the scan results
-		    ci          Run a security scan in CI/CD pipeline
-		    update      Update VulnScout to the latest version
-		    help        Display this help message
+		    scan            Run a security scan on the project (interactive)
+		    report          Generate a report from the scan results
+		    ci [condition]  Run a security scan in CI/CD pipeline
+		                    fail with exit code 2 if a vulnerability fulfill the [condition]
+		    update          Update VulnScout to the latest version
+		    help            Display this help message
 
 		Options:
-		    --help      Display this help message, or specific help for a command
-		    --version   Display the version of VulnScout
+		    --help          Display this help message, or specific help for a command
+		    --version       Display the version of VulnScout
 
 		Copyright (C) 2024 Savoir-faire Linux, Inc.
 	EOF
@@ -121,6 +129,7 @@ function scan() {
 	if [[ -n "${FLASK_RUN_HOST-}" ]]; then docker_args+=" -e FLASK_RUN_HOST=${FLASK_RUN_HOST}"; fi
 	docker_args+=" -e FLASK_RUN_PORT=${FLASK_RUN_PORT-7275}"
 	docker_args+=" -p ${FLASK_RUN_PORT-7275}:${FLASK_RUN_PORT-7275}"
+	docker_args+=" -e INTERACTIVE_MODE=${INTERACTIVE_MODE}"
 
 	if [[ -n "${PRODUCT_NAME-}" ]]; then docker_args+=" -e PRODUCT_NAME=${PRODUCT_NAME}"; fi
 	if [[ -n "${PRODUCT_VERSION-}" ]]; then docker_args+=" -e PRODUCT_VERSION=${PRODUCT_VERSION}"; fi
@@ -156,6 +165,7 @@ function scan() {
 	container_id="$(
 		docker run --rm -d ${docker_args} \
 		-e GENERATE_DOCUMENTS="${GENERATE_DOCUMENTS-}" \
+		-e FAIL_CONDITION="${FAIL_CONDITION-}" \
 		"${DOCKER_IMAGE}"
 	)"
 	echo "${container_id}"

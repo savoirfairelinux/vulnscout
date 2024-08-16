@@ -16,6 +16,7 @@ from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from ..controllers.conditions_parser import ConditionParser
 import glob
 import json
 import os
@@ -37,6 +38,42 @@ OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 def post_treatment(controllers, files):
     """Do some actions on data after collect and aggregation."""
     controllers["vulnerabilities"].fetch_epss_scores()
+
+
+def evaluate_condition(controllers, condition):
+    """Evaluate a condition and exit if it's True."""
+    parser = ConditionParser()
+    have_failed = False
+    for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
+        data = {
+            "id": vuln_id,
+            "cvss": vuln.severity["max_score"] or vuln.severity["min_score"] or False,
+            "cvss_min": vuln.severity["min_score"] or vuln.severity["max_score"] or False,
+            "epss": vuln.epss["score"] or False,
+            "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
+            "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
+            "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
+            "fixed": False,
+            "ignored": False,
+            "affected": False,
+            "pending": True,
+            "new": True
+        }
+        last_assessment = None
+        for assessment in controllers["assessments"].gets_by_vuln(vuln_id):
+            if last_assessment is None or last_assessment.timestamp < assessment.timestamp:
+                last_assessment = assessment
+        if last_assessment:
+            data["fixed"] = last_assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
+            data["ignored"] = last_assessment.status in ["not_affected", "false_positive"]
+            data["affected"] = last_assessment.status in ["affected", "exploitable"]
+            data["pending"] = last_assessment.status in ["under_investigation", "in_triage"]
+            data["new"] = False
+        if parser.evaluate(condition, data):
+            have_failed = True
+            print(f"Vulnerability triggered fail condition: {vuln_id}")  # output in stdout to be catched by the CI
+    if have_failed:
+        exit(2)
 
 
 def read_inputs(controllers):
@@ -142,6 +179,8 @@ def main():
 
     files = read_inputs(controllers)
     post_treatment(controllers, files)
+    if os.getenv("FAIL_CONDITION", "") != "":
+        evaluate_condition(controllers, os.getenv("FAIL_CONDITION"))
     output_results(controllers, files)
 
 
