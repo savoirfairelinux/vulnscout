@@ -23,6 +23,7 @@ PRODUCT_VERSION=${PRODUCT_VERSION-"1.0.0"}
 COMPANY_NAME=${COMPANY_NAME-"Savoir-faire Linux"}
 CONTACT_EMAIL=${CONTACT_EMAIL-""}
 DOCUMENT_URL=${DOCUMENT_URL-"https://spdx.org/spdxdocs/${PRODUCT_NAME}-${PRODUCT_VERSION}.spdx.json"}
+INTERACTIVE_MODE=${INTERACTIVE_MODE-"true"}
 
 readonly BASE_DIR="/scan"
 
@@ -44,8 +45,10 @@ function main() {
 
 
     # 0. Run server to start page
-    set_status "0" "Server started"
-    (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
+    if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+        set_status "0" "Server started"
+        (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
+    fi
 
     if [[ "${DEBUG_SKIP_SCAN-}" != "true" ]]; then
         full_scan_steps
@@ -58,7 +61,9 @@ function main() {
 
     set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
-    fg # Bring back last background process (flask run) to foreground.
+    if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+        fg # Bring back last background process (flask run) to foreground.
+    fi
 }
 
 
