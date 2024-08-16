@@ -103,3 +103,26 @@ def test_generate_docs(init_files):
 
     os.environ["GENERATE_DOCUMENTS"] = "summary.adoc, none.doesntexist"
     main()
+
+
+def test_ci_mode(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    os.environ["FAIL_CONDITION"] = "false == true"
+    main()
+
+    os.environ["FAIL_CONDITION"] = "true == true"
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.type == SystemExit
+    assert e.value.code == 2
+
+    os.environ["FAIL_CONDITION"] = "cvss >= 8"
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.type == SystemExit
+    assert e.value.code == 2
+
+    os.environ["FAIL_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
+    main()
