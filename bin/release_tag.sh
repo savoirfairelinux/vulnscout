@@ -28,6 +28,7 @@ semversion=$(echo "${version:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')
 sed -i "s/\"version\": \".*\",/\"version\": \"${version}\",/i" frontend/package.json
 sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" README.adoc
 sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" WRITING_TEMPLATES.adoc
+sed -Ei "3s/^v[0-9]+(\.[0-9]+){0,2}/v${semversion}/" WRITING_CI_CONDITIONS.adoc
 sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers.image.version=\"${version}\"/i" Dockerfile
 sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
 sed -i "s/^DOCKER_IMAGE=\".*\"$/DOCKER_IMAGE=\"gitlab\.savoirfairelinux\.com:5050\/pe\/vulnscout:${version}\"/i" bin/vulnscout.sh
@@ -36,6 +37,7 @@ sed -i "s/^DOCKER_IMAGE=\".*\"$/DOCKER_IMAGE=\"gitlab\.savoirfairelinux\.com:505
 git add frontend/package.json
 git add README.adoc
 git add WRITING_TEMPLATES.adoc
+git add WRITING_CI_CONDITIONS.adoc
 git add Dockerfile
 git add bin/vulnscout.sh
 
