@@ -1,0 +1,152 @@
+= vulnscout-ci(1)
+Savoir-Faire Linux
+v0.3.0
+:doctype: manpage
+:manmanual: VULNSCOUT
+:mansource: VULNSCOUT
+:man-linkstyle: pass:[blue R < >]
+
+== Name
+       vulnscout-ci - Evaluate and enforce conditions on vulnerabilities within a project.
+
+== Synopsis
+       *vulnscout ci* [_CONDITION_]
+
+== Description
+       The `vulnscout ci` command can optionally accept a CONDITION
+       argument that causes the command to fail if the specified
+       condition is met by any vulnerability found in the project.
+
+       The _CONDITION_ is a string that follows the syntax described
+       below. It is evaluated against each vulnerability identified.
+       If the condition is met, the names of the vulnerabilities that
+       trigger the condition are displayed in the output. The command
+       will return an exit code of *2* if at least one vulnerability meets
+       the condition.
+
+       If the _CONDITION_ is invalid, the configuration is not found, or
+       an error occurs during the process, the command will return an
+       exit code of *1*. This allows users to differentiate between a
+       configuration error and a condition error.
+
+== Options
+       _CONDITION_
+              A string representing the criteria used to evaluate each
+              vulnerability. The syntax of this string is defined below.
+
+== Exit Status
+       *0*::
+              Success.
+       *1*::
+              Configuration error or invalid condition.
+       *2*::
+              Condition met by at least one vulnerability.
+
+== Examples
+       *vulnscout ci* _"severity=high"_
+              This example will cause the command to fail (exit code *2*)
+              if any vulnerability with a severity level of "high" is
+              found.
+
+== Global syntax and language definition
+       The full language definition can be found in
+       `src/controllers/conditions_parser.py`. The following keywords
+       are recognized:
+
+       * `true`, `false`
+       * `and`, `or`, `not`
+       * `>`, `>=`, `<`, `<=`, `==`, `!=`
+       * `0`, `5`, `2.3`, `-1`, `.42`, `25%` are recognized as numbers.
+       * `(` ... `)` are used to group expressions.
+
+       Any condition is always expressed as `<left token> <operator>
+       <right token>`. For example: `cvss >= 5 or ignored == true`.
+
+       *Note:* `true` alone is not a valid expression, but `true ==
+       true` is.
+
+== Tokens list
+       In addition to the language definition above, the following
+       tokens can be used in your conditions. They are defined in
+       `src/bin/merger_ci.py`:
+
+       * *id*
+              The CVE ID of the vulnerability.
+
+       * *cvss*
+              A number representing the maximal CVSS score of the
+              vulnerability. Generally between 0 and 10, but not
+              guaranteed.
+
+       * *cvss_min*
+              A number representing the minimal CVSS score of the
+              vulnerability. Generally between 0 and 10, but not
+              guaranteed.
+
+       * *epss*
+              A number representing the EPSS score of the vulnerability.
+              Ranges between 0 and 1.
+
+       * *effort*
+              A number representing the "most likely" estimation of time
+              needed to fix the vulnerability. Expressed in seconds.
+
+       * *effort_min*
+              A number representing the "optimistic" estimation of time
+              needed to fix the vulnerability. Expressed in seconds.
+
+       * *effort_max*
+              A number representing the "pessimistic" estimation of time
+              needed to fix the vulnerability. Expressed in seconds.
+
+       * *fixed*
+              A boolean representing if the vulnerability status is
+              fixed or not.
+
+       * *ignored*
+              A boolean representing if the vulnerability status is
+              ignored or not.
+
+       * *affected*
+              A boolean representing if the vulnerability status is
+              affecting the project or not.
+
+       * *pending*
+              A boolean representing if the vulnerability status is
+              pending or not.
+
+       * *new*
+              A boolean representing if the vulnerability is new or not.
+
+       Any other token will be treated as a string. Strings are not
+       quoted, can start with [a-zA-Z] or an underscore `_`, and can
+       contain [a-zA-Z0-9_-:].
+
+== Common examples and tips
+       Fail if any vulnerability is critical:
+              `cvss >= 9.0`
+
+       Fail if any vulnerability is critical or has both high CVSS and
+       EPSS scores:
+              `cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)`
+
+       Fail if any vulnerability was not reviewed by a human yet:
+              `pending == true`
+
+       Fail if there are important vulnerabilities not fixed or ignored:
+              `cvss >= 7.0 and (not fixed == true and not ignored ==
+              true)`
+
+       Or more concisely:
+              `cvss >= 7 and fixed == false and ignored == false`
+
+       Fail if a vulnerability with affected status doesn't have an
+       effort set already:
+              `affected == true and effort == false`
+
+       Fail if a high vulnerability is affecting the product and needs
+       less than an hour to fix:
+              `cvss >= 7.0 and affected == true and effort < 3600`
+
+       Fail if Log4j is found:
+              `id == CVE-2021-44228`

@@ -8,6 +8,9 @@ src/static/*
 *.pdf
 *.local
 
+# man page
+vulnscout*.1
+
 docker-compose.yml
 
 # Byte-compiled / optimized / DLL files
