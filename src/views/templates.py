@@ -118,7 +118,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
 
     @staticmethod
-    def filter_status(value, status):
+    def filter_status(value: list, status: str | list[str]) -> list:
         if type(status) is str:
             return [v for v in value if v["status"] == status]
         if type(status) is list:
@@ -126,7 +126,7 @@ class TemplatesExtensions:
         return []
 
     @staticmethod
-    def filter_severity(value, severity):
+    def filter_severity(value: list, severity: str | list[str]) -> list:
         if type(severity) is str:
             return [v for v in value if v["severity"]["severity"].lower() == severity.lower()]
         if type(severity) is list:
@@ -134,30 +134,34 @@ class TemplatesExtensions:
         return []
 
     @staticmethod
-    def filter_as_list(value: dict):
-        return value.values()
+    def filter_as_list(value: dict) -> list:
+        return list(value.values())
 
     @staticmethod
-    def filter_limit(value: list, limit: int):
+    def filter_limit(value: list, limit: int) -> list:
         return value[:limit]
 
     @staticmethod
-    def sort_by_epss(value: list):
+    def sort_by_epss(value: dict[str, dict] | list[dict]) -> list[dict]:
         if type(value) is dict:
-            value = value.values()
-        return sorted(value, key=lambda x: x["epss"]["score"], reverse=True)
+            value = list(value.values())
+        return sorted(value, key=lambda x: x["epss"]["score"], reverse=True)  # type: ignore
 
     @staticmethod
-    def filter_epss_score(value: dict, minimum: float):
+    def filter_epss_score(value: dict[str, dict] | list[dict], minimum: float) -> list[dict]:
         if type(value) is dict:
-            value = value.values()
-        return [v for v in value if float(v["epss"]["score"]) * 100 >= minimum]
+            value = list(value.values())
+        return [v for v in value if float(v["epss"]["score"]) * 100 >= minimum]  # type: ignore
 
     @staticmethod
-    def sort_by_effort(value: list):
+    def sort_by_effort(value: dict[str, dict] | list[dict]) -> list[dict]:
         if type(value) is dict:
-            value = value.values()
-        return sorted(value, key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds, reverse=True)
+            value = list(value.values())
+        return sorted(
+            value,  # type: ignore
+            key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds,
+            reverse=True
+        )
 
     @staticmethod
     def print_iso8601(value: str) -> str:

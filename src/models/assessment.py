@@ -3,6 +3,7 @@ from .vulnerability import Vulnerability
 from .package import Package
 from datetime import datetime, timezone
 from uuid import uuid4
+from typing import Optional
 
 
 VALID_STATUS_OPENVEX = ["under_investigation", "not_affected", "affected", "fixed"]
@@ -76,12 +77,12 @@ class VulnAssessment:
     A vulnerability can have multiple assessments because assessments are specific to a timestamp.
     """
 
-    def __init__(self, vuln_id: str, packages=[]):
+    def __init__(self, vuln_id: str, packages: Optional[list[str]] = None):
         """Create a new assesment for the given vulnerability (str) and packages (optional)."""
         if isinstance(vuln_id, Vulnerability):
             vuln_id = vuln_id.id
         self.vuln_id = vuln_id
-        self.packages = []
+        self.packages: list[str] = []
         self.timestamp = datetime.now(timezone.utc).isoformat()
         self.last_update = datetime.now(timezone.utc).isoformat()
         self.id = str(uuid4())
@@ -90,11 +91,11 @@ class VulnAssessment:
         self.status_notes = ""
         self.justification = ""
         self.impact_statement = ""
-        self.responses = []
+        self.responses: list[str] = []
         self.workaround = ""
         self.workaround_timestamp = ""
 
-        for p in packages:
+        for p in packages or []:
             self.add_package(p)
 
     def add_package(self, package) -> bool:
@@ -123,7 +124,7 @@ class VulnAssessment:
             return True
         return False
 
-    def get_status_openvex(self) -> str:
+    def get_status_openvex(self) -> Optional[str]:
         """Return the status of the vulnerability in OpenVEX format."""
         if self.status in VALID_STATUS_OPENVEX:
             return self.status
@@ -131,7 +132,7 @@ class VulnAssessment:
             return STATUS_CDX_VEX_TO_OPENVEX[self.status]
         return None
 
-    def get_status_cdx_vex(self) -> str:
+    def get_status_cdx_vex(self) -> Optional[str]:
         """Return the status of the vulnerability in CDX VEX format."""
         if self.status in VALID_STATUS_CDX_VEX:
             return self.status
@@ -175,7 +176,7 @@ class VulnAssessment:
             return True
         return False
 
-    def get_justification_openvex(self) -> str:
+    def get_justification_openvex(self) -> Optional[str]:
         """Return the justification of the vulnerability in OpenVEX format."""
         if self.justification in VALID_JUSTIFICATION_OPENVEX:
             return self.justification
@@ -183,7 +184,7 @@ class VulnAssessment:
             return JUSTIFICATION_CDX_VEX_TO_OPENVEX[self.justification]
         return None
 
-    def get_justification_cdx_vex(self) -> str:
+    def get_justification_cdx_vex(self) -> Optional[str]:
         """Return the justification of the vulnerability in CDX VEX format."""
         if self.justification in VALID_JUSTIFICATION_CDX_VEX:
             return self.justification
@@ -228,7 +229,7 @@ class VulnAssessment:
             return True
         return False
 
-    def set_workaround(self, workaround: str, timestamp: str = None):
+    def set_workaround(self, workaround: str, timestamp: Optional[str] = None):
         """
         Set the workaround for the vulnerability and the timestamp of the last update.
         If no timestamp is provided, the current time is used.
@@ -269,13 +270,13 @@ class VulnAssessment:
         assessment.workaround_timestamp = data["workaround_timestamp"] if "workaround_timestamp" in data else ""
         return assessment
 
-    def to_openvex_dict(self) -> dict:
+    def to_openvex_dict(self) -> Optional[dict]:
         """Return a dict representation of this assessment in OpenVEX format."""
         # OpenVEX must have a valid status
         openvex_status = self.get_status_openvex()
         if openvex_status is None:
             return None
-        openvex_justif = ""
+        openvex_justif: Optional[str] = ""
 
         # If justification set, it must be valid
         if self.justification != "":
@@ -312,14 +313,14 @@ class VulnAssessment:
             "action_statement_timestamp": self.workaround_timestamp
         }
 
-    def to_cdx_vex_dict(self) -> dict:
+    def to_cdx_vex_dict(self) -> Optional[dict]:
         """Return a dict representation of this assessment in CDX VEX format."""
         # CDX VEX must have a valid status
         cdx_state = self.get_status_cdx_vex()
         if cdx_state is None:
             return None
 
-        cdx_justif = ""
+        cdx_justif: Optional[str] = ""
         # If justification set, it must be valid
         if self.justification != "":
             cdx_justif = self.get_justification_cdx_vex()

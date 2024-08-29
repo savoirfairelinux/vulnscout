@@ -51,7 +51,7 @@ def init_app(app):
         return list(assessCtrl.to_dict().values())
 
     @app.route('/api/assessments/<assessment_id>')
-    def assess_by_id(assessment_id):
+    def assess_by_id(assessment_id: str):
         assessCtrl = get_assessments()
         if assessCtrl is None:
             return {"error": "Internal error"}, 500
@@ -62,7 +62,7 @@ def init_app(app):
         return item.to_dict(), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
-    def list_assess_by_vuln(vuln_id):
+    def list_assess_by_vuln(vuln_id: str):
         assessCtrl = get_assessments()
         if assessCtrl is None:
             return {"error": "Internal error"}, 500
@@ -72,14 +72,14 @@ def init_app(app):
         return [v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id], 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
-    def add_assessment(vuln_id):
+    def add_assessment(vuln_id: str):
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
 
         if "vuln_id" not in payload_data:
             payload_data["vuln_id"] = vuln_id
-        elif payload_data["vuln_id"] != vuln_id:
+        elif payload_data["vuln_id"] != vuln_id or not isinstance(payload_data["vuln_id"], str):
             return {"error": "Invalid vuln_id"}, 400
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:

@@ -118,6 +118,7 @@ If you confirm with empty text, it create tag with `Release v*.*.*` message.
 
 * Python Backend (Python3 + Flask)
 ** Linter: `flake8`
+** Type check: `mypy --config-file tox.ini`
 ** Unit tests: `pytest`
 ** Code coverage in terminal: `pytest --cov=src`
 ** Code coverage as HTML: `pytest --cov-report html --cov=src`

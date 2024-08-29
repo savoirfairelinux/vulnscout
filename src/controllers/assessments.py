@@ -2,6 +2,7 @@
 from ..models.assessment import VulnAssessment
 from ..models.vulnerability import Vulnerability
 from ..models.package import Package
+from typing import Optional
 
 
 class AssessmentsController:
@@ -20,10 +21,11 @@ class AssessmentsController:
         self.assessments = {}
         """A dictionary of assessments, indexed by their id."""
 
-    def get_by_id(self, assess_id: str) -> VulnAssessment:
+    def get_by_id(self, assess_id: str) -> Optional[VulnAssessment]:
         """Return an assessment by id (str) or None if not found."""
         if assess_id in self.assessments:
             return self.assessments[assess_id]
+        return None
 
     def gets_by_vuln(self, vuln_id) -> list:
         """Return a list of assessments by vulnerability id (str) or Vulnerability instance."""
