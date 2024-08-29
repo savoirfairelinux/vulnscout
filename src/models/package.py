@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import semver
+from typing import Optional
 
 
 class Package:
@@ -8,7 +9,7 @@ class Package:
     Packages can be compared, merged and exported or imported as dictionaries.
     """
 
-    def __init__(self, name: str, version: str, cpe=[], purl=[]):
+    def __init__(self, name: str, version: str, cpe: Optional[list[str]] = None, purl: Optional[list[str]] = None):
         """
         Create a package by name (str) and version (str).
         Version should be a semver compatible string.
@@ -16,19 +17,21 @@ class Package:
         """
         self.name = name
         self.version = version.split("+git")[0]
+        cpes = cpe or []
+        purls = purl or []
 
         # handle vendor:package format
         if len(name.split(':')) == 2:
             self.name = name.split(':')[1]
-            cpe.append(f"cpe:2.3:a:{name}:{self.version}:*:*:*:*:*:*:*")
-            purl.append(f"pkg:generic/{name.replace(':', '/')}@{self.version}")
+            cpes.append(f"cpe:2.3:a:{name}:{self.version}:*:*:*:*:*:*:*")
+            purls.append(f"pkg:generic/{name.replace(':', '/')}@{self.version}")
 
         self.id = f"{self.name}@{self.version}"
-        self.cpe = []
-        self.purl = []
-        for c in cpe:
+        self.cpe: list[str] = []
+        self.purl: list[str] = []
+        for c in cpes:
             self.add_cpe(c)
-        for p in purl:
+        for p in purls:
             self.add_purl(p)
 
     def add_cpe(self, cpe: str):
@@ -66,7 +69,7 @@ class Package:
             my_v = semver.Version.parse(self.version, optional_minor_and_patch=True)
             ot_v = semver.Version.parse(other.version, optional_minor_and_patch=True)
             return self.name == other.name and my_v == ot_v
-        except:
+        except Exception:
             return self.name == other.name and self.version == other.version
 
     def __hash__(self) -> int:
@@ -88,7 +91,7 @@ class Package:
             my_v = semver.Version.parse(self.version, optional_minor_and_patch=True)
             ot_v = semver.Version.parse(other.version, optional_minor_and_patch=True)
             return my_v < ot_v
-        except:
+        except Exception:
             return self.version < other.version
 
     def __gt__(self, other) -> bool:
@@ -102,7 +105,7 @@ class Package:
             my_v = semver.Version.parse(self.version, optional_minor_and_patch=True)
             ot_v = semver.Version.parse(other.version, optional_minor_and_patch=True)
             return my_v > ot_v
-        except:
+        except Exception:
             return self.version > other.version
 
     def __le__(self, other) -> bool:

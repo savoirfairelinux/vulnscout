@@ -3,6 +3,7 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
 from ..models.cvss import CVSS
+from typing import Optional
 
 
 class GrypeVulns:
@@ -16,7 +17,7 @@ class GrypeVulns:
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
 
-    def parse_artifact_section(self, artifact: dict) -> str:
+    def parse_artifact_section(self, artifact: dict) -> Optional[str]:
         """Parse the `artifact` part of grype JSON output."""
         if "name" in artifact and "version" in artifact:
             package = Package(artifact["name"], artifact["version"], [], [])
@@ -32,8 +33,9 @@ class GrypeVulns:
 
             self.packagesCtrl.add(package)
             return package.id
+        return None
 
-    def parse_match_details(self, match_details: list) -> list:
+    def parse_match_details(self, match_details: list) -> list[str]:
         """Parse the `matchDetails` part of grype JSON output."""
         packages = []
 
@@ -64,7 +66,7 @@ class GrypeVulns:
                     packages.append(package.id)
         return packages
 
-    def parse_vulnerability_section(self, vulnerability: dict):
+    def parse_vulnerability_section(self, vulnerability: dict) -> Vulnerability:
         """Parse the `vulnerability` part of grype JSON output."""
         vuln_data = Vulnerability(
             vulnerability.get("id", "").upper(),
@@ -76,7 +78,9 @@ class GrypeVulns:
         for url in vulnerability.get("urls", []):
             vuln_data.add_url(url)
 
-        vuln_data.add_text(vulnerability.get("description"), "description")
+        description = vulnerability.get("description")
+        if isinstance(description, str):
+            vuln_data.add_text(description, "description")
 
         for cvss_score in vulnerability.get("cvss", []):
             cvss_item = CVSS(

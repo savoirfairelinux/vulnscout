@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from ..models.vulnerability import Vulnerability
+from ..controllers.packages import PackagesController
 import http.client
 import json
 import time
+from typing import Optional
 
 
 class VulnerabilitiesController:
@@ -11,12 +13,12 @@ class VulnerabilitiesController:
     Vulnerabilities can be added, removed, retrieved and exported or imported as dictionaries.
     """
 
-    def __init__(self, pkgCtrl):
+    def __init__(self, pkgCtrl: PackagesController):
         """Take an instance of PackagesController to resolve package dependencies as parameter."""
         self.packagesCtrl = pkgCtrl
-        self.vulnerabilities = {}
+        self.vulnerabilities: dict[str, Vulnerability] = {}
         """A dictionary of vulnerabilities, indexed by their id."""
-        self.alias_registered = {}
+        self.alias_registered: dict[str, str] = {}
 
     def get(self, vuln_id: str):
         """Return a vulnerability by id (str) or None if not found. Also look for aliases."""
@@ -25,7 +27,7 @@ class VulnerabilitiesController:
         if vuln_id in self.alias_registered:
             return self.vulnerabilities[self.alias_registered[vuln_id]]
 
-    def add(self, vulnerability: Vulnerability) -> Vulnerability:
+    def add(self, vulnerability: Vulnerability) -> Optional[Vulnerability]:
         """
         Add a vulnerability to the list, merging it with an existing one if present.
         Return the vulnerability as is if added, or the merged vulnerability if already existing.
