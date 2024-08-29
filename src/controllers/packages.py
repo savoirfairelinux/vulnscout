@@ -35,6 +35,7 @@ class PackagesController:
         """Export the list of packages as a dictionary of dictionaries."""
         return {k: v.to_dict() for k, v in self.packages.items()}
 
+    @staticmethod
     def from_dict(data: dict):
         """Import a list of packages from a dictionary of dictionaries."""
         item = PackagesController()

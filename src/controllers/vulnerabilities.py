@@ -117,6 +117,7 @@ class VulnerabilitiesController:
         """Export the list of vulnerabilities as a dictionary of dictionaries."""
         return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
 
+    @staticmethod
     def from_dict(pkgCtrl, data: dict):
         """
         Import a list of vulnerabilities from a dictionary of dictionaries.

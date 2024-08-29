@@ -25,6 +25,7 @@ class CycloneDx:
         self.assessmentsCtrl = controllers["assessments"]
         self.ref_dict = {}
 
+    @staticmethod
     def str_to_severity(severity: str) -> cyclonedx.model.vulnerability.VulnerabilitySeverity:
         """
         Internal method.
@@ -42,6 +43,7 @@ class CycloneDx:
             return cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO
         return cyclonedx.model.vulnerability.VulnerabilitySeverity.UNKNOWN
 
+    @staticmethod
     def str_to_vex_status(state: str) -> ImpactAnalysisState:
         """
         Internal method.
@@ -61,6 +63,7 @@ class CycloneDx:
             return ImpactAnalysisState.NOT_AFFECTED
         return ImpactAnalysisState.IN_TRIAGE
 
+    @staticmethod
     def str_to_vex_justification(justification: str) -> ImpactAnalysisJustification:
         """
         Internal method.
@@ -89,6 +92,7 @@ class CycloneDx:
             return ImpactAnalysisJustification.REQUIRES_ENVIRONMENT
         return None
 
+    @staticmethod
     def cvss_to_rating_method(cvss: CVSS) -> cyclonedx.model.vulnerability.VulnerabilityScoreSource:
         if cvss.version == "4.0" or cvss.version == "4":
             return cyclonedx.model.vulnerability.VulnerabilityScoreSource.CVSS_V4

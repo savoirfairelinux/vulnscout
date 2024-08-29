@@ -187,6 +187,7 @@ class Iso8601Duration:
             fmt += "N/A"
         return fmt.strip()
 
+    @staticmethod
     def try_parse(something):
         """
         Try to parse the input as Iso8601Duration

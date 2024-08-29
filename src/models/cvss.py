@@ -183,6 +183,7 @@ class CVSS:
             "severity": self.severity(),
         }
 
+    @staticmethod
     def from_dict(data: dict):
         """Import a CVSS score from a dictionary."""
         return CVSS(
