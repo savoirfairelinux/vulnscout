@@ -47,8 +47,8 @@ def evaluate_condition(controllers, condition):
     for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
         data = {
             "id": vuln_id,
-            "cvss": vuln.severity["max_score"] or vuln.severity["min_score"] or False,
-            "cvss_min": vuln.severity["min_score"] or vuln.severity["max_score"] or False,
+            "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
+            "cvss_min": vuln.severity_min_score or vuln.severity_max_score or False,
             "epss": vuln.epss["score"] or False,
             "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
             "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,

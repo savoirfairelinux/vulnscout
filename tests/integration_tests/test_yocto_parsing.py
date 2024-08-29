@@ -152,12 +152,12 @@ in c-ares 1.x before 1.12.0 allows remote attackers to cause a denial of service
     cve_2007 = yocto_parser.vulnerabilitiesCtrl.get("CVE-2007-3152")
     cve_2016 = yocto_parser.vulnerabilitiesCtrl.get("CVE-2016-5180")
     cve_2023 = yocto_parser.vulnerabilitiesCtrl.get("CVE-2023-31124")
-    assert len(cve_2007.severity["cvss"]) == 1
-    assert cve_2007.severity["severity"] == "high"
-    assert len(cve_2016.severity["cvss"]) == 2
-    assert cve_2016.severity["severity"] == "critical"
-    assert len(cve_2023.severity["cvss"]) == 1
-    assert cve_2023.severity["severity"] == "low"
+    assert len(cve_2007.severity_cvss) == 1
+    assert cve_2007.severity_label == "high"
+    assert len(cve_2016.severity_cvss) == 2
+    assert cve_2016.severity_label == "critical"
+    assert len(cve_2023.severity_cvss) == 1
+    assert cve_2023.severity_label == "low"
 
     assessment_1 = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2007-3152")[0]
     assessment_2 = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2016-5180")[0]
