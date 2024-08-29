@@ -253,6 +253,7 @@ class VulnAssessment:
             "workaround_timestamp": self.workaround_timestamp
         }
 
+    @staticmethod
     def from_dict(data: dict):
         """Create a new assessment from a dict representation."""
         assessment = VulnAssessment(data["vuln_id"], data["packages"])

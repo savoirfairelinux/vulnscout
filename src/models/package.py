@@ -146,6 +146,7 @@ class Package:
             "purl": self.purl
         }
 
+    @staticmethod
     def from_dict(data: dict):
         """Import a package from a dictionary."""
         return Package(data["name"], data["version"], data.get("cpe", []), data.get("purl", []))
