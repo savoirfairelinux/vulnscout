@@ -237,8 +237,8 @@ is to confidentiality, integrity, as well as system availability.",
     assert "cairo@1.16.0" in grype_parser.packagesCtrl.packages
     assert "CVE-2020-35492" in grype_parser.vulnerabilitiesCtrl.vulnerabilities
     cve = grype_parser.vulnerabilitiesCtrl.get("CVE-2020-35492")
-    assert cve.severity["severity"] == "high"
+    assert cve.severity_label == "high"
     assert len(cve.urls) == 2
-    assert len(cve.severity["cvss"]) == 2
+    assert len(cve.severity_cvss) == 2
     assessment = grype_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-35492")[0]
     assert assessment.is_compatible_status("under_investigation")
