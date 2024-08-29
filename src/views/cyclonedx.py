@@ -283,10 +283,10 @@ class CycloneDx:
                         id=alias
                     )
                 )
-            have_custom_severity = vuln.severity["max_score"] is not None
-            for cvss in vuln.severity["cvss"]:
-                if (cvss.severity().lower() == vuln.severity["severity"].lower()
-                   and cvss.base_score == vuln.severity["max_score"]):
+            have_custom_severity = vuln.severity_max_score is not None
+            for cvss in vuln.severity_cvss:
+                if (cvss.severity().lower() == vuln.severity_label.lower()
+                   and cvss.base_score == vuln.severity_max_score):
                     have_custom_severity = False
 
                 vuln_obj.ratings.add(
@@ -305,8 +305,8 @@ class CycloneDx:
                 vuln_obj.ratings.add(
                     cyclonedx.model.vulnerability.VulnerabilityRating(
                         method=cyclonedx.model.vulnerability.VulnerabilityScoreSource.OTHER,
-                        score=float(vuln.severity["max_score"]),
-                        severity=CycloneDx.str_to_severity(vuln.severity["severity"])
+                        score=float(vuln.severity_max_score),
+                        severity=CycloneDx.str_to_severity(vuln.severity_label)
                     )
                 )
 

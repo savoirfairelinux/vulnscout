@@ -185,11 +185,11 @@ def test_parse_vulnerabilities_json(cdx_parser):
     assert cve.texts["description"] == "A flaw was found in cairo's image-compositor.c"
     assert cve.texts["detail"] == "Function image_compositor_create make buffer overflow"
     assert "https://bugzilla.redhat.com/show_bug.cgi?id=1898396" in cve.urls
-    assert len(cve.severity["cvss"]) == 1
-    assert cve.severity["cvss"][0].base_score == 7.8
-    assert cve.severity["cvss"][0].vector_string == "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
-    assert cve.severity["severity"] == "critical"
-    assert cve.severity["max_score"] == 9.5
+    assert len(cve.severity_cvss) == 1
+    assert cve.severity_cvss[0].base_score == 7.8
+    assert cve.severity_cvss[0].vector_string == "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    assert cve.severity_label == "critical"
+    assert cve.severity_max_score == 9.5
 
     assess = cdx_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-35492")[0]
     assert assess.is_compatible_status("exploitable")
