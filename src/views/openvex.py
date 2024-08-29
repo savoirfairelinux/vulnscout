@@ -140,5 +140,5 @@ class OpenVex:
                 pkg_list.append(product)
             stmt["products"] = pkg_list
 
-            output["statements"].append(stmt)
+            output["statements"].append(stmt)  # type: ignore
         return output

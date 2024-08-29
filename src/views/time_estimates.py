@@ -34,7 +34,7 @@ class TimeEstimates:
                or vuln.effort["likely"] is None
                or vuln.effort["pessimistic"] is None):
 
-                output["tasks"][vuln_id] = {
+                output["tasks"][vuln_id] = {  # type: ignore
                     "optimistic": str(vuln.effort["optimistic"]),
                     "likely": str(vuln.effort["likely"]),
                     "pessimistic": str(vuln.effort["pessimistic"])
