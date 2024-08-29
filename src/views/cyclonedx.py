@@ -76,7 +76,7 @@ class CycloneDx:
             return ImpactAnalysisJustification.CODE_NOT_REACHABLE
         elif justification.lower() == "protected_at_perimeter":
             try:
-                return ImpactAnalysisJustification.PROTECTED_AT_PERIMETER
+                return ImpactAnalysisJustification.PROTECTED_AT_PERIMETER  # type: ignore
             except AttributeError:
                 return ImpactAnalysisJustification.PROTECTED_AT_PERIMITER
         elif justification.lower() == "protected_at_runtime":
@@ -108,7 +108,7 @@ class CycloneDx:
     def load_from_dict(self, cyclonedx: dict):
         """Read data from CycloneDx json parsed format."""
         try:
-            self.sbom = Bom.from_json(data=cyclonedx)
+            self.sbom = Bom.from_json(data=cyclonedx)  # type: ignore
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
 
@@ -353,7 +353,7 @@ class CycloneDx:
         """Output the SBOM to JSON format."""
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Bom()
-            self.sbom.serial_number = uuid7()
+            self.sbom.serial_number = uuid7()  # type: ignore
 
         self.sbom.metadata.timestamp = datetime.now(timezone.utc)
         self.sbom.components = []

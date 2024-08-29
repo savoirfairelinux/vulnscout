@@ -3,6 +3,7 @@ test: test_backend test_frontend
 
 test_backend:
 	flake8
+	mypy --config-file tox.ini
 	pytest --cov-report html --cov=src
 	pdoc ./src -o ./htmldocs
 	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
