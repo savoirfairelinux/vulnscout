@@ -117,6 +117,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["sort_by_effort"] = TemplatesExtensions.sort_by_effort
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
 
+    @staticmethod
     def filter_status(value, status):
         if type(status) is str:
             return [v for v in value if v["status"] == status]
@@ -124,6 +125,7 @@ class TemplatesExtensions:
             return [v for v in value if v["status"] in status]
         return []
 
+    @staticmethod
     def filter_severity(value, severity):
         if type(severity) is str:
             return [v for v in value if v["severity"]["severity"].lower() == severity.lower()]
@@ -131,27 +133,33 @@ class TemplatesExtensions:
             return [v for v in value if v["severity"]["severity"].lower() in map(lambda x: x.lower(), severity)]
         return []
 
+    @staticmethod
     def filter_as_list(value: dict):
         return value.values()
 
+    @staticmethod
     def filter_limit(value: list, limit: int):
         return value[:limit]
 
+    @staticmethod
     def sort_by_epss(value: list):
         if type(value) is dict:
             value = value.values()
         return sorted(value, key=lambda x: x["epss"]["score"], reverse=True)
 
+    @staticmethod
     def filter_epss_score(value: dict, minimum: float):
         if type(value) is dict:
             value = value.values()
         return [v for v in value if float(v["epss"]["score"]) * 100 >= minimum]
 
+    @staticmethod
     def sort_by_effort(value: list):
         if type(value) is dict:
             value = value.values()
         return sorted(value, key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds, reverse=True)
 
+    @staticmethod
     def print_iso8601(value: str) -> str:
         if type(value) is not str:
             return "N/A"

@@ -67,6 +67,7 @@ class AssessmentsController:
         """Return a dictionary representation of the assessments."""
         return {k: v.to_dict() for k, v in self.assessments.items()}
 
+    @staticmethod
     def from_dict(pkgCtrl, vulnCtrl, data: dict):
         """Return a new instance of AssessmentsController from a dictionary."""
         item = AssessmentsController(pkgCtrl, vulnCtrl)
