@@ -11,6 +11,7 @@ from cyclonedx.model.impact_analysis import ImpactAnalysisState, ImpactAnalysisJ
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from packageurl import PackageURL
+from typing import Optional
 
 
 class CycloneDx:
@@ -64,7 +65,7 @@ class CycloneDx:
         return ImpactAnalysisState.IN_TRIAGE
 
     @staticmethod
-    def str_to_vex_justification(justification: str) -> ImpactAnalysisJustification:
+    def str_to_vex_justification(justification: str) -> Optional[ImpactAnalysisJustification]:
         """
         Internal method.
         Convert string to CycloneDx VEX justification.
@@ -201,6 +202,8 @@ class CycloneDx:
 
         if vulnerability.analysis:
             analysis = vulnerability.analysis
+            if vulnerability.id is None:
+                return
             assess = VulnAssessment(vulnerability.id, pkgs)
             if analysis.state:
                 assess.set_status(analysis.state)

@@ -5,6 +5,7 @@ from ..models.assessment import VulnAssessment
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
+from typing import Optional
 
 
 class OpenVex:
@@ -18,7 +19,7 @@ class OpenVex:
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
 
-    def parse_package_section(self, product: dict) -> Package:
+    def parse_package_section(self, product: dict) -> Optional[Package]:
         pkg = None
         identifiers = product["identifiers"] if "identifiers" in product else {}
 
