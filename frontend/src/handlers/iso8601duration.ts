@@ -9,8 +9,8 @@ class Iso8601Duration {
     private seconds: number = 0;
     public total_seconds: number = 0;
 
-    private static regex_parse = /^P([\d\.]+Y)?([\d\.]+M)?([\d\.]+W)?([\d\.]+D)?(T([\d\.]+H)?([\d\.]+M)?([\d\.]+S)?)?$/i
-    private static regex_validate = /^P([\d\.]+[YMWD]|T[\d\.]+[HMS])/i
+    private static regex_parse = /^P([\d.]+Y)?([\d.]+M)?([\d.]+W)?([\d.]+D)?(T([\d.]+H)?([\d.]+M)?([\d.]+S)?)?$/i
+    private static regex_validate = /^P([\d.]+[YMWD]|T[\d.]+[HMS])/i
 
     private static regex_gitlab_years = /^(\d*\.?\d+)y(ears?)?$/gi
     private static regex_gitlab_months = /^(\d*\.?\d+)mo(nths?)?$/gi
@@ -20,11 +20,11 @@ class Iso8601Duration {
     private static regex_gitlab_minutes = /^(\d*\.?\d+)m(inutes?)?$/gi
 
     constructor(input: string | undefined) {
-        if(typeof input !== 'string') {}
-        else if(input.startsWith('P')) {
-            this.parseIso8601(input);
-        } else {
-            this.parseGitlabLike(input);
+        if(typeof input === 'string') {
+            if(input.startsWith('P'))
+                this.parseIso8601(input);
+            else
+                this.parseGitlabLike(input);
         }
         this.compute_total_seconds();
     }
@@ -33,7 +33,7 @@ class Iso8601Duration {
         if(typeof input !== 'string') {
             throw new Error('Input must be a string');
         }
-        let matches = input.match(Iso8601Duration.regex_parse);
+        let matches = Iso8601Duration.regex_parse.exec(input);
         if(matches === null) {
             throw new Error('Invalid ISO 8601 duration');
         }

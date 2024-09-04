@@ -16,7 +16,7 @@ type Props = {
   setDarkMode: (mode: boolean) => void;
 }
 
-function Explorer({ darkMode, setDarkMode }: Props) {
+function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
 

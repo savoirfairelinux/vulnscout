@@ -24,7 +24,7 @@ function TableGeneric<DataType> ({
     fuseKeys = ['id'],
     estimateRowHeight = 66,
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)'
-}: Props<DataType>) {
+}: Readonly<Props<DataType>>) {
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -110,7 +110,7 @@ function TableGeneric<DataType> ({
                 <tbody className="relative grid" style={{height: `${rowVirtualizer.getTotalSize()}px`}}>
 
                     {rowVirtualizer.getVirtualItems().map(virtualRow => {
-                        const row = rows[virtualRow.index] as Row<DataType>
+                        const row: Row<DataType> = rows[virtualRow.index]
                         return (
                             <tr
                             data-index={virtualRow.index} //needed for dynamic row height measurement
