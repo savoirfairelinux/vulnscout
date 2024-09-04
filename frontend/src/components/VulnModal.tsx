@@ -17,13 +17,13 @@ type Props = {
 };
 
 type PostAssessment = {
-    vuln_id: String,
-    packages: String[],
-    status: String,
-    justification?: String,
-    impact_statement?: String,
-    status_notes?: String,
-    workaround?: String
+    vuln_id: string,
+    packages: string[],
+    status: string,
+    justification?: string,
+    impact_statement?: string,
+    status_notes?: string,
+    workaround?: string
 }
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -35,34 +35,34 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
 
-function VulnModal(props: Props) {
+function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, patchVuln } = props;
 
-    const [estimate_help, set_estimate_help] = useState(false);
-    const [new_optimistic, set_new_optimistic] = useState("");
-    const [new_likely, set_new_likely] = useState("");
-    const [new_pessimistic, set_new_pessimistic] = useState("");
-    const [new_status, set_new_status] = useState("under_investigation");
-    const [new_justification, set_new_justification] = useState("none");
-    const [new_status_notes, set_new_status_notes] = useState("");
-    const [new_workaround, set_new_workaround] = useState("");
-    const [new_impact, set_new_impact] = useState("");
+    const [estimateHelp, setEstimateHelp] = useState(false);
+    const [newOptimistic, setNewOptimistic] = useState("");
+    const [newLikely, setNewLikely] = useState("");
+    const [newPessimistic, setNewPessimistic] = useState("");
+    const [newStatus, setNewStatus] = useState("under_investigation");
+    const [newJustification, setNewJustification] = useState("none");
+    const [newStatusNotes, setNewStatusNotes] = useState("");
+    const [newWorkaround, setNewWorkaround] = useState("");
+    const [newImpact, setNewImpact] = useState("");
 
 
     const addAssessment = async () => {
-        if (new_status == '' || new_justification == '')
+        if (newStatus == '' || newJustification == '')
             return;
         let content: PostAssessment = {
             vuln_id: vuln.id,
             packages: vuln.packages,
-            status: new_status,
-            impact_statement: new_status == "not_affected" ? new_impact : undefined,
-            status_notes: new_status_notes,
-            workaround: new_workaround
+            status: newStatus,
+            impact_statement: newStatus == "not_affected" ? newImpact : undefined,
+            status_notes: newStatusNotes,
+            workaround: newWorkaround
         }
-        if (new_status == "not_affected") {
-            if (new_justification != 'none') {
-                content.justification = new_justification;
+        if (newStatus == "not_affected") {
+            if (newJustification != 'none') {
+                content.justification = newJustification;
             } else {
                 alert("You must provide a justification for this status");
                 return;
@@ -95,9 +95,9 @@ function VulnModal(props: Props) {
             pessimistic?: Iso8601Duration
         } = {};
         try {
-            content.optimistic = new Iso8601Duration(new_optimistic);
-            content.likely = new Iso8601Duration(new_likely);
-            content.pessimistic = new Iso8601Duration(new_pessimistic);
+            content.optimistic = new Iso8601Duration(newOptimistic);
+            content.likely = new Iso8601Duration(newLikely);
+            content.pessimistic = new Iso8601Duration(newPessimistic);
 
             if(content.optimistic.total_seconds <= 0)
                 throw new Error('Invalid optimistic duration, must be strictly positive');
@@ -203,8 +203,8 @@ function VulnModal(props: Props) {
                                     <code>{vuln.related_vulnerabilities.join(', ')}</code>
                                 </li>
                             </ul>
-                            {vuln.severity.cvss.map((cvss, ind) => (
-                                <div key={ind} className="bg-gray-800 p-2 rounded-xl flex-initial ml-4">
+                            {vuln.severity.cvss.map((cvss) => (
+                                <div key={encodeURIComponent(`${cvss.author}-${cvss.version}-${cvss.base_score}`)} className="bg-gray-800 p-2 rounded-xl flex-initial ml-4">
                                     <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
                                     <CvssGauge data={cvss} />
                                 </div>
@@ -232,7 +232,7 @@ function VulnModal(props: Props) {
                                 <h4 className="font-bold">Optimistic</h4>
                                 <p>{vuln.effort?.optimistic?.formatHumanShort() || "not defined"}</p>
                                 <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_optimistic(event.target.value)}
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewOptimistic(event.target.value)}
                                     type="text"
                                     className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
                                     placeholder="shortest estimate [eg: 5h]"
@@ -242,7 +242,7 @@ function VulnModal(props: Props) {
                                 <h4 className="font-bold">Most Likely</h4>
                                 <p>{vuln.effort?.likely?.formatHumanShort() || "not defined"}</p>
                                 <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_likely(event.target.value)}
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewLikely(event.target.value)}
                                     type="text"
                                     className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
                                     placeholder="balanced estimate [eg: 2d 4h, or 2.5d]"
@@ -252,20 +252,20 @@ function VulnModal(props: Props) {
                                 <h4 className="font-bold">Pessimistic</h4>
                                 <p>{vuln.effort?.pessimistic?.formatHumanShort() || "not defined"}</p>
                                 <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_pessimistic(event.target.value)}
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewPessimistic(event.target.value)}
                                     type="text"
                                     className="bg-gray-800 m-1 w-full p-1 px-2 placeholder:text-slate-400"
                                     placeholder="longest estimate [eg: 1w]"
                                 />
                             </div>
                             <div>
-                                <button type='button' className='pt-8 pl-2 hover:text-blue-400' onClick={() => set_estimate_help(!estimate_help)}>
+                                <button type='button' className='pt-8 pl-2 hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
                                     <FontAwesomeIcon icon={faCircleQuestion} size='xl' className='pr-2' />
                                     Show help
                                 </button>
                             </div>
                         </div>
-                        {estimate_help && <div className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
+                        {estimateHelp && <div className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
                             We follow the same time scale as Gitlab, which count only worked days.<br/>
                             When estimating a task to 12h, it's in fact 1 day (8h) and a half (4h).<br/>
                             Time scale: 1 month = 4 weeks; 1 week = 5 days = 40 hours.<br/>
@@ -297,8 +297,8 @@ function VulnModal(props: Props) {
                                         <p className="text-base font-normal text-gray-300">
                                             {assess.impact_statement && <>{assess.impact_statement}<br/></>}
                                             {!assess.impact_statement && assess.status == 'not_affected' && <>no impact statement<br/></>}
-                                            {assess.status_notes || 'no status notes'}<br/>
-                                            {assess.workaround || 'no workaround available'}
+                                            {assess.status_notes ?? 'no status notes'}<br/>
+                                            {assess.workaround ?? 'no workaround available'}
                                         </p>
                                     </li>
                                 );
@@ -310,7 +310,7 @@ function VulnModal(props: Props) {
                                 <h3 className="m-1">
                                     Status:
                                     <select
-                                        onChange={(event) => set_new_status(event.target.value)}
+                                        onChange={(event) => setNewStatus(event.target.value)}
                                         className="p-1 px-2 bg-gray-800 mr-4"
                                         name="new_assessment_status"
                                     >
@@ -320,10 +320,10 @@ function VulnModal(props: Props) {
                                         <option value="not_affected">Not applicable</option>
                                         <option value="false_positive">Faux positif</option>
                                     </select>
-                                    {new_status == "not_affected" && <>
+                                    {newStatus == "not_affected" && <>
                                         Justification:
                                         <select
-                                            onChange={(event) => set_new_justification(event.target.value)}
+                                            onChange={(event) => setNewJustification(event.target.value)}
                                             className="p-1 px-2 bg-gray-800"
                                             name="new_assessment_justification"
                                         >
@@ -337,9 +337,9 @@ function VulnModal(props: Props) {
                                         </select>
                                     </>}
                                 </h3>
-                                {(new_status == "not_affected" || new_status == "false_positive") && <>
+                                {(newStatus == "not_affected" || newStatus == "false_positive") && <>
                                     <input
-                                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_impact(event.target.value)}
+                                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewImpact(event.target.value)}
                                         name="new_assessment_impact"
                                         className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
                                         type="text"
@@ -347,14 +347,14 @@ function VulnModal(props: Props) {
                                     /><br/>
                                 </>}
                                 <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_status_notes(event.target.value)}
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewStatusNotes(event.target.value)}
                                     name="new_assessment_status_notes"
                                     className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
                                     type="text"
                                     placeholder="Free text notes about your review, details, actions taken, ..."
                                 /><br/>
                                 <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => set_new_workaround(event.target.value)}
+                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewWorkaround(event.target.value)}
                                     name="new_assessment_workaround"
                                     className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white"
                                     type="text"

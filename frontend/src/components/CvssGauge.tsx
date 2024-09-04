@@ -4,8 +4,8 @@ type Props = {
     data: CVSS;
 };
 
-function CvssGauge ({ data }: Props) {
-    //percent to deg => Math.round(((value / 100) * 180 - 45) * 10) / 10
+function CvssGauge ({ data }: Readonly<Props>) {
+    // percent to deg => Math.round(((value / 100) * 180 - 45) * 10) / 10
     // src: https://gist.github.com/gquittet/77dd931ebfa7b8a73f2711faee0a7292
 
     if (typeof data.base_score !== 'number' || data.base_score < 0.0 || data.base_score > 10.0)
