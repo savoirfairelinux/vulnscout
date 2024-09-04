@@ -29,11 +29,11 @@ const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }: Props) {
+function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }: Readonly<Props>) {
 
-    const [modalvuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
+    const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
-    const [filterSource, setfilterSource] = useState<string|undefined>(undefined);
+    const [filterSource, setFilterSource] = useState<string|undefined>(undefined);
     const [hidePatched, setHidePatched] = useState(false);
     const [hideIgnored, setHideIgnored] = useState(false);
     const [hideActive, setHideActive] = useState(false);
@@ -131,7 +131,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
             <div className="ml-4">Source</div>
-            <select name="source_selector" onChange={(event) => setfilterSource(event.target.value)} className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8">
+            <select name="source_selector" onChange={(event) => setFilterSource(event.target.value)} className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8">
                 <option value={undefined}>All sources</option>
                 {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
             </select>
@@ -155,7 +155,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredvulnerabilities} estimateRowHeight={66} />
 
-        {modalvuln != undefined && <VulnModal vuln={modalvuln} onClose={() => setModalVuln(undefined)} appendAssessment={appendAssessment} patchVuln={patchVuln}></VulnModal>}
+        {modalVuln != undefined && <VulnModal vuln={modalVuln} onClose={() => setModalVuln(undefined)} appendAssessment={appendAssessment} patchVuln={patchVuln}></VulnModal>}
     </>)
 }
 

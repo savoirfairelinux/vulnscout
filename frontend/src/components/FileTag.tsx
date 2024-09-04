@@ -11,7 +11,7 @@ const documentTypes: {[key: string]: string|undefined} = {
     'XLSX': 'Excel Spreadsheet'
 }
 
-function FileTag ({ name, extension, onOpen, opened }: Props) {
+function FileTag ({ name, extension, onOpen, opened }: Readonly<Props>) {
     return (
         <div className="relative inline-block">
             <div>

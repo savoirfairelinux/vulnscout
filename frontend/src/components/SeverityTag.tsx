@@ -14,12 +14,12 @@ const severityColors: { [key: string]: string } = {
     "NONE": "bg-green-500",
 }
 
-function SeverityTag ({ severity, className }: Props) {
+function SeverityTag ({ severity, className }: Readonly<Props>) {
     const color = severityColors[severity.toUpperCase()] || "bg-gray-500";
 
-    return (<>
+    return (
         <span className={['py-1 px-2', color, escape(className)].join(' ')}>{severity}</span>
-    </>);
+    );
 }
 
 export default SeverityTag;

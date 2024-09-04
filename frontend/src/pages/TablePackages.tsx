@@ -38,12 +38,12 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages ({ packages }: Props) {
+function TablePackages ({ packages }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
     const [hidePatched, setHidePatched] = useState(false);
     const [hideIgnored, setHideIgnored] = useState(false);
     const [search, setSearch] = useState<string>('');
-    const [filterSource, setfilterSource] = useState<string|undefined>(undefined)
+    const [filterSource, setFilterSource] = useState<string|undefined>(undefined)
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -107,7 +107,7 @@ function TablePackages ({ packages }: Props) {
             <div className="ml-4">Source</div>
             <select
                 name="source_selector"
-                onChange={(event) => setfilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
+                onChange={(event) => setFilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
                 className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
             >
                 <option value="__none__">All sources</option>

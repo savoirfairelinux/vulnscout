@@ -9,7 +9,7 @@ function Loading(
   {
     topline = 'Project analysis is running...',
     details = 'Step 0 : starting script'
-  }: Props
+  }: Readonly<Props>
 ) {
   return (
     <div className='w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] text-center pt-[15vh]'>

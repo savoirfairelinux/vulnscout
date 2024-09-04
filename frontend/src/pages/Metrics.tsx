@@ -57,7 +57,7 @@ const BarOptions = {
     }
 };
 
-function Metrics ({ vulnerabilities }: Props) {
+function Metrics ({ vulnerabilities }: Readonly<Props>) {
     const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
     const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
@@ -135,9 +135,9 @@ function Metrics ({ vulnerabilities }: Props) {
                     if (hideStatus[vuln.simplified_status]) return acc;
                     if (hideSeverity[vuln.severity.severity]) return acc;
                     let added = false;
-                    if (vuln.found_by.includes('grype')) acc[1]++; added = true;
-                    if (vuln.found_by.includes('yocto')) acc[2]++; added = true;
-                    if (vuln.found_by.includes('osv')) acc[3]++; added = true;
+                    if (vuln.found_by.includes('grype')) { acc[1]++; added = true; }
+                    if (vuln.found_by.includes('yocto')) { acc[2]++; added = true; }
+                    if (vuln.found_by.includes('osv')) { acc[3]++; added = true; }
                     if (!added) acc[0]++;
                     return acc;
                 }, [0, 0, 0, 0]),

@@ -13,7 +13,7 @@ type Props = {
     setDarkMode: (mode: boolean) => void;
 };
 
-function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Props) {
+function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props>) {
   return (
     <nav>
       <ul className={["flex flex-row font-bold items-center", bgColor].join(' ')}>
@@ -22,39 +22,53 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Props) {
             VulnScout
         </li>
 
-        <li className={["px-4 py-2", bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')} onClick={() => changeTab('metrics')}>
-            <FontAwesomeIcon icon={faChartLine} className='mr-1' />
-            Dashboard
+        <li className={["px-4 py-2", bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('metrics')}>
+                <FontAwesomeIcon icon={faChartLine} className='mr-1' />
+                Dashboard
+            </button>
         </li>
-        <li className={["px-4 py-2", bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')} onClick={() => changeTab('packages')}>
-            <FontAwesomeIcon icon={faBox} className='mr-1' />
-            Packages
+        <li className={["px-4 py-2", bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('packages')}>
+                <FontAwesomeIcon icon={faBox} className='mr-1' />
+                Packages
+            </button>
         </li>
-        <li className={["px-4 py-2", bgHoverColor, tab == 'vulnerabilities' && bgActiveColor].join(' ')} onClick={() => changeTab('vulnerabilities')}>
-            <FontAwesomeIcon icon={faShieldHalved} className='mr-1' />
-            Vulnerabilities
+        <li className={["px-4 py-2", bgHoverColor, tab == 'vulnerabilities' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('vulnerabilities')}>
+                <FontAwesomeIcon icon={faShieldHalved} className='mr-1' />
+                Vulnerabilities
+            </button>
         </li>
-        <li className={["px-4 py-2", bgHoverColor, tab == 'audit' && bgActiveColor].join(' ')} onClick={() => changeTab('audit')}>
-            <FontAwesomeIcon icon={faMagnifyingGlass} className='mr-1' />
-            Audit
+        <li className={["px-4 py-2", bgHoverColor, tab == 'audit' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('audit')}>
+                <FontAwesomeIcon icon={faMagnifyingGlass} className='mr-1' />
+                Audit
+            </button>
         </li>
 
         <li className="mx-3 border-l h-8 dark:border-neutral-300"></li>
 
         <li className={["px-4 py-2", bgHoverColor].join(' ')}>
-            <FontAwesomeIcon icon={faFileImport} className='mr-1' />
-            Import
+            <button>
+                <FontAwesomeIcon icon={faFileImport} className='mr-1' />
+                Import
+            </button>
         </li>
-        <li className={["px-4 py-2", bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')} onClick={() => changeTab('exports')}>
-            <FontAwesomeIcon icon={faFileExport} className='mr-1' />
-            Export
+        <li className={["px-4 py-2", bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('exports')}>
+                <FontAwesomeIcon icon={faFileExport} className='mr-1' />
+                Export
+            </button>
         </li>
 
         <li className='grow'></li>
 
-        <li onClick={() => setDarkMode(!darkMode)} className={["px-4 py-2", bgHoverColor].join(' ')}>
-            {!darkMode && <FontAwesomeIcon icon={faMoon} />}
-            {darkMode && <FontAwesomeIcon icon={faSun} />}
+        <li className={["px-4 py-2", bgHoverColor].join(' ')}>
+            <button onClick={() => setDarkMode(!darkMode)}>
+                {!darkMode && <FontAwesomeIcon icon={faMoon} />}
+                {darkMode && <FontAwesomeIcon icon={faSun} />}
+            </button>
         </li>
       </ul>
     </nav>
