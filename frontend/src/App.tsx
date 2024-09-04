@@ -31,7 +31,7 @@ function App() {
         }
         setLoadingText({
           topline: 'Project analysis is running...',
-          details: `Step ${data.step}/${data.maxsteps} : ${data.message}`
+          details: `Step ${data?.step ?? '0'}/${data?.maxsteps ?? '?'} : ${data?.message}`
         });
       })
       .catch(error => {

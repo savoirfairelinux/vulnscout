@@ -22,11 +22,16 @@ function FileTag ({ name, extension, onOpen, opened }: Props) {
             </div>
             <div className={["absolute left-0 z-10 mt-2 min-w-56 w-[110%] origin-top-left rounded-md bg-slate-50 text-black", !opened && "hidden"].join(' ')}>
                 {extension.split('|').map((value, index) => (
-                    <a href={`${import.meta.env.VITE_API_URL}/api/documents/${name}?ext=${value}`} target="_blank" className={[
-                        "inline-block w-full py-2 px-4 hover:bg-slate-300 text-left",
-                        index == 0 && 'rounded-t-md',
-                        index == extension.split('|').length - 1 && 'rounded-b-md'
-                    ].join(' ')}>Download as {documentTypes?.[value.toUpperCase()] || value.toUpperCase()}</a>
+                    <a
+                        href={`${import.meta.env.VITE_API_URL}/api/documents/${encodeURIComponent(name)}?ext=${encodeURIComponent(value)}`}
+                        key={encodeURIComponent(value)}
+                        target="_blank"
+                        className={[
+                            "inline-block w-full py-2 px-4 hover:bg-slate-300 text-left",
+                            index == 0 && 'rounded-t-md',
+                            index == extension.split('|').length - 1 && 'rounded-b-md'
+                        ].join(' ')}
+                    >Download as {documentTypes?.[value.toUpperCase()] ?? value.toUpperCase()}</a>
                 ))}
             </div>
         </div>

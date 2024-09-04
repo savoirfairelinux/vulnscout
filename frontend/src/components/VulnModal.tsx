@@ -2,8 +2,9 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion } from '@fortawesome/free-regular-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
-import Assessments from "../handlers/assessments";
+import { asAssessment } from "../handlers/assessments";
 import { useState } from "react";
+import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import SeverityTag from "./SeverityTag";
 import Iso8601Duration from '../handlers/iso8601duration';
@@ -68,7 +69,7 @@ function VulnModal(props: Props) {
             }
         }
 
-        const response = await fetch(`/api/vulnerabilities/${vuln.id}/assessments`, {
+        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
             method: 'POST',
             mode: 'cors',
             headers: {
@@ -77,11 +78,13 @@ function VulnModal(props: Props) {
             body: JSON.stringify(content)
         })
         const data = await response.json()
-        if (data.status == 'success') {
-            appendAssessment(Assessments.from_json(data.assessment));
+        if (data?.status === 'success') {
+            const casted = asAssessment(data?.assessment);
+            if (!Array.isArray(casted) && typeof casted === "object")
+                appendAssessment(casted);
             onClose();
         } else {
-            alert(`Failed to add assessment: HTTP code ${response.status} | ${JSON.stringify(data)}`);
+            alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
         }
     };
 
@@ -107,11 +110,11 @@ function VulnModal(props: Props) {
             if(content.likely.total_seconds > content.pessimistic.total_seconds)
                 throw new Error('Likely duration must be lower than pessimistic duration');
         } catch (e) {
-            alert(`Failed to parse estimation: ${e}`);
+            alert(`Failed to parse estimation: ${escape(String(e))}`);
             return;
         }
 
-        const response = await fetch(`/api/vulnerabilities/${vuln.id}`, {
+        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
@@ -125,16 +128,18 @@ function VulnModal(props: Props) {
         })
         if (response.status == 200) {
             const data = await response.json()
-            vuln.effort = {
-                optimistic: new Iso8601Duration(data.effort.optimistic),
-                likely: new Iso8601Duration(data.effort.likely),
-                pessimistic: new Iso8601Duration(data.effort.pessimistic)
-            }
+            if (typeof data?.effort?.optimistic === "string")
+                vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
+            if (typeof data?.effort?.likely === "string")
+                vuln.effort.likely = new Iso8601Duration(data.effort.likely);
+            if (typeof data?.effort?.pessimistic === "string")
+                vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+
             patchVuln(vuln.id, vuln);
             onClose();
         } else {
             const data = await response.text();
-            alert(`Failed to save estimation: HTTP code ${response.status} | ${data}`);
+            alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
         }
     };
 
@@ -208,7 +213,7 @@ function VulnModal(props: Props) {
 
                         {vuln.texts.map((text) => {
                             const title = text.title.split('');
-                            return (<div key={text.title}>
+                            return (<div key={encodeURIComponent(text.title)}>
                                 <h3 className="font-bold">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
                                 <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg">{text.content}</p>
                             </div>)
@@ -217,7 +222,7 @@ function VulnModal(props: Props) {
                         <h3 className="font-bold">Links</h3>
                         <ul>
                             {[...new Set([vuln.datasource, ...vuln.urls])].map(url => (
-                                <li key={url}><a className="underline" href={url} target="_blank">{url}</a></li>
+                                <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
                             ))}
                         </ul>
 
@@ -283,7 +288,7 @@ function VulnModal(props: Props) {
                             {vuln.assessments.map(assess => {
                                 const dt = new Date(assess.timestamp);
                                 return (
-                                    <li key={assess.id} className="mb-10 ms-4">
+                                    <li key={encodeURIComponent(assess.id)} className="mb-10 ms-4">
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                         <h3 className="text-lg font-semibold text-white">
