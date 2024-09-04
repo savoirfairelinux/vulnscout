@@ -7,6 +7,7 @@ import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
+import { escape } from "lodash-es";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -132,7 +133,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             <div className="ml-4">Source</div>
             <select name="source_selector" onChange={(event) => setfilterSource(event.target.value)} className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8">
                 <option value={undefined}>All sources</option>
-                {sources_list.map(source => <option value={source} key={source}>{source}</option>)}
+                {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
             </select>
             <label className="ml-2">
                 <input name="hide_patched" type="checkbox" className="mr-1" checked={hidePatched} onChange={() => {setHidePatched(!hidePatched)} } />

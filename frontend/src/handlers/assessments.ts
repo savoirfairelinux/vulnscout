@@ -28,6 +28,43 @@ type Assessment = {
 
 export type { Assessment };
 
+const asStringArray = (data: any): string[] => {
+    if (!Array.isArray(data)) return [];
+    return data.filter((item: any) => typeof item === "string");
+}
+
+const asAssessment = (data: any): Assessment | [] => {
+    if (typeof data !== "object") return [];
+    if (typeof data?.id !== "string") return [];
+    if (typeof data?.vuln_id !== "string") return [];
+    if (typeof data?.status !== "string") return [];
+    if (typeof data?.timestamp !== "string") return [];
+    let item: Assessment = {
+        id: data.id,
+        vuln_id: data.vuln_id,
+        packages: asStringArray(data?.packages),
+        status: data.status,
+        simplified_status: `[invalid status] ${data.status}`,
+        status_notes: undefined,
+        justification: undefined,
+        impact_statement: undefined,
+        workaround: undefined,
+        workaround_timestamp: undefined,
+        timestamp: data.timestamp,
+        last_update: undefined,
+        responses: asStringArray(data?.responses),
+    };
+    if (typeof STATUS_VEX_TO_GRAPH?.[data.status] === "string")
+        item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
+    if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
+    if (typeof data?.justification === "string") item.justification = data.justification;
+    if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;
+    if (typeof data?.workaround === "string") item.workaround = data.workaround;
+    if (typeof data?.workaround_timestamp === "string") item.workaround_timestamp = data.workaround_timestamp;
+    if (typeof data?.last_update === "string") item.last_update = data.last_update;
+    return item
+}
+
 class Assessments {
     /**
      * Fetch server API to list all packages
@@ -38,16 +75,9 @@ class Assessments {
             mode: "cors",
         });
         const data = await response.json();
-        return data.map(Assessments.from_json);
-    }
-
-    static from_json(data: Assessment): Assessment {
-        return {
-            ...data,
-            simplified_status: STATUS_VEX_TO_GRAPH[data.status] || '[invalid status] '+data.status,
-        };
+        return data.flatMap(asAssessment);
     }
 }
 
 export default Assessments;
-export { STATUS_VEX_TO_GRAPH };
+export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment };
