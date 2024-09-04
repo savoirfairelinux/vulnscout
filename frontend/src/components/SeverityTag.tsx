@@ -1,4 +1,4 @@
-
+import { escape } from "lodash-es";
 type Props = {
     severity: string;
     icon?: boolean;
@@ -18,7 +18,7 @@ function SeverityTag ({ severity, className }: Props) {
     const color = severityColors[severity.toUpperCase()] || "bg-gray-500";
 
     return (<>
-        <span className={['py-1 px-2', color, className].join(' ')}>{severity}</span>
+        <span className={['py-1 px-2', color, escape(className)].join(' ')}>{severity}</span>
     </>);
 }
 

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
+import { escape } from "lodash-es";
 
 type Props = {
     packages: Package[];
@@ -110,7 +111,7 @@ function TablePackages ({ packages }: Props) {
                 className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
             >
                 <option value="__none__">All sources</option>
-                {sources_list.map(source => <option value={source} key={source}>{source}</option>)}
+                {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
             </select>
             <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>Severity {showSeverity ? 'enabled' : 'disabled'}</button>
             <label className="ml-2">

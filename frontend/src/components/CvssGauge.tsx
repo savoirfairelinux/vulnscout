@@ -8,8 +8,11 @@ function CvssGauge ({ data }: Props) {
     //percent to deg => Math.round(((value / 100) * 180 - 45) * 10) / 10
     // src: https://gist.github.com/gquittet/77dd931ebfa7b8a73f2711faee0a7292
 
+    if (typeof data.base_score !== 'number' || data.base_score < 0.0 || data.base_score > 10.0)
+        return <></>;
+
     // score is in the range 0-10, so we multiply by 18 to get the angle
-    const score_angle = data.base_score * 18 - 45;
+    const score_angle = Number(data.base_score) * 18 - 45;
     let score_color = 'bg-green-500';
     if (data.base_score >= 4.0)
         score_color = 'bg-orange-500';

@@ -15,6 +15,30 @@ export type { Package, VulnCounts, Severities };
 import type { Vulnerability } from "./vulnerabilities";
 import { SEVERITY_ORDER } from "./vulnerabilities";
 
+const asPackage = (data: any): Package | [] => {
+    if (typeof data !== "object") return [];
+    if (typeof data?.name !== "string") return [];
+    if (typeof data?.version !== "string") return [];
+    let pkg: Package = {
+        id: `${data.name}@${data.version}`,
+        name: data.name,
+        version: data.version,
+        cpe: [],
+        purl: [],
+        vulnerabilities: {},
+        maxSeverity: {},
+        source: []
+    };
+    if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
+    if (Array.isArray(data?.cpe)) {
+        for (const cpe of data.cpe) if (typeof cpe === "string") pkg.cpe.push(cpe);
+    }
+    if (Array.isArray(data?.purl)) {
+        for (const purl of data.purl) if (typeof purl === "string") pkg.purl.push(purl);
+    }
+    return pkg
+};
+
 class Packages {
     /**
      * Fetch server API to list all packages
@@ -25,13 +49,7 @@ class Packages {
             mode: "cors",
         });
         const data = await response.json();
-        return data.map((pkg: Package) => ({
-            ...pkg,
-            id: pkg.id || `${pkg.name}@${pkg.version}`,
-            vulnerabilities: {},
-            maxSeverity: {},
-            source: [],
-        }));
+        return data.flatMap(asPackage);
     }
 
     static enrich_with_vulns(pkgs: Package[], vulns: Vulnerability[]): Package[] {
