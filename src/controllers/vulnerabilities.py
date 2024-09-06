@@ -4,6 +4,7 @@ from ..controllers.packages import PackagesController
 import http.client
 import json
 import time
+import re
 from typing import Optional
 
 
@@ -12,6 +13,9 @@ class VulnerabilitiesController:
     A class to handle a list of vulnerabilities, de-duplicating them and handling low-level stuff.
     Vulnerabilities can be added, removed, retrieved and exported or imported as dictionaries.
     """
+
+    safe_url_regex = r"[^a-zA-Z0-9_\-\.]"
+    """Regex to remove unsafe characters from URLs."""
 
     def __init__(self, pkgCtrl: PackagesController):
         """Take an instance of PackagesController to resolve package dependencies as parameter."""
@@ -77,7 +81,8 @@ class VulnerabilitiesController:
             return True
         return False
 
-    def _fetch_epss_for_cves(self, conn, cve_ids: list):
+    def _fetch_epss_for_cves(self, conn, cve_ids: list[str]):
+        cve_ids = [re.sub(self.safe_url_regex, '', s) for s in cve_ids]
         conn.request('GET', '/data/v1/epss?envelope=false&cve=' + ','.join(cve_ids))
         resp = conn.getresponse()
         data = json.loads(resp.read())
