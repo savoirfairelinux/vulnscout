@@ -1,6 +1,6 @@
 = VulnScout
 Savoir-Faire Linux
-0.4.0, {docdate}: developement builds
+0.4.1, {docdate}: developement builds
 :url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
 :source-highlighter: highlight.js
 :toc:
