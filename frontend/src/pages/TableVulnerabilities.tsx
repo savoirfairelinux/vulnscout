@@ -131,8 +131,12 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
             <div className="ml-4">Source</div>
-            <select name="source_selector" onChange={(event) => setFilterSource(event.target.value)} className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8">
-                <option value={undefined}>All sources</option>
+            <select
+                name="source_selector"
+                onChange={(event) => setFilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
+                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
+            >
+                <option value="__none__">All sources</option>
                 {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
             </select>
             <label className="ml-2">
