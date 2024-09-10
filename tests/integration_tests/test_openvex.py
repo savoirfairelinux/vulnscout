@@ -166,7 +166,7 @@ def test_parse_statement_details(openvex_parser):
     assert len(openvex_parser.packagesCtrl.packages) == 1
     assert len(openvex_parser.vulnerabilitiesCtrl.vulnerabilities) == 1
     vuln = openvex_parser.vulnerabilitiesCtrl.get("CVE-2020-35492")
-    assert vuln.found_by == ["openvex", "some_scanner"]
+    assert vuln.found_by == ["openvex", "openvex(some_scanner)"]
 
     assert len(openvex_parser.assessmentsCtrl.assessments) == 1
     assess = openvex_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-35492")[0]
