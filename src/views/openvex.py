@@ -57,10 +57,12 @@ class OpenVex:
                         vuln.add_alias(alias)
                 if "@id" in statement["vulnerability"] and statement["vulnerability"]["@id"].startswith("http"):
                     vuln.add_url(statement["vulnerability"]["@id"])
+                    vuln.datasource = statement["vulnerability"]["@id"]
                 # scanners is not part of OpenVex standard
                 if "scanners" in statement:
                     for scanner in statement["scanners"]:
-                        vuln.add_found_by(scanner)
+                        if "openvex" not in scanner:
+                            vuln.add_found_by(f"openvex({scanner})")
 
                 assess = VulnAssessment(vuln.id)
                 if "products" in statement:
@@ -118,7 +120,7 @@ class OpenVex:
                 if vuln.datasource.startswith("http"):
                     stmt["vulnerability"]["@id"] = vuln.datasource
                 if not strict_export:
-                    stmt["scanners"] = vuln.found_by
+                    stmt["scanners"] = list(filter(lambda x: not x.startswith("openvex"), vuln.found_by))
 
             pkg_list = []
             for pkg_id in assess.packages:
