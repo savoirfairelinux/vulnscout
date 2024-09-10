@@ -41,6 +41,7 @@ You can use VulnScout to scan your project, make report about your dependencies 
 * openVex (vulnerabilities + Assessments)
 
 **Grab data from following sources** :
+
 * NVD (National Vulnerability Database)
 * All datasource supported by Grype
 * EPSS (Exploit Prediction Scoring System)
@@ -91,13 +92,17 @@ Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and o
 
 After having setup one of the <<Deployment>> tutorial, you have some steps needed make Yocto output necessary files.
 
+TIP: CycloneDX is not mandatory to use VulnScout. If you want to use only SPDX and CVE-checker, skip step 1-3 and at step 4, ignore the line `cyclonedx-export`.
+
 1. In the Yocto repository, if you use git submodules features, you can run: +
 `git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx` +
 (tips: if you have a `.gitmodules`, you should use this command).
 
 2. If you don't have a `.gitmodules` file and don't want to use git submodules, you can add the source manually by going in `sources` folder and running the following command: `git clone https://github.com/savoirfairelinux/meta-cyclonedx.git`
 
-3. Add the following lines if their are not present in your `layers.conf` file: +
+3. After cloning meta-cyclonedx, you must enter inside (`cd sources/meta-cyclonedx`) and `git checkout` to a tag for your yocto version.
+
+4. Add the following lines if their are not present in your `layers.conf` file: +
 [source,conf]
 ----
 INHERIT += "create-spdx" <1>
@@ -116,7 +121,7 @@ If you haven't already done it, check at the example in `bin/.vulnscout-example/
 
 === Configuration tips for others projects
 
-If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matchign packages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
+If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matching packages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
 
 If you followed correctly the <<Deployment>> section, you should have a `.vulnscout` folder at the root of your project.
 You can edit this file in it and make the path bindings for SPDX / CDX variables:
