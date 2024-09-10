@@ -19,6 +19,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
+from ..models.assessment import VulnAssessment
 from ..helpers.verbose import verbose
 import glob
 import json
@@ -41,9 +42,72 @@ OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 
 
+def is_items_only_openvex(scanners: list[str]) -> bool:
+    """Return True if only openvex scanners are found."""
+    for scanner in scanners:
+        if "openvex" not in scanner:
+            return False
+    return True
+
+
+def expire_vuln(vuln_id, packages):
+    """Expire a vulnerability."""
+    expired = VulnAssessment(vuln_id, packages)
+    expired.set_status("not_affected")
+    expired.set_justification("component_not_present")
+    expired.set_not_affected_reason("Vulnerable component removed, marking as expired")
+    expired.set_status_notes("Vulnerability no longer present in analysis, marking as expired")
+    return expired
+
+
+def revert_expiration_vuln(vuln_id, packages, previous_assessment):
+    """Expire a vulnerability."""
+    state = VulnAssessment(vuln_id, packages)
+    if previous_assessment is None:
+        state.set_status("under_investigation")
+        state.set_status_notes("Vulnerability was expired but is found again by scanners, setting it in default state")
+    else:
+        state.set_status(previous_assessment.status)
+        state.set_justification(previous_assessment.justification)
+        state.set_not_affected_reason(previous_assessment.impact_statement)
+        state.set_status_notes(
+            "Vulnerability was expired but is found again by scanners, setting it back to previous state"
+        )
+    return state
+
+
 def post_treatment(controllers, files):
     """Do some actions on data after collect and aggregation."""
+    # 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
+
+    # 2. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
+    for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
+        assessments = controllers["assessments"].gets_by_vuln(vuln_id)
+        already_expired = False
+        is_last_assessment_an_expiration = False
+        last_assessment_before_expiration = None
+        need_expiration = False
+        for assessment in assessments:
+            is_last_assessment_an_expiration = False
+            if assessment.status in ["affected", "exploitable", "under_investigation", "in_triage"]:
+                need_expiration = True
+                last_assessment_before_expiration = assessment
+            else:
+                need_expiration = False
+                if "marking as expired" in assessment.status_notes:
+                    already_expired = True
+                    is_last_assessment_an_expiration = True
+                else:
+                    last_assessment_before_expiration = assessment
+
+        if is_items_only_openvex(vuln.found_by) and need_expiration and not already_expired:
+            controllers["assessments"].add(expire_vuln(vuln_id, vuln.packages))
+
+        elif is_last_assessment_an_expiration and not is_items_only_openvex(vuln.found_by):
+            controllers["assessments"].add(
+                revert_expiration_vuln(vuln_id, vuln.packages, last_assessment_before_expiration)
+            )
 
 
 def evaluate_condition(controllers, condition):
