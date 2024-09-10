@@ -153,3 +153,84 @@ def test_spdx_output_completeness(init_files):
         if pkg["name"] == "cairo" and pkg["versionInfo"] == "1.16.0":
             found_cairo = True
     assert found_linux and found_cairo
+
+
+def test_expiration_vulnerabilities(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    init_files["OPENVEX_PATH"].write_text("""{
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "@id": "https://openvex.dev/docs/example/vex-9fb3463de1b57",
+        "author": "Savoir-faire Linux",
+        "timestamp": "2023-01-08T18:02:03.647787998-06:00",
+        "version": 1,
+        "statements": [
+            {
+                "vulnerability": {
+                    "@id": "https://nvd.nist.gov/vuln/detail/CVE-2002-FAKE-EXPIRED",
+                    "name": "CVE-2002-FAKE-EXPIRED"
+                },
+                "products": [
+                    { "@id": "cairo@0.0.1" }
+                ],
+                "status": "under_investigation",
+                "action_statement": "Use product version 1.0+",
+                "action_statement_timestamp": "2023-01-08T18:02:03.647787998-06:00",
+                "status_notes": "This vulnerability was mitigated by the use of a color filter in image-pipeline.c",
+                "timestamp": "2023-01-06T15:05:42.647787998Z",
+                "last_updated": "2023-01-08T18:02:03.647787998Z",
+
+                "scanners": ["some_scanner"]
+            },
+            {
+                "vulnerability": {
+                    "@id": "https://nvd.nist.gov/vuln/detail/CVE-2002-FAKE-EXPIRED",
+                    "name": "CVE-2020-35492"
+                },
+                "products": [
+                    { "@id": "cairo@1.16.0" }
+                ],
+                "status": "affected",
+                "timestamp": "2023-01-06T15:05:42.647787998Z",
+                "last_updated": "2023-01-08T18:02:03.647787998Z",
+                "scanners": ["some_scanner"]
+            },
+            {
+                "vulnerability": {
+                    "@id": "https://nvd.nist.gov/vuln/detail/CVE-2002-FAKE-EXPIRED",
+                    "name": "CVE-2020-35492"
+                },
+                "products": [
+                    { "@id": "cairo@1.16.0" }
+                ],
+                "status": "not_affected",
+                "justification": "component_not_present",
+                "status_notes": "Vulnerability no longer present in analysis, marking as expired",
+                "timestamp": "2023-02-06T15:05:42.647787998Z",
+                "last_updated": "2023-02-08T18:02:03.647787998Z",
+                "scanners": ["some_scanner"]
+            }
+        ]
+    }""")
+
+    main()
+
+    out_assessment = json.loads(init_files["OUTPUT_ASSESSEMENT_PATH"].read_text())
+    found_expiration = False
+    found_unexpired = False
+
+    for assess_id, assessment in out_assessment.items():
+        if assessment["vuln_id"] == "CVE-2002-FAKE-EXPIRED":
+            if assessment["status"] == "not_affected":
+                assert assessment["justification"] == "component_not_present"
+                assert assessment["impact_statement"] == "Vulnerable component removed, marking as expired"
+                assert assessment["status_notes"] == "Vulnerability no longer present in analysis, marking as expired"
+                found_expiration = True
+
+        if assessment["vuln_id"] == "CVE-2020-35492":
+            if (assessment["status"] == "affected"
+               and "Vulnerability was expired but is found again" in assessment["status_notes"]):
+                found_unexpired = True
+    assert found_expiration
+    assert found_unexpired
