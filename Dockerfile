@@ -49,6 +49,6 @@ ENV NVD_API_KEY=$DEFAULT_NVD_API_KEY
 LABEL org.opencontainers.image.title="VulnScout"
 LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
 LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
-LABEL org.opencontainers.image.version="v0.4.1"
+LABEL org.opencontainers.image.version="v0.5.0"
 
 CMD ./scan.sh
