@@ -14,9 +14,10 @@ type Props = {
     vulnerabilities: Vulnerability[];
     packages: Package[];
     patchData: PackageVulnerabilities;
+    db_ready: boolean;
 };
 
-function PatchFinder ({ packages, patchData }: Readonly<Props>) {
+function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [showLegend, setShowLegend] = useState<boolean>(true);
     const [filterSource, setFilterSource] = useState<string|undefined>(undefined);
@@ -71,6 +72,11 @@ function PatchFinder ({ packages, patchData }: Readonly<Props>) {
             <div className="flex-1"></div>
             <button className="p-2 px-4 bg-sky-900 hover:bg-sky-950" onClick={() => setShowLegend(!showLegend)}>{showLegend ? 'Hide' : 'Show'} Legend</button>
         </div>
+
+        {!db_ready && <div className="p-4 bg-orange-600">
+            Database is currently updating, please wait. This page will refresh when patch data are available.<br/>
+            <i>You can leave and come back at this page, DB will continue update in background. To speed up the process, ensure you have cache configured in vulnscout configuration.</i>
+        </div>}
 
         <div className="my-4 p-4 bg-slate-700 flex flex-row flex-wrap">
             {showLegend && <div className="flex-none w-full px-8 bg-slate-600">
