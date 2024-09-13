@@ -20,6 +20,7 @@ services:
       - /path/to/yocto/cdx-export-folder:/scan/inputs/cdx/yocto_layer:ro
       - /path/to/yocto/build/tmp/deploy/images/name/image.rootfs.json:/scan/inputs/yocto_cve_check/name_image_rootfs.json:ro
       # - ./tmp:/scan/tmp # Debug only
+      - .vulnscout/cache:/cache/vulnscout
       - ./outputs:/scan/outputs
     environment:
       - FLASK_RUN_PORT=7275

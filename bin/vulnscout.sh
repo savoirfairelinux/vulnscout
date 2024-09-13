@@ -158,7 +158,13 @@ function scan() {
 	if [[ -n "${OUTPUT_FOLDER-}" ]]; then
 		docker_args+=" -v $(pwd)$(clean_path "$OUTPUT_FOLDER"):/scan/outputs"
 	else
-		echo "Warning: You runned without OUTPUT_FOLDER which mean the script will not save your change between runs" >&2
+		echo "Warning: Started without OUTPUT_FOLDER which means the script will not save your change between runs" >&2
+	fi
+
+	if [[ -n "${CACHE_FOLDER-}" ]]; then
+		docker_args+=" -v $(pwd)$(clean_path "$CACHE_FOLDER"):/cache/vulnscout"
+	else
+		echo "Warning: Started without CACHE_FOLDER which means the script will take much more time to start (+ 5-10 minutes)" >&2
 	fi
 
 	# shellcheck disable=SC2086 # docker args is a string with series of argument, so requires to be unquoted

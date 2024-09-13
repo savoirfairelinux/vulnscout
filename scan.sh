@@ -50,6 +50,8 @@ function main() {
         (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
     fi
 
+    python3 -m src.bin.nvd_db_builder &
+
     if [[ "${DEBUG_SKIP_SCAN-}" != "true" ]]; then
         full_scan_steps
     fi
@@ -62,7 +64,7 @@ function main() {
     set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
-        fg # Bring back last background process (flask run) to foreground.
+        fg %?flask # Bring back process named 'flask' (flask run) to foreground.
     fi
 }
 
