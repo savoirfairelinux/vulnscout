@@ -19,6 +19,10 @@ YOCTO_CVE_SOURCES=(
 # Don't put in .gitignored folder, must be tracked by git.
 OUTPUT_FOLDER=".vulnscout/output"
 
+# Cache folder is used to save database used between multiple runs.
+# They store arbitrary binary data and we don't recommend to track them in git (ie. add to .gitignore)
+CACHE_FOLDER=".vulnscout/cache"
+
 # Generate automaticaly theses documents based on templates. You can find documentation about templating in WRITING_TEMPLATES.[adoc, pdf]
 # If you don't want to generate a document, just remove it from the list. Separator is comma, space are facultative and trimmed.
 GENERATE_DOCUMENTS="summary.adoc, time_estimates.csv"
