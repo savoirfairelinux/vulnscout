@@ -78,6 +78,16 @@ class NVD_DB:
                 self.last_modified
             )
 
+    def set_writing_flag(self, flag: bool):
+        """
+        Set the writing flag for the local DB. This flag is only used when reading DB, to avoid using incomplete data
+        """
+        self.cursor.execute(
+            "INSERT OR REPLACE INTO nvd_metadata (key, value) VALUES ('writing_flag', ?);",
+            ("true" if flag else "false",)
+        )
+        self.conn.commit()
+
     def _call_nvd_api(self, params: dict = {}) -> Tuple[int, dict]:
         """
         Call the NVD API and return the status code as int and response as a dictionary.

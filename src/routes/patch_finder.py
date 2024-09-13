@@ -15,6 +15,23 @@ def init_app(app):
     if "NVD_DB_PATH" not in app.config:
         app.config["NVD_DB_PATH"] = NVD_DB_PATH
 
+    @app.route('/api/patch-finder/status', methods=['GET'])
+    def get_status():
+        conn = sqlite3.connect(app.config["NVD_DB_PATH"])
+        cursor = conn.cursor()
+        version = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
+        write_flag = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'writing_flag';").fetchone()
+        last_index = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_index';").fetchone()
+        last_modified = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_modified';").fetchone()
+        conn.close()
+        return {
+            "api_version": DB_MODEL_VERSION,
+            "db_version": version[0] if version is not None else None,
+            "db_ready": write_flag[0] == "false" if write_flag is not None else False,
+            "vulns_count": int(last_index[0]) if last_index is not None else 0,
+            "last_modified": last_modified[0] if last_modified is not None else None
+        }, 200
+
     @app.route('/api/patch-finder/scan', methods=['POST'])
     def run_scan():
         if request.method != 'POST':

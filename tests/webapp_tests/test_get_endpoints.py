@@ -26,6 +26,7 @@ def app(init_files):
         "PKG_FILE": init_files["packages"],
         "VULNS_FILE": init_files["vulnerabilities"],
         "ASSESSMENTS_FILE": init_files["assessments"],
+        "NVD_DB_PATH": "tests/webapp_tests/mini_nvd.db"
     })
 
     yield app
@@ -211,3 +212,18 @@ def test_render_document_invalid_ext(client):
     assert response.status_code >= 400
     data = json.loads(response.data)
     assert data["error"] is not None
+
+
+def test_get_patch_finder_status(client):
+    response = client.get("/api/patch-finder/status")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    # values allowed to be changed on future updates
+    assert data["api_version"] == "nvd2.0-vulnscout1.1"
+    assert data["db_version"] == "nvd2.0-vulnscout1.1"
+
+    # following should be true whichever version is used
+    assert data["api_version"] == data["db_version"]
+    assert data["db_ready"] is True
+    assert data["vulns_count"] == 264387
+    assert data["last_modified"] == "2024-10-03T13:35:12.847678+00:00"
