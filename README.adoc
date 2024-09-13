@@ -1,6 +1,6 @@
 = VulnScout
 Savoir-faire Linux
-0.4.1, {docdate}: developement builds
+0.5.0, {docdate}: developement builds
 :url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
 :source-highlighter: highlight.js
 :toc:
@@ -27,7 +27,7 @@ You can use VulnScout to scan your project, make report about your dependencies 
 
 **Support following inputs** :
 
-* ##WIP##: SPDX 2.4 (Packages)
+* SPDX 2.3 (Packages)
 * ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
 * Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 * Grype native JSON format (Packages + vulnerabilities)
