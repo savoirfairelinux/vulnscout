@@ -19,7 +19,6 @@ type PatchInfos = { affected: string[], fix: string[], solve_all?: string }
 } */
 
 
-
 type PackageVersions = {
     nb_vulns: number,
     same_minor: VersionPatchs,
@@ -38,6 +37,14 @@ type VersionVulns = {
     [key: string]: string[]
 }
 
+
+type APIStatus = {
+    api_version: string,
+    db_version?: string,
+    db_ready: boolean,
+    vulns_count: number,
+    last_modified?: string
+}
 
 export type { PackageVulnerabilities, PackageVersions };
 
@@ -88,7 +95,30 @@ const asPackageVulnerabilities = (data: any): PackageVulnerabilities => {
     return output;
 };
 
+const asAPIStatus = (data: any): APIStatus => {
+    const output: APIStatus = {
+        api_version: 'unknown',
+        db_ready: false,
+        vulns_count: 0
+    }
+    if (typeof data !== "object") return output;
+    if (typeof data?.db_ready === "boolean") output.db_ready = data.db_ready
+    if (typeof data?.vulns_count === "number") output.vulns_count = data.vulns_count
+    if (typeof data?.api_version === "string") output.api_version = data.api_version;
+    if (typeof data?.db_version === "string") output.db_version = data.db_version;
+    if (typeof data?.last_modified === "string") output.last_modified = data.last_modified;
+    return output;
+}
+
 class PatchFinderLogic {
+    static async status(): Promise<APIStatus> {
+        const response = await fetch(import.meta.env.VITE_API_URL + "/api/patch-finder/status", {
+            mode: "cors"
+        });
+        const data = await response.json();
+        return asAPIStatus(data);
+    }
+
     static async scan(cves: string[]): Promise<PackageVulnerabilities> {
         const response = await fetch(import.meta.env.VITE_API_URL + "/api/patch-finder/scan", {
             mode: "cors",
@@ -197,4 +227,4 @@ class PatchFinderLogic {
 }
 
 export default PatchFinderLogic;
-export { asPackageVulnerabilities, asPatchInfos };
+export { asPackageVulnerabilities, asPatchInfos, asAPIStatus };

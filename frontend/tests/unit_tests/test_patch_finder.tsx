@@ -72,6 +72,7 @@ describe('Render patch found', () => {
                     }
                 }
             })}
+            db_ready={true}
         />);
 
         // ACT
@@ -100,6 +101,7 @@ describe('Render patch found', () => {
                     }
                 }
             })}
+            db_ready={true}
         />);
 
         // ACT
@@ -126,6 +128,7 @@ describe('Render patch found', () => {
                     }
                 }
             })}
+            db_ready={true}
         />);
 
         // ACT
@@ -149,6 +152,7 @@ describe('Render patch found', () => {
             vulnerabilities={vulns}
             packages={pkg}
             patchData={asPackageVulnerabilities({})}
+            db_ready={true}
         />);
 
         // ACT
@@ -183,6 +187,7 @@ describe('Render patch found', () => {
                     }
                 }
             })}
+            db_ready={true}
         />);
 
         // ACT
@@ -204,6 +209,22 @@ describe('Render patch found', () => {
         version_major = await screen.getAllByText('2.0.1');
         expect(version_minor.length).toBe(0);
         expect(version_major.length).toBeGreaterThan(0);
+    })
+
+    test('render when not ready', async () => {
+        // ARRANGE
+        render(<PatchFinder
+            vulnerabilities={[]}
+            packages={[]}
+            patchData={{}}
+            db_ready={false}
+        />);
+
+        // ACT
+        const db_updating_msg = await screen.getByText(/database(.+)updating/i);
+
+        // ASSERT
+        expect(db_updating_msg).toBeInTheDocument();
     })
 
 });

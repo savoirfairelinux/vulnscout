@@ -23,6 +23,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
+    const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
 
     useEffect(() => {
         Promise.allSettled([
@@ -40,9 +41,27 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             setPkgs(
               Packages.enrich_with_vulns(pkgs.value, enriched_vulns)
             );
-            setTimeout(() => loadPatchData(enriched_vulns), 100)
+            setTimeout(() => checkPatchReady(enriched_vulns), 100)
         })
     }, []);
+
+    function checkPatchReady (vulns_list: Vulnerability[]) {
+        PatchFinderLogic
+        .status()
+        .then((patchData) => {
+            if (patchData.db_ready) {
+                setPatchDbReady(true);
+                loadPatchData(vulns_list);
+            } else {
+                setTimeout(() => checkPatchReady(vulns_list), 15000)
+                setPatchDbReady(false);
+            }
+        })
+        .catch((err) => {
+            console.error(err);
+            alert("Failed to load patch data");
+        })
+    }
 
     function loadPatchData (vulns_list: Vulnerability[]) {
         const active_status = ['active', 'pending analysis']
@@ -80,7 +99,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
                 {tab == 'packages' && <TablePackages packages={pkgs} />}
                 {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} patchVuln={patchVuln} vulnerabilities={vulns} />}
-                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} />}
+                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
                 {tab == 'exports' && <Exports />}
             </div>
         </div>
