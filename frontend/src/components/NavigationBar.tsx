@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChartLine, faBox, faShieldHalved, faMagnifyingGlass, faFileImport, faFileExport, faBinoculars, faMoon, faSun } from '@fortawesome/free-solid-svg-icons';
+import { faChartLine, faBox, faShieldHalved, faMagnifyingGlass, faFileImport, faFileExport, faBinoculars, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-green-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -44,6 +44,12 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
             <button onClick={() => changeTab('audit')}>
                 <FontAwesomeIcon icon={faMagnifyingGlass} className='mr-1' />
                 Audit
+            </button>
+        </li>
+        <li className={["px-4 py-2", bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
+            <button onClick={() => changeTab('patch-finder')}>
+                <FontAwesomeIcon icon={faBugSlash} className='mr-1' />
+                Patch-Finder
             </button>
         </li>
 
