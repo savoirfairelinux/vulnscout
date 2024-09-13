@@ -4,6 +4,7 @@ fetchMock.enableMocks();
 import Packages from '../../src/handlers/packages';
 import Vulnerabilities from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
+import PatchFinderLogic from '../../src/handlers/patch_finder';
 
 
 const PACKAGES = [
@@ -105,6 +106,16 @@ const ASSESSMENTS = [
         responses: []
     }
 ];
+
+
+const PATCH_FINDER = {
+    "aaabbbccc": {
+        "CVE-2021-37322 (nvd-cpe-match)": {
+            "fix": [">=? 1.2.3"],
+            "affected": ["< 1.2.3"]
+        }
+    }
+};
 
 
 describe('Packages', () => {
@@ -236,5 +247,92 @@ describe('Assessments', () => {
         const assessments = await Assessments.list();
         expect(assessments).toEqual([]);
         expect(thisFetch).toHaveBeenCalledTimes(1);
+    });
+});
+
+
+describe('PatchFinder', () => {
+
+    beforeEach(() => {
+        fetchMock.resetMocks();
+    });
+
+    test('with empty list of patch', async () => {
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve({})
+            } as Response)
+        );
+
+        const patchs = await PatchFinderLogic.scan(["CVE-2021-37322", "CVE-0000-00000"]);
+        expect(patchs).toEqual({});
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('with some patchs found', async () => {
+        let thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve(PATCH_FINDER)
+            } as Response)
+        );
+
+        const patchs = await PatchFinderLogic.scan(["CVE-2021-37322", "CVE-0000-00000"]);
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+
+        const patchInfo = patchs?.["aaabbbccc"]?.["CVE-2021-37322"]?.["(nvd-cpe-match)"]
+        expect(patchInfo).toBeDefined();
+        expect(patchInfo.fix).toEqual([">=? 1.2.3"]);
+        expect(patchInfo.affected).toEqual(["< 1.2.3"]);
+        expect(patchInfo.solve_all).toEqual("1.2.3")
+    });
+
+    test('compute versions and patch', async () => {
+        let thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve(PATCH_FINDER)
+            } as Response)
+        );
+
+        const patchs = await PatchFinderLogic.scan(["CVE-2021-37322", "CVE-0000-00000"]);
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+
+        const computed = PatchFinderLogic.compute_versions_and_patch(
+            patchs,
+            {"aaabbbccc": "1.0.0"},
+            undefined,
+            ''
+        );
+
+        const patchsInfo = computed?.["aaabbbccc"]
+        expect(patchsInfo).toBeDefined();
+        expect(patchsInfo.nb_vulns).toEqual(1);
+        expect(patchsInfo.latest.version).toEqual("1.2.3");
+        expect(patchsInfo.latest.solve).toEqual(1);
+        expect(patchsInfo.same_major.version).toEqual("1.2.3");
+        expect(patchsInfo.same_major.solve).toEqual(1);
+        expect(patchsInfo.same_minor.version).toEqual(undefined);
+        expect(patchsInfo.same_minor.solve).toEqual(0);
+    });
+
+    test('compute vulns per versions', async () => {
+        let thisFetch = fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve(PATCH_FINDER)
+            } as Response)
+        );
+
+        const patchs = await PatchFinderLogic.scan(["CVE-2021-37322", "CVE-0000-00000"]);
+        expect(thisFetch).toHaveBeenCalledTimes(1);
+
+        const computed = PatchFinderLogic.compute_vulns_per_versions(
+            patchs,
+            {"aaabbbccc": "1.0.0"},
+            undefined,
+            ''
+        );
+
+        const patchsInfo = computed?.["aaabbbccc"]?.["1.2.3"]
+        expect(patchsInfo).toBeDefined();
+        expect(patchsInfo[0]).toEqual("CVE-2021-37322");
     });
 });
