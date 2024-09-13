@@ -30,6 +30,7 @@ def app(init_files):
         "ASSESSMENTS_FILE": init_files["assessments"],
         "OPENVEX_FILE": init_files["openvex"],
         "TIME_ESTIMATES_PATH": init_files["time_estimates"],
+        "NVD_DB_PATH": "tests/webapp_tests/mini_nvd.db"
     })
 
     yield app
@@ -192,3 +193,21 @@ def test_patch_vulnerability_invalids(client):
         }
     })
     assert response.status_code == 400
+
+
+def test_post_scan_patch_finder(client):
+    response = client.post("/api/patch-finder/scan", json=[
+        "CVE-2021-37322",
+        "CVE-0000-00000"
+    ])
+    assert response.status_code == 200
+
+    data = json.loads(response.data)
+    assert "binutils" in data
+    assert "CVE-2021-37322 (nvd-cpe-match)" in data["binutils"]
+    assert "gcc" in data
+    assert "CVE-2021-37322 (nvd-cpe-match)" in data["gcc"]
+    fixs_binutils = data["binutils"]["CVE-2021-37322 (nvd-cpe-match)"]["fix"]
+    affected_gcc = data["gcc"]["CVE-2021-37322 (nvd-cpe-match)"]["affected"]
+    assert fixs_binutils == [">=? 2.32"]
+    assert affected_gcc == ["< 10.1"]
