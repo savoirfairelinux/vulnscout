@@ -98,11 +98,19 @@ def read_inputs(controllers):
         else:
             print(f"Ignored: Error parsing OpenVEX file: {e}")
 
-    with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
-        cdx.load_from_dict(json.loads(f.read()))
-        cdx.parse_and_merge()
-    with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
-        scanGrype.load_from_dict(json.loads(f.read()))
+    try:
+        with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
+            cdx.load_from_dict(json.loads(f.read()))
+            cdx.parse_and_merge()
+    except FileNotFoundError:
+        pass
+
+    try:
+        with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
+            scanGrype.load_from_dict(json.loads(f.read()))
+    except FileNotFoundError:
+        pass
+
     with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
         scanGrype.load_from_dict(json.loads(f.read()))
 
