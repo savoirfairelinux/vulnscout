@@ -89,7 +89,8 @@ def read_inputs(controllers):
         with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
             openvex.load_from_dict(json.loads(f.read()))
     except FileNotFoundError:
-        pass
+        print("Warning: Did not find openvex file, which is used to store history of analysis."
+              + " This is normal at first start but not in later analysis")
     except Exception as e:
         if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
             print(f"Error parsing OpenVEX file: {e}")
@@ -98,18 +99,23 @@ def read_inputs(controllers):
         else:
             print(f"Ignored: Error parsing OpenVEX file: {e}")
 
+    error_cdx_not_found_displayed = False
     try:
         with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
             cdx.load_from_dict(json.loads(f.read()))
             cdx.parse_and_merge()
     except FileNotFoundError:
-        pass
+        print("Warning: Did not find CycloneDX files. If you intended to scan CycloneDX files,"
+              + " this mean there was an issue when collecting them.")
+        error_cdx_not_found_displayed = True
 
     try:
         with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
             scanGrype.load_from_dict(json.loads(f.read()))
     except FileNotFoundError:
-        pass
+        if not error_cdx_not_found_displayed:
+            print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
+                  + " CycloneDX files, this mean there was an issue when analysing them.")
 
     with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
         scanGrype.load_from_dict(json.loads(f.read()))
