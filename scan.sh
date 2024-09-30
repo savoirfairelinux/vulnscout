@@ -125,11 +125,15 @@ function full_scan_steps() {
 
     set_status "4" "Scanning with Grype"
     grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
-    grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
+    if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
+        grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
+    fi
 
     set_status "5" "Scanning with OSV (WIP)"
-    osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
-    osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
+    if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
+        osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
+        osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
+    fi
 
     if [[ -e "$YOCTO_CVE_INPUTS_PATH" ]]; then
         set_status "6" "Copy CVE-check result from Yocto"
