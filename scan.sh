@@ -106,8 +106,6 @@ function full_scan_steps() {
                 --name "$PRODUCT_NAME" \
                 --version "$PRODUCT_VERSION" \
                 --input-files "${CDX_FILE_LIST[@]}"
-
-            cp "$TMP_PATH/merged.cdx.json" "/$OUTPUTS_PATH/sbom.cdx.json"
         else
             set_status "3" "No CDX files found, skipping"
         fi

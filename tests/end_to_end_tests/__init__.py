@@ -9,6 +9,10 @@ def write_demo_files(files):
         with open("tests/end_to_end_tests/input_cdx.json", "r") as f:
             files["CDX_PATH"].write_text(f.read())
 
+    if "SPDX_PATH" in files:
+        with open("tests/end_to_end_tests/input_spdx.json", "r") as f:
+            files["SPDX_PATH"].write_text(f.read())
+
     if "GRYPE_CDX_PATH" in files:
         with open("tests/end_to_end_tests/grype_cdx.json", "r") as f:
             files["GRYPE_CDX_PATH"].write_text(f.read())
