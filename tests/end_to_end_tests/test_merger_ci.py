@@ -10,6 +10,8 @@ from . import write_demo_files
 def init_files(tmp_path):
     files = {
         "CDX_PATH": tmp_path / "input.cdx.json",
+        "SPDX_FOLDER": tmp_path / "spdx",
+        "SPDX_PATH": tmp_path / "spdx" / "input.spdx.json",
         "GRYPE_CDX_PATH": tmp_path / "cdx.grype.json",
         "GRYPE_SPDX_PATH": tmp_path / "spdx.grype.json",
         "YOCTO_FOLDER": tmp_path / "yocto_cve",
@@ -17,12 +19,14 @@ def init_files(tmp_path):
         "OPENVEX_PATH": tmp_path / "openvex.json",
         "TIME_ESTIMATES_PATH": tmp_path / "time_estimates.json",
         "OUTPUT_CDX_PATH": tmp_path / "output.cdx.json",
+        "OUTPUT_SPDX_PATH": tmp_path / "output.spdx.json",
         "OUTPUT_PATH": tmp_path / "all-merged.json",
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
         "OUTPUT_VULN_PATH": tmp_path / "vulnerabilities-merged.json",
         "OUTPUT_ASSESSEMENT_PATH": tmp_path / "assessments-merged.json",
     }
     files["YOCTO_FOLDER"].mkdir()
+    files["SPDX_FOLDER"].mkdir()
     write_demo_files(files)
     return files
 
@@ -46,6 +50,10 @@ def test_running_script(init_files):
     assert "c-ares@1.18.1" in out_all["packages"]
     assert "curl@7.82.0" in out_pkg
     assert "curl@7.82.0" in out_all["packages"]
+    assert "xyz@rev2.3" in out_pkg
+    assert "xyz@rev2.3" in out_all["packages"]
+    assert "linux@6.8.0-40-generic" in out_pkg
+    assert "linux@6.8.0-40-generic" in out_all["packages"]
 
     assert "CVE-2020-35492" in out_vuln
     assert "CVE-2020-35492" in out_all["vulnerabilities"]
@@ -126,3 +134,22 @@ def test_ci_mode(init_files):
 
     os.environ["FAIL_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
     main()
+
+
+def test_spdx_output_completeness(init_files):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    main()
+
+    out_spdx = json.loads(init_files["OUTPUT_SPDX_PATH"].read_text())
+    assert "packages" in out_spdx
+    assert len(out_spdx["packages"]) >= 6
+    found_linux = False  # check package is still in SPDX
+    found_cairo = False  # check package was added in SPDX
+    for pkg in out_spdx["packages"]:
+        if pkg["name"] == "linux" and pkg["versionInfo"] == "6.8.0-40-generic":
+            found_linux = True
+        if pkg["name"] == "cairo" and pkg["versionInfo"] == "1.16.0":
+            found_cairo = True
+    assert found_linux and found_cairo

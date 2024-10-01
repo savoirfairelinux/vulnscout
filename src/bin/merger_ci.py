@@ -12,6 +12,7 @@ from ..views.yocto_vulns import YoctoVulns
 from ..views.openvex import OpenVex
 from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
+from ..views.spdx import SPDX
 from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -22,6 +23,7 @@ import json
 import os
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
+SPDX_FOLDER = "/scan/tmp/spdx"
 GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
 GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
 YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
@@ -33,6 +35,7 @@ OUTPUT_PKG_PATH = "/scan/tmp/packages-merged.json"
 OUTPUT_VULN_PATH = "/scan/tmp/vulnerabilities-merged.json"
 OUTPUT_ASSESSEMENT_PATH = "/scan/tmp/assessments-merged.json"
 OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
+OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 
 
 def post_treatment(controllers, files):
@@ -83,6 +86,7 @@ def read_inputs(controllers):
     openvex = OpenVex(controllers)
     timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
+    spdx = SPDX(controllers)
     templates = Templates(controllers)
 
     try:
@@ -117,6 +121,18 @@ def read_inputs(controllers):
             print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
                   + " CycloneDX files, this mean there was an issue when analysing them.")
 
+    for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+        try:
+            spdx.load_from_file(file)
+            spdx.parse_and_merge()
+        except Exception as e:
+            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+                print(f"Error parsing SPDX file: {file} {e}")
+                print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+                raise e
+            else:
+                print(f"Ignored: Error parsing SPDX file: {file} {e}")
+
     with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
         scanGrype.load_from_dict(json.loads(f.read()))
 
@@ -147,6 +163,7 @@ def read_inputs(controllers):
 
 def output_results(controllers, files):
     """Output the results to files."""
+    spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
     output = {
         "packages": controllers["packages"].to_dict(),
         "vulnerabilities": controllers["vulnerabilities"].to_dict(),
@@ -165,6 +182,8 @@ def output_results(controllers, files):
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
     with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
         f.write(files["cdx"].output_as_json())
+    with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
+        f.write(spdx.output_as_json())
     with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
         f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
 

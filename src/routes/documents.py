@@ -6,6 +6,7 @@ from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..views.templates import Templates
 from ..views.cyclonedx import CycloneDx
+from ..views.spdx import SPDX
 from ..views.openvex import OpenVex
 
 
@@ -55,7 +56,7 @@ def init_app(app):
         try:
             docs = templ.list_documents()
 
-            # docs.append({"id": "SPDX 2.4", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "SPDX 2.3", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
             # docs.append({"id": "SPDX 3.0", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.4", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.5", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
@@ -89,7 +90,11 @@ def init_app(app):
             base_mime = guess_mime_type(doc_name)
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
 
-            if doc_name.startswith("CycloneDX "):
+            if (
+                doc_name.startswith("CycloneDX ")
+                or doc_name == "OpenVex"
+                or doc_name.startswith("SPDX")
+            ):
                 return handle_sbom_exports(doc_name, ctrls, expected_mime)
 
             content = templ.render(doc_name)
@@ -124,6 +129,17 @@ def handle_sbom_exports(doc_name, ctrls, expected_mime):
             if doc_name == "CycloneDX 1.6":
                 content = cdx.output_as_json(6)
 
+            if content is not None:
+                new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
+                return content, 200, {
+                    "Content-Type": expected_mime,
+                    "Content-Disposition": f"attachment; filename={new_name}.json"
+                }
+
+    if doc_name.startswith("SPDX"):
+        spdx = SPDX(ctrls)
+        if expected_mime == "application/json":
+            content = spdx.output_as_json()
             if content is not None:
                 new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
                 return content, 200, {
