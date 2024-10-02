@@ -1,7 +1,7 @@
-From f1f3bf30f438f53e04ec9cbac5a237bcdc2d993a Mon Sep 17 00:00:00 2001
+From 0a8b05017d1129d0075e19f5b34eede79dfc24ab Mon Sep 17 00:00:00 2001
 From: Louis Maillard <lmaillard@savoirfairelinux.com>
 Date: Mon, 10 Jun 2024 12:08:56 -0400
-Subject: [PATCH] read_docs: reduce error when reading non-spdx file
+Subject: [PATCH 1/2] read_docs: reduce error when reading non-spdx file
 
 Reduce risk of error by matching ony .spdx.json and not all .json files.
 Reading and parsing are running in a try-catch block to allow ignore
@@ -13,7 +13,7 @@ Signed-off-by: Louis Maillard <louis.maillard@savoirfairelinux.com>
  1 file changed, 12 insertions(+), 2 deletions(-)
 
 diff --git a/spdxmerge/utils.py b/spdxmerge/utils.py
-index df0b0c0..1ef98b3 100755
+index df0b0c0..589ba04 100755
 --- a/spdxmerge/utils.py
 +++ b/spdxmerge/utils.py
 @@ -4,9 +4,19 @@ from spdxmerge.checksum import sha1sum
