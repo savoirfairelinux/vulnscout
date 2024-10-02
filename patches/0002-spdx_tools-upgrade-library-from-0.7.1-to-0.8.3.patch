@@ -1,0 +1,296 @@
+From 94434ca67473084ff8f81e1ba2b950e7bf2fb959 Mon Sep 17 00:00:00 2001
+From: Louis Maillard <louis.maillard@savoirfairelinux.com>
+Date: Tue, 1 Oct 2024 16:39:33 -0400
+Subject: [PATCH 2/2] spdx_tools: upgrade library from 0.7.1 to 0.8.3
+
+Migrate API call to library spdx_tools from 0.7.1 to 0.8.3 in order to
+make it compatible with VulnScout software stack.
+
+Signed-off-by: Louis Maillard <louis.maillard@savoirfairelinux.com>
+---
+ spdxmerge/SPDXMergeLib.py      | 45 ++++++++++++++-----------
+ spdxmerge/SPDX_DeepMerge.py    | 54 ++++++++++++++++--------------
+ spdxmerge/SPDX_ShallowMerge.py | 60 +++++++++++++++++++---------------
+ spdxmerge/utils.py             |  8 +++--
+ 4 files changed, 95 insertions(+), 72 deletions(-)
+
+diff --git a/spdxmerge/SPDXMergeLib.py b/spdxmerge/SPDXMergeLib.py
+index f9debe3..938ab70 100755
+--- a/spdxmerge/SPDXMergeLib.py
++++ b/spdxmerge/SPDXMergeLib.py
+@@ -1,42 +1,49 @@
+ import codecs
+ import os
+-from spdx.writers.json import write_document as write_json_document, InvalidDocumentError as JsonInvalidDocumentError
+-from spdx.writers.tagvalue import write_document as write_tagvalue_document, InvalidDocumentError as TagvalueInvalidDocumentError
+-from spdx.parsers.loggers import ErrorMessages
++from spdx_tools.spdx.writer.json.json_writer import write_document_to_file as write_json_file
++from spdx_tools.spdx.writer.tagvalue.tagvalue_writer import write_document_to_file as write_tagvalue_file
+ from spdxmerge.SPDX_DeepMerge import SPDX_DeepMerger
+ from spdxmerge.SPDX_ShallowMerge import SPDX_ShallowMerger
++from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
++from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
++from spdx_tools.spdx.model.spdx_none import SpdxNone
+
+ def create_merged_spdx_document(doc_list, docnamespace, name, author, email, merge_type):
+     if merge_type == "deep":
+         merger = SPDX_DeepMerger(doc_list, docnamespace, name, author, email)
+-        merger.doc_creationinfo()
+         merger.doc_packageinfo()
+         merger.doc_fileinfo()
+         merger.doc_snippetinfo()
+         merger.doc_other_license_info()
+         merger.doc_relationship_info()
++        merger.doc_externaldoc_ref()
+     elif merge_type == "shallow":
+         merger = SPDX_ShallowMerger(doc_list, docnamespace, name, author, email)
+-        merger.doc_creationInfo()
+         merger.doc_externalDocumentRef()
+
+-    return merger.get_document()
++    doc = merger.get_document()
++    if len(doc.relationships) == 0:
++        doc.relationships = doc.relationships + [Relationship(
++            "SPDXRef-DOCUMENT",
++            RelationshipType.DESCRIBES,
++            SpdxNone()
++        )]
++    return doc
+
+ def write_file(doc, filetype, merge_type, outpath = None):
+     result_filetype = "spdx" if filetype.lower() == "t" else "json"
+     file = f"merged-SBoM-{merge_type}.{result_filetype}"
+     if outpath:
+         file = os.path.join(outpath, file)
+-    with codecs.open(file, mode="w", encoding="utf-8") as out:
+-        try:
+-            if result_filetype == "spdx":
+-                write_tagvalue_document(doc, out)
+-            else:
+-                write_json_document(doc, out)
+-        except (TagvalueInvalidDocumentError, JsonInvalidDocumentError) as e:
+-            print("Document is Invalid:\n\t", end="")
+-            print("\n\t".join(e.args[0]))
+-            messages = ErrorMessages()
+-            doc.validate(messages)
+-            print("\n".join(messages.messages))
+-        print("File "+file+" is generated")
++    try:
++        if result_filetype == "spdx":
++            write_tagvalue_file(doc, file)
++        else:
++            write_json_file(doc, file)
++    except Exception as e:
++        print("Error writing out file:")
++        messages = validate_full_spdx_document(doc)
++        for message in messages:
++            print(message.validation_message)
++        raise e
++    print("File "+file+" is generated")
+diff --git a/spdxmerge/SPDX_DeepMerge.py b/spdxmerge/SPDX_DeepMerge.py
+index 2926183..06a2e8d 100755
+--- a/spdxmerge/SPDX_DeepMerge.py
++++ b/spdxmerge/SPDX_DeepMerge.py
+@@ -1,10 +1,8 @@
+-from spdx.creationinfo import Person
+-from spdx.license import License
+-from spdx.document import Document
+-from spdx.relationship import Relationship,RelationshipType
+-from spdx.version import Version
++from spdx_tools.spdx.model.actor import Actor, ActorType
++from spdx_tools.spdx.model.document import Document, CreationInfo
++from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
++from datetime import datetime, timezone
+
+-master_doc = Document()
+
+ class SPDX_DeepMerger():
+
+@@ -14,49 +12,57 @@ class SPDX_DeepMerger():
+         self.name = name
+         self.author = author
+         self.emailaddr = email
++        self.master_doc = Document(creation_info=self.doc_creationinfo())
+
+     def get_document(self):
+-        return master_doc
++        return self.master_doc
+
+     def doc_creationinfo(self):
+-        master_doc.name = self.name
+-        master_doc.version = Version(2,3) # TODO Need to check from where to take this. can not hardcode here
+-        master_doc.spdx_id = self.docnamespace + "#SPDXRef-DOCUMENT"
+-        master_doc.namespace = self.docnamespace
+-        master_doc.data_license = License.from_identifier("CC0-1.0") #TODO Can not hardcode it here need to check from where to take it.
+-        master_doc.creation_info.add_creator(Person(self.author,self.emailaddr))
+-        master_doc.creation_info.set_created_now()
++        return CreationInfo(
++            name=self.name,
++            spdx_version="SPDX-2.3", # TODO Need to check from where to take this. can not hardcode here
++            spdx_id="SPDXRef-DOCUMENT",
++            document_namespace=self.docnamespace,
++            data_license="CC0-1.0",
++            creators=[
++                Actor(ActorType.PERSON, self.author, self.emailaddr)
++            ],
++            created=datetime.now(timezone.utc)
++        )
+
+     def doc_packageinfo(self):
+         """
+         Append packges from document list
+         """
+         for doc in self.doc_list:
+-            master_doc.packages.extend(doc.packages)
++            self.master_doc.packages = self.master_doc.packages + doc.packages
+
+     def doc_fileinfo(self):
+         for doc in self.doc_list:
+-            master_doc.files.extend(doc.files)  #TODO Need to check this its not returning list
++            self.master_doc.files = self.master_doc.files + doc.files
+
+     def doc_snippetinfo(self):
+         for doc in self.doc_list:
+-            master_doc.snippet.extend(doc.snippet)
++            self.master_doc.snippets = self.master_doc.snippets + doc.snippets
+
+     def doc_other_license_info(self):
+         for doc in self.doc_list:
+-            master_doc.extracted_licenses.extend(doc.extracted_licenses)
++            self.master_doc.extracted_licensing_info = self.master_doc.extracted_licensing_info + doc.extracted_licensing_info
+
+     def doc_relationship_info(self):
+         for doc in self.doc_list:
+             # Add 'DESCRIBES' relationship between master and child documents, then import all relationships in child docs
+-            relationship = Relationship(master_doc.spdx_id+" "+RelationshipType.DESCRIBES.name+" "+doc.spdx_id)
+-            master_doc.add_relationship(relationship)
+-            master_doc.relationships.extend(doc.relationships)
++            # self.master_doc.relationships = self.master_doc.relationships + [Relationship(
++            #     self.master_doc.creation_info.spdx_id,
++            #     RelationshipType.DESCRIBES,
++            #     f"{doc.creation_info.document_namespace}#{doc.creation_info.spdx_id}"
++            # )]
++            self.master_doc.relationships = self.master_doc.relationships + doc.relationships
+
+     def doc_annotation_info(self):
+         for doc in self.doc_list:
+-            master_doc.annotations.extend(doc.annotations)
++            self.master_doc.annotations = self.master_doc.annotations + doc.annotations
+
+-    def doc_review_info(self):
++    def doc_externaldoc_ref(self):
+         for doc in self.doc_list:
+-            master_doc.reviews.extend(doc.reviews)
++            self.master_doc.creation_info.external_document_refs = self.master_doc.creation_info.external_document_refs + doc.creation_info.external_document_refs
+diff --git a/spdxmerge/SPDX_ShallowMerge.py b/spdxmerge/SPDX_ShallowMerge.py
+index 0e03afe..433b35e 100755
+--- a/spdxmerge/SPDX_ShallowMerge.py
++++ b/spdxmerge/SPDX_ShallowMerge.py
+@@ -1,12 +1,11 @@
+-from spdx.checksum import Checksum,ChecksumAlgorithm
+-from spdx.utils import NoAssert
+-from spdx.creationinfo import Person
+-from spdx.license import License
+-from spdx.document import (Document,ExternalDocumentRef)
+-from spdx.package import Package
+-from spdx.version import Version
+-
+-master_doc = Document()
++from spdx_tools.spdx.model.checksum import Checksum, ChecksumAlgorithm
++from spdx_tools.spdx.model.external_document_ref import ExternalDocumentRef
++from spdx_tools.spdx.model.actor import Actor, ActorType
++from spdx_tools.spdx.model.package import Package
++from spdx_tools.spdx.model.document import Document, CreationInfo
++from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
++from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
++from datetime import datetime, timezone
+
+ class SPDX_ShallowMerger():
+     def __init__(self,doc_list=None,docnamespace=None,name=None,author=None,email=None):
+@@ -15,28 +14,37 @@ class SPDX_ShallowMerger():
+         self.name = name
+         self.author = author
+         self.emailaddr = email
++        self.master_doc = Document(creation_info=self.doc_creationinfo())
+
+     def get_document(self):
+-        return master_doc
++        return self.master_doc
+
+     def doc_creationInfo(self):
+-        master_doc.name = self.name
+-        master_doc.version = Version(2,3) # TODO Need to check from where to take this. can not hardcode here
+-        master_doc.spdx_id = self.docnamespace + "#SPDXRef-DOCUMENT"
+-        master_doc.namespace = self.docnamespace
+-        master_doc.data_license = License.from_identifier("CC0-1.0") #TODO Can not hardcode it here need to check from where to take it.
+-        master_doc.creation_info.add_creator(Person(self.author,self.emailaddr))
+-        master_doc.creation_info.set_created_now()
++        return CreationInfo(
++            name=self.name,
++            spdx_version="SPDX-2.3", # TODO Need to check from where to take this. can not hardcode here
++            spdx_id="SPDXRef-DOCUMENT",
++            document_namespace=self.docnamespace,
++            data_license="CC0-1.0",
++            creators=[
++                Actor(ActorType.PERSON, self.author, self.emailaddr)
++            ],
++            created=datetime.now(timezone.utc)
++        )
+
+     def doc_externalDocumentRef(self):
+-        package = Package()
+-        package.name = self.name
+-        package.version = "1.0"
+-        package.spdx_id = self.docnamespace + "#SPDXRef-DOCUMENT"
+-        package.download_location = NoAssert()
++        package = Package(
++            spdx_id=self.docnamespace + "#SPDXRef-DOCUMENT",
++            name=self.name,
++            download_location=SpdxNoAssertion(),
++            version="1.0"
++        )
++        self.master_doc.packages = self.master_doc.packages + [package]
+
+-        master_doc.add_package(package)
+         for doc in self.doc_list:
+-            check_sum = Checksum(ChecksumAlgorithm.SHA1,doc.comment)
+-            extDoc = ExternalDocumentRef(doc.spdx_id,doc.namespace,check_sum)
+-            master_doc.add_ext_document_reference(extDoc)
++            check_sum = Checksum(ChecksumAlgorithm.SHA1, doc.creation_info.document_comment)
++            ext_doc = ExternalDocumentRef(
++                document_ref_id=doc.creation_info.spdx_id,
++                document_uri=doc.creation_info.document_namespace,
++                checksum=check_sum)
++            self.master_doc.creation_info.external_document_refs = self.master_doc.creation_info.external_document_refs + [ext_doc]
+diff --git a/spdxmerge/utils.py b/spdxmerge/utils.py
+index 589ba04..ebb6729 100755
+--- a/spdxmerge/utils.py
++++ b/spdxmerge/utils.py
+@@ -1,5 +1,5 @@
+ import os
+-from spdx.parsers import parse_anything
++from spdx_tools.spdx.parser.parse_anything import parse_file
+ from spdxmerge.checksum import sha1sum
+
+ def read_docs(dir):
+@@ -9,7 +9,9 @@ def read_docs(dir):
+     for file in doc_files:
+         try:
+             # put the parser in try catch to avoid crashing for one corrupted file
+-            doc, _error = parse_anything.parse_file(dir+"/"+file)
++            doc = parse_file(dir+"/"+file)
++            if doc is None:
++                raise Exception(f"Cannot find file format: {file}")
+         except Exception as e:
+             print("Error parsing file: ", file)
+             print(e)
+@@ -18,6 +20,6 @@ def read_docs(dir):
+                 raise e
+             continue
+         check_sum = sha1sum(dir+"/"+file)
+-        doc.comment = check_sum
++        doc.creation_info.document_comment = check_sum
+         doc_list.append(doc)
+     return doc_list
+--
+2.34.1

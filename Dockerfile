@@ -38,8 +38,9 @@ ARG SPDXMERGE_VERSION=00c288e245d48203e898f1ea1570a5cd2a22838f
 RUN git clone "https://github.com/philips-software/SPDXMerge.git" && \
     cd SPDXMerge && \
     git checkout "$SPDXMERGE_VERSION" && \
-    pip3 install --no-cache-dir -r requirements.txt --break-system-packages && \
-    git -c user.name='bot' -c user.email='bot@ci.cd' am < /tmp/patches/0001-read_docs-reduce-error-when-reading-non-spdx-file.patch
+    git -c user.name='bot' -c user.email='bot@ci.cd' am /tmp/patches/*.patch && \
+    sed -i 's/spdx-tools==0.7.1/spdx-tools==0.8.3/' requirements.txt && \
+    pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
 
 # Install dependencies for python backend
