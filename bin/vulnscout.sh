@@ -18,6 +18,7 @@ set -euo pipefail # Enable error checking
 DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.4.1"
 VULNSCOUT_VERSION="v0.4.1"
 INTERACTIVE_MODE="true"
+FAIL_CONDITION=""
 QUIET_MODE="false"
 
 
@@ -26,11 +27,6 @@ function main() {
 	if [ $# -eq 0 ]; then
 		echo "No arguments provided. Use --help for more information."
 		exit 1
-	fi
-
-	if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-		help
-		exit 0
 	fi
 
 	actual_semver="$(echo "${VULNSCOUT_VERSION:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')"
@@ -46,35 +42,40 @@ function main() {
 
 	load_conf
 
-	case "$1" in
-		scan)
-			container_id="$(scan)"
-			;;
-		report)
-			echo "report command not implemented yet."
-			exit 1
-			;;
-		ci)
-			INTERACTIVE_MODE="false"
-			FAIL_CONDITION="${2-}"
-			container_id="$(scan)"
-			;;
-		quiet)
-			QUIET_MODE="true"
-			container_id="$(scan)"
-			;;
-		update | upgrade)
-			update_vulnscout
-			;;
-		--version | -v)
-			echo "$VULNSCOUT_VERSION"
-			exit 0
-			;;
-		*)
-			echo "Invalid command. Use --help for more information."
-			exit 1
-			;;
-	esac
+	for arg in "$@"; do
+		case "$arg" in
+			--help | -h | help)
+				help
+				exit 0;
+				;;
+			-q | --quiet)
+				QUIET_MODE="true"
+				;;
+			-v | --version)
+				echo "$VULNSCOUT_VERSION"
+				exit 0
+				;;
+			update | upgrade)
+				update_vulnscout  # will exit
+				;;
+			scan)
+				# action by default, nothing to do bu keep for compatibility
+				;;
+			ci)
+				INTERACTIVE_MODE="false"
+				;;
+			*)
+				if [[ "$FAIL_CONDITION" == "" && "$INTERACTIVE_MODE" == "false" ]]; then
+					FAIL_CONDITION="$arg"
+				else
+					echo "Invalid command or flag '$arg'. Use --help for more information."
+					exit 1
+				fi
+				;;
+		esac
+	done
+
+	container_id="$(scan)"
 
 	if [[ -n "${container_id}" ]]; then
 		# shellcheck disable=SC2064 disable=SC2154
@@ -110,17 +111,16 @@ function help() {
 		    vulnscout.sh [command] [options]
 
 		Commands:
-		    scan            Run a security scan on the project (interactive)
-		    quiet           Run a scan without docker logs
-		    report          Generate a report from the scan results
+		    scan            Run a security scan on the project (interactive) [default]
 		    ci [condition]  Run a security scan in CI/CD pipeline
 		                    fail with exit code 2 if a vulnerability fulfill the [condition]
 		    update          Update VulnScout to the latest version
 		    help            Display this help message
 
 		Options:
-		    --help          Display this help message, or specific help for a command
-		    --version       Display the version of VulnScout
+		    -h --help       Display this help message
+		    -v --version    Display the version of VulnScout
+		    -q --quiet      Hide docker logs, keeping only a few line
 
 		Copyright (C) 2024 Savoir-faire Linux, Inc.
 	EOF
