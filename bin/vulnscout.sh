@@ -18,6 +18,7 @@ set -euo pipefail # Enable error checking
 DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.4.1"
 VULNSCOUT_VERSION="v0.4.1"
 INTERACTIVE_MODE="true"
+QUIET_MODE="false"
 
 
 function main() {
@@ -58,6 +59,10 @@ function main() {
 			FAIL_CONDITION="${2-}"
 			container_id="$(scan)"
 			;;
+		quiet)
+			QUIET_MODE="true"
+			container_id="$(scan)"
+			;;
 		update | upgrade)
 			update_vulnscout
 			;;
@@ -83,6 +88,9 @@ function main() {
 		echo "You can access the scan results at http://localhost:${FLASK_RUN_PORT-7275}"
 	fi
 	sleep 1
+	if [[ "$QUIET_MODE" != "true" ]]; then
+		docker logs -f "$container_id"
+	fi
 
 	local container_exit_code=0
 	container_exit_code="$(docker wait "$container_id")"
@@ -103,6 +111,7 @@ function help() {
 
 		Commands:
 		    scan            Run a security scan on the project (interactive)
+		    quiet           Run a scan without docker logs
 		    report          Generate a report from the scan results
 		    ci [condition]  Run a security scan in CI/CD pipeline
 		                    fail with exit code 2 if a vulnerability fulfill the [condition]
@@ -169,7 +178,7 @@ function scan() {
 
 	# shellcheck disable=SC2086 # docker args is a string with series of argument, so requires to be unquoted
 	container_id="$(
-		docker run --rm -d ${docker_args} \
+		docker run -d ${docker_args} \
 		-e GENERATE_DOCUMENTS="${GENERATE_DOCUMENTS-}" \
 		-e FAIL_CONDITION="${FAIL_CONDITION-}" \
 		"${DOCKER_IMAGE}"

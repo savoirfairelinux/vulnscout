@@ -35,3 +35,6 @@ FLASK_RUN_HOST=0.0.0.0
 # If scan encounters a file with invalid format, should it ignore it?
 # Recommended for Yocto as it tend to generate non-SPDX files in SPDX folder
 IGNORE_PARSING_ERRORS='false'
+
+# Enable / Disable output logs from docker
+QUIET_MODE='false'
