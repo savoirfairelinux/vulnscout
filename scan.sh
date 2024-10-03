@@ -82,17 +82,7 @@ function full_scan_steps() {
         copy_spdx_files $SPDX_INPUTS_PATH $SPDX_TMP_PATH
 
         set_status "2" "Merging SPDX files"
-        python ./SPDXMerge/spdxmerge/SPDXMerge.py \
-            --docpath $SPDX_TMP_PATH \
-            --outpath "$TMP_PATH/" \
-            --mergetype 1 \
-            --filetype "J" \
-            --name "${PRODUCT_NAME}-${PRODUCT_VERSION}" \
-            --author "$COMPANY_NAME" \
-            --email "$CONTACT_EMAIL" \
-            --docnamespace "$DOCUMENT_URL"
-
-        mv "$TMP_PATH/merged-SBoM-deep.json" "$TMP_PATH/merged.spdx.json"
+        INPUT_SPDX_FOLDER="$SPDX_TMP_PATH" OUTPUT_SPDX_FILE="$TMP_PATH/merged.spdx.json" python3 -m src.bin.spdx_merge
     else
         set_status "2" "No SPDX files found, skipping"
     fi
