@@ -18,6 +18,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
+from ..helpers.verbose import verbose
 import glob
 import json
 import os
@@ -89,6 +90,7 @@ def read_inputs(controllers):
     spdx = SPDX(controllers)
     templates = Templates(controllers)
 
+    verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
     try:
         with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
             openvex.load_from_dict(json.loads(f.read()))
@@ -103,6 +105,7 @@ def read_inputs(controllers):
         else:
             print(f"Ignored: Error parsing OpenVEX file: {e}")
 
+    verbose(f"merger_ci: Reading {os.getenv('CDX_PATH', CDX_PATH)}")
     error_cdx_not_found_displayed = False
     try:
         with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
@@ -113,6 +116,7 @@ def read_inputs(controllers):
               + " this mean there was an issue when collecting them.")
         error_cdx_not_found_displayed = True
 
+    verbose(f"merger_ci: Reading {os.getenv('GRYPE_CDX_PATH', GRYPE_CDX_PATH)}")
     try:
         with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
             scanGrype.load_from_dict(json.loads(f.read()))
@@ -123,6 +127,7 @@ def read_inputs(controllers):
 
     for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
         try:
+            verbose(f"merger_ci: Reading {file}")
             spdx.load_from_file(file)
             spdx.parse_and_merge()
         except Exception as e:
@@ -133,13 +138,16 @@ def read_inputs(controllers):
             else:
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
+    verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
     with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
         scanGrype.load_from_dict(json.loads(f.read()))
 
     for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
+        verbose(f"merger_ci: Reading {file}")
         with open(file, "r") as f:
             scanYocto.load_from_dict(json.loads(f.read()))
 
+    verbose(f"merger_ci: Reading {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
     try:
         with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "r") as f:
             timeEstimates.load_from_dict(json.loads(f.read()))
@@ -169,6 +177,7 @@ def output_results(controllers, files):
         "vulnerabilities": controllers["vulnerabilities"].to_dict(),
         "assessments": controllers["assessments"].to_dict()
     }
+    verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
     with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "w") as f:
         f.write(json.dumps(output))
     with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "w") as f:
@@ -178,12 +187,19 @@ def output_results(controllers, files):
     with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
         f.write(json.dumps(output["assessments"]))
 
+    verbose(f"merger_ci: Exporting {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
     with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "w") as f:
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
+
+    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
     with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
         f.write(files["cdx"].output_as_json())
+
+    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
     with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
         f.write(spdx.output_as_json())
+
+    verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
     with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
         f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
 
@@ -193,6 +209,7 @@ def output_results(controllers, files):
             continue
         try:
             doc = doc.strip()
+            verbose(f"merger_ci: Generating report from template {doc}")
             content = files["templates"].render(doc)
             with open(f"/scan/outputs/{doc}", "w") as f:
                 f.write(content)
@@ -211,10 +228,20 @@ def main():
     }
 
     files = read_inputs(controllers)
+    verbose("merger_ci: Finished reading inputs")
+
+    verbose("merger_ci: Start Post-treatment")
     post_treatment(controllers, files)
+    verbose("merger_ci: Finished post-treatment")
+
     if os.getenv("FAIL_CONDITION", "") != "":
+        verbose("merger_ci: Start evaluating conditions")
         evaluate_condition(controllers, os.getenv("FAIL_CONDITION"))
+        verbose("merger_ci: Finished evaluating conditions")
+
+    verbose("merger_ci: Start exporting results")
     output_results(controllers, files)
+    verbose("merger_ci: Finished exporting results")
 
 
 if __name__ == "__main__":

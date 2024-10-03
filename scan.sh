@@ -24,6 +24,7 @@ COMPANY_NAME=${COMPANY_NAME-"Savoir-faire Linux"}
 CONTACT_EMAIL=${CONTACT_EMAIL-""}
 DOCUMENT_URL=${DOCUMENT_URL-"https://spdx.org/spdxdocs/${PRODUCT_NAME}-${PRODUCT_VERSION}.spdx.json"}
 INTERACTIVE_MODE=${INTERACTIVE_MODE-"true"}
+VERBOSE_MODE=${VERBOSE_MODE-"false"}
 
 readonly BASE_DIR="/scan"
 

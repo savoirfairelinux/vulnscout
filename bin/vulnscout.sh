@@ -20,6 +20,7 @@ VULNSCOUT_VERSION="v0.4.1"
 INTERACTIVE_MODE="true"
 FAIL_CONDITION=""
 QUIET_MODE="false"
+VERBOSE_MODE="false"
 
 
 function main() {
@@ -50,6 +51,9 @@ function main() {
 				;;
 			-q | --quiet)
 				QUIET_MODE="true"
+				;;
+			-vv | --verbose)
+				VERBOSE_MODE="true"
 				;;
 			-v | --version)
 				echo "$VULNSCOUT_VERSION"
@@ -121,6 +125,7 @@ function help() {
 		    -h --help       Display this help message
 		    -v --version    Display the version of VulnScout
 		    -q --quiet      Hide docker logs, keeping only a few line
+		    -vv --verbose   Print event more logs than by default
 
 		Copyright (C) 2024 Savoir-faire Linux, Inc.
 	EOF
@@ -139,6 +144,7 @@ function scan() {
 	docker_args+=" -e FLASK_RUN_PORT=${FLASK_RUN_PORT-7275}"
 	docker_args+=" -p ${FLASK_RUN_PORT-7275}:${FLASK_RUN_PORT-7275}"
 	docker_args+=" -e INTERACTIVE_MODE=${INTERACTIVE_MODE}"
+	docker_args+=" -e VERBOSE_MODE=${VERBOSE_MODE}"
 
 	if [[ -n "${PRODUCT_NAME-}" ]]; then docker_args+=" -e PRODUCT_NAME=${PRODUCT_NAME}"; fi
 	if [[ -n "${PRODUCT_VERSION-}" ]]; then docker_args+=" -e PRODUCT_VERSION=${PRODUCT_VERSION}"; fi
