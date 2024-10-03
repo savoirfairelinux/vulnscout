@@ -10,6 +10,7 @@ from ..views.spdx import SPDX
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from ..helpers.verbose import verbose
 import glob
 import os
 
@@ -23,6 +24,7 @@ def read_inputs(controllers):
 
     for file in glob.glob(f"{os.getenv('INPUT_SPDX_FOLDER', INPUT_SPDX_FOLDER)}/*.spdx.json"):
         try:
+            verbose(f"spdx_merge: Merging {file}")
             spdx.load_from_file(file)
             spdx.parse_and_merge()
         except Exception as e:
@@ -38,6 +40,7 @@ def output_results(controllers):
     """Output the results to files."""
     spdx = SPDX(controllers)
 
+    verbose(f"spdx_merge: Writing {os.getenv('OUTPUT_SPDX_FILE', OUTPUT_SPDX_FILE)}")
     with open(os.getenv("OUTPUT_SPDX_FILE", OUTPUT_SPDX_FILE), "w") as f:
         f.write(spdx.output_as_json())
 
