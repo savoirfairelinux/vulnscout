@@ -18,8 +18,6 @@ FROM alpine:3.20
 RUN mkdir -p /scan/inputs /scan/tmp /scan/outputs
 WORKDIR /scan
 
-COPY patches /tmp/patches
-
 RUN apk add --no-cache bash curl git zstd icu python3 py3-pip osv-scanner asciidoctor ruby && \
     gem install asciidoctor-pdf --version 2.3.15
 
@@ -32,16 +30,6 @@ RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CY
 # Install Grype
 ARG GRYPE_VERSION=v0.78.0
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
-
-# Install and patch SPDXMerge
-ARG SPDXMERGE_VERSION=00c288e245d48203e898f1ea1570a5cd2a22838f
-RUN git clone "https://github.com/philips-software/SPDXMerge.git" && \
-    cd SPDXMerge && \
-    git checkout "$SPDXMERGE_VERSION" && \
-    git -c user.name='bot' -c user.email='bot@ci.cd' am /tmp/patches/*.patch && \
-    sed -i 's/spdx-tools==0.7.1/spdx-tools==0.8.3/' requirements.txt && \
-    pip3 install --no-cache-dir -r requirements.txt --break-system-packages
-
 
 # Install dependencies for python backend
 COPY requirements.txt ./

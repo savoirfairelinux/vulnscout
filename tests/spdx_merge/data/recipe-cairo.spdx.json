@@ -1,0 +1,1534 @@
+{
+    "SPDXID": "SPDXRef-DOCUMENT",
+    "creationInfo": {
+        "comment": "This document was created by analyzing recipe files during the build.",
+        "created": "2024-05-03T19:35:05Z",
+        "creators": [
+            "Tool: OpenEmbedded Core create-spdx.bbclass",
+            "Organization: OpenEmbedded ()",
+            "Person: N/A ()"
+        ],
+        "licenseListVersion": "3.14"
+    },
+    "dataLicense": "CC0-1.0",
+    "documentNamespace": "http://spdx.org/spdxdoc/recipe-cairo-943d62bf-eaa5-5419-8081-2f91a78ba1cd",
+    "externalDocumentRefs": [
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fe49a8f31bd88a62b1a2f31866b32e4c04a1daf9"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-acl-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-acl-native-90ada574-0418-501d-ab9a-814f7f8cf160"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "877b7ddcaad5cf88c52fe32470051e0fbc30360f"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-attr-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-attr-native-a4ca441b-3630-5ca7-a9d6-f08d4bc6cd5b"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "70ca963af3eaf930b1dac96fac494067c5ce95d8"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-autoconf-archive",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-autoconf-archive-75266b06-b583-5d7c-9087-87aca7166c81"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "ba09bb185098a0543977f8ac0fd0becc506cb45e"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-autoconf-archive-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-autoconf-archive-native-fd00b327-70b9-5c20-8c90-9c0103cbc9f0"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "cb9542322af6fa072a393f397632cf0c019c8e49"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-autoconf-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-autoconf-native-124e4a29-7bee-575a-9a44-2226fa6af9c9"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "6596512f276a9b8ba6219b2073f862b891689d41"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-automake-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-automake-native-e3046935-37af-5c2e-b371-e883e5ef1216"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "3693b53bf66aebc493914dd9a7376bed4b6fa2bc"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-bash-completion",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-bash-completion-449f3c99-4701-554f-9a75-392b0289d6be"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "2589eef25bc9b7cdf79fbe02554d89cc5f593d1c"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-binutils-cross-arm",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-binutils-cross-arm-d730440d-487f-5ff3-9d03-a8c48e4752b3"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "8e75ff9d838e701132c0897597f661c1529de5d6"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-bison-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-bison-native-d18e081d-4246-5067-9e41-c5ae29c9b9ff"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "53f4120d40381f6c0ab5bbd03c9e37656bb5b06b"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-bzip2",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-bzip2-48d77de4-d76a-580e-82f3-6bfefd5b9795"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "ccf5050337648f233d859e39575e9080662b6b91"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-bzip2-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-bzip2-native-9d1fa3cb-3643-5f5e-9360-58c1eb05c68e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1e8ab90669e12c285618200556a84779c1a8b351"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-chrpath-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-chrpath-native-2690d640-5a3d-5cec-af85-030031084df6"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "15c1c4bfcae8638bbe3ce09c7083ce0169dd5863"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-cmake-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-cmake-native-065aeeea-e673-57cc-a9f5-a3fe1fc2b3ea"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "642323131cefe00239f37c94e2ec74a7c2ac4eda"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-cracklib",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-cracklib-dd1fc795-90e8-5933-90de-8cec69667843"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "7ef2cb01e07403f7e496785a721a1609be182a4a"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-cracklib-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-cracklib-native-10f0cbd5-6a06-5edc-9ab7-309961298953"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "c3e7e7a27f7e1d3fa14a8687d3865c5a38e37d70"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-curl-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-curl-native-acd62102-415e-50b8-8fff-b573056aa44e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "e09c11aa174bcbee631e27dd6e955bba9ed53a24"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-expat",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-expat-3c0df939-071e-5cc6-ab3d-a72974b1f775"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "dd9c1dd9c104df96cf55d8d13de09d4afcd4cbaf"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-flex",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-flex-8f5d3614-e1eb-5926-8d26-9d3b9bdbce95"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "f4aa7d31119f217cac004c345b3dcbc399e86500"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-flex-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-flex-native-db3e6886-d8ff-51c5-9589-0e997748f089"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "38f44fbf45b7a52210fa16853254f15759714e33"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-fontconfig",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-fontconfig-09ac3d08-38a3-5d30-aede-89bdfe118aaf"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "9dd41e48a65ffab3abba124d97eaff79a4d660c7"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-freetype",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-freetype-7aa0dd6e-66a9-557f-a3e5-9df6851322ab"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "3270fddac9384c2c255e165f3fc9d6384d937945"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gcc-cross-arm",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gcc-cross-arm-3ec6f16b-d802-5329-8e83-237a286c87f1"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "5f20ada6f6e349ed97307c55cd2a0d7ea256818b"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gcc-runtime",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gcc-runtime-a8177036-816d-5f00-a030-969647302050"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "e0c6fb92c0163b23b49cd83585ff3931690cf991"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gdbm-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gdbm-native-41413a0a-1570-5d00-a5f5-8d068dbf5997"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "654af3228f32b56f1729612919205f4f9314bd39"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gettext-minimal-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gettext-minimal-native-d0a27f93-c2cb-5d69-ab6b-b5b2d7da1769"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "becd948caadf58043fc07bad3bbe64aecad04f1a"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gettext-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gettext-native-bc0b5e4e-69c4-5def-955c-45419d0a98ee"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "92cbde72cc12dee73cb9f1176b3ccbee742c2314"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-glib-2.0",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-glib-2.0-d0091684-3041-5a99-9476-45ed618feb68"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "8947f71b96dc146d691b99ebf9c43000e52c575d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-glib-2.0-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-glib-2.0-native-705aca78-6a39-5d5c-9e39-a6c873295cf1"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "abb53c9509fbbcd02d17289c6eb43e8270e4c2a0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-glibc",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-glibc-8ec5f1d4-204b-530d-8854-79bbb314d6d7"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "698edd6404f592001a83eb5d8cae0b87a90f0ba6"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gmp-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gmp-native-008a73c2-0509-5b24-a32c-a84f417c6f76"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "acd5ef552a2e35087ef7ebb102a47be207cfc9b9"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gnu-config-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gnu-config-native-7f998b5b-4a9f-5868-bb80-1279a9b986ff"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "cb798759c6cc71ba3826aa6e5c6d550fee903ca3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gperf-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gperf-native-8ff83514-7088-5153-b0e5-1d27897382c3"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "419c75c09dddd05f5473a9986f87fab906e952a6"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-gtk-doc-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-gtk-doc-native-5263677d-0962-5f28-a0fb-1308d67c5da7"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "db42be3cf63c29877d5f9a4cbd5a00534fa26c89"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libcap-ng",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libcap-ng-67baa97c-2236-5adf-91d3-d28a71356339"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "077eafb114998e1714fcbacb52082fd80bac407e"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libcap-ng-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libcap-ng-native-14985d36-c68b-5e36-b2e3-71dfd5168cd8"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "84afe330e0406616fc3abf80e511b9a05079651f"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libdrm",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libdrm-41327e54-6b3c-5e1d-bd51-7a2dfbefa077"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "2e5b2ce502e1c332cc2c5e9a47b769d703d48a8d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libffi",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libffi-e07aad0a-60d0-5af2-87c1-57fff6c9f659"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "2d81ef6d1e083363e8aaa5c8a2dbe8b98f4ec7cd"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libffi-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libffi-native-16d6a62d-8719-56f3-a4ce-660f29fe886a"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "7a41048b86645fa051750b44fa6fd914ff3ae5b6"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libgcc",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libgcc-df9557c5-65f1-57eb-9bd9-76620c52cf82"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "f9dd083845aabc3e48b77cfd16fd489b0bef7dd5"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libgcc-initial",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libgcc-initial-a4724a6f-7615-5e3e-b3b1-e881263363b2"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "5a0009103fe745d1db1c6bfa2fd2d441b7b6f7f3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libice",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libice-12233329-96ff-5c89-a16a-6bb76e873e3f"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "e1cd905669bb1de51ddffe51c38075ac1a8f2be4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libmpc-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libmpc-native-106a5827-b85a-571e-9b61-3567ebe410d9"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "f77225add88446cae50d77dfd3fa44bca990a7b3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libnsl2-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libnsl2-native-25b9f36e-c12d-5dcf-bf25-5892da981acb"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fe3fdb80b15e4d833ac80d9420b35aa84dda50ab"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpam",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpam-598348bb-de94-5567-9012-dd2dbcb34f59"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d3d3cef32f63d2a88868282a2f6be63ab84cb77d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpciaccess",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpciaccess-e28964ec-976c-5248-afcd-36f2c35cc678"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "e76bdb2ffce696135d6ac1dbb8c62038368c8215"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpcre",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpcre-88e084af-1d44-5d6d-9956-e2e9125ca895"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "392465b2042067ca8cba9fd8427778adabb04147"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpcre-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpcre-native-8ad64b54-8180-5611-b63f-593fd43e2db0"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "8a658722c86267040b2c1318dfde03c46bde862e"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpcre2-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpcre2-native-87c509bc-91cb-5a3c-9a43-68404322bbb2"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1d64dab461a13386499aa4f3474ad6b3047ccfee"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpng",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpng-ac715238-4008-5aba-9058-bfd3da5e2dd6"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "2cc589ef5d7fd5932068929e68aace5c2730f5a4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libpthread-stubs",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libpthread-stubs-309e2119-b099-599e-aa18-c7bdc9bc187e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "bfe76c9fb4a0a7836be4c4732527be1ced1e5de0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libsm",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libsm-79c00984-3eaf-50e2-8b53-f4f67349a799"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1cd06ca2d4d4fbd018e762668f231f9ecf091f52"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libtirpc-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libtirpc-native-95d82d43-3a82-5fc4-812e-a93eeb169deb"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "0cd1afe11ab7ecfd91c83358faf890ebde039520"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libtool-cross",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libtool-cross-07500b21-b619-56d3-838e-16ca401a612f"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "04128cef5c67ad9598af64e8049588c28f7d6ebf"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libtool-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libtool-native-af5e5210-5bed-5317-878d-15206849f191"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "18f09270f129b17d8aee60934c5ce036be3344a3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libx11",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libx11-55e245a1-d00e-5445-bb7b-87ecfa6d3cde"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fcd5f59f6597df043ca75882e981ea6576857102"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxau",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxau-dc53d0c7-7adc-5e2a-a9e2-03b22f685185"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "6c1ef087249c17cf86418debbedfa56c41e63362"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxcb",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxcb-cbe0dd4b-19f4-57aa-bcaf-f2847d801a87"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "674f7aa3666ada7fe035e3779b241c0df4c64750"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxcrypt",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxcrypt-efbb6a8f-45ef-56f5-b465-7bb29439adf1"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "3869b73882c320c303fb0085ce1b72488f785fea"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxdamage",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxdamage-0f268374-6cdc-5fe6-9225-0eeef2e4c4d9"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "03b4829fb1fdcc220aed764300d4b624091112f8"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxdmcp",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxdmcp-7a086720-6a15-5e43-9902-c6c3b099c9d3"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "7b3a00e4ef5bdbbef3f54d3b9736bbaf80e2a924"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxext",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxext-cf00ddd1-33d4-52b0-b6dc-3afb1e119ed9"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "0a7241f3faf36d1d2dd7afc28618e1cc5c34b582"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxfixes",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxfixes-27b83156-8e77-57e6-a3fc-d4737542d718"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "35807a36c18e84b92855b5d92c5322e6b64d0cf3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxml2-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxml2-native-3a00c675-f8c7-59bc-88fd-8dcbd5a6a02a"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "8319345de4694c61aee58d3762ebeea55b3ef1a0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxrandr",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxrandr-3e4fe197-20b6-56f9-9629-1571fd4f1e28"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "708b057bc50c0d648585d0d154b1bfdc9402baee"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxrender",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxrender-2f2a4aaf-a3dd-580b-913a-d509663f7b15"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "222b1a59fc26aad360c68fd21c3e01cc4daf3886"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxshmfence",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxshmfence-a2c4b286-e87b-5233-9806-44dfdc4ab2c8"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "03dfbd827182c198d87a02a79b665cd22217162d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-libxxf86vm",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-libxxf86vm-54f5c14d-e4d3-5340-a954-f94b95bffefd"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "aa69377cee04a235c8c5ea1df95d40dbb5f53fe0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-linux-libc-headers",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-linux-libc-headers-2ed63bda-d297-58f5-be96-fcf57476d8ed"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1ea60e2e25138ce162f41b8443316d0a5fc3ab5c"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-m4-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-m4-native-5679b535-f65a-57b6-8760-ded5f4d5578c"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "945890c5bccc043a10cfece38f3ada848a827d78"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-make-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-make-native-df9bc34d-be65-55f4-94e1-8830884fb2fe"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "a7f812dc5347404640a559ff840aadb17e81a3bf"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-makedepend-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-makedepend-native-8243110b-56a7-53b3-a9b8-dfd04d620f6f"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fc62e0d95a6b0f826257fd0d7208e9c7cd4d0097"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-mesa",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-mesa-7b60ae74-1886-5e97-8828-a73a8efa6f20"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1b4e0a83b2ce7525f6030e54e2c98895b103049d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-meson-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-meson-native-c406ca80-e1f3-5f06-98d6-b7b62049c315"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "9b0a4231d70d7e9ce9e3dd70128f9fcf1e641854"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-mpfr-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-mpfr-native-63ad704f-f019-5db3-9fd1-ef154f972c7e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "c61ffc7703a2af734f81215a7af4482857c2d16f"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-ncurses",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-ncurses-0e23f426-319c-55a3-92d6-7bae8d64d645"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "55c36743e11929153a17399cd01222f49de4f537"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-ncurses-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-ncurses-native-6ee9d8f0-8e87-5b73-a420-c66a1123b8a6"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "33e05d8267d0f582cbcf44e32ddf7e1ba4c16068"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-ninja-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-ninja-native-69509a4d-51be-58e4-8b69-f8cab885e13f"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "e1ce5b1b16e3ecc718bc9a4fbc7728b38c7b96d1"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-openssl-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-openssl-native-29712d98-dace-570a-bc97-e67cefc5997d"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "55c8f521bb9765629fb11a968e9029625fb0cfc3"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-opkg-utils",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-opkg-utils-f3c24e09-f6ff-5f5c-ab93-a37218f4e1a7"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "be453521dca795db0f77e8dabc22fc3f423be9f0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-perl-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-perl-native-ca4779ec-f2da-58e4-b2de-b4093de4d855"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "9e55b56c708fd66c214a43d1f0604e315b07b078"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-perlcross-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-perlcross-native-2c1f6985-82ff-5005-b2a1-d04a20bf908d"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "49876882b6920580d4d8237b4c9dff8000d03704"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-pixman",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-pixman-8dd3af7d-9029-5987-8724-e5acff8e1270"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "dbe0a6d0c6a625cc2644f6b4c8af18ec84a1a185"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-pkgconfig-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-pkgconfig-native-f02bc6f9-93d3-5de4-bfc1-f49135872105"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "11b8b6ec06e50cb5ce30ad11425bfb0132f67d3d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-popt-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-popt-native-d6bc9bd3-f84d-5754-9a47-bd7439938a9e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "98b1362ec5c66ff109cc871c80281a528a4351d1"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-flit-core-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-flit-core-native-e62949a3-3d60-5850-bc46-6c225875a32c"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d64914d1f3fd362e889ae4fecfec7ad9e575de1a"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-installer-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-installer-native-6a2f8ac3-c10d-5155-9b98-c3e070517152"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "cdf89a58bd37dc3bbd72ddacc5a711113bc6b865"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-mako-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-mako-native-b5c77f4d-4445-55b0-a82f-9ff8aca1821e"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "c1d9566d01d722e028324ba9a134d836c33a7aef"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-native-34cc7325-70e1-5a3a-873a-66b0c1f8d193"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "0c4aed34a7cc75b8a938ced3c1119d60e82f7fd0"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-setuptools-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-setuptools-native-92b01c14-7992-558f-a0a2-15e98166b4eb"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "60ed9e91aeee035c32d697618364983eb5782e3c"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-python3-wheel-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-python3-wheel-native-7a4afc6e-8440-50b2-8bb9-a733e12ef1a6"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "545d5800bf0717e822ed2a124c7d69e98389e76b"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-qemu-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-qemu-native-4a6c275b-748a-5a53-90e0-46381c95e2ff"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "63e06661d24299858fb177dcff16cab613506ba9"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-re2c-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-re2c-native-3edd7bdd-0f75-5db3-9e25-3cea19f3bf75"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d6439e1fdebdeb0f5c36378ade0c8ea849d547bd"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-readline-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-readline-native-acb67a62-4d2f-54be-b07f-6c8716c62e89"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "940bc2cca344e0cd78c6210f98c97edcced808b8"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-rsync-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-rsync-native-639100c3-b666-5884-a1a8-68c8cec5272b"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d65210b6ba6e6191923fdaa50a84be822ce1856d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-sqlite3-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-sqlite3-native-37e6312b-56b6-52d3-af92-d788e79f1637"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "1b20ef436008e6a933e572b80d2e3e9f9506ae6f"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-systemd-systemctl-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-systemd-systemctl-native-2f3d50ae-528c-5654-b3e7-3b2e2de42e45"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "f7597daa20010a9d1ae9fad870a0623dee8f29a4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-texinfo-dummy-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-texinfo-dummy-native-cb9012ff-d8d8-5775-98c1-f58ed5fb9573"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "140e6d8a623e10fe833523356c1c8e4ff303ba26"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-unifdef-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-unifdef-native-33f1ca41-dd34-528b-adf6-32040e8883b4"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fd3a47ae4a80c24a8da79218b954daf7ddda2e3a"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-unzip-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-unzip-native-973eef0c-f234-504f-abce-ad53e966428c"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "57f952c5b6b04c1aba71b273c389ce877622de7d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-linux",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-linux-03796bcc-1e40-51f7-b208-58742d376218"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "842c38d282d2ae499fa3a11211fe42634bbd7f41"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-linux-libuuid",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-linux-libuuid-917cc809-1f9e-5aea-98ec-4c19c576f248"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "22a275e842d4c24c281aeb6b07be3701368b1e0d"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-linux-libuuid-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-linux-libuuid-native-103ab003-39fa-5581-bc0b-bcf14aad3f6c"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "46af7a7e9bfbeaa108c521e62c843d920082d073"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-linux-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-linux-native-ad149639-d77e-5762-95b9-57fc9f43ba41"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d2680c7807aab3a038a1121914ef8059af8d0a7f"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-macros",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-macros-3a788eb9-b380-5e8a-bc7c-01384f914470"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "af1d6107892b55329869cf688fd0bb34bb3b8b2e"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-util-macros-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-util-macros-native-43c8d9e2-ef19-58b7-99b3-dbb4a238088b"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "d35eb684bf494755ccfcc696e7d966128e0267f8"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xcb-proto",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xcb-proto-35d79e75-5027-56d6-a353-67b7a61294ad"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "00ddd3a39cca0e1cd47b6b91b332ee0b2bb2b00e"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xorgproto",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xorgproto-91e7ae24-8759-5341-86ca-f0cd7cffce06"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "6070c23a58a074c3806602cade9ada5fd61201f4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xorgproto-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xorgproto-native-b2d644f2-f879-54f6-a818-8fbf7be4eb7d"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "18d9a31b3560d035c3b455e07cdfff84d04d73b4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xrandr",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xrandr-febddaa0-277c-5164-b8df-779cee2a5fb9"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "fdea3c68118e4ea31956c22e7d902f8822bc7799"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xtrans",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xtrans-ac7aaf7a-b35e-5a71-a974-1e48edec20dd"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "8cda8ccf2314b1c8dcd780072c5f21d554050c65"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-xz-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-xz-native-fb9b6d7a-1472-5337-888f-d4bf9e719144"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "91c5fc5d145506cbd11f072e53002bc581522811"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-zlib",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-zlib-5b14b6f4-7132-524f-8cee-cdebd6df7ce5"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "c5f7149aeb4f18cb9dc81986b2461e49c11eb741"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-zlib-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-zlib-native-1fc15e1f-ff2b-539e-861e-33e08efd56d2"
+        },
+        {
+            "checksum": {
+                "algorithm": "SHA1",
+                "checksumValue": "0ac85f4902d9c359e042f9f9a47a7ad0bd935df4"
+            },
+            "externalDocumentId": "DocumentRef-dependency-recipe-zstd-native",
+            "spdxDocument": "http://spdx.org/spdxdoc/recipe-zstd-native-ccc925e5-9b0f-5106-b595-cbfe0152bf06"
+        }
+    ],
+    "name": "recipe-cairo",
+    "packages": [
+        {
+            "SPDXID": "SPDXRef-Recipe-cairo",
+            "copyrightText": "NOASSERTION",
+            "description": "Cairo is a multi-platform library providing anti-aliased vector-based rendering for multiple target backends. Paths consist of line segments and cubic splines and can be rendered at any width with various join and cap styles. All colors may be specified with optional translucence (opacity/alpha) and combined using the extended Porter/Duff compositing algebra as found in the X Render Extension.",
+            "downloadLocation": "http://cairographics.org/releases/cairo-1.16.0.tar.xz",
+            "externalRefs": [
+                {
+                    "referenceCategory": "SECURITY",
+                    "referenceLocator": "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
+                    "referenceType": "http://spdx.org/rdf/references/cpe23Type"
+                }
+            ],
+            "homepage": "http://cairographics.org",
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": "( MPL-1.1 OR LGPL-2.1-only ) AND GPL-3.0-or-later",
+            "licenseInfoFromFiles": [
+                "NOASSERTION"
+            ],
+            "name": "cairo",
+            "sourceInfo": "CVEs fixed: CVE-2020-35492 CVE-2019-6461 CVE-2018-19876 CVE-2019-6462 CVE-2017-7475",
+            "summary": "The Cairo 2D vector graphics library",
+            "supplier": "Organization: OpenEmbedded ()",
+            "versionInfo": "1.16.0"
+        }
+    ],
+    "relationships": [
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "DESCRIBES",
+            "spdxElementId": "SPDXRef-DOCUMENT"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-acl-native:SPDXRef-Recipe-acl-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-attr-native:SPDXRef-Recipe-attr-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-autoconf-archive:SPDXRef-Recipe-autoconf-archive"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-autoconf-archive-native:SPDXRef-Recipe-autoconf-archive-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-autoconf-native:SPDXRef-Recipe-autoconf-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-automake-native:SPDXRef-Recipe-automake-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-bash-completion:SPDXRef-Recipe-bash-completion"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-binutils-cross-arm:SPDXRef-Recipe-binutils-cross-arm"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-bison-native:SPDXRef-Recipe-bison-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-bzip2:SPDXRef-Recipe-bzip2"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-bzip2-native:SPDXRef-Recipe-bzip2-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-chrpath-native:SPDXRef-Recipe-chrpath-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-cmake-native:SPDXRef-Recipe-cmake-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-cracklib:SPDXRef-Recipe-cracklib"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-cracklib-native:SPDXRef-Recipe-cracklib-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-curl-native:SPDXRef-Recipe-curl-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-expat:SPDXRef-Recipe-expat"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-flex:SPDXRef-Recipe-flex"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-flex-native:SPDXRef-Recipe-flex-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-fontconfig:SPDXRef-Recipe-fontconfig"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-freetype:SPDXRef-Recipe-freetype"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gcc-cross-arm:SPDXRef-Recipe-gcc-cross-arm"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gcc-runtime:SPDXRef-Recipe-gcc-runtime"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gdbm-native:SPDXRef-Recipe-gdbm-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gettext-minimal-native:SPDXRef-Recipe-gettext-minimal-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gettext-native:SPDXRef-Recipe-gettext-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-glib-2.0:SPDXRef-Recipe-glib-2.0"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-glib-2.0-native:SPDXRef-Recipe-glib-2.0-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-glibc:SPDXRef-Recipe-glibc"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gmp-native:SPDXRef-Recipe-gmp-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gnu-config-native:SPDXRef-Recipe-gnu-config-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gperf-native:SPDXRef-Recipe-gperf-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-gtk-doc-native:SPDXRef-Recipe-gtk-doc-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libcap-ng:SPDXRef-Recipe-libcap-ng"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libcap-ng-native:SPDXRef-Recipe-libcap-ng-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libdrm:SPDXRef-Recipe-libdrm"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libffi:SPDXRef-Recipe-libffi"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libffi-native:SPDXRef-Recipe-libffi-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libgcc:SPDXRef-Recipe-libgcc"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libgcc-initial:SPDXRef-Recipe-libgcc-initial"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libice:SPDXRef-Recipe-libice"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libmpc-native:SPDXRef-Recipe-libmpc-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libnsl2-native:SPDXRef-Recipe-libnsl2-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpam:SPDXRef-Recipe-libpam"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpciaccess:SPDXRef-Recipe-libpciaccess"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpcre:SPDXRef-Recipe-libpcre"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpcre-native:SPDXRef-Recipe-libpcre-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpcre2-native:SPDXRef-Recipe-libpcre2-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpng:SPDXRef-Recipe-libpng"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libpthread-stubs:SPDXRef-Recipe-libpthread-stubs"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libsm:SPDXRef-Recipe-libsm"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libtirpc-native:SPDXRef-Recipe-libtirpc-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libtool-cross:SPDXRef-Recipe-libtool-cross"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libtool-native:SPDXRef-Recipe-libtool-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libx11:SPDXRef-Recipe-libx11"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxau:SPDXRef-Recipe-libxau"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxcb:SPDXRef-Recipe-libxcb"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxcrypt:SPDXRef-Recipe-libxcrypt"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxdamage:SPDXRef-Recipe-libxdamage"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxdmcp:SPDXRef-Recipe-libxdmcp"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxext:SPDXRef-Recipe-libxext"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxfixes:SPDXRef-Recipe-libxfixes"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxml2-native:SPDXRef-Recipe-libxml2-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxrandr:SPDXRef-Recipe-libxrandr"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxrender:SPDXRef-Recipe-libxrender"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxshmfence:SPDXRef-Recipe-libxshmfence"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-libxxf86vm:SPDXRef-Recipe-libxxf86vm"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-linux-libc-headers:SPDXRef-Recipe-linux-libc-headers"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-m4-native:SPDXRef-Recipe-m4-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-make-native:SPDXRef-Recipe-make-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-makedepend-native:SPDXRef-Recipe-makedepend-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-mesa:SPDXRef-Recipe-mesa"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-meson-native:SPDXRef-Recipe-meson-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-mpfr-native:SPDXRef-Recipe-mpfr-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-ncurses:SPDXRef-Recipe-ncurses"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-ncurses-native:SPDXRef-Recipe-ncurses-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-ninja-native:SPDXRef-Recipe-ninja-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-openssl-native:SPDXRef-Recipe-openssl-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-opkg-utils:SPDXRef-Recipe-opkg-utils"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-perl-native:SPDXRef-Recipe-perl-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-perlcross-native:SPDXRef-Recipe-perlcross-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-pixman:SPDXRef-Recipe-pixman"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-pkgconfig-native:SPDXRef-Recipe-pkgconfig-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-popt-native:SPDXRef-Recipe-popt-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-flit-core-native:SPDXRef-Recipe-python3-flit-core-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-installer-native:SPDXRef-Recipe-python3-installer-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-mako-native:SPDXRef-Recipe-python3-mako-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-native:SPDXRef-Recipe-python3-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-setuptools-native:SPDXRef-Recipe-python3-setuptools-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-python3-wheel-native:SPDXRef-Recipe-python3-wheel-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-qemu-native:SPDXRef-Recipe-qemu-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-re2c-native:SPDXRef-Recipe-re2c-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-readline-native:SPDXRef-Recipe-readline-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-rsync-native:SPDXRef-Recipe-rsync-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-sqlite3-native:SPDXRef-Recipe-sqlite3-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-systemd-systemctl-native:SPDXRef-Recipe-systemd-systemctl-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-texinfo-dummy-native:SPDXRef-Recipe-texinfo-dummy-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-unifdef-native:SPDXRef-Recipe-unifdef-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-unzip-native:SPDXRef-Recipe-unzip-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-linux:SPDXRef-Recipe-util-linux"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-linux-libuuid:SPDXRef-Recipe-util-linux-libuuid"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-linux-libuuid-native:SPDXRef-Recipe-util-linux-libuuid-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-linux-native:SPDXRef-Recipe-util-linux-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-macros:SPDXRef-Recipe-util-macros"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-util-macros-native:SPDXRef-Recipe-util-macros-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xcb-proto:SPDXRef-Recipe-xcb-proto"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xorgproto:SPDXRef-Recipe-xorgproto"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xorgproto-native:SPDXRef-Recipe-xorgproto-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xrandr:SPDXRef-Recipe-xrandr"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xtrans:SPDXRef-Recipe-xtrans"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-xz-native:SPDXRef-Recipe-xz-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-zlib:SPDXRef-Recipe-zlib"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-zlib-native:SPDXRef-Recipe-zlib-native"
+        },
+        {
+            "relatedSpdxElement": "SPDXRef-Recipe-cairo",
+            "relationshipType": "BUILD_DEPENDENCY_OF",
+            "spdxElementId": "DocumentRef-dependency-recipe-zstd-native:SPDXRef-Recipe-zstd-native"
+        }
+    ],
+    "spdxVersion": "SPDX-2.2"
+}
