@@ -39,6 +39,9 @@ FLASK_RUN_HOST=0.0.0.0
 # Recommended for Yocto as it tend to generate non-SPDX files in SPDX folder
 IGNORE_PARSING_ERRORS='false'
 
+# Enable / Disable output logs from docker
+QUIET_MODE='false'
+
 # PRODUCT_NAME=""
 # PRODUCT_VERSION="1.0.0"
 # COMPANY_NAME="Savoir-faire Linux"

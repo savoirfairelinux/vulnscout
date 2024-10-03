@@ -83,7 +83,7 @@ function full_scan_steps() {
 
         copy_spdx_files $SPDX_INPUTS_PATH $SPDX_TMP_PATH
 
-        set_status "2" "Merging SPDX files"
+        set_status "2" "Merging $((SPDX_FILE_COUNTER-1)) SPDX files"
         INPUT_SPDX_FOLDER="$SPDX_TMP_PATH" OUTPUT_SPDX_FILE="$TMP_PATH/merged.spdx.json" python3 -m src.bin.spdx_merge
     else
         set_status "2" "No SPDX files found, skipping"
@@ -113,13 +113,14 @@ function full_scan_steps() {
         fi
     fi
 
-    set_status "4" "Scanning with Grype"
+    set_status "4" "Scanning SPDX with Grype"
     grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
+        set_status "4" "Scanning CDX with Grype"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
     fi
 
-    set_status "5" "Scanning with OSV (WIP)"
+    set_status "5" "Scanning CDX with OSV (WIP)"
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
         osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
         osv-scanner --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
@@ -133,7 +134,7 @@ function full_scan_steps() {
 
         copy_yocto_cve_files $YOCTO_CVE_INPUTS_PATH $YOCTO_CVE_TMP_PATH
 
-        set_status "6" "Found $(cd $YOCTO_CVE_TMP_PATH && find -- *.json | wc -l) CVE files issued by Yocto CVE check"
+        set_status "6" "Found $((YOCTO_CVE_FILE_COUNTER-1)) CVE files issued by Yocto CVE check"
     else
         set_status "6" "No CVE check result found from Yocto"
     fi
