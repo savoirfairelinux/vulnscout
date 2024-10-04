@@ -1,4 +1,4 @@
-import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row } from '@tanstack/react-table'
+import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
@@ -14,6 +14,8 @@ type Props<DataType> = {
     fuseKeys?: string[];
     estimateRowHeight?: number;
     tableHeight?: string;
+    selected?: RowSelectionState;
+    updateSelected?: OnChangeFn<RowSelectionState>;
 };
 /* tslint:enable:no-explicit-any */
 
@@ -23,7 +25,9 @@ function TableGeneric<DataType> ({
     search,
     fuseKeys = ['id'],
     estimateRowHeight = 66,
-    tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)'
+    tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
+    selected = undefined,
+    updateSelected = () => {}
 }: Readonly<Props<DataType>>) {
 
     const fuse = useMemo(() => {
@@ -50,8 +54,12 @@ function TableGeneric<DataType> ({
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
+        enableRowSelection: selected !== undefined,
+        enableMultiRowSelection: selected !== undefined,
         // @ts-ignore
         getRowId: row => row?.id,
+        onRowSelectionChange: updateSelected,
+        state: { rowSelection: selected ?? {} }
     });
 
     const { rows } = table.getRowModel()

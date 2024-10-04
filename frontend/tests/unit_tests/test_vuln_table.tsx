@@ -1,3 +1,6 @@
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
 import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
@@ -104,6 +107,10 @@ describe('Packages Table', () => {
     Element.prototype.getBoundingClientRect = jest.fn(function () {
         return getDOMRect(500, 500)
     })
+
+    beforeEach(() => {
+        fetchMock.resetMocks();
+    });
 
     test('render headers with empty array', async () => {
         // ARRANGE
@@ -382,5 +389,74 @@ describe('Packages Table', () => {
 
         const selected_checkbox = await screen.getByTitle(/unselect/i);
         expect(selected_checkbox).toBeInTheDocument();
+
+        const bulkeditbar = await screen.getByText(/selected vulnerabilities: 1/i);
+        expect(bulkeditbar).toBeInTheDocument();
+
+        const reset_btn = await screen.getByRole('button', {name: /reset selection/i});
+        expect(reset_btn).toBeInTheDocument();
+        await user.click(reset_btn);
+
+        const selecteds = await screen.queryAllByTitle(/unselect/i);
+        expect(selecteds.length).toBe(0);
+    })
+
+    test('select and change status', async () => {
+        const thisFetch = fetchMock.mockImplementation(() =>
+            Promise.resolve({
+                json: () => Promise.resolve({
+                    status: 'success',
+                    assessment: {
+                        id: '000',
+                        vuln_id: 'CVE-0000-00000',
+                        status: 'affected',
+                        timestamp: "2024-01-01T00:00:00Z"
+                    }
+                }),
+                status: 200
+            } as Response)
+        );
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const select_all = await screen.getByTitle(/select all/i);
+        expect(select_all).toBeInTheDocument();
+
+        await user.click(select_all)
+
+        const edit_status_btn = await screen.getByRole('button', {name: /Change status/i});
+        expect(edit_status_btn).toBeInTheDocument();
+        await user.click(edit_status_btn);
+
+        // StatusEditor testing, taken from test_vuln_modal
+        let selects = await screen.getAllByRole('combobox');
+        const selectSource = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        expect(selectSource).toBeDefined();
+        expect(selectSource).toBeInTheDocument();
+        const inputStatus = await screen.getByPlaceholderText(/notes/i);
+        const inputWorkaround = await screen.getByPlaceholderText(/workaround/i);
+        const btn = await screen.getByRole('button', {name: /add assessment/i});
+
+        await user.selectOptions(selectSource, 'not_affected');
+
+        // new checkbox arrived
+        selects = await screen.getAllByRole('combobox');
+        const selectjustification = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_justification')) as HTMLElement;
+        expect(selectjustification).toBeDefined();
+        expect(selectjustification).toBeInTheDocument();
+
+        const inputJustification = await screen.getByPlaceholderText(/vulnerability is not exploitable/i);
+        expect(inputJustification).toBeDefined();
+        expect(inputJustification).toBeInTheDocument();
+
+        await user.selectOptions(selectjustification, 'inline_mitigations_already_exist');
+        await user.type(inputStatus, 'patched by disabling configuration X');
+        await user.type(inputWorkaround, 'feature Y is safe when configuration X is disabled (from source)');
+        await user.click(btn);
+
+        // ASSERT
+        expect(thisFetch).toHaveBeenCalledTimes(2);
     })
 });
