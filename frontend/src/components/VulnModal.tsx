@@ -7,6 +7,8 @@ import { useState } from "react";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import SeverityTag from "./SeverityTag";
+import StatusEditor from "./StatusEditor";
+import type { PostAssessment } from './StatusEditor';
 import Iso8601Duration from '../handlers/iso8601duration';
 
 type Props = {
@@ -15,16 +17,6 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
-
-type PostAssessment = {
-    vuln_id: string,
-    packages: string[],
-    status: string,
-    justification?: string,
-    impact_statement?: string,
-    status_notes?: string,
-    workaround?: string
-}
 
 const dt_options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
@@ -42,32 +34,11 @@ function VulnModal(props: Readonly<Props>) {
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
     const [newPessimistic, setNewPessimistic] = useState("");
-    const [newStatus, setNewStatus] = useState("under_investigation");
-    const [newJustification, setNewJustification] = useState("none");
-    const [newStatusNotes, setNewStatusNotes] = useState("");
-    const [newWorkaround, setNewWorkaround] = useState("");
-    const [newImpact, setNewImpact] = useState("");
 
 
-    const addAssessment = async () => {
-        if (newStatus == '' || newJustification == '')
-            return;
-        let content: PostAssessment = {
-            vuln_id: vuln.id,
-            packages: vuln.packages,
-            status: newStatus,
-            impact_statement: newStatus == "not_affected" ? newImpact : undefined,
-            status_notes: newStatusNotes,
-            workaround: newWorkaround
-        }
-        if (newStatus == "not_affected") {
-            if (newJustification != 'none') {
-                content.justification = newJustification;
-            } else {
-                alert("You must provide a justification for this status");
-                return;
-            }
-        }
+    const addAssessment = async (content: PostAssessment) => {
+        content.vuln_id = vuln.id
+        content.packages = vuln.packages
 
         const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
             method: 'POST',
@@ -307,64 +278,7 @@ function VulnModal(props: Readonly<Props>) {
                             <li className="ms-4 text-white">
                                 <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                 <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <h3 className="m-1">
-                                    Status:
-                                    <select
-                                        onChange={(event) => setNewStatus(event.target.value)}
-                                        className="p-1 px-2 bg-gray-800 mr-4"
-                                        name="new_assessment_status"
-                                    >
-                                        <option value="under_investigation">Pending Analysis</option>
-                                        <option value="affected">Affected / Exploitable</option>
-                                        <option value="fixed">Fixed / Patched</option>
-                                        <option value="not_affected">Not applicable</option>
-                                        <option value="false_positive">Faux positif</option>
-                                    </select>
-                                    {newStatus == "not_affected" && <>
-                                        Justification:
-                                        <select
-                                            onChange={(event) => setNewJustification(event.target.value)}
-                                            className="p-1 px-2 bg-gray-800"
-                                            name="new_assessment_justification"
-                                        >
-                                            <option value="none">No justification</option>
-                                            <option value="component_not_present">Component not present</option>
-                                            <option value="vulnerable_code_not_present">vulnerable code not present</option>
-                                            <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
-                                            <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
-                                            <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
-                                            <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
-                                        </select>
-                                    </>}
-                                </h3>
-                                {(newStatus == "not_affected" || newStatus == "false_positive") && <>
-                                    <input
-                                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewImpact(event.target.value)}
-                                        name="new_assessment_impact"
-                                        className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
-                                        type="text"
-                                        placeholder="why this vulnerability is not exploitable ?"
-                                    /><br/>
-                                </>}
-                                <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewStatusNotes(event.target.value)}
-                                    name="new_assessment_status_notes"
-                                    className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
-                                    type="text"
-                                    placeholder="Free text notes about your review, details, actions taken, ..."
-                                /><br/>
-                                <input
-                                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewWorkaround(event.target.value)}
-                                    name="new_assessment_workaround"
-                                    className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white"
-                                    type="text"
-                                    placeholder="Describe workaround here if available"
-                                /><br/>
-                                <button
-                                    onClick={addAssessment}
-                                    type="button"
-                                    className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-                                >Add assessment</button>
+                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} />
                             </li>
                         </ol>
                     </div>
