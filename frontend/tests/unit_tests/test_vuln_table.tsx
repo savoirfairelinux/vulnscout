@@ -347,4 +347,40 @@ describe('Packages Table', () => {
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_xyz).toBeInTheDocument();
     })
+
+    test('select all in table and unselecting', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const select_all = await screen.getByTitle(/select all/i);
+        expect(select_all).toBeInTheDocument();
+
+        await user.click(select_all)
+        expect(select_all).toBeChecked();
+
+        const uniques_selections = await screen.getAllByTitle(/unselect/i);
+        expect(uniques_selections.length).toBeGreaterThanOrEqual(1);
+        uniques_selections.forEach((el) => expect(el).toBeChecked());
+
+        await user.click(uniques_selections[0])
+
+        expect(select_all).not.toBeChecked();
+    })
+
+    test('select using ctrl+click and reset selection', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        expect(id_col).toBeInTheDocument();
+
+        await user.keyboard('[ControlLeft>]')
+        await user.click(id_col);
+        await user.keyboard('[/ControlLeft]')
+
+        const selected_checkbox = await screen.getByTitle(/unselect/i);
+        expect(selected_checkbox).toBeInTheDocument();
+    })
 });
