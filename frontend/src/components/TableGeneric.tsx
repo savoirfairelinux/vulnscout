@@ -49,7 +49,9 @@ function TableGeneric<DataType> ({
         data: filteredData,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
-        getFilteredRowModel: getFilteredRowModel()
+        getFilteredRowModel: getFilteredRowModel(),
+        // @ts-ignore
+        getRowId: row => row?.id,
     });
 
     const { rows } = table.getRowModel()
@@ -67,7 +69,15 @@ function TableGeneric<DataType> ({
             ? element => element?.getBoundingClientRect().height
             : undefined,
         overscan: 5,
-      })
+    })
+
+    function ctrl_click (event: React.MouseEvent, row: Row<DataType>) {
+        if (event.ctrlKey || event.metaKey) {
+            row.getToggleSelectedHandler()(event)
+        }
+    }
+
+
 
     return (
         <div className="relative overflow-auto" style={{height: tableHeight}} ref={tableContainerRef}>
@@ -116,7 +126,11 @@ function TableGeneric<DataType> ({
                             data-index={virtualRow.index} //needed for dynamic row height measurement
                             ref={node => rowVirtualizer.measureElement(node)} //measure dynamic row height
                             key={row.id}
-                            className="flex absolute w-full bg-slate-600"
+                            className={[
+                                "flex absolute w-full",
+                                row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600'
+                            ].join(' ')}
+                            onClick={(e) => ctrl_click(e, row)}
                             style={{
                                 transform: `translateY(${virtualRow.start}px)`, //this should always be a `style` as it changes on scroll
                             }}
@@ -146,7 +160,7 @@ function TableGeneric<DataType> ({
                         {footerGroup.headers.map(header => (
                             <th
                                 key={header.id}
-                                className="p-2 border border-slate-600 flex-auto"
+                                className="px-4 py-2 border border-slate-600 flex-auto"
                                 style={{width: header.getSize()}}
                             >
                             {header.isPlaceholder

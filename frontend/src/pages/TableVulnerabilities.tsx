@@ -1,6 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
-import { createColumnHelper, SortingFn } from '@tanstack/react-table'
+import { createColumnHelper, SortingFn, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
@@ -57,6 +57,38 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Vulnerability>()
         return [
+            {
+                id: 'select-checkbox',
+                header: ({ table }: {table: Table<Vulnerability>}) => (
+                    <div className="w-full text-center">
+                        <input
+                            type="checkbox"
+                            title={table.getIsAllRowsSelected() ? "Unselect all" : "Select all"}
+                            checked={table.getIsAllRowsSelected()}
+                            onChange={table.getToggleAllRowsSelectedHandler()}
+                        />
+                    </div>
+                ),
+                cell: ({ row }: {row: Row<Vulnerability>}) => (
+                    <div className="w-full text-center">
+                        <input
+                            type="checkbox"
+                            title={row.getIsSelected() ? "Unselect" : "Select"}
+                            checked={row.getIsSelected()}
+                            disabled={!row.getCanSelect()}
+                            onChange={row.getToggleSelectedHandler()}
+                        />
+                    </div>
+                ),
+                footer: ({ table }: {table: Table<Vulnerability>}) => (
+                    <div className="w-full text-center">
+                        {table.getSelectedRowModel().rows.length || ''}
+                    </div>
+                ),
+                minSize: 10,
+                size: 10,
+                maxSize: 50
+            },
             columnHelper.accessor('id', {
                 header: 'ID',
                 cell: info => info.getValue(),
@@ -110,7 +142,9 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 >
                         edit
                 </button>,
-                enableSorting: false
+                enableSorting: false,
+                minSize: 50,
+                size: 50
             })
         ]
     }, []);
