@@ -12,9 +12,10 @@ type PostAssessment = {
 
 type Props = {
     onAddAssessment: (data: PostAssessment) => void;
+    progressBar?: number;
 }
 
-function StatusEditor ({onAddAssessment}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
     const [status, setStatus] = useState("under_investigation");
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
@@ -96,6 +97,10 @@ function StatusEditor ({onAddAssessment}: Readonly<Props>) {
             type="button"
             className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
         >Add assessment</button>
+
+        {progressBar !== undefined && <div className="p-4 pb-1 w-full">
+             <progress max={1} value={progressBar} className="w-full h-2"></progress>
+        </div>}
     </>);
 }
 

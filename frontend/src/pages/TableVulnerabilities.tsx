@@ -1,11 +1,12 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
-import { createColumnHelper, SortingFn, Row, Table } from '@tanstack/react-table'
+import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
+import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import { escape } from "lodash-es";
 
@@ -38,6 +39,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
     const [hideIgnored, setHideIgnored] = useState(false);
     const [hideActive, setHideActive] = useState(false);
     const [hidePending, setHidePending] = useState(false);
+    const [selectedRows, setSelectedRows] = useState<RowSelectionState>({})
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -160,6 +162,10 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
         })
     }, [vulnerabilities, filterSource, hideIgnored, hidePatched, hideActive, hidePending])
 
+    const selectedVulns = useMemo(() => {
+        return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
+    }, [selectedRows])
+
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
@@ -191,7 +197,28 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             </label>
         </div>
 
-        <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredvulnerabilities} estimateRowHeight={66} />
+
+        <MultiEditBar
+            vulnerabilities={vulnerabilities}
+            selectedVulns={selectedVulns}
+            resetVulns={() => setSelectedRows({})}
+            appendAssessment={appendAssessment}
+        />
+
+        <TableGeneric
+            fuseKeys={fuseKeys}
+            search={search}
+            columns={columns}
+            tableHeight={
+                selectedVulns.length >= 1 ?
+                'calc(100dvh - 44px - 64px - 48px - 16px - 48px - 16px)' :
+                'calc(100dvh - 44px - 64px - 48px - 16px)'
+            }
+            data={filteredvulnerabilities}
+            estimateRowHeight={66}
+            selected={selectedRows}
+            updateSelected={setSelectedRows}
+        />
 
         {modalVuln != undefined && <VulnModal vuln={modalVuln} onClose={() => setModalVuln(undefined)} appendAssessment={appendAssessment} patchVuln={patchVuln}></VulnModal>}
     </>)
