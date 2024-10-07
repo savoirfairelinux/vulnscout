@@ -7,12 +7,14 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 
 from ..views.spdx import SPDX
+from ..views.fast_spdx import FastSPDX
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
 import glob
 import os
+import json
 
 INPUT_SPDX_FOLDER = "/scan/tmp/spdx"
 OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
@@ -20,13 +22,23 @@ OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
 
 def read_inputs(controllers):
     """Read from folder."""
+    use_fastspdx = False
+    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
+        use_fastspdx = True
+        verbose("spdx_merge: Using FastSPDX parser")
+
     spdx = SPDX(controllers)
+    fastspdx = FastSPDX(controllers)
 
     for file in glob.glob(f"{os.getenv('INPUT_SPDX_FOLDER', INPUT_SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"spdx_merge: Merging {file}")
-            spdx.load_from_file(file)
-            spdx.parse_and_merge()
+            if use_fastspdx:
+                with open(file, "r") as f:
+                    fastspdx.parse_from_dict(json.loads(f.read()))
+            else:
+                spdx.load_from_file(file)
+                spdx.parse_and_merge()
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
                 print(f"Error parsing SPDX file: {file} {e}")
