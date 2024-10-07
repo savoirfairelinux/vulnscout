@@ -2,22 +2,26 @@ import { useState } from "react";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
+import TimeEstimateEditor from "./TimeEstimateEditor";
+import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
+import Iso8601Duration from '../handlers/iso8601duration';
 
 type Props = {
     vulnerabilities: Vulnerability[];
     selectedVulns: string[];
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
+    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln} : Readonly<Props>) {
 
-    const [panelStatus, setPanelStatus] = useState<boolean>(false)
+    const [panelOpened, setPanelOpened] = useState<number>(0)
     const [progressBar, setProgressBar] = useState<number|undefined>(undefined)
 
     if (selectedVulns.length == 0) {
-        if (panelStatus) setPanelStatus(false)
+        if (panelOpened) setPanelOpened(0)
         if (progressBar !== undefined) setProgressBar(undefined)
     }
 
@@ -71,25 +75,100 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         }
         assessments.forEach(appendAssessment)
         setProgressBar(undefined)
-        setPanelStatus(false)
+        setPanelOpened(0)
     };
+
+    function vuln_ids_to_vulns () {
+        const vulns: {[key: string]: Vulnerability} = {}
+        for (const vuln of vulnerabilities) {
+            if (selectedVulns.includes(vuln.id)) {
+                vulns[vuln.id] = vuln
+            }
+        }
+        return vulns
+    }
+
+    const saveTimeEstimation = async (content: PostTimeEstimate) => {
+        const vulns = vuln_ids_to_vulns();
+        const patchs: Vulnerability[] = [];
+        const errors = []
+        let index = 0
+        setProgressBar(0)
+
+        for (const vuln_id of selectedVulns) {
+            try {
+                const vuln = vulns[vuln_id];
+                const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+                    method: 'PATCH',
+                    mode: 'cors',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({effort: {
+                        optimistic: content.optimistic.formatAsIso8601(),
+                        likely: content.likely.formatAsIso8601(),
+                        pessimistic: content.pessimistic.formatAsIso8601()
+                    }})
+                })
+
+                if (response.status == 200) {
+                    const data = await response.json()
+                    if (typeof data?.effort?.optimistic === "string")
+                        vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
+                    if (typeof data?.effort?.likely === "string")
+                        vuln.effort.likely = new Iso8601Duration(data.effort.likely);
+                    if (typeof data?.effort?.pessimistic === "string")
+                        vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+
+                    patchs.push(vuln);
+                } else {
+                    errors.push(Number(response?.status))
+                }
+            }
+            catch (e) {
+                alert(`Failed to save time estimate: ${e}`);
+            }
+
+            index++
+            setProgressBar(index / selectedVulns.length)
+        }
+
+        if (errors.length >= 1) {
+            alert(`Failed to add assessment: HTTP code ${errors.join(', ')}`);
+        }
+        patchs.forEach((vuln: Vulnerability) => patchVuln(vuln.id, vuln))
+        setProgressBar(undefined)
+        setPanelOpened(0)
+    }
 
     return (<>
         {selectedVulns.length >= 1 && <>
-            {panelStatus && <div className="absolute top-0 left-0 right-0 bottom-0 z-30 bg-black/40"></div>}
+            {panelOpened > 0 && <div className="absolute top-0 left-0 right-0 bottom-0 z-30 bg-black/40"></div>}
 
             <div className="relative mb-4 p-2 z-40 bg-slate-600/70 text-white w-full flex flex-row items-center gap-2">
                 <div>Selected vulnerabilities: {selectedVulns.length}</div>
                 <button className="bg-sky-900 p-1 px-2 mr-4" onClick={resetVulns}>Reset selection</button>
 
-                <button className="bg-sky-900 p-1 px-2" onClick={() => setPanelStatus(!panelStatus)}>Change status</button>
+                <button className="bg-sky-900 p-1 px-2" onClick={() => setPanelOpened(panelOpened == 1 ? 0 : 1)}>Change status</button>
+                <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => setPanelOpened(panelOpened == 2 ? 0 : 2)}>Change estimated time</button>
             </div>
 
             <div className={[
-                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-500 top-48 left-32 w-1/2',
-                panelStatus ? 'block' : 'hidden'
+                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
+                panelOpened == 1 ? 'block' : 'hidden'
             ].join(' ')}>
                 <StatusEditor onAddAssessment={(data) => addAssessment(data)} progressBar={progressBar} />
+            </div>
+
+            <div className={[
+                'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
+                panelOpened == 2 ? 'block' : 'hidden'
+            ].join(' ')}>
+                <TimeEstimateEditor
+                    onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
+                    progressBar={progressBar}
+                    actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
+                />
             </div>
         </>}
     </>);

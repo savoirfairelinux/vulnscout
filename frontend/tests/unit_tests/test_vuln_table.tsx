@@ -459,4 +459,50 @@ describe('Packages Table', () => {
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(2);
     })
+
+    test('select and change time estimate', async () => {
+        const thisFetch = fetchMock.mockImplementation(() =>
+            Promise.resolve({
+                json: () => Promise.resolve({
+                    id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    effort: {
+                        optimistic: 'PT5H',
+                        likely: 'P2DT4H',
+                        pessimistic: 'P2W3D'
+                    },
+                    responses: []
+                }),
+                text: () => Promise.resolve('Text only usefull when error happens'),
+                status: 200
+            } as Response)
+        );
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const select_all = await screen.getByTitle(/select all/i);
+        expect(select_all).toBeInTheDocument();
+
+        await user.click(select_all)
+
+        const edit_time_btn = await screen.getByRole('button', {name: /Change estimated time/i});
+        expect(edit_time_btn).toBeInTheDocument();
+        await user.click(edit_time_btn);
+
+        // TimeEstimateEditor testing, taken from test_vuln_modal
+        const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+        const likely = await screen.getByPlaceholderText(/balanced estimate/i);
+        const pessimistic = await screen.getByPlaceholderText(/longest estimate/i);
+        const btn = await screen.getByText(/save estimation/i);
+
+        await user.type(optimistic, '5h');
+        await user.type(likely, '2.5');
+        await user.type(pessimistic, '2w 3d');
+        await user.click(btn);
+
+        // ASSERT
+        expect(thisFetch).toHaveBeenCalledTimes(2);
+    })
 });
