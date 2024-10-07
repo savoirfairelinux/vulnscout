@@ -13,6 +13,7 @@ from ..views.openvex import OpenVex
 from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
+from ..views.fast_spdx import FastSPDX
 from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -88,6 +89,7 @@ def read_inputs(controllers):
     timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
     spdx = SPDX(controllers)
+    fastspdx = FastSPDX(controllers)
     templates = Templates(controllers)
 
     verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
@@ -125,11 +127,20 @@ def read_inputs(controllers):
             print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
                   + " CycloneDX files, this mean there was an issue when analysing them.")
 
+    use_fastspdx = False
+    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
+        use_fastspdx = True
+        verbose("spdx_merge: Using FastSPDX parser")
+
     for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"merger_ci: Reading {file}")
-            spdx.load_from_file(file)
-            spdx.parse_and_merge()
+            if use_fastspdx:
+                with open(file, "r") as f:
+                    fastspdx.parse_from_dict(json.loads(f.read()))
+            else:
+                spdx.load_from_file(file)
+                spdx.parse_and_merge()
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
                 print(f"Error parsing SPDX file: {file} {e}")
