@@ -203,6 +203,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             selectedVulns={selectedVulns}
             resetVulns={() => setSelectedRows({})}
             appendAssessment={appendAssessment}
+            patchVuln={patchVuln}
         />
 
         <TableGeneric
@@ -220,7 +221,12 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             updateSelected={setSelectedRows}
         />
 
-        {modalVuln != undefined && <VulnModal vuln={modalVuln} onClose={() => setModalVuln(undefined)} appendAssessment={appendAssessment} patchVuln={patchVuln}></VulnModal>}
+        {modalVuln != undefined && <VulnModal
+            vuln={modalVuln}
+            onClose={() => setModalVuln(undefined)}
+            appendAssessment={appendAssessment}
+            patchVuln={patchVuln}
+        ></VulnModal>}
     </>)
 }
 
