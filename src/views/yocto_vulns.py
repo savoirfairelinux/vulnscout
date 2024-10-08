@@ -40,7 +40,7 @@ class YoctoVulns:
                 if "scorev3" in issue and issue["scorev3"] != "0.0":
                     cvss_item = CVSS(
                         "3.1",
-                        "",
+                        f"CVSS:3.1/AV:{issue['vector']}" if "vector" in issue else "",
                         "unknown",
                         float(issue.get("scorev3")),
                         0.0,
@@ -50,7 +50,7 @@ class YoctoVulns:
                 if "scorev2" in issue and issue["scorev2"] != "0.0":
                     cvss_item = CVSS(
                         "2.0",
-                        "",
+                        f"AV:{issue['vector']}" if "vector" in issue else "",
                         "unknown",
                         float(issue.get("scorev2")),
                         0.0,

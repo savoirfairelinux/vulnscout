@@ -7,6 +7,7 @@ type CVSS = {
     severity: string;
     version: string;
     vector_string: string;
+    attack_vector?: string;
     base_score: number;
     exploitability_score: number;
     impact_score: number;
@@ -61,13 +62,20 @@ const asCVSS = (data: any): CVSS | [] => {
         severity: "unknown",
         version: data.version,
         vector_string: "",
+        attack_vector: undefined,
         base_score: Number(data.base_score),
         exploitability_score: 0,
         impact_score: 0,
     };
     if (typeof data?.author === "string") score.author = data.author
     if (typeof data?.severity === "string") score.severity = data.severity
-    if (typeof data?.vector_string === "string") score.vector_string = data.vector_string
+    if (typeof data?.vector_string === "string") {
+        score.vector_string = data.vector_string
+        if (score.vector_string.includes("AV:N")) score.attack_vector = "NETWORK"
+        if (score.vector_string.includes("AV:A")) score.attack_vector = "ADJACENT"
+        if (score.vector_string.includes("AV:L")) score.attack_vector = "LOCAL"
+        if (score.vector_string.includes("AV:P")) score.attack_vector = "PHYSICAL"
+    }
     if (typeof data?.exploitability_score === "number") score.exploitability_score = Number(data.exploitability_score)
     if (typeof data?.impact_score === "number") score.impact_score = Number(data.impact_score)
     return score

@@ -28,6 +28,19 @@ const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return indexA - indexB
 }
 
+const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
+    const av_A = [...(new Set(
+        rowA.original.severity.cvss.map(cvss => cvss.attack_vector)
+    ))]
+    const av_B = [...(new Set(
+        rowB.original.severity.cvss.map(cvss => cvss.attack_vector)
+    ))]
+    const priorities = [undefined, 'PHYSICAL', 'LOCAL', 'ADJACENT', 'NETWORK']
+    const indexA = Math.max(...av_A.map(a => priorities.indexOf(a)))
+    const indexB = Math.max(...av_B.map(b => priorities.indexOf(b)))
+    return indexA - indexB
+}
+
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
 function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }: Readonly<Props>) {
@@ -95,12 +108,14 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 header: 'ID',
                 cell: info => info.getValue(),
                 sortDescFirst: true,
-                footer: (info) => `Total: ${info.table.getRowCount()}`
+                footer: (info) => `Total: ${info.table.getRowCount()}`,
+                size: 125
             }),
             columnHelper.accessor('severity.severity', {
                 header: 'Severity',
                 cell: info => <SeverityTag severity={info.getValue()} />,
-                sortingFn: sortSeverityFn
+                sortingFn: sortSeverityFn,
+                size: 100
             }),
             columnHelper.accessor('epss', {
                 header: 'Exploitability',
@@ -118,10 +133,20 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 cell: info => info.getValue().map(p => p.split('+git')[0]).join(', '),
                 enableSorting: false
             }),
+            columnHelper.accessor('severity', {
+                header: 'Attack Vector',
+                cell: info => [...(new Set(
+                    info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)
+                ))].join(', '),
+                enableSorting: true,
+                sortingFn: sortAttackVectorFn,
+                size: 100
+            }),
             columnHelper.accessor('simplified_status', {
                 header: 'Status',
                 cell: info => <code>{info.renderValue()}</code>,
-                sortingFn: sortStatusFn
+                sortingFn: sortStatusFn,
+                size: 130
             }),
             columnHelper.accessor('effort.likely', {
                 header: 'Estimated effort',
@@ -129,7 +154,8 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 enableSorting: true,
                 sortingFn: (rowA, rowB) => {
                     return rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds
-                }
+                },
+                size: 100
             }),
             columnHelper.accessor('found_by', {
                 header: 'Sources',

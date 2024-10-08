@@ -47,7 +47,16 @@ describe('Vulnerability Table', () => {
                 severity: 'low',
                 min_score: 3,
                 max_score: 3,
-                cvss: []
+                cvss: [{
+                    author: 'company A',
+                    severity: 'low',
+                    base_score: 3,
+                    vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+                    version: '3.1',
+                    impact_score: 0,
+                    exploitability_score: 0,
+                    attack_vector: 'NETWORK'
+                }]
             },
             epss: {
                 score: 0.356789,
@@ -84,7 +93,28 @@ describe('Vulnerability Table', () => {
                 severity: 'high',
                 min_score: 8,
                 max_score: 8,
-                cvss: []
+                cvss: [
+                    {
+                        author: 'company A',
+                        severity: 'high',
+                        base_score: 8,
+                        vector_string: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+                        version: '3.1',
+                        impact_score: 0,
+                        exploitability_score: 0,
+                        attack_vector: 'LOCAL'
+                    },
+                    {
+                        author: 'company B',
+                        severity: 'high',
+                        base_score: 8,
+                        vector_string: 'CVSS:3.1/AV:P',
+                        version: '3.1',
+                        impact_score: 0,
+                        exploitability_score: 0,
+                        attack_vector: 'PHYSICAL'
+                    }
+                ]
             },
             epss: {
                 score: undefined,
@@ -121,6 +151,7 @@ describe('Vulnerability Table', () => {
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
         const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
         const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
+        const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
         const source_header = await screen.getByRole('columnheader', {name: /source/i});
 
@@ -129,6 +160,7 @@ describe('Vulnerability Table', () => {
         expect(severity_header).toBeInTheDocument();
         expect(exploit_header).toBeInTheDocument();
         expect(packages_header).toBeInTheDocument();
+        expect(atk_vector_header).toBeInTheDocument();
         expect(status_header).toBeInTheDocument();
         expect(source_header).toBeInTheDocument();
     })
@@ -143,6 +175,7 @@ describe('Vulnerability Table', () => {
         const epss_col = await screen.getByRole('cell', {name: /3[56][ ]?\%/});
         const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
+        const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
         const status_col = await screen.getByRole('cell', {name: /pending analysis/i});
         const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
@@ -152,6 +185,7 @@ describe('Vulnerability Table', () => {
         expect(epss_col).toBeInTheDocument();
         expect(effort_col).toBeInTheDocument();
         expect(packages_col).toBeInTheDocument();
+        expect(atk_vector_col).toBeInTheDocument();
         expect(status_col).toBeInTheDocument();
         expect(source_col).toBeInTheDocument();
     })
@@ -190,6 +224,26 @@ describe('Vulnerability Table', () => {
         });
 
         await user.click(severity_header); // alphabetical order -> reverse alphabetical order
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
+    })
+
+    test('sorting by attack vector', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
+
+        await user.click(atk_vector_header); // un-ordoned -> network first
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
+        });
+
+        await user.click(atk_vector_header); // network first -> physical first
         await waitFor(() => {
             const html = document.body.innerHTML;
             expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
