@@ -208,6 +208,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
 
         <TableGeneric
             fuseKeys={fuseKeys}
+            hoverField="texts"
             search={search}
             columns={columns}
             tableHeight={

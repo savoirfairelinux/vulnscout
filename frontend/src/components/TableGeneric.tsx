@@ -12,6 +12,7 @@ type Props<DataType> = {
     data: DataType[];
     search?: string;
     fuseKeys?: string[];
+    hoverField?: string;
     estimateRowHeight?: number;
     tableHeight?: string;
     selected?: RowSelectionState;
@@ -24,6 +25,7 @@ function TableGeneric<DataType> ({
     data,
     search,
     fuseKeys = ['id'],
+    hoverField = undefined,
     estimateRowHeight = 66,
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
     selected = undefined,
@@ -129,13 +131,13 @@ function TableGeneric<DataType> ({
 
                     {rowVirtualizer.getVirtualItems().map(virtualRow => {
                         const row: Row<DataType> = rows[virtualRow.index]
-                        return (
+                        return [
                             <tr
                             data-index={virtualRow.index} //needed for dynamic row height measurement
                             ref={node => rowVirtualizer.measureElement(node)} //measure dynamic row height
                             key={row.id}
                             className={[
-                                "flex absolute w-full",
+                                "flex absolute w-full row-with-hover-effect",
                                 row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600'
                             ].join(' ')}
                             onClick={(e) => ctrl_click(e, row)}
@@ -158,8 +160,22 @@ function TableGeneric<DataType> ({
                                         )}
                                     </td>)
                                 })}
+                            </tr>,
+                            hoverField != undefined && <tr
+                                className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center"
+                                key={`${row.id}_hoverpanel`}
+                                style={{
+                                    transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll
+                                        `translateY(calc(${virtualRow.start}px - 100%))` :
+                                        `translateY(calc(${virtualRow.end}px))`
+                                }}
+                            >
+                                <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
+                                    <b className='mb-2'>Description of {row.id}</b><br/>
+                                    {(row.original as any)?.[hoverField]?.map((a: any) => a?.content)?.join('\n---\n') ?? "No description was provided"}
+                                </td>
                             </tr>
-                        )
+                        ]
                     })}
                 </tbody>
                 <tfoot className="grid sticky bottom-0 z-10">

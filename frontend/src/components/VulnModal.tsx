@@ -154,7 +154,7 @@ function VulnModal(props: Readonly<Props>) {
                             const title = text.title.split('');
                             return (<div key={encodeURIComponent(text.title)}>
                                 <h3 className="font-bold">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
-                                <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg">{text.content}</p>
+                                <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                             </div>)
                         })}
 
