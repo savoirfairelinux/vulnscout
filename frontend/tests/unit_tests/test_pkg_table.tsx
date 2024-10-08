@@ -206,8 +206,10 @@ describe('Packages Table', () => {
         // REVERT CHANGE
         await user.selectOptions(filter_select, 'All sources');
         const pkg_abc = await screen.getByRole('cell', {name: /aaabbbccc/});
+        const pkg_xyz2 = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+
         expect(pkg_abc).toBeInTheDocument();
-        expect(pkg_xyz).toBeInTheDocument();
+        expect(pkg_xyz2).toBeInTheDocument();
     })
 
     test('filter by status', async () => {

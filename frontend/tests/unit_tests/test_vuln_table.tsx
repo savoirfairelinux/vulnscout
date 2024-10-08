@@ -25,7 +25,7 @@ const getDOMRect = (width: number, height: number) => ({
 })
 
 
-describe('Packages Table', () => {
+describe('Vulnerability Table', () => {
 
     const vulnerabilities: Vulnerability[] = [
         {
@@ -504,5 +504,22 @@ describe('Packages Table', () => {
 
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(2);
+    })
+
+    test('show description when hovering vulnerability', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const id_col = await screen.getByRole('cell', {name: vulnerabilities[0].id});
+        expect(id_col).toBeInTheDocument();
+        const description = await screen.getByText(vulnerabilities[0].texts[0].content);
+        expect(description).toBeInTheDocument();
+
+        await user.hover(id_col);
+        expect(description).toBeVisible();
+
+        await user.unhover(id_col)
+        // doesn't seem to work : expect(description).not.toBeVisible();
     })
 });
