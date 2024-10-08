@@ -114,8 +114,10 @@ function full_scan_steps() {
         fi
     fi
 
-    set_status "4" "Scanning SPDX with Grype"
-    grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
+    if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
+        set_status "4" "Scanning SPDX with Grype"
+        grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
+    fi
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
         set_status "4" "Scanning CDX with Grype"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
