@@ -150,8 +150,12 @@ def read_inputs(controllers):
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
-    with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
-        scanGrype.load_from_dict(json.loads(f.read()))
+    try:
+        with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
+            scanGrype.load_from_dict(json.loads(f.read()))
+    except FileNotFoundError:
+        print("Warning: Did not find Grype analysis of SPDX files. If you intended to scan"
+              + " SPDX files, this mean there was an issue when analysing them.")
 
     for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
         verbose(f"merger_ci: Reading {file}")
