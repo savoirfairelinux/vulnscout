@@ -7,11 +7,11 @@ Savoir-Faire Linux
 
 == Templating system
 
-We use Jinja 2 as templating engine, which have great community, documentations and support any file format (html, asciidoc, markdown, CSV, ...).
-We store official templates in `src/views/templates` folder, and custom per-project templates should be saved in `.vulnscout/templates` folder, directly in your project. Finaly, some templates can be configured to be generated at each analysis, they will be writed in `outputs` folder.
-All templates can be run from graphical interface, using export button in toolbar, at top of screen. You can use ##to specify## environment variable to automatically build templates on start. As said, they will be output in `outputs` folder. Specify multiple templates with comma separated values (with or without spaces, values are trimmed).
+We use Jinja 2 as templating engine, which has great community, documentation and supports any file format (html, asciidoc, markdown, CSV, ...).
+We store official templates in the `src/views/templates` folder, and custom per-project templates should be saved in the `.vulnscout/templates` folder, directly in your project. Finally, some templates can be configured to be generated at each analysis, they will be written to the `outputs` folder.
+All templates can be run from the graphical interface, using the export button in the toolbar, at the top of the screen. You can use the `GENERATE_DOCUMENTS` environment variable to automatically build templates at startup. As said, they will be written to the `outputs` folder. Specify multiple templates with comma-separated values (with or without spaces, values are trimmed).
 
-=== Global variables accessible in templates
+=== Global variables available in templates
 
 * `vulnerabilities`: dict of all vulnerabilities found in the project.
 ** Use `vulnerabilities | as_list` to get a list instead of dict.
@@ -47,7 +47,8 @@ All templates can be run from graphical interface, using export button in toolba
 * `advisories`: ##reserved, not implemented yet##.
 * `packages` (list of strings): List of packages affected by the vulnerability, in form `name@version`.
 * `status` (string): Status of the vulnerability (see assessment object to see possible status).
-* `last_assessment` (Assessment object): Last assessment of the vulnerability.
+* `last_assessment` (Assessment object): Latest assessment of the vulnerability, aka `assessments[0]`.
+* `assessments` (list of Assessment objects): List of assessments for this vulnerability, sorted by most recent first.
 
 **Package object**:
 
@@ -108,14 +109,14 @@ All templates can be run from graphical interface, using export button in toolba
 * `rollback`
 * `workaround_available`
 
-=== Filter and tests (utils scripts)
+=== Filter and tests (util scripts)
 
-In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-builtin-filters[jinja build-in filters], you can use the followings cutsom filters.
+In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-builtin-filters[jinja build-in filters], you can use the following custom filters.
 
-* Formating:
+* Formatting:
 ** `as_list`: Convert dict to list using `.values()`.
 ** `limit(n)`: [n: int] Limit the number of results to `n`.
-** `print_iso8601`: Transform an ISO 8601 string into a more human readable format (eg: P2DT4H = 2d 4h).
+** `print_iso8601`: Transform an ISO 8601 string into a more human readable format (eg: P2DT4H = 2d 4h or "2024 Sep 14 - 12:00").
 
 * Filtering on list:
 ** `status(x)`: [x: str or list of str] Keep only vulnerabilities with status in `x`.
@@ -130,7 +131,8 @@ In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-bui
 
 * Sorting:
 ** `sort_by_epss`: Sort vulnerabilities by EPSS score, with greater score first.
-** `sort_by_effort`: Sort vulnerabilities by effort [most.likely], with most important effort first.
+** `sort_by_effort`: Sort vulnerabilities by effort [effort.likely], with most important effort first.
+** `sort_by_last_modified`: sort vulnerabilities by latest assessment date, with the most recent assessment first
 
 === Common exemples and tips
 
