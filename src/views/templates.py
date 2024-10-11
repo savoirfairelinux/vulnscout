@@ -4,6 +4,7 @@ import subprocess
 import os
 import random
 import string
+import datetime
 from ..models.iso8601_duration import Iso8601Duration
 
 
@@ -39,13 +40,15 @@ class Templates:
         kwargs["assessments"] = self.assessmentsCtrl.to_dict()
 
         for vuln_obj in kwargs["vulnerabilities"].values():
-            last_assessment = None
+            vuln_assessments = []
             for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj['id']):
-                if last_assessment is None or last_assessment.timestamp < assessment.timestamp:
-                    last_assessment = assessment
-            if last_assessment:
-                vuln_obj['status'] = last_assessment.status
-                vuln_obj['last_assessment'] = last_assessment
+                vuln_assessments.append(assessment.to_dict())
+
+            vuln_assessments = sorted(vuln_assessments, key=lambda x: x["timestamp"], reverse=True)  # type: ignore
+            if len(vuln_assessments) >= 1:
+                vuln_obj['assessments'] = vuln_assessments
+                vuln_obj['last_assessment'] = vuln_assessments[0]
+                vuln_obj['status'] = vuln_assessments[0]['status']
 
         return template.render(**kwargs)
 
@@ -117,6 +120,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["epss_score"] = TemplatesExtensions.filter_epss_score
         jinjaEnv.filters["sort_by_effort"] = TemplatesExtensions.sort_by_effort
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
+        jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
 
     @staticmethod
     def filter_status(value: list, status: str | list[str]) -> list:
@@ -168,4 +172,12 @@ class TemplatesExtensions:
     def print_iso8601(value: str) -> str:
         if type(value) is not str:
             return "N/A"
-        return Iso8601Duration(value).human_readable()
+        if value.startswith("P"):
+            return Iso8601Duration(value).human_readable()
+        return datetime.datetime.fromisoformat(value).strftime("%Y %b %d - %H:%M")
+
+    @staticmethod
+    def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:
+        if type(value) is dict:
+            value = list(value.values())
+        return sorted(value, key=lambda x: x["last_assessment"]["timestamp"], reverse=True)  # type: ignore
