@@ -19,7 +19,8 @@ class Templates:
         ])
         self.external_loader = FileSystemLoader([
             ".vulnscout/templates",
-            "templates"
+            "templates",
+            "/scan/templates"
         ])
 
         self.env = sandbox.ImmutableSandboxedEnvironment(
