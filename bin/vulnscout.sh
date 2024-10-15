@@ -182,6 +182,10 @@ function scan() {
 		echo "Warning: Started without CACHE_FOLDER which means the script will take much more time to start (+ 5-10 minutes)" >&2
 	fi
 
+	if [[ -d ".vulnscout/templates" ]]; then
+		docker_args+=" -v $(pwd)$(clean_path "/.vulnscout/templates"):/scan/templates:ro"
+	fi
+
 	# shellcheck disable=SC2086 # docker args is a string with series of argument, so requires to be unquoted
 	container_id="$(
 		docker run -d ${docker_args} \
