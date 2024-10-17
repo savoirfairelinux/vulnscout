@@ -1,0 +1,46 @@
+= Quickstart guide for Yocto projects
+
+== Steps to setup your machine for vulnscout
+
+1. Install and setup docker. Refer https://docs.docker.com/desktop/install/linux/.
+
+2. Authenticate to vulnscout registry:
+
+     - Open https://gitlab.savoirfairelinux.com/-/user_settings/personal_access_tokens in your browser.
+     - Create a new token with the following scope: `read_registry` and set expiration to what you want.
+     - Enter a name, create the token and copy it.
+     - In a terminal, run `docker login gitlab.savoirfairelinux.com:5050` and enter your Gitlab username and the token as password.
+
+TIP: If you have already logged in the registry but want to change the password, add `-u <username>` to the command. It will re-ask for password.
+NOTE: If after authentification you still fail to pull image, verify you have access to https://gitlab.savoirfairelinux.com/pe/vulnscout . If not, ask for access to the project.
+
+== Steps to scan your yocto project
+
+1. Build your image. Make sure that you have the following inherits in your layer which is necessary to create spdx and yocto cve sources for vulnscout: +
+[source,conf]
+----
+    inherit create-spdx
+    inherit cve-check
+----
+
+2. Copy `bin/vulnscout.sh` into root of the project.
+
+3. Create `.vulnscout` folder at the root of your project. Copy the `yocto.rc` conf file from `bin/.vulnscout-example` in the vulnscout repository into your `.vulnscout` folder.
+
+4. Modify the necessary paths in `yocto.rc` to use your spdx and cve files as sources. If you have a `meta-cyclonedx` layer, you can also use `CDX_SOURCES`, otherwise, comment out the variable.
+
+NOTE: Cyclonedx generates SBOM of all the packages in your project, not only those used to create a particular image.
+
+5. Run `./vulnscout.sh --verbose scan` to run a scan and open http://localhost:7275 to view the results.
+
+NOTE: The `--verbose` option is to see all the logs. You can omit that if you prefer quiet mode.
+
+== Tips to use vulnscout
+
+1. Make use of filters in each tab. For example, under the `Vulnerabilities` title in the interface, you can `Hide (already) fixed` vulnerabilities.
+
+2. Check the `.vulnscout/output` to see the default reports and sboms created by vulnscout. Other reports/sboms are available under the `Exports` title in the interface.
+
+3. The default `summary` report lists only CVEs with more than 50% EPSS. To change that you need to add a custom template in `.vulnscout/templates`. And add the templates name in `GENERATE_DOCUMENTS` variable in `yocto.rc`. See an example template in https://r1.sfl.team/issues/15570[the redmine issue], `report_template_summary.adoc`, with it the generated report will display all the vulnerabilities with more than 0% EPSS and it also lists the package information.
+
+NOTE: For more information on customizing template, see `WRITING_TEMPLATES.adoc`.
