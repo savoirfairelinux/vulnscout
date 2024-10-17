@@ -187,7 +187,7 @@ def test_render_document_adoc(client):
 
 
 def test_render_document_with_options(client):
-    response = client.get("/api/documents/summary.adoc?" + '&'.join([
+    response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
         "author=AUTHOR_NAME",
         "client_name=CLIENT_NAME",
         "export_date=2002-02-02"
@@ -197,6 +197,33 @@ def test_render_document_with_options(client):
     assert "AUTHOR_NAME" in content
     assert "CLIENT_NAME" in content
     assert "2002-02-02" in content
+    assert "CVE-2020-35492" in content
+
+
+def test_render_document_with_filter(client):
+    response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
+        "ignore_before=2000-01-01T00:00",
+        "only_epss_greater=45.67"
+    ]))
+    assert response.status_code == 200
+    content = response.data.decode("utf-8")
+    assert "CVE-2020-35492" not in content
+
+    response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
+        "ignore_before=2024-09-01T00:00",
+        "only_epss_greater=05.00"
+    ]))
+    assert response.status_code == 200
+    content = response.data.decode("utf-8")
+    assert "CVE-2020-35492" not in content
+
+    response = client.get("/api/documents/all_assessments.adoc?" + '&'.join([
+        "ignore_before=2000-01-01T00:00",
+        "only_epss_greater=05.00"
+    ]))
+    assert response.status_code == 200
+    content = response.data.decode("utf-8")
+    assert "CVE-2020-35492" in content
 
 
 def test_render_document_pdf(client):

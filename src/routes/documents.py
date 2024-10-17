@@ -94,8 +94,14 @@ def init_app(app):
             metadata = {
                 "author": request.args.get("author") or os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
                 "client_name": request.args.get("client_name") or "",
-                "export_date": request.args.get("export_date") or date.today().isoformat()
+                "export_date": request.args.get("export_date") or date.today().isoformat(),
+                "ignore_before": request.args.get("ignore_before") or "1970-01-01T00:00",
+                "only_epss_greater": 0.0
             }
+            try:
+                metadata["only_epss_greater"] = float(request.args.get("only_epss_greater") or "0.0")
+            except Exception:
+                pass
 
             if (
                 doc_name.startswith("CycloneDX ")
