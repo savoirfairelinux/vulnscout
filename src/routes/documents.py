@@ -92,8 +92,9 @@ def init_app(app):
             base_mime = guess_mime_type(doc_name)
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
             metadata = {
-                "author": os.getenv('COMPANY_NAME', 'Savoir-Faire Linux'),
-                "export_date": date.today().isoformat()
+                "author": request.args.get("author") or os.getenv('COMPANY_NAME', 'Savoir-Faire Linux'),
+                "client_name": request.args.get("client_name") or "",
+                "export_date": request.args.get("export_date") or date.today().isoformat()
             }
 
             if (
