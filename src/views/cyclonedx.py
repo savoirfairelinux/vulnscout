@@ -349,13 +349,17 @@ class CycloneDx:
             if assess["workaround"]:
                 vuln_obj.workaround = assess["workaround"]
 
-    def output_as_json(self, version=6) -> str:
+    def output_as_json(self, version=6, author=None) -> str:
         """Output the SBOM to JSON format."""
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Bom()
             self.sbom.serial_number = uuid7()  # type: ignore
 
         self.sbom.metadata.timestamp = datetime.now(timezone.utc)
+        if author is not None:
+            self.sbom.metadata.manufacturer = cyclonedx.model.contact.OrganizationalEntity(
+                name=author
+            )
         self.sbom.components = []
         self.register_components()
         self.sbom.vulnerabilities = []

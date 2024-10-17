@@ -20,6 +20,8 @@ All templates can be run from the graphical interface, using the export button i
 * `assessments`: dict of all assessments found in the project.
 ** Use `assessments | as_list` to get a list instead of dict.
 ** Use `.last_assessment` from a vulnerability object to get the last assessment.
+* `author`: string containing the company name who is producting this document.
+* `export_date`: string containing date of export as YYYY-MM-DD.
 
 **Vulnerability object**:
 

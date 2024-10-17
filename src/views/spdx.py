@@ -98,7 +98,7 @@ class SPDX:
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]
 
-    def output_as_json(self, validate=True) -> str:
+    def output_as_json(self, validate=True, author=None) -> str:
         """Output the SBOM to JSON format."""
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Document(
@@ -114,7 +114,7 @@ class SPDX:
                     creators=[
                         Actor(
                             actor_type=ActorType.ORGANIZATION,
-                            name=getenv('COMPANY_NAME', 'Savoir-faire Linux'),
+                            name=author if author is not None else "Savoir-Faire Linux",
                             email=getenv('CONTACT_EMAIL', None)
                         ),
                         Actor(

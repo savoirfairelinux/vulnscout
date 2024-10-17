@@ -18,7 +18,7 @@ def spdx_parser():
 
 
 def test_export_empty_json(spdx_parser):
-    output = json.loads(spdx_parser.output_as_json())
+    output = json.loads(spdx_parser.output_as_json(True, "MY_AUTHOR_NAME"))
     try:
         assert {
             "SPDXID": "SPDXRef-DOCUMENT",
@@ -28,6 +28,7 @@ def test_export_empty_json(spdx_parser):
         assert output["documentNamespace"].startswith("https://")
         assert len(output["name"]) > 5
         assert len(output["creationInfo"]["creators"]) == 2
+        assert any(map(lambda x: "MY_AUTHOR_NAME" in x, output["creationInfo"]["creators"]))
         assert "packages" not in output or len(output["packages"]) == 0
     except Exception as e:
         print(json.dumps(output, indent=2))

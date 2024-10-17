@@ -1,11 +1,11 @@
 = Vulnerabilities Report
-Company name
-2024-07-15
+{{author}}
+{{export_date}}
 
 == Legal Notice
 
 [.text-justify]
-This report is a summary of the vulnerabilities found in the project. Scan was made on 2024-07-15 at 11:02:45 and export of this report was made on 2024-07-15 at 11:18:12. Keep in mind that this report is not exhaustive and may not contain all vulnerabilities found in the project. Also, new vulnerabilities are discovered every day and thus the precision and accuracy of this report will decrease over time.
+This report is a summary of the vulnerabilities found in the project. Scan was made on YYYY-MM-DD at HH:mm:ss and export of this report was made on {{export_date}}. Keep in mind that this report is not exhaustive and may not contain all vulnerabilities found in the project. Also, new vulnerabilities are discovered every day and thus the precision and accuracy of this report will decrease over time.
 
 == Summary
 
