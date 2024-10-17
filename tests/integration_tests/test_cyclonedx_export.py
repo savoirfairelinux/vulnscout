@@ -22,7 +22,7 @@ def cdx_exporter():
 
 
 def test_export_empty_json(cdx_exporter):
-    output = json.loads(cdx_exporter.output_as_json())
+    output = json.loads(cdx_exporter.output_as_json(6, "MY_AUTHOR_NAME"))
     try:
         assert {
             "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
@@ -32,6 +32,7 @@ def test_export_empty_json(cdx_exporter):
         }.items() <= output.items()
         assert output["serialNumber"].startswith("urn:uuid:")
         assert len(output["serialNumber"]) > 36
+        assert output["metadata"]["manufacturer"]["name"] == "MY_AUTHOR_NAME"
         assert "components" not in output or len(output["components"]) == 0
         assert "vulnerabilities" not in output or len(output["vulnerabilities"]) == 0
     except Exception as e:

@@ -23,6 +23,7 @@ from ..helpers.verbose import verbose
 import glob
 import json
 import os
+from datetime import date
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
 SPDX_FOLDER = "/scan/tmp/spdx"
@@ -219,13 +220,17 @@ def output_results(controllers, files):
         f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
 
     list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
+    metadata = {
+        "author": os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
+        "export_date": date.today().isoformat()
+    }
     for doc in list_docs:
         if not doc:
             continue
         try:
             doc = doc.strip()
             verbose(f"merger_ci: Generating report from template {doc}")
-            content = files["templates"].render(doc)
+            content = files["templates"].render(doc, **metadata)
             with open(f"/scan/outputs/{doc}", "w") as f:
                 f.write(content)
         except Exception as e:

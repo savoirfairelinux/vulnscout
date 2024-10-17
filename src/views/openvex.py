@@ -96,11 +96,11 @@ class OpenVex:
 
                 self.assessmentsCtrl.add(assess)
 
-    def to_dict(self, strict_export=False) -> dict:
+    def to_dict(self, strict_export=False, author=None) -> dict:
         output = {
             "@context": "https://openvex.dev/ns/v0.2.0",
             "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(uuid7(as_type='str')),
-            "author": "Savoir-Faire Linux",
+            "author": author if author is not None else "Savoir-Faire Linux",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": 1,
             "statements": []

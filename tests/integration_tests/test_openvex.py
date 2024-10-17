@@ -181,10 +181,10 @@ def test_parse_statement_details(openvex_parser):
 
 
 def test_encode_empty(openvex_parser):
-    output = openvex_parser.to_dict()
+    output = openvex_parser.to_dict(False, "MY_AUTHOR_NAME")
     assert {
         "@context": "https://openvex.dev/ns/v0.2.0",
-        "author": "Savoir-Faire Linux",
+        "author": "MY_AUTHOR_NAME",
         "version": 1,
         "statements": []
     }.items() <= output.items()

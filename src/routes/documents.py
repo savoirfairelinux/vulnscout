@@ -1,6 +1,8 @@
 from flask import request, make_response
 import json
+import os
 import mimetypes
+from datetime import date
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
@@ -89,15 +91,19 @@ def init_app(app):
         try:
             base_mime = guess_mime_type(doc_name)
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
+            metadata = {
+                "author": os.getenv('COMPANY_NAME', 'Savoir-Faire Linux'),
+                "export_date": date.today().isoformat()
+            }
 
             if (
                 doc_name.startswith("CycloneDX ")
                 or doc_name == "OpenVex"
                 or doc_name.startswith("SPDX")
             ):
-                return handle_sbom_exports(doc_name, ctrls, expected_mime)
+                return handle_sbom_exports(doc_name, ctrls, expected_mime, metadata)
 
-            content = templ.render(doc_name)
+            content = templ.render(doc_name, **metadata)
 
             if base_mime == expected_mime:
                 return content, 200, {
@@ -117,17 +123,17 @@ def init_app(app):
             return {"error": str(e)}, 500
 
 
-def handle_sbom_exports(doc_name, ctrls, expected_mime):
+def handle_sbom_exports(doc_name, ctrls, expected_mime, metadata):
     if doc_name.startswith("CycloneDX"):
         cdx = CycloneDx(ctrls)
         if expected_mime == "application/json":
             content = None
             if doc_name == "CycloneDX 1.4":
-                content = cdx.output_as_json(4)
+                content = cdx.output_as_json(4, metadata["author"])
             if doc_name == "CycloneDX 1.5":
-                content = cdx.output_as_json(5)
+                content = cdx.output_as_json(5, metadata["author"])
             if doc_name == "CycloneDX 1.6":
-                content = cdx.output_as_json(6)
+                content = cdx.output_as_json(6, metadata["author"])
 
             if content is not None:
                 new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
@@ -139,7 +145,7 @@ def handle_sbom_exports(doc_name, ctrls, expected_mime):
     if doc_name.startswith("SPDX"):
         spdx = SPDX(ctrls)
         if expected_mime == "application/json":
-            content = spdx.output_as_json()
+            content = spdx.output_as_json(metadata["author"])
             if content is not None:
                 new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
                 return content, 200, {
@@ -149,7 +155,7 @@ def handle_sbom_exports(doc_name, ctrls, expected_mime):
 
     if doc_name == "OpenVex" and expected_mime == "application/json":
         opvx = OpenVex(ctrls)
-        return json.dumps(opvx.to_dict(True), indent=2), 200, {
+        return json.dumps(opvx.to_dict(True, metadata["author"]), indent=2), 200, {
             "Content-Type": expected_mime,
             "Content-Disposition": "attachment; filename=openvex.json"
         }
