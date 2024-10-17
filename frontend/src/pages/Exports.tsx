@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faStar, faThumbTack, faFolderOpen, faFileShield, faCompassDrafting, faBoxes } from "@fortawesome/free-solid-svg-icons";
 import FileTag from "../components/FileTag";
+import PopupExportOptions from "../components/PopupExportOptions";
+import type { Options as PopupOptions } from "../components/PopupExportOptions";
 
 type Props = {};
 
@@ -33,6 +35,7 @@ function Exports ({}: Props) {
     const [tab, setTab] = useState<string>("recommended");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
+    const [popupOptions, setPopupOptions] = useState<PopupOptions|undefined>(undefined);
 
     useEffect(() => {
         fetch(import.meta.env.VITE_API_URL + "/api/documents", {
@@ -108,6 +111,7 @@ function Exports ({}: Props) {
                         extension={doc.extension}
                         opened={openDl == doc.id}
                         onOpen={() => openDl == doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
+                        openOptions={(name: string, ext: string) => setPopupOptions({docName: name, extension: ext})}
                     />
                 ))}
 
@@ -121,6 +125,12 @@ function Exports ({}: Props) {
 
             <div className="grow"></div>
         </div>
+
+        {popupOptions && <PopupExportOptions
+            docName={popupOptions.docName}
+            extension={popupOptions.extension}
+            onClose={() => {setPopupOptions(undefined)}}
+        ></PopupExportOptions>}
     </>);
 }
 

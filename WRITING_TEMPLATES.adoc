@@ -22,6 +22,7 @@ All templates can be run from the graphical interface, using the export button i
 ** Use `.last_assessment` from a vulnerability object to get the last assessment.
 * `author`: string containing the company name who is producting this document.
 * `export_date`: string containing date of export as YYYY-MM-DD.
+* `client_name`: string which may be undefined, empty or contain the company name of the customer.
 
 **Vulnerability object**:
 

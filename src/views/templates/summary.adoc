@@ -2,6 +2,10 @@
 {{author}}
 {{export_date}}
 
+{% if client_name is defined and client_name != "" -%}
+This report is strictly confidential and restricted to {% if author is defined and author != "" %}{{author}} and {% endif %}{{client_name}}.
+{%- endif %}
+
 == Legal Notice
 
 [.text-justify]

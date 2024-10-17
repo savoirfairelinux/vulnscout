@@ -1,9 +1,14 @@
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faGear } from '@fortawesome/free-solid-svg-icons';
+import React from 'react';
+
 type Props = {
     name: string;
     extension: string;
     icon?: boolean;
     onOpen?: () => void;
     opened?: boolean;
+    openOptions?: (name: string, value: string) => void;
 };
 
 const documentTypes: {[key: string]: string|undefined} = {
@@ -11,7 +16,13 @@ const documentTypes: {[key: string]: string|undefined} = {
     'XLSX': 'Excel Spreadsheet'
 }
 
-function FileTag ({ name, extension, onOpen, opened }: Readonly<Props>) {
+function FileTag ({ name, extension, onOpen, opened, openOptions }: Readonly<Props>) {
+    function openOpts (event: React.MouseEvent, name:string, extension: string) {
+        event.stopPropagation();
+        event.preventDefault();
+        if (openOptions) openOptions(name, extension);
+    }
+
     return (
         <div className="relative inline-block">
             <div>
@@ -31,7 +42,12 @@ function FileTag ({ name, extension, onOpen, opened }: Readonly<Props>) {
                             index == 0 && 'rounded-t-md',
                             index == extension.split('|').length - 1 && 'rounded-b-md'
                         ].join(' ')}
-                    >Download as {documentTypes?.[value.toUpperCase()] ?? value.toUpperCase()}</a>
+                    >
+                        Download as {documentTypes?.[value.toUpperCase()] ?? value.toUpperCase()}
+                        <button className="float-right text-slate-700 hover:text-black" onClick={(e) => openOpts(e, name, value)}>
+                            <FontAwesomeIcon icon={faGear}></FontAwesomeIcon>
+                        </button>
+                    </a>
                 ))}
             </div>
         </div>

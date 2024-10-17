@@ -186,6 +186,19 @@ def test_render_document_adoc(client):
     assert "| Fixed\n^.^| 0\n^.^| 1\n" in content
 
 
+def test_render_document_with_options(client):
+    response = client.get("/api/documents/summary.adoc?" + '&'.join([
+        "author=AUTHOR_NAME",
+        "client_name=CLIENT_NAME",
+        "export_date=2002-02-02"
+    ]))
+    assert response.status_code == 200
+    content = response.data.decode("utf-8")
+    assert "AUTHOR_NAME" in content
+    assert "CLIENT_NAME" in content
+    assert "2002-02-02" in content
+
+
 def test_render_document_pdf(client):
     response = client.get("/api/documents/summary.adoc?ext=pdf")
     assert response.status_code == 200
