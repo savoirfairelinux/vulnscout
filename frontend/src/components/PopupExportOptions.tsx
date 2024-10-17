@@ -13,6 +13,11 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
     const [clientName, setClientName] = useState("");
     const [author, setAuthor] = useState("Savoir-faire Linux");
     const [exportDate, setExportDate] = useState((new Date()).toISOString().split('T')[0]);
+    const [onlyMoreRecentDate, setOnlyMoreRecentDate] = useState("");
+    const [onlyMoreRecentTime, setOnlyMoreRecentTime] = useState("00:00");
+    const [onlyEPSSGreater, setOnlyEPSSGreater] = useState<string>("");
+
+    const onlyMoreRecent = onlyMoreRecentDate != '' ? `${onlyMoreRecentDate}T${onlyMoreRecentTime || '00:00'}` : undefined;
 
     return (
         <div
@@ -75,6 +80,37 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
                                 />
                             </label>
                         </div>
+                        <div className="w-full bg-gray-600 h-px"></div>
+                        <div className="w-full flex flex-col md:flex-row">
+                            <label className="w-full md:w-1/2 px-4">
+                                Keep only vulnerability with assessments more recent than<br/>
+                                <input
+                                    type="date"
+                                    className="bg-slate-800 text-gray-200 p-1 px-2 my-1"
+                                    value={onlyMoreRecentDate}
+                                    onChange={(e) => setOnlyMoreRecentDate(e.target.value)}
+                                />
+                                <input
+                                    type="time"
+                                    className="bg-slate-800/85 text-gray-200 p-1 px-2 m-1"
+                                    value={onlyMoreRecentTime}
+                                    onChange={(e) => setOnlyMoreRecentTime(e.target.value)}
+                                />
+                            </label>
+                            <label className="w-full md:w-1/2 px-4">
+                                Keep only vulnerability with EPSS greater or equal to<br/>
+                                <input
+                                    type="number"
+                                    className="bg-slate-800 text-gray-200 p-1 px-2 my-1 min-w-32"
+                                    min={0}
+                                    max={100}
+                                    step={0.01}
+                                    value={onlyEPSSGreater}
+                                    onChange={(e) => setOnlyEPSSGreater(e.target.value)}
+                                />
+                                <span className="pl-2 text-lg">%</span>
+                            </label>
+                        </div>
                     </div>
 
                     {/* Modal footer */}
@@ -87,7 +123,7 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
                             Close
                         </button>
                         <div className="flex-grow px-4">
-                            <i>All fields are optional.</i>
+                            <i>All fields are optional. Empty field in filter section means filter are not applied.</i>
                         </div>
                         <a
                             href={
@@ -95,7 +131,9 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
                                     `ext=${encodeURIComponent(extension)}`,
                                     clientName != '' ? `client_name=${encodeURIComponent(clientName)}` : undefined,
                                     author != '' ? `author=${encodeURIComponent(author)}` : undefined,
-                                    exportDate != '' ? `export_date=${encodeURIComponent(exportDate)}` : undefined
+                                    exportDate != '' ? `export_date=${encodeURIComponent(exportDate)}` : undefined,
+                                    onlyMoreRecent ? `ignore_before=${encodeURIComponent(onlyMoreRecent)}` : undefined,
+                                    onlyEPSSGreater != '' ? `only_epss_greater=${encodeURIComponent(onlyEPSSGreater)}` : undefined
                                 ].filter(a => a != undefined).join('&')
                             }
                             onClick={onClose}

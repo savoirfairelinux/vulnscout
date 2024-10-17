@@ -24,6 +24,10 @@ All templates can be run from the graphical interface, using the export button i
 * `export_date`: string containing date of export as YYYY-MM-DD.
 * `client_name`: string which may be undefined, empty or contain the company name of the customer.
 
+When exporting, user can add filters to export only some vulnerabilites. If you want to access all vulnerabilities and bypassing these filters,
+you can use `unfiltered_vulnerabilities` instead of `vulnerabilities` and `unfiltered_assessments` instead of `assessments`.
+This can be a valid use-case when you want to produce a summary, or to show the number of filtered-out vulnerabilities for example.
+
 **Vulnerability object**:
 
 * `id` (string): CVE ID of the vulnerability.

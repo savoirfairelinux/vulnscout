@@ -14,7 +14,9 @@ This report is a summary of the vulnerabilities found in the project. Scan was m
 
 == Summary
 
-Number of vulnerabilities found: **{{ vulnerabilities | as_list | length }}**
+Number of vulnerabilities found: **{{ unfiltered_vulnerabilities | as_list | length }}**
+
+Number of vulnerabilities present in this report: **{{ vulnerabilities | as_list | length }}**
 
 They are classified as follow:
 

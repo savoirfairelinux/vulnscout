@@ -47,6 +47,10 @@ def write_demo_files(files):
                     "versions_fixing": [],
                     "state": "unknown"
                 },
+                "epss": {
+                    "score": "0.311320000",
+                    "percentile": "0.850420000"
+                },
                 "severity": {
                     "severity": "high",
                     "min_score": 6.8,

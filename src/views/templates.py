@@ -4,7 +4,7 @@ import subprocess
 import os
 import random
 import string
-import datetime
+from datetime import datetime, timezone
 from ..models.iso8601_duration import Iso8601Duration
 
 
@@ -36,19 +36,51 @@ class Templates:
     def render(self, template_name, **kwargs):
         template = self.env.get_template(template_name)
         kwargs["packages"] = self.packagesCtrl.to_dict()
-        kwargs["vulnerabilities"] = self.vulnerabilitiesCtrl.to_dict()
-        kwargs["assessments"] = self.assessmentsCtrl.to_dict()
+        kwargs["unfiltered_vulnerabilities"] = self.vulnerabilitiesCtrl.to_dict()
+        kwargs["vulnerabilities"] = {}
+        kwargs["unfiltered_assessments"] = self.assessmentsCtrl.to_dict()
+        kwargs["assessments"] = {}
+        filter_date = None
+        if "ignore_before" in kwargs and kwargs["ignore_before"] != "1970-01-01T00:00":
+            filter_date = datetime.fromisoformat(kwargs["ignore_before"]).astimezone(timezone.utc)
+        filter_epss = None
+        if "only_epss_greater" in kwargs and kwargs["only_epss_greater"] >= 0.01:
+            filter_epss = kwargs["only_epss_greater"] / 100
 
-        for vuln_obj in kwargs["vulnerabilities"].values():
+        for vuln_obj in kwargs["unfiltered_vulnerabilities"].values():
             vuln_assessments = []
             for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj['id']):
                 vuln_assessments.append(assessment.to_dict())
 
             vuln_assessments = sorted(vuln_assessments, key=lambda x: x["timestamp"], reverse=True)  # type: ignore
             if len(vuln_assessments) >= 1:
-                vuln_obj['assessments'] = vuln_assessments
+                vuln_obj['unfiltered_assessments'] = vuln_assessments
+                vuln_obj['assessments'] = []
+                if filter_date is not None:
+                    for assessment in vuln_assessments:
+                        assess_date = datetime.fromisoformat(assessment["timestamp"]).astimezone(timezone.utc)
+                        if assess_date >= filter_date:
+                            vuln_obj['assessments'].append(assessment)
+                else:
+                    vuln_obj['assessments'] = vuln_assessments
+
                 vuln_obj['last_assessment'] = vuln_assessments[0]
                 vuln_obj['status'] = vuln_assessments[0]['status']
+
+            if len(vuln_obj['assessments']) > 0:
+                try:
+                    if (filter_epss is None or float(vuln_obj["epss"]["score"]) >= filter_epss):
+                        kwargs["vulnerabilities"][vuln_obj['id']] = vuln_obj
+                except Exception:
+                    pass
+
+        if filter_date is not None:
+            for assessment in kwargs["unfiltered_assessments"].values():
+                assess_date = datetime.fromisoformat(assessment["timestamp"]).astimezone(timezone.utc)
+                if assess_date >= filter_date:
+                    kwargs['assessments'][assessment["id"]] = assessment
+        else:
+            kwargs["assessments"] = kwargs["unfiltered_assessments"]
 
         return template.render(**kwargs)
 
@@ -174,7 +206,7 @@ class TemplatesExtensions:
             return "N/A"
         if value.startswith("P"):
             return Iso8601Duration(value).human_readable()
-        return datetime.datetime.fromisoformat(value).strftime("%Y %b %d - %H:%M")
+        return datetime.fromisoformat(value).strftime("%Y %b %d - %H:%M")
 
     @staticmethod
     def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:

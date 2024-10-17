@@ -86,11 +86,21 @@ describe('Exports Page', () => {
         await user.click(options);
         const client = await screen.getByLabelText(/client name/i);
         const export_date = await screen.getByLabelText(/export date/i);
+
+        const date_label = await screen.getByText(/vulnerability with assessments more recent than/i);
+        const input_date = [...date_label.children].find((el) => el.getAttribute('type') == 'date') as HTMLElement;
+        const input_time = [...date_label.children].find((el) => el.getAttribute('type') == 'time') as HTMLElement;
+
+        const filter_epss = await screen.getByLabelText(/vulnerability with EPSS greater/i);
         const download_btn = await screen.getByRole("link", {name: /generate/i}) as HTMLAnchorElement;
 
         await user.type(client, "CLIENT_COMPANY");
         await user.clear(export_date);
         await user.type(export_date, "2024-01-05");
+        await user.type(input_date, "2023-04-06");
+        await user.clear(input_time);
+        await user.type(input_time, "07:08");
+        await user.type(filter_epss, "2.55");
 
 
         // ASSERT
@@ -99,6 +109,8 @@ describe('Exports Page', () => {
         expect(download_btn.href).toContain("client_name=CLIENT_COMPANY");
         expect(download_btn.href).toContain("author=Savoir-faire%20Linux");
         expect(download_btn.href).toContain("export_date=2024-01-05");
+        expect(download_btn.href).toContain("ignore_before=2023-04-06T07%3A08");
+        expect(download_btn.href).toContain("only_epss_greater=2.55");
         expect(thisFetch).toHaveBeenCalledTimes(1);
     })
 });
