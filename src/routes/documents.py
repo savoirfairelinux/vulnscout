@@ -96,7 +96,8 @@ def init_app(app):
                 "client_name": request.args.get("client_name") or "",
                 "export_date": request.args.get("export_date") or date.today().isoformat(),
                 "ignore_before": request.args.get("ignore_before") or "1970-01-01T00:00",
-                "only_epss_greater": 0.0
+                "only_epss_greater": 0.0,
+                "scan_date": app.config["SCAN_DATE"] or "unknown date"  # don't use actual datetime by default.
             }
             try:
                 metadata["only_epss_greater"] = float(request.args.get("only_epss_greater") or "0.0")

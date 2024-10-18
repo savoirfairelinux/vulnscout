@@ -47,6 +47,9 @@ class Templates:
         if "only_epss_greater" in kwargs and kwargs["only_epss_greater"] >= 0.01:
             filter_epss = kwargs["only_epss_greater"] / 100
 
+        if "scan_date" not in kwargs:
+            kwargs["scan_date"] = "unknown date"  # don't use actual datetime by default.
+
         for vuln_obj in kwargs["unfiltered_vulnerabilities"].values():
             vuln_assessments = []
             for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj['id']):
