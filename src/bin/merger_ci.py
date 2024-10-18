@@ -23,7 +23,7 @@ from ..helpers.verbose import verbose
 import glob
 import json
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
 SPDX_FOLDER = "/scan/tmp/spdx"
@@ -224,6 +224,8 @@ def output_results(controllers, files):
         "author": os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
         "export_date": date.today().isoformat()
     }
+    if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
+        metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
     for doc in list_docs:
         if not doc:
             continue

@@ -9,6 +9,8 @@
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..routes import init_app
 import sys
+import os
+from datetime import datetime, timezone
 import signal
 
 MAX_SCRIPT_STEPS = 7
@@ -21,12 +23,16 @@ def create_app():
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
+    app.config["SCAN_DATE"] = "unknown date"
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
             return True
         with open(app.config["SCAN_FILE"], "r") as f:
             if "__END_OF_SCAN_SCRIPT__" in f.read():
+                if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
+                    app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
+
                 app._INT_SCAN_FINISHED = True
                 return True
         return False
