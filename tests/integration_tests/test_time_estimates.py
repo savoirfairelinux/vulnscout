@@ -29,7 +29,7 @@ def vuln_123():
 
 def test_parse_empty_json(time_estimates_parser):
     time_estimates_parser.load_from_dict(json.loads("""{
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "tasks": { }
@@ -52,7 +52,7 @@ def test_parse_invalid_model_json(time_estimates_parser):
 
 def test_parse_tasks_not_existing(time_estimates_parser):
     time_estimates_parser.load_from_dict(json.loads("""{
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "tasks": {
@@ -71,7 +71,7 @@ def test_parse_tasks_not_existing(time_estimates_parser):
 def test_parse_tasks(time_estimates_parser, vuln_123):
     time_estimates_parser.vulnerabilitiesCtrl.add(vuln_123)
     time_estimates_parser.load_from_dict(json.loads("""{
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "tasks": {
@@ -95,7 +95,7 @@ def test_parse_tasks(time_estimates_parser, vuln_123):
 def test_encode_empty(time_estimates_parser):
     output = time_estimates_parser.to_dict()
     assert {
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "version": 1,
         "tasks": {}
     }.items() <= output.items()

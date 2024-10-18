@@ -44,7 +44,7 @@ def test_parse_empty_json(openvex_parser):
     openvex_parser.load_from_dict(json.loads("""{
         "@context": "https://openvex.dev/ns/v0.2.0",
         "@id": "https://openvex.dev/docs/example/vex-9fb3463de1b57",
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "statements": []
@@ -69,7 +69,7 @@ def test_parse_statements(openvex_parser):
     openvex_parser.load_from_dict(json.loads("""{
         "@context": "https://openvex.dev/ns/v0.2.0",
         "@id": "https://openvex.dev/docs/example/vex-9fb3463de1b57",
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "statements": [
@@ -136,7 +136,7 @@ def test_parse_statement_details(openvex_parser):
     openvex_parser.load_from_dict(json.loads("""{
         "@context": "https://openvex.dev/ns/v0.2.0",
         "@id": "https://openvex.dev/docs/example/vex-9fb3463de1b57",
-        "author": "Savoir-Faire Linux",
+        "author": "Savoir-faire Linux",
         "timestamp": "2023-01-08T18:02:03.647787998-06:00",
         "version": 1,
         "statements": [
