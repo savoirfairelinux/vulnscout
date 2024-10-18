@@ -114,7 +114,7 @@ class SPDX:
                     creators=[
                         Actor(
                             actor_type=ActorType.ORGANIZATION,
-                            name=author if author is not None else "Savoir-Faire Linux",
+                            name=author if author is not None else "Savoir-faire Linux",
                             email=getenv('CONTACT_EMAIL', None)
                         ),
                         Actor(

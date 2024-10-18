@@ -24,7 +24,7 @@ class TimeEstimates:
 
     def to_dict(self) -> dict:
         output = {
-            "author": "Savoir-Faire Linux",
+            "author": "Savoir-faire Linux",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": 1,
             "tasks": {}

@@ -11,7 +11,7 @@ export type { Options }
 
 function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<Options>) {
     const [clientName, setClientName] = useState("");
-    const [author, setAuthor] = useState("Savoir-Faire Linux");
+    const [author, setAuthor] = useState("Savoir-faire Linux");
     const [exportDate, setExportDate] = useState((new Date()).toISOString().split('T')[0]);
 
     return (
@@ -48,7 +48,7 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
                                 <input
                                     type="text"
                                     className="bg-slate-800 text-gray-200 p-1 px-2 my-1 w-full"
-                                    placeholder="eg. ACME org. or Savoir-Faire Linux for internal production"
+                                    placeholder="eg. ACME org. or Savoir-faire Linux for internal production"
                                     value={clientName}
                                     onChange={(e) => setClientName(e.target.value)}
                                 />
@@ -58,7 +58,7 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
                                 <input
                                     type="text"
                                     className="bg-slate-800 text-gray-200 p-1 px-2 my-1 w-full"
-                                    placeholder="Enter your name or Savoir-Faire Linux"
+                                    placeholder="Enter your name or Savoir-faire Linux"
                                     value={author}
                                     onChange={(e) => setAuthor(e.target.value)}
                                 />

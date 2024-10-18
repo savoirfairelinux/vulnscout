@@ -97,7 +97,7 @@ describe('Exports Page', () => {
         expect(download_btn.href).toContain("/api/documents/hello.adoc");
         expect(download_btn.href).toContain("ext=pdf");
         expect(download_btn.href).toContain("client_name=CLIENT_COMPANY");
-        expect(download_btn.href).toContain("author=Savoir-Faire%20Linux");
+        expect(download_btn.href).toContain("author=Savoir-faire%20Linux");
         expect(download_btn.href).toContain("export_date=2024-01-05");
         expect(thisFetch).toHaveBeenCalledTimes(1);
     })
