@@ -61,9 +61,9 @@ def init_app(app):
 
             docs.append({"id": "SPDX 2.3", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
             # docs.append({"id": "SPDX 3.0", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
-            docs.append({"id": "CycloneDX 1.4", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
-            docs.append({"id": "CycloneDX 1.5", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
-            docs.append({"id": "CycloneDX 1.6", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "CycloneDX 1.4", "extension": "json", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "CycloneDX 1.5", "extension": "json", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "CycloneDX 1.6", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "OpenVex", "extension": "json", "is_template": False, "category": ["sbom"]})
 
             for doc in docs:
