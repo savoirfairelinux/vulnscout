@@ -57,11 +57,57 @@ const BarOptions = {
     }
 };
 
+
+function zeroise_date (date: Date, unit: string) {
+    if (unit.startsWith('month')) date.setDate(1);
+
+    if (unit.startsWith('hour')) {
+        date.setMinutes(0, 0, 0);
+    } else {
+        date.setHours(0, 0, 0, 0);
+    }
+}
+
+
+function previous_date (date: Date, unit: string): Date {
+    if (unit.startsWith('week')) {
+        date = new Date(date.getTime() - (7 * 86400000));
+    } else if (unit.startsWith('hour')) {
+        date = new Date(date.getTime() - 3600000);
+    } else {
+        date = new Date(date.getTime() - 86400000);
+    }
+    return date;
+}
+
+
 function Metrics ({ vulnerabilities }: Readonly<Props>) {
     const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
     const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
     const [hideStatus, setHideStatus] = useState<{[key: string] : boolean}>({});
+    const [timeScale, setTimeScale] = useState<string>("6_months")
+
+    const time_scales = useMemo(() => {
+        const scale = Number(timeScale.split('_')[0]);
+        const unit = timeScale.split('_')[1];
+        if (isNaN(scale) || scale < 2 || !unit || unit == ''){
+            console.error("Invalid time scale, must be <number>_<unit>. eg: 6_months")
+            return [];
+        }
+        let refs: Date[] = [];
+        let date = new Date();
+        do {
+            // clean date and insert it
+            zeroise_date(date, unit)
+            refs.splice(0, 0, date);
+
+            // generate previous date for use in next iteration
+            date = previous_date(date, unit)
+        } while (refs.length < scale);
+
+        return refs;
+    }, [timeScale]);
 
     const dataSetVulnBySeverity = useMemo(() => {
         return {
@@ -110,18 +156,52 @@ function Metrics ({ vulnerabilities }: Readonly<Props>) {
         }
     }, [vulnerabilities, hideSeverity]);
 
+    const nb_points = Number(timeScale.split('_')[0])
     const vulnEvolutionTime = {
-        labels: ['feb 24', 'march 24', 'april 24', 'may 24', 'june 24'],
+        labels: time_scales.map(date => date.toLocaleString(undefined, {
+            day: timeScale.includes('_month') ? undefined : 'numeric',
+            month: 'short',
+            year: timeScale.includes('_hour') ? undefined : '2-digit',
+            hour: timeScale.includes('_hour') ? 'numeric' : undefined,
+            minute: undefined,
+            second: undefined,
+            timeZone: undefined,
+            hour12: false
+        })),
         datasets: [{
             label: '# of Vulnerabilities',
-            data: [512, 483, 430, 380, 440],
-            backgroundColor: [
-                '#C63D2F',
-                '#E25E3E',
-                '#FF9B50',
-                '#FFBB5C',
-                '#FFDB5A',
-            ],
+            data: vulnerabilities.reduce((acc, vuln) => {
+                let is_active = false
+                let date_index = 0
+                let was_active = new Array(nb_points).fill(false)
+
+                vuln.assessments.forEach(assess => {
+                    const dt = new Date(assess.timestamp);
+
+                    // forward time index if needed
+                    while (dt.getTime() > time_scales[date_index+1]?.getTime() && date_index < (nb_points - 1)) {
+                        if (is_active) was_active[date_index] = true;
+                        date_index++;
+                    }
+
+                    const should_be_active = (assess.simplified_status != 'not affected' && assess.simplified_status != 'fixed');
+                    if (is_active != should_be_active) {
+                        if (should_be_active && dt.getTime() >= time_scales[date_index]?.getTime()) {
+                            // if vulnerability was active at least one time in the month, then classify as active for while month
+                            was_active[date_index] = true
+                        }
+                        is_active = should_be_active;
+                    }
+                })
+
+                while (date_index < nb_points) {
+                    if (is_active) was_active[date_index] = true;
+                    date_index++;
+                }
+                was_active.forEach((v, i) => acc[i] += v ? 1 : 0);
+                return acc;
+            }, new Array(nb_points).fill(0)),
+            backgroundColor: new Array(nb_points).fill(0).map((_, ind) => `hsl(${Math.round((60 / nb_points) * (ind+1))} 100% 50%)`),
             hoverOffset: 4
         }]
     }
@@ -200,7 +280,18 @@ function Metrics ({ vulnerabilities }: Readonly<Props>) {
             </div>
 
             <div className="w-1/3 lg:w-1/4 p-4">
-                <div className="bg-zinc-700 p-2 text-center text-xl">Active vulnerabilities <i>[fake data]</i></div>
+                <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
+                    <div className="text-xl p-1">Active vulnerabilities</div>
+                    <select className="bg-zinc-800 ml-2 p-1" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
+                        <option value="12_months">1 year</option>
+                        <option value="6_months">6 months</option>
+                        <option value="12_weeks">12 weeks</option>
+                        <option value="6_weeks">6 weeks</option>
+                        <option value="31_days">1 month</option>
+                        <option value="7_days">1 week</option>
+                        <option value="24_hours">24 hours</option>
+                    </select>
+                </div>
                 <div className="bg-zinc-700 p-4 w-full aspect-square">
                     <Line data={vulnEvolutionTime} options={LineOptions} />
                 </div>
