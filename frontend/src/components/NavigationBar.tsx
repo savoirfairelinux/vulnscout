@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChartLine, faBox, faShieldHalved, faMagnifyingGlass, faFileImport, faFileExport, faBinoculars, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
+import { faChartLine, faBox, faShieldHalved, faFileExport, faBinoculars, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-green-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -17,7 +17,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
   return (
     <nav>
       <ul className={["flex flex-row font-bold items-center", bgColor].join(' ')}>
-        <li className={["px-4 py-2 mr-4 text-lg", bgHoverColor].join(' ')}>
+        <li className="px-4 py-2 mr-4 text-lg">
             <FontAwesomeIcon icon={faBinoculars} className='mr-1 fa-rotate-180' size='xl' />
             VulnScout
         </li>
@@ -40,12 +40,6 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
                 Vulnerabilities
             </button>
         </li>
-        <li className={["px-4 py-2", bgHoverColor, tab == 'audit' && bgActiveColor].join(' ')}>
-            <button onClick={() => changeTab('audit')}>
-                <FontAwesomeIcon icon={faMagnifyingGlass} className='mr-1' />
-                Audit
-            </button>
-        </li>
         <li className={["px-4 py-2", bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
             <button onClick={() => changeTab('patch-finder')}>
                 <FontAwesomeIcon icon={faBugSlash} className='mr-1' />
@@ -55,12 +49,6 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
 
         <li className="mx-3 border-l h-8 dark:border-neutral-300"></li>
 
-        <li className={["px-4 py-2", bgHoverColor].join(' ')}>
-            <button>
-                <FontAwesomeIcon icon={faFileImport} className='mr-1' />
-                Import
-            </button>
-        </li>
         <li className={["px-4 py-2", bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')}>
             <button onClick={() => changeTab('exports')}>
                 <FontAwesomeIcon icon={faFileExport} className='mr-1' />
