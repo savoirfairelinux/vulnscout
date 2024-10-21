@@ -2,7 +2,8 @@
 from ..models.package import Package
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
-from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
+from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
+from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
 from spdx_tools.spdx.model.package import PackagePurpose, Package as SpdxPackage
 from spdx_tools.spdx.model.document import Document, CreationInfo
 from spdx_tools.spdx.model.actor import Actor, ActorType
@@ -98,8 +99,7 @@ class SPDX:
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]
 
-    def output_as_json(self, validate=True, author=None) -> str:
-        """Output the SBOM to JSON format."""
+    def create_shell_document(self, author=None):
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Document(
                 creation_info=CreationInfo(
@@ -126,12 +126,23 @@ class SPDX:
                 ),
                 packages=[]
             )
+
+    def _output_generic(self, writer, validate=True, author=None) -> str:
+        self.create_shell_document(author)
         self.register_components()
 
         if len(self.sbom.relationships) == 0:
             self.sbom.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, SpdxNone())]
 
         stream = StringIO()
-        write_document_to_stream(self.sbom, stream, validate=validate)
+        writer(self.sbom, stream, validate=validate)
         # Replace is here until patch are applied upstream: https://github.com/spdx/tools-python/pull/828
         return stream.getvalue().replace("OPERATING_SYSTEM", "OPERATING-SYSTEM")
+
+    def output_as_json(self, validate=True, author=None) -> str:
+        """Output the SBOM to JSON format."""
+        return self._output_generic(write_document_to_json_stream, validate=validate, author=author)
+
+    def output_as_xml(self, validate=True, author=None) -> str:
+        """Output the SBOM to XML format."""
+        return self._output_generic(write_document_to_xml_stream, validate=validate, author=author)

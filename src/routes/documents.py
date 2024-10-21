@@ -160,6 +160,14 @@ def handle_sbom_exports(doc_name, ctrls, expected_mime, metadata):
                     "Content-Type": expected_mime,
                     "Content-Disposition": f"attachment; filename={new_name}.json"
                 }
+        if expected_mime == "text/xml":
+            content = spdx.output_as_xml(metadata["author"])
+            if content is not None:
+                new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
+                return content, 200, {
+                    "Content-Type": expected_mime,
+                    "Content-Disposition": f"attachment; filename={new_name}.xml"
+                }
 
     if doc_name == "OpenVex" and expected_mime == "application/json":
         opvx = OpenVex(ctrls)
