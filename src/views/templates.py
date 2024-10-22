@@ -185,7 +185,7 @@ class TemplatesExtensions:
     def sort_by_epss(value: dict[str, dict] | list[dict]) -> list[dict]:
         if type(value) is dict:
             value = list(value.values())
-        return sorted(value, key=lambda x: x["epss"]["score"], reverse=True)  # type: ignore
+        return sorted(value, key=lambda x: float(x["epss"]["score"] or "0.0"), reverse=True)  # type: ignore
 
     @staticmethod
     def filter_epss_score(value: dict[str, dict] | list[dict], minimum: float) -> list[dict]:
@@ -215,4 +215,4 @@ class TemplatesExtensions:
     def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:
         if type(value) is dict:
             value = list(value.values())
-        return sorted(value, key=lambda x: x["last_assessment"]["timestamp"], reverse=True)  # type: ignore
+        return sorted(value, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)  # type: ignore

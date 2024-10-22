@@ -2,6 +2,7 @@ from flask import request, make_response
 import json
 import os
 import mimetypes
+import traceback
 from datetime import date
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -127,7 +128,7 @@ def init_app(app):
 
             return {"error": f"Cannot convert {base_mime} to {expected_mime}"}, 400
         except Exception as e:
-            print(e)
+            print(e, traceback.format_exc(), flush=True)
             return {"error": str(e)}, 500
 
 
