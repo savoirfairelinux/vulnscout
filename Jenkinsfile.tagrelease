@@ -18,11 +18,15 @@ pipeline {
                     script: 'echo $GERRIT_REFNAME | sed "s|refs/tags/||i" | sed "s|[/+]|-|g"'
                 ).trim()
                 // DOCKER_BUILDKIT="1"
+                SFL_NVD_API_KEY=credentials('nvd-nist-fa7ce700-c837-4daa-b6b3-0f04e1971e31')
             }
             steps {
                 script {
                     docker.withRegistry('https://gitlab.savoirfairelinux.com:5050', '4a2371e0-45dd-4abc-81b0-cad2dcc19ba1') {
-                        def dockerImage = docker.build("gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}")
+                        def dockerImage = docker.build(
+                            "gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}",
+                            "--build-arg DEFAULT_NVD_API_KEY=$SFL_NVD_API_KEY Dockerfile ."
+                        )
 
                         sh 'tests/docker/testDocker.sh "gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}"'
 

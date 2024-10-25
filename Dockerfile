@@ -42,6 +42,10 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
+ARG DEFAULT_NVD_API_KEY=""
+
+ENV NVD_API_KEY=$DEFAULT_NVD_API_KEY
+
 LABEL org.opencontainers.image.title="VulnScout"
 LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
 LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
