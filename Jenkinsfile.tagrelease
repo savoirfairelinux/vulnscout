@@ -25,7 +25,7 @@ pipeline {
                     docker.withRegistry('https://gitlab.savoirfairelinux.com:5050', '4a2371e0-45dd-4abc-81b0-cad2dcc19ba1') {
                         def dockerImage = docker.build(
                             "gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}",
-                            "--build-arg DEFAULT_NVD_API_KEY=$SFL_NVD_API_KEY Dockerfile ."
+                            "--build-arg DEFAULT_NVD_API_KEY=$SFL_NVD_API_KEY ."
                         )
 
                         sh 'tests/docker/testDocker.sh "gitlab.savoirfairelinux.com:5050/pe/vulnscout:${RELEASE_TAG}"'
