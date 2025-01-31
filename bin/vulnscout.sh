@@ -10,6 +10,7 @@
 # Note: Keep this file indented with tabs, not spaces, or you break the help message.
 #
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
 
 
 set -euo pipefail # Enable error checking
@@ -128,6 +129,11 @@ function help() {
 		    -vv --verbose   Print event more logs than by default
 
 		Copyright (C) 2024 Savoir-faire Linux, Inc.
+
+		This program comes with ABSOLUTELY NO WARRANTY. This is free software,
+		and you are welcome to redistribute it under the terms of the
+		GNU GPLv3 license; see the LICENSE.GPL-3.0-only for more informations.
+
 	EOF
 }
 

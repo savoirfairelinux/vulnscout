@@ -1,3 +1,7 @@
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
 from .packages import init_app as init_pkg_app
 from .vulnerabilities import init_app as init_vuln_app
 from .assessments import init_app as init_assess_app

@@ -6,6 +6,7 @@
 # Outputs files will be used by web API later. (see scan.sh)
 #
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from ..views.grype_vulns import GrypeVulns
 from ..views.yocto_vulns import YoctoVulns

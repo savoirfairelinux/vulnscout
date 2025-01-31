@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
 from ..models.vulnerability import Vulnerability
 from ..controllers.packages import PackagesController
 import http.client
