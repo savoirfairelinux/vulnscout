@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
 """
 Code in this project follow the Model-View-Controller (MVC) pattern.
 On the left panel, you can access the models, views, and controllers part of the code.

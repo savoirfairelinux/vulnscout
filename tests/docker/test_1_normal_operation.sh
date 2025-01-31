@@ -7,6 +7,7 @@
 # - Server root path respond a non-empty 200 HTML page
 #
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail # Enable error checking
 

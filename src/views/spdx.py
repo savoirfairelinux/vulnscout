@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
 from ..models.package import Package
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
