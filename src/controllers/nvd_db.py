@@ -109,16 +109,26 @@ class NVD_DB:
         }
         if self.nvd_api_key is not None:
             headers['apiKey'] = self.nvd_api_key
+
         try:
             self.client.request("GET", f"/rest/json/cves/2.0?{txt_params}", headers=headers)
             resp = self.client.getresponse()
-            return resp.status, json.loads(resp.read().decode())
-        except json.decoder.JSONDecodeError:
-            print("NVD API responded with invalid JSON. Adding an free NVD API key "
-                  + f"can help to avoid this error. (status: {resp.status})", flush=True)
-            return resp.status, {}
+            resp_status = resp.status
+
+            try:
+                resp_json = json.loads(resp.read().decode())
+            except json.decoder.JSONDecodeError:
+                print("NVD API responded with invalid JSON. Adding an free NVD API key "
+                      + f"can help to avoid this error. (status: {resp_status})", flush=True)
+                resp_json = {}
+
+            self.client.close()
+
+            return resp_status, resp_json
+
         except Exception as e:
             print(f"Error calling NVD API: {e}", flush=True)
+            self.client.close()
             raise e
 
     def api_get_cve(self, cve_id: str) -> Tuple[int, dict]:
