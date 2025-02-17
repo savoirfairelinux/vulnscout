@@ -41,6 +41,7 @@ NOTE: The `--verbose` option is to see all the logs. You can omit that if you pr
 
 2. Check the `.vulnscout/output` to see the default reports and sboms created by vulnscout. Other reports/sboms are available under the `Exports` title in the interface.
 
-3. The default `summary` report lists only CVEs with more than 50% EPSS. To change that you need to add a custom template in `.vulnscout/templates`. And add the templates name in `GENERATE_DOCUMENTS` variable in `yocto.rc`. See an example template in https://r1.sfl.team/issues/15570[the redmine issue], `report_template_summary.adoc`, with it the generated report will display all the vulnerabilities with more than 0% EPSS and it also lists the package information.
+3. The default `summary` report lists only CVEs with more than 50% EPSS. To change that you need to add a custom template in `.vulnscout/templates` and add its name in the `GENERATE_DOCUMENTS` variable in `yocto.rc`.
+An example template is provided in this repository at `bin/.vulnscout-example/templates/report_template_summary.adoc`. Its generated report will display up to 15 vulnerabilities with more than 0% EPSS and also list the package information.
 
 NOTE: For more information on customizing template, see `WRITING_TEMPLATES.adoc`.
