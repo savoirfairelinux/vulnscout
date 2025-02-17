@@ -117,7 +117,7 @@ include conf/distro/include/cve-extra-exclusions.inc <4>
 
 Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. +
 To allow vulnscout to find your SBOM files, ensure you have copied and configured `.rc` file in the `.vulnscout` folder. +
-If you haven't already done it, check at the example in `bin/.vulnscout-example/yocto.rc` folder of `sfl/vulnscout` project.
+If you haven't already done it, check the examples in `bin/.vulnscout-example/yocto.rc` folder of this repository.
 
 === Configuration tips for others projects
 
