@@ -22,7 +22,7 @@ if ! echo "$version" | grep -qE '^v[0-9]+(\.[0-9]+){0,2}([-+\.][a-zA-Z0-9]+)*$';
 fi
 
 semversion=$(echo "${version:1}" | grep -oE '^[0-9]+(\.[0-9]+){0,2}')
-
+VULNSCOUT_GIT_URI="git@github.com:savoirfairelinux/vulnscout.git"
 
 
 # Write the version to files
@@ -106,6 +106,6 @@ git tag -am "$tag_msg" "$version"
 
 
 # Push the tag
-git push gerrit tag "$version"
+git push $VULNSCOUT_GIT_URI tag "$version"
 
 echo "Version $version published with success, check Jenkins pipeline for deployment of Docker image."

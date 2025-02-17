@@ -1,7 +1,7 @@
 = VulnScout - Writing guide for creating templates
 Savoir-faire Linux
 0.5.0, {docdate}
-:url-repo: https://g1.sfl.team/plugins/gitiles/sfl/vulnscout
+:url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 :toc:
 

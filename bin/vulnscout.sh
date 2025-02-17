@@ -18,6 +18,7 @@ set -euo pipefail # Enable error checking
 # Configuration are changed automatically by bin/release_tag.sh
 DOCKER_IMAGE="gitlab.savoirfairelinux.com:5050/pe/vulnscout:v0.5.0"
 VULNSCOUT_VERSION="v0.5.0"
+VULNSCOUT_GIT_URI="git@github.com:savoirfairelinux/vulnscout.git"
 INTERACTIVE_MODE="true"
 FAIL_CONDITION=""
 QUIET_MODE="false"
@@ -278,7 +279,7 @@ semver_cmp () {
 #######################################
 function check_newer_version() {
 	local versions="" greatest_version="" verA="" cmp_result=""
-	versions="$(git ls-remote --refs -t --sort=-v:refname ssh://g1.sfl.io/sfl/vulnscout)"
+	versions="$(git ls-remote --refs -t --sort=-v:refname $VULNSCOUT_GIT_URI)"
 	versions="$(echo "$versions" | grep -Eo 'v[0-9]+(\.[0-9]+){0,2}([-+\.][a-zA-Z0-9]+)*')"
 
 	for version in $versions; do
@@ -374,7 +375,7 @@ function update_vulnscout() {
 
 	echo "Found vulnscout.sh at: $script_path"
 
-	git clone ssh://g1.sfl.io/sfl/vulnscout "$tmp_folder"
+	git clone $VULNSCOUT_GIT_URI "$tmp_folder"
 	if [[ ! -f "$tmp_folder/bin/vulnscout.sh" ]]; then
 		echo "Error: Unable to find vulnscout.sh in the repository."
 		rm -rf "$tmp_folder"
