@@ -90,8 +90,6 @@ changed in the source tree.
   $ make docker_build docker_test docker_clean
 ----
 
-TIP: All theses tests are run by Jenkins for every changes in Gerrit.
-
 === Publishing new version
 
 1. Identify which version is next and determine which one you want to create. +

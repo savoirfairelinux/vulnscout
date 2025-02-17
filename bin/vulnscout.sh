@@ -40,7 +40,7 @@ function main() {
 			echo "To updade, run: $0 update" >&2
 		fi
 	else
-		echo "Warning: Unable to reach Vulnscout repository using ssh on gerrit. Unable to check for newer version." >&2
+		echo "Warning: Unable to reach Vulnscout repository using ssh on github. Unable to check for newer version." >&2
 	fi
 
 	load_conf

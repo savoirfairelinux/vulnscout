@@ -88,10 +88,6 @@ if ! git diff --quiet HEAD --; then
         trap 'git stash pop' EXIT
     fi
 
-
-    # Publish the commit
-    git review
-
 else
     echo "No changes to commit, moving to tag step"
 fi
