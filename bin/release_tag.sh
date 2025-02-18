@@ -32,7 +32,6 @@ sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" WRITING_TEMPLATES.adoc
 sed -Ei "3s/^v[0-9]+(\.[0-9]+){0,2}/v${semversion}/" WRITING_CI_CONDITIONS.adoc
 sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers.image.version=\"${version}\"/i" Dockerfile
 sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
-sed -i "s/^DOCKER_IMAGE=\".*\"$/DOCKER_IMAGE=\"gitlab\.savoirfairelinux\.com:5050\/pe\/vulnscout:${version}\"/i" bin/vulnscout.sh
 
 # Commit the changes
 git add frontend/package.json

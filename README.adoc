@@ -136,23 +136,6 @@ You can edit this file in it and make the path bindings for SPDX / CDX variables
 
 You can now run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
 
-== Authentification
-
-If you get an error while using vulnscout.sh or docker-compose, you may need to authenticate to the registry.
-The image is not public but hosted on Gitlab registry. To authentificate:
-
-1. Open https://gitlab.savoirfairelinux.com/-/user_settings/personal_access_tokens in your browser.
-
-2. Create a new token with the following scope: `read_registry` and set expiration to what you want.
-
-3. Enter a name, create the token and copy it.
-
-4. In a terminal, run `docker login gitlab.savoirfairelinux.com:5050` and enter your Gitlab username and the token as password.
-
-TIP: If you have already logged in the registry but want to change the password, add `-u <username>` to the command. It will re-ask for password.
-
-NOTE: If after authentification you still fail to pull image, verify you have access to https://gitlab.savoirfairelinux.com/pe/vulnscout . If not, ask for access to the project.
-
 <<<
 
 include::README_DEV.adoc[]
