@@ -1,18 +1,8 @@
 = Quickstart guide for Yocto projects
 
-== Steps to setup your machine for vulnscout
+== Prerequisites
 
-1. Install and setup docker. Refer https://docs.docker.com/desktop/install/linux/.
-
-2. Authenticate to vulnscout registry:
-
-     - Open https://gitlab.savoirfairelinux.com/-/user_settings/personal_access_tokens in your browser.
-     - Create a new token with the following scope: `read_registry` and set expiration to what you want.
-     - Enter a name, create the token and copy it.
-     - In a terminal, run `docker login gitlab.savoirfairelinux.com:5050` and enter your Gitlab username and the token as password.
-
-TIP: If you have already logged in the registry but want to change the password, add `-u <username>` to the command. It will re-ask for password.
-NOTE: If after authentification you still fail to pull image, verify you have access to https://gitlab.savoirfairelinux.com/pe/vulnscout . If not, ask for access to the project.
+Install and setup docker. Refer https://docs.docker.com/desktop/install/linux/.
 
 == Steps to scan your yocto project
 

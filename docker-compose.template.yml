@@ -5,7 +5,7 @@
 services:
 
   vulnscout:
-    image: gitlab.savoirfairelinux.com:5050/pe/vulnscout:latest
+    image: sflinux/vulnscout:latest
     container_name: vulnscout
     restart: "no"
     ports:
