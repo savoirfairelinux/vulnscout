@@ -24,10 +24,10 @@ pipeline {
         stage("Test docker image") {
             steps {
                 script {
-                    def dockerImage = docker.build("vulnscout:${BUILD_TAG}")
+                    def dockerImage = docker.build("sflinux/vulnscout:${BUILD_TAG}")
                     sh '''
                         chmod +x tests/docker/testDocker.sh
-                        tests/docker/testDocker.sh "vulnscout:${BUILD_TAG}"
+                        tests/docker/testDocker.sh "sflinux/vulnscout:${BUILD_TAG}"
                     '''
                 }
             }
