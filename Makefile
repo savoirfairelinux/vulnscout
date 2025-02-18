@@ -30,12 +30,12 @@ jenkins_test_frontend:
 
 docker_build:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
-	docker build -t "vulnscout:${BUILD_TAG}" .
+	docker build -t "sflinux/vulnscout:${BUILD_TAG}" .
 
 docker_test:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
-	tests/docker/testDocker.sh "vulnscout:${BUILD_TAG}"
+	tests/docker/testDocker.sh "sflinux/vulnscout:${BUILD_TAG}"
 
 docker_clean:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
-	docker image rm -f "vulnscout:${BUILD_TAG}" "registry.savoirfairelinux.com/lmaillard/vulnscout-test:${BUILD_TAG}"
+	docker image rm -f "sflinux/vulnscout:${BUILD_TAG}"
