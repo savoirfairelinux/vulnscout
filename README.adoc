@@ -1,6 +1,6 @@
 = VulnScout
 Savoir-faire Linux
-0.5.0, {docdate}: developement builds
+v0.6.0, {docdate}: developement builds
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 :toc:
