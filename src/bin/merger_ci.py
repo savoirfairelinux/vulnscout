@@ -15,6 +15,7 @@ from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.fast_spdx import FastSPDX
+from ..views.fast_spdx3 import FastSPDX3
 from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -155,6 +156,7 @@ def read_inputs(controllers):
     timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
     spdx = SPDX(controllers)
+    fastspdx3 = FastSPDX3(controllers)
     fastspdx = FastSPDX(controllers)
     templates = Templates(controllers)
 
@@ -201,12 +203,16 @@ def read_inputs(controllers):
     for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"merger_ci: Reading {file}")
-            if use_fastspdx:
-                with open(file, "r") as f:
-                    fastspdx.parse_from_dict(json.loads(f.read()))
-            else:
-                spdx.load_from_file(file)
-                spdx.parse_and_merge()
+            with open(file, "r") as f:
+                data = json.load(f)
+
+                if fastspdx3.could_parse_spdx(data):
+                    fastspdx3.parse_from_dict(data)
+                elif use_fastspdx:
+                    fastspdx.parse_from_dict(data)
+                else:
+                    spdx.load_from_file(file)
+                    spdx.parse_and_merge()
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
                 print(f"Error parsing SPDX file: {file} {e}")
