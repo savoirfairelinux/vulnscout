@@ -16,7 +16,7 @@
 set -euo pipefail # Enable error checking
 
 # Configuration are changed automatically by bin/release_tag.sh
-VULNSCOUT_VERSION="v0.6.0"
+VULNSCOUT_VERSION="v0.7.0-beta.1"
 DOCKER_IMAGE="sflinux/vulnscout:$VULNSCOUT_VERSION"
 VULNSCOUT_GIT_URI="https://github.com/savoirfairelinux/vulnscout.git"
 INTERACTIVE_MODE="true"
