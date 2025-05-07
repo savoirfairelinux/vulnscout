@@ -88,6 +88,12 @@ Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and o
 
 == Specific configuration
 
+=== Environment variables
+
+The following environment variables may be used to configure the scanner:
+
+* `NVD_API_KEY`: An API key for NVD. This is required to properly use the NVD datasource.
+
 === Configuration for Yocto projects
 
 After having setup one of the <<Deployment>> tutorial, you have some steps needed make Yocto output necessary files.
