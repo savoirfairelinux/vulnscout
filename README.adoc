@@ -71,7 +71,7 @@ More information on <<Authentification>> section.
 `BUILD_TAG="local-build" cqfd -b docker_build run`
 
 2. Then, copy `bin/vulnscout.sh` into root of your project repository. Create a `.vulnscout` folder also at root. +
-Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.l`.
+Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.
 
 3. In your new copied file, customize variables to bind the correct paths. +
 Replace the `DOCKER_IMAGE` value by your image name like `vulnscout:local-build`.
