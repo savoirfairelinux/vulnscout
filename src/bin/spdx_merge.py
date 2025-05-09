@@ -61,7 +61,7 @@ def output_results(controllers):
 
     verbose(f"spdx_merge: Writing {os.getenv('OUTPUT_SPDX_FILE', OUTPUT_SPDX_FILE)}")
     with open(os.getenv("OUTPUT_SPDX_FILE", OUTPUT_SPDX_FILE), "w") as f:
-        f.write(spdx.output_as_json())
+        f.write(spdx.output_as_json(with_cpe=True))
 
 
 def main():

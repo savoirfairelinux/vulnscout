@@ -8,7 +8,12 @@ from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
-from spdx_tools.spdx.model.package import PackagePurpose, Package as SpdxPackage
+from spdx_tools.spdx.model.package import (
+    PackagePurpose,
+    Package as SpdxPackage,
+    ExternalPackageRef,
+    ExternalPackageRefCategory
+)
 from spdx_tools.spdx.model.document import Document, CreationInfo
 from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
@@ -58,7 +63,7 @@ class SPDX:
                 cpe_type = "o"
             if package.primary_package_purpose == PackagePurpose.DEVICE:
                 cpe_type = "h"
-            pkg.add_cpe(f"cpe:2.3:{cpe_type}:*:{package.name}:{package.version or '*'}:*:*:*:*:*:*:*")
+            pkg.add_cpe(f"cpe:2.3:{cpe_type}:*:{package.name or '*'}:{package.version or '*'}:*:*:*:*:*:*:*")
             pkg.generate_generic_cpe()
             pkg.generate_generic_purl()
 
@@ -72,7 +77,7 @@ class SPDX:
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
 
-    def register_components(self):
+    def register_components(self, with_cpe=False):
         """
         Internal method.
         Copy components from controller into SBOM.
@@ -97,6 +102,15 @@ class SPDX:
                         package.primary_package_purpose = PackagePurpose.OPERATING_SYSTEM
                     if cpe_type == "h":
                         package.primary_package_purpose = PackagePurpose.DEVICE
+                    if with_cpe:
+                        # Add CPE as external reference
+                        package.external_references.append(
+                            ExternalPackageRef(
+                                category=ExternalPackageRefCategory.SECURITY,
+                                reference_type="cpe23Type",
+                                locator=cpe
+                            )
+                        )
 
                 self.sbom.packages = self.sbom.packages + [package]
                 self.sbom.relationships = self.sbom.relationships + [
@@ -131,22 +145,27 @@ class SPDX:
                 packages=[]
             )
 
-    def _output_generic(self, writer, validate=True, author=None) -> str:
+    def _output_generic(self, writer, validate=True, author=None, with_cpe=True) -> str:
         self.create_shell_document(author)
-        self.register_components()
+        self.register_components(with_cpe=with_cpe)
 
         if len(self.sbom.relationships) == 0:
             self.sbom.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, SpdxNone())]
 
         stream = StringIO()
-        writer(self.sbom, stream, validate=validate)
+        # CPE validation may fail because the SPDX spec expects special characters in package
+        # names to be escaped, but our CPE strings may contain unescaped special characters
+        if with_cpe:
+            writer(self.sbom, stream, validate=False)
+        else:
+            writer(self.sbom, stream, validate=validate)
         # Replace is here until patch are applied upstream: https://github.com/spdx/tools-python/pull/828
         return stream.getvalue().replace("OPERATING_SYSTEM", "OPERATING-SYSTEM")
 
-    def output_as_json(self, validate=True, author=None) -> str:
+    def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:
         """Output the SBOM to JSON format."""
-        return self._output_generic(write_document_to_json_stream, validate=validate, author=author)
+        return self._output_generic(write_document_to_json_stream, validate=validate, author=author, with_cpe=with_cpe)
 
-    def output_as_xml(self, validate=True, author=None) -> str:
+    def output_as_xml(self, validate=True, author=None, with_cpe=False) -> str:
         """Output the SBOM to XML format."""
-        return self._output_generic(write_document_to_xml_stream, validate=validate, author=author)
+        return self._output_generic(write_document_to_xml_stream, validate=validate, author=author, with_cpe=with_cpe)
