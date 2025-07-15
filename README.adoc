@@ -10,6 +10,8 @@ v0.6.0, {docdate}: developement builds
 Scanning project to export Software Bill of Materials (SBOM) and list of Vulnerabilities that affect them.
 Support for Cyclone DX, SPDX, Yocto JSON files and Open VEX.
 
+image::diagrams/architecture.png
+
 This document use a lot of format names, accronyms and abbreviations which is evident for people working on them, but not for everyone. Here is a definition of the most used ones:
 
 [unordered]
