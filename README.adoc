@@ -7,10 +7,25 @@ v0.6.0, {docdate}: developement builds
 
 == Introduction
 
-Scanning project to export Software Bill of Materials (SBOM) and list of Vulnerabilities that affect them.
-Support for Cyclone DX, SPDX, Yocto JSON files and Open VEX.
+=== What is VulnScout?
+
+VulnScout is a tool designed to help developers and security analysts identify vulnerabilities in their software components and dependencies using an SBOM (Software Bill of Materials). Rather than analyzing code or binaries directly, VulnScout examines metadata that lists all components and dependencies in your codebase. It supports popular input formats such as SPDX, CycloneDX, Grype JSON, and Yocto JSON.
+
+It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype to figure out which parts of your codebase might be affected by security issues (CVE). You can use it locally through a web interface that provides visualization tools or command line that generates enriched output files.
+
+=== What can VulnScout do?
+
+* Analyze SBOMs: Parses and merges SBOMs from multiple formats (SPDX, CycloneDX, Grype JSON and Yocto cve_check output).
+* Detect vulnerabilities: Associates packages with known CVEs from multiple sources (e.g., NVD, EPSS, Grype and OSV).
+* Enrich SBOM files: Combines vulnerability data found in the input files with data pulled from external sources.
+* Generate detailed reports: Provides scan summaries in multiple formats, including an interactive web dashboard and text file.
+* Help track fixes: The web dashboard allows you to assign and track which vulnerabilities are fixed and which are still open and provides various metrics to help decision-making (score, exploitability, risk exposure...).
+
+=== Architecture
 
 image::diagrams/architecture.png[An architecture diagram showing different components of the VulnScout app]
+
+=== Terminology
 
 This document use a lot of format names, accronyms and abbreviations which is evident for people working on them, but not for everyone. Here is a definition of the most used ones:
 
@@ -23,11 +38,11 @@ Yocto:: A build system for embedded Linux systems. It is used to build custom Li
 
 <<<
 
-== Usage
+== Features
 
 You can use VulnScout to scan your project, make report about your dependencies and vulnerabilities, and to manage them.
 
-**Support following inputs** :
+=== Supported input formats
 
 * SPDX 2.3 (Packages)
 * ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
@@ -35,14 +50,16 @@ You can use VulnScout to scan your project, make report about your dependencies 
 * Grype native JSON format (Packages + vulnerabilities)
 * Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
 
-**Support following outputs** :
+=== Supported output formats
 
 * SPDX 2.3 (Packages)
 * ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
 * Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 * openVex (vulnerabilities + Assessments)
 
-**Grab data from following sources** :
+=== Vulnerability Data Sources
+
+The tool pulls vulnerability and risk data from multiple trusted sources:
 
 * NVD (National Vulnerability Database)
 * All datasource supported by Grype
@@ -50,93 +67,255 @@ You can use VulnScout to scan your project, make report about your dependencies 
 * ##OSV## (Open Source Vulnerabilities) Comming soon
 * Information embedded in inputs files
 
-== Deployment
+== Getting Started with VulnScout
 
-This project is made to run on local in a docker container.
+VulnScout is designed to run locally in a docker container.
 
-=== Recommended setup using vulnscout.sh wrapper
+=== Recommended Setup: Using the `vulnscout.sh` Wrapper
 
-1. Copy `bin/vulnscout.sh` at root of your project repository.
+==== 1. Copy the wrapper script
 
-2. Create a `.vulnscout` folder at root of your project repository. +
-Copy one of the example file in `bin/.vulnscout-example` folder into your `.vulnscout` folder. +
-Adjust theses variables to your needs.
+Place the `bin/vulnscout.sh` file into the root directory of your project repository:
 
-3. Run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
+[source,shell]
+----
+cp bin/vulnscout.sh .
+----
 
-4. If you get error when running container, try use `docker login` to authenticate to the registry. +
-More information on <<Authentification>> section.
+==== 2. Set up configuration
 
-=== Alternative setup: Build and use a local image
+Configuration files allows you to tell VulnScout where to find your SBOM files and how to run the scanner. You can use the provided example configuration files and modify them to suit your needs.
 
-1. Start by building the image at root of repository: +
-`BUILD_TAG="local-build" cqfd -b docker_build run`
+Create the configuration directory and copy an example config file:
 
-2. Then, copy `bin/vulnscout.sh` into root of your project repository. Create a `.vulnscout` folder also at root. +
-Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.l`.
+[source,shell]
+----
+mkdir .vulnscout/
+# A generic configuration file with generic SBOM inputs
+cp bin/.vulnscout-example/generic.rc .vulnscout/
+# A configuration file with path to Yocto projects cve-check output
+cp bin/.vulnscout-example/yocto.rc .vulnscout/
+----
 
-3. In your new copied file, customize variables to bind the correct paths. +
-Replace the `DOCKER_IMAGE` value by your image name like `vulnscout:local-build`.
+Edit the configuration file in `.vulnscout/` to suit your project’s needs.
 
-Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and open http://localhost:7275 to view the results.
+==== 3. Run the scanner
 
-=== Alternative setup: Use docker-compose instead of vulnscout.sh
+From the root of your project, run:
 
-1. Copy `docker-compose.template.yml` from this repository as `docker-compose.yml` at root of your project repository.
+[source,shell]
+----
+./vulnscout.sh scan
+----
 
-2. Edit this file to bind your volumes. Follow instructions in the file. Then adjust environment variables.
+Once the scan completes, you can open the VulnScout dashboard in your web browser to view the results:
 
-3. Run `docker-compose up` to start the scanner and open http://localhost:7275 to view the results.
+[source,plaintext]
+----
+http://localhost:7275
+----
 
-== Specific configuration
+==== Troubleshooting
+
+If the container fails to start, it may be due to missing Docker credentials. Log in with:
+
+[source,shell]
+----
+docker login
+----
+
+Refer to the <<Authentication>> section for more details.
+
+=== Alternative Setup: Build and Use a Local Image
+
+==== 1. Build the Docker image
+
+From the root of the repository, build the local image:
+
+[source,shell]
+----
+BUILD_TAG="local-build" cqfd -b docker_build run
+----
+
+This will produce a Docker image tagged `vulnscout:local-build`.
+
+==== 2. Prepare the project repository
+
+Copy the wrapper script and configuration:
+
+[source,shell]
+----
+cp bin/vulnscout.sh .
+mkdir .vulnscout/
+# A generic configuration file with generic SBOM inputs
+cp bin/.vulnscout-example/generic.rc .vulnscout/
+# A configuration file with path to Yocto projects cve-check output
+cp bin/.vulnscout-example/yocto.rc .vulnscout/
+----
+
+Then edit the copied `.rc` file inside `.vulnscout/`:
+
+- Update paths as needed.
+- Set the `DOCKER_IMAGE` variable to use your local image:
+
+==== 3. Run the scanner
+
+From the root of your project, run:
+
+[source,shell]
+----
+./vulnscout.sh scan
+----
+
+Once the scan completes, you can open the VulnScout dashboard in your web browser to view the results:
+
+[source,plaintext]
+----
+http://localhost:7275
+----
+
+=== Alternative Setup: Use `docker-compose`
+
+==== 1. Copy the Compose template
+
+Copy the provided Docker Compose template into your project root location:
+
+[source,shell]
+----
+cp docker-compose.template.yml docker-compose.yml
+----
+
+==== 2. Configure your Compose file
+
+Edit `docker-compose.yml` to:
+
+- Bind your project volumes
+- Set appropriate environment variables  
+  (see instructions in the file)
+
+==== 3. Start the scanner
+
+Run the following command from your project root:
+
+[source,shell]
+----
+docker-compose up
+----
+
+Then access the results at:
+
+[source,plaintext]
+----
+http://localhost:7275
+----
+
+== Specific Configuration
 
 === Configuration for Yocto projects
 
-After having setup one of the <<Deployment>> tutorial, you have some steps needed make Yocto output necessary files.
-
-TIP: CycloneDX is not mandatory to use VulnScout. If you want to use only SPDX and CVE-checker, skip step 1-3 and at step 4, ignore the line `cyclonedx-export`.
-
-1. In the Yocto repository, if you use git submodules features, you can run: +
-`git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx` +
-(tips: if you have a `.gitmodules`, you should use this command).
-
-2. If you don't have a `.gitmodules` file and don't want to use git submodules, you can add the source manually by going in `sources` folder and running the following command: `git clone https://github.com/savoirfairelinux/meta-cyclonedx.git`
-
-3. After cloning meta-cyclonedx, you must enter inside (`cd sources/meta-cyclonedx`) and `git checkout` to a tag for your yocto version.
-
-4. Add the following lines if their are not present in your `conf/local.conf` file: +
-[source,conf]
-----
-INHERIT += "create-spdx" <1>
-INHERIT += "cyclonedx-export" <2>
-INHERIT += "cve-check" <3>
-include conf/distro/include/cve-extra-exclusions.inc <4>
-----
-<1> Native export to SPDX, handled by Yocto
-<2> Export to Cyclone DX format, made by the meta-cyclonedx layer
-<3> Check for CVE using Native Yocto tool
-<4> Exclude some old CVE that was corrected
-
-Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. +
-To allow vulnscout to find your SBOM files, ensure you have copied and configured `.rc` file in the `.vulnscout` folder. +
-If you haven't already done it, check the examples in `bin/.vulnscout-example/yocto.rc` folder of this repository.
-
-=== Configuration tips for others projects
-
-If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matching packages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
-
-If you followed correctly the <<Deployment>> section, you should have a `.vulnscout` folder at the root of your project.
-You can edit this file in it and make the path bindings for SPDX / CDX variables:
+After completing one of the <<Deployment>> tutorials, follow these steps to configure your Yocto project to generate the necessary files for scanning.
 
 [TIP]
 ====
-- You can delete the YOCTO_CVE variable if you don't use Yocto CVE-check.
-- You can refer as many files and folder as needed. They are Bash arrays.
-- Scanner support reading in `.tar`, `.tar.zst` and `.tar.gz` archives.
-- If your inputs may contains invalid files, you can set `IGNORE_PARSING_ERRORS` to `true` in your `.rc` file.
+CycloneDX is not mandatory to use VulnScout.  
+If you only want to use SPDX and Yocto’s native CVE-checker, you can skip steps 1–3, and in step 4, ignore the `cyclonedx-export` line.
 ====
 
-You can now run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
+==== 1. Recommended setup: Add `meta-cyclonedx` submodule
+
+If your Yocto project uses Git submodules, run this from the root of your Yocto repository:
+
+[source,shell]
+----
+git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx
+----
+
+If you have a `.gitmodules` file, this is the preferred method.
+
+==== 2. Alternative setup: Clone without submodules
+
+If you don't want to use submodules, manually clone the layer:
+
+[source,shell]
+----
+cd sources
+git clone https://github.com/savoirfairelinux/meta-cyclonedx.git
+----
+
+==== 3. Checkout the appropriate tag
+
+You need to grab the meta-cyclonedx tag that matches your Yocto version.
+[source,shell]
+----
+cd sources/meta-cyclonedx
+git checkout <tag-for-your-yocto-version>
+----
+
+Replace `<tag-for-your-yocto-version>` with your Yocto release.
+
+==== 4. Update `conf/local.conf`
+
+Append the following lines to your `conf/local.conf` file if they are not already present:
+
+[source,conf]
+----
+INHERIT += "create-spdx"             // SPDX file generation
+INHERIT += "cyclonedx-export"        // CycloneDX SBOM export
+INHERIT += "cve-check"               // Native CVE checker
+include conf/distro/include/cve-extra-exclusions.inc
+----
+
+Now rebuild your Yocto project to generate SPDX, CycloneDX (CDX), and CVE data.
+
+==== 5. Configure VulnScout
+
+Make sure you have a `.rc` file configured in your `.vulnscout` folder.  
+If you haven't already, refer to the example file:
+
+[source,shell]
+----
+cp bin/.vulnscout-example/yocto.rc .vulnscout/
+----
+
+Update it to reflect your build paths and desired settings.
+
+=== Configuration tips for others projects
+
+You don’t need to use Yocto to benefit from VulnScout.  
+All you need is at least one Software Bill of Materials (SBOM) file in SPDX or CycloneDX format.
+
+Grype and OSV scanners will analyze the SBOM for known vulnerabilities.  
+If your SBOMs already include vulnerabilities, those will also be merged into the final results.
+
+If you followed the <<Deployment>> section, you should already have a `.vulnscout` folder in your project root.
+
+==== Tips for Editing your `.rc` File
+
+[TIP]
+====
+- You can remove the `YOCTO_CVE` variable if not using Yocto.
+- The `SPDX_FILES` and `CDX_FILES` variables accept multiple files or folders as Bash arrays.
+- `.tar`, `.tar.gz`, and `.tar.zst` archives are supported as SBOM inputs.
+- To ignore parsing errors for malformed SBOMs, set:
+  `IGNORE_PARSING_ERRORS=true`
+====
+
+==== Run the scanner
+
+Run the following to start scanning:
+
+[source,shell]
+----
+./vulnscout.sh scan
+----
+
+Then open your browser to view the results:
+
+[source,plaintext]
+----
+http://localhost:7275
+----
+
 
 <<<
 
