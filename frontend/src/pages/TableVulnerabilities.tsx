@@ -12,6 +12,7 @@ import { escape } from "lodash-es";
 
 type Props = {
     vulnerabilities: Vulnerability[];
+    filteredVulns?: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
@@ -43,7 +44,7 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessment, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
@@ -53,6 +54,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
     const [hideActive, setHideActive] = useState(false);
     const [hidePending, setHidePending] = useState(false);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({})
+    const [useFilteredProp, setUseFilteredProp] = useState(true);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -188,9 +190,22 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
         })
     }, [vulnerabilities, filterSource, hideIgnored, hidePatched, hideActive, hidePending])
 
+    const dataToDisplay = useFilteredProp && filteredVulns ? filteredVulns : filteredvulnerabilities;
+
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
+
+    function resetFilters() {
+        setSearch('');
+        setFilterSource(undefined);
+        setHidePatched(false);
+        setHideIgnored(false);
+        setHideActive(false);
+        setHidePending(false);
+        setSelectedRows({});
+        setUseFilteredProp(false);
+    }
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -221,6 +236,13 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 <input name="hide_pending" type="checkbox" className="mr-1" checked={hidePending} onChange={() => {setHidePending(!hidePending)} } />
                 Hide pending review
             </label>
+
+            <button
+                onClick={resetFilters}
+                className="ml-auto bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
+            >
+                Reset Filters
+            </button>
         </div>
 
 
@@ -242,7 +264,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 'calc(100dvh - 44px - 64px - 48px - 16px - 48px - 16px)' :
                 'calc(100dvh - 44px - 64px - 48px - 16px)'
             }
-            data={filteredvulnerabilities}
+            data={dataToDisplay}
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}

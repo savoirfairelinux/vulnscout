@@ -114,7 +114,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
                     patchVuln={patchVuln}
-                    vulnerabilities={filteredVulns || vulns}
+                    vulnerabilities={vulns}
+                    {...(filteredVulns && { filteredVulns: filteredVulns })}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
                 {tab == 'exports' && <Exports />}
