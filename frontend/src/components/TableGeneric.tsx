@@ -2,7 +2,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable,
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
@@ -31,6 +31,8 @@ function TableGeneric<DataType> ({
     selected = undefined,
     updateSelected = () => {}
 }: Readonly<Props<DataType>>) {
+    const itemsPerPage = 25
+    const [pageIndex, setPageIndex] = useState(0)
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -50,9 +52,16 @@ function TableGeneric<DataType> ({
         return data;
     }, [search, fuse, data]);
 
+    const paginatedData = useMemo(() => {
+        const start = pageIndex * itemsPerPage
+        return filteredData.slice(start, start + itemsPerPage)
+    }, [filteredData, pageIndex])
+
+    const pageCount = Math.ceil(filteredData.length / itemsPerPage)
+
     const table = useReactTable({
         columns,
-        data: filteredData,
+        data: paginatedData,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
@@ -87,7 +96,30 @@ function TableGeneric<DataType> ({
         }
     }
 
+    function getPageNumbers(current: number, total: number): (number | string)[] {
+        const delta = 2
+        const range: (number | string)[] = []
+        const rangeWithDots: (number | string)[] = []
+        let left = current - delta
+        let right = current + delta + 1
 
+        for (let i = 0; i < total; i++) {
+            if (i === 0 || i === total - 1 || (i >= left && i < right)) {
+                range.push(i)
+            }
+        }
+
+        let l: number | null = null
+        for (let i of range) {
+            if (l !== null && typeof i === 'number' && i - l > 1) {
+                rangeWithDots.push('...')
+            }
+            rangeWithDots.push(i)
+            if (typeof i === 'number') l = i
+        }
+
+        return rangeWithDots
+    }
 
     return (
         <div className="relative overflow-auto" style={{height: tableHeight}} ref={tableContainerRef}>
@@ -199,6 +231,53 @@ function TableGeneric<DataType> ({
                     ))}
                 </tfoot>
             </table>
+
+                        <div className="flex flex-wrap justify-center items-center gap-2 py-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
+                <button
+                    className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                    disabled={pageIndex === 0}
+                    onClick={() => setPageIndex(0)}
+                >
+                    First
+                </button>
+                <button
+                    className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                    disabled={pageIndex === 0}
+                    onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))}
+                >
+                    Previous
+                </button>
+                {getPageNumbers(pageIndex, pageCount).map((p, i) => (
+                    typeof p === 'string' ? (
+                        <span key={i} className="px-2">...</span>
+                    ) : (
+                        <button
+                            key={i}
+                            className={[
+                                'px-2 py-1 rounded',
+                                p === pageIndex ? 'bg-blue-600' : 'bg-slate-600'
+                            ].join(' ')}
+                            onClick={() => setPageIndex(p)}
+                        >
+                            {p + 1}
+                        </button>
+                    )
+                ))}
+                <button
+                    className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                    disabled={pageIndex + 1 >= pageCount}
+                    onClick={() => setPageIndex(prev => prev + 1)}
+                >
+                    Next
+                </button>
+                <button
+                    className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                    disabled={pageIndex + 1 >= pageCount}
+                    onClick={() => setPageIndex(pageCount - 1)}
+                >
+                    Last
+                </button>
+            </div>
         </div>
     );
 }
