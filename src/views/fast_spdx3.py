@@ -5,6 +5,7 @@
 
 from typing import Dict, List, Optional, Any
 import logging
+import re
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
@@ -75,12 +76,21 @@ class FastSPDX3:
         """
         Extract package information from components objects and create Package objects.
         """
+        if not isinstance(components_dict, dict):
+            return
+
         graph = components_dict.get("@graph", [])
+        if not isinstance(graph, list):
+            self.logger.warning("@graph is not a list")
+            return
+
         if not graph:
             self.logger.warning("No @graph found in SPDX document")
             return
 
         for component in graph:
+            if not isinstance(component, dict):
+                continue
             if component.get('type') != 'software_Package':
                 continue
             primary_purpose = component.get('software_primaryPurpose', '').lower()
@@ -152,6 +162,8 @@ class FastSPDX3:
         cpe_identifiers = []
 
         for ext_id in external_identifiers:
+            if not isinstance(ext_id, dict):
+                continue
             ext_id_type = ext_id.get('externalIdentifierType', '')
             if ext_id_type == 'cpe23' or ext_id_type == 'cpe22':
                 cpe_id = ext_id.get('identifier')
@@ -164,7 +176,15 @@ class FastSPDX3:
         """
         Extract Vulnerability objects from SPDX graph elements.
         """
+        if not isinstance(vuln_dict, dict):
+            self.logger.warning("Invalid SPDX document format")
+            return
+
         graph = vuln_dict.get("@graph", [])
+        if not isinstance(graph, list):
+            self.logger.warning("@graph is not a list")
+            return
+
         if not graph:
             return
 
@@ -204,11 +224,17 @@ class FastSPDX3:
         }
         """
         for element in graph:
+            if not isinstance(element, dict):
+                continue
             if element.get('type') != 'security_Vulnerability':
                 continue
 
             ext_ids = element.get('externalIdentifier', [])
+            if not isinstance(ext_ids, list):
+                continue
             for ext_id in ext_ids:
+                if not isinstance(ext_id, dict):
+                    continue
                 if ext_id.get('externalIdentifierType') != 'cve':
                     continue
 
@@ -217,13 +243,16 @@ class FastSPDX3:
                     continue
 
                 locators = ext_id.get('identifierLocator', [])
+                if not isinstance(locators, list):
+                    locators = []
                 datasource = locators[0] if locators else "unknown"
 
                 vulnerability = Vulnerability(cve_id, ["yocto"], datasource, "unknown")
 
                 # Add remaining locators as URLs
                 for locator in locators[1:]:
-                    vulnerability.add_url(locator)
+                    if isinstance(locator, str):
+                        vulnerability.add_url(locator)
 
                 self.vulnerabilitiesCtrl.add(vulnerability)
 
@@ -241,6 +270,8 @@ class FastSPDX3:
         }
         """
         for element in graph:
+            if not isinstance(element, dict):
+                continue
             if element.get('type') != 'Relationship':
                 continue
 
@@ -252,7 +283,7 @@ class FastSPDX3:
                 continue
 
             vulnerability_uris = element.get('to', [])
-            if not vulnerability_uris:
+            if not isinstance(vulnerability_uris, list) or not vulnerability_uris:
                 continue
 
             # Get package ID from URI mapping
@@ -270,15 +301,16 @@ class FastSPDX3:
                 if vulnerability:
                     vulnerability.add_package(package_id)
 
+    CVE_PATTERN = re.compile(r'\bCVE-\d{4}-\d{4,}\b')
+
     def _extract_cve_id(self, text: str) -> Optional[str]:
         """Extract CVE ID from text string if present."""
         if not text:
             return None
 
-        parts = text.split('/')
-        for part in parts:
-            if part.startswith('CVE-'):
-                return part
+        match = self.CVE_PATTERN.search(text)
+        if match:
+            return match.group(0)
 
         return None
 
@@ -293,11 +325,21 @@ class FastSPDX3:
         """
         Process VEX relationships from the SPDX document to create vulnerability assessments.
         """
+        if not isinstance(spdx_dict, dict):
+            self.logger.warning("Invalid SPDX document format")
+            return
+
         graph = spdx_dict.get("@graph", [])
+        if not isinstance(graph, list):
+            self.logger.warning("@graph is not a list")
+            return
+
         if not graph:
             return
 
         for rel in graph:
+            if not isinstance(rel, dict):
+                continue
             if not self.is_vex_relationship(rel):
                 continue
 
@@ -312,8 +354,10 @@ class FastSPDX3:
         if 'from' not in element or 'to' not in element:
             return None
 
-        from_value = element.get('from', '')  # package uri
-        to_values = element.get('to', [])     # vulnerabilities uri
+        from_value = element.get('from', '')  # vulnerability uri
+        to_values = element.get('to', [])     # package uri
+        if not isinstance(to_values, list):
+            return None
         vuln_id = self._extract_cve_id(from_value)
         package_uri = to_values[0] if to_values else None
 
@@ -337,6 +381,7 @@ class FastSPDX3:
             assessment.set_status('fixed')
 
         raw_justification = element.get('security_justificationType')
+
         if raw_justification and raw_justification in self.JUSTIFICATION_MAP:
             assessment.set_justification(self.JUSTIFICATION_MAP[raw_justification])
 
@@ -360,23 +405,17 @@ class FastSPDX3:
         for vuln_id in vulnerabilities_to_remove:
             self.vulnerabilitiesCtrl.remove(vuln_id)
 
-    def parse_all_from_dict(self, spdx: Dict[str, Any]):
-        """
-        Parse all packages, vulnerabilities, and VEX relationships from SPDX document.
-        """
-        self.merge_components_into_controller(spdx)
-        self.merge_vulnerabilities_into_controller(spdx)
-        self.process_vex_relationships(spdx)
-        self._remove_vulnerabilities_without_assessments()
-
     def parse_controllers_from_dict(self, spdx: Dict[str, Any]):
         """
-        Parse only packages from SPDX document.
+        Parse only packages from SPDX 3 document.
         """
         self.merge_components_into_controller(spdx)
 
     def parse_from_dict(self, spdx: Dict[str, Any]):
         """
-        Read data from SPDX JSON parsed format and populate controllers.
+        Read data from SPDX 3 format and populate controllers.
         """
-        self.parse_all_from_dict(spdx)
+        self.merge_components_into_controller(spdx)
+        self.merge_vulnerabilities_into_controller(spdx)
+        self.process_vex_relationships(spdx)
+        self._remove_vulnerabilities_without_assessments()

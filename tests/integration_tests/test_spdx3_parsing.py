@@ -425,3 +425,171 @@ def test_vulnerability_without_relationship(spdx3_parser):
     # Verify that the vulnerability was not added since there's no hasAssociatedVulnerability relationship
     assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
     assert "CVE-2023-1234" not in spdx3_parser.vulnerabilitiesCtrl
+
+
+def test_graph_as_string_instead_of_list(spdx3_parser):
+    """Test parsing when @graph is provided as a string instead of a list."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": "invalid_string_instead_of_list"
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    assert len(spdx3_parser.packagesCtrl) == 0
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+    assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_graph_as_none(spdx3_parser):
+    """Test parsing when @graph is None."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": None
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    assert len(spdx3_parser.packagesCtrl) == 0
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+    assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_missing_graph_field(spdx3_parser):
+    """Test parsing when @graph field is completely missing."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT"
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    assert len(spdx3_parser.packagesCtrl) == 0
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+    assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_graph_with_invalid_element_types(spdx3_parser):
+    """Test parsing when @graph contains non-dictionary elements."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            "invalid_string_element",
+            123,
+            None,
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/valid/package/test",
+                "name": "test",
+                "software_packageVersion": "1.0"
+            }
+        ]
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert "test@1.0" in spdx3_parser.packagesCtrl
+
+
+def test_package_missing_required_fields(spdx3_parser):
+    """Test parsing packages with missing name or version."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/no-name",
+                "software_packageVersion": "1.0"
+                # Missing name
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/no-version",
+                "name": "test-package"
+                # Missing version
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/valid",
+                "name": "valid-package",
+                "software_packageVersion": "2.0"
+            }
+        ]
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    # Only the valid package should be added
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert "valid-package@2.0" in spdx3_parser.packagesCtrl
+
+def test_vex_relationship_invalid_structure(spdx3_parser):
+    """Test parsing VEX relationships with invalid structure."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/kernel",
+                "name": "kernel",
+                "software_packageVersion": "6.0"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2023-1234"
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/relationship/1",
+                "from": "http://spdx.org/spdxdocs/test/package/kernel",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": ["http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234"]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/missing-from",
+                "to": ["http://spdx.org/spdxdocs/test/package/kernel"],
+                "relationshipType": "doesNotAffect"
+                # Missing 'from' field
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/missing-to",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "relationshipType": "doesNotAffect"
+                # Missing 'to' field
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/invalid-to-type",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "to": "invalid_string_instead_of_list",
+                "relationshipType": "doesNotAffect"
+            }
+        ]
+    }
+
+    spdx3_parser.parse_from_dict(spdx_data)
+
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+    assert len(spdx3_parser.assessmentsCtrl) == 0
