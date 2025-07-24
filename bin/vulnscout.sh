@@ -161,30 +161,30 @@ function scan() {
 
 	if [[ -n "${SPDX_SOURCES-}" ]]; then
 		for source in "${SPDX_SOURCES[@]}"; do
-			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/spdx$(clean_path "$source"):ro"
+			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/spdx$(clean_path "$source"):ro,Z"
 		done
 	fi
 
 	if [[ -n "${CDX_SOURCES-}" ]]; then
 		for source in "${CDX_SOURCES[@]}"; do
-			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/cdx$(clean_path "$source"):ro"
+			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/cdx$(clean_path "$source"):ro,Z"
 		done
 	fi
 
 	if [[ -n "${YOCTO_CVE_SOURCES-}" ]]; then
 		for source in "${YOCTO_CVE_SOURCES[@]}"; do
-			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/yocto_cve_check$(clean_path "$source"):ro"
+			docker_args+=" -v $(pwd)$(clean_path "$source"):/scan/inputs/yocto_cve_check$(clean_path "$source"):ro,Z"
 		done
 	fi
 
 	if [[ -n "${OUTPUT_FOLDER-}" ]]; then
-		docker_args+=" -v $(pwd)$(clean_path "$OUTPUT_FOLDER"):/scan/outputs"
+		docker_args+=" -v $(pwd)$(clean_path "$OUTPUT_FOLDER"):/scan/outputs:Z"
 	else
 		echo "Warning: Started without OUTPUT_FOLDER which means the script will not save your change between runs" >&2
 	fi
 
 	if [[ -n "${CACHE_FOLDER-}" ]]; then
-		docker_args+=" -v $(pwd)$(clean_path "$CACHE_FOLDER"):/cache/vulnscout"
+		docker_args+=" -v $(pwd)$(clean_path "$CACHE_FOLDER"):/cache/vulnscout:Z"
 	else
 		echo "Warning: Started without CACHE_FOLDER which means the script will take much more time to start (+ 5-10 minutes)" >&2
 	fi
