@@ -32,7 +32,7 @@ function TableGeneric<DataType> ({
     updateSelected = () => {}
 }: Readonly<Props<DataType>>) {
     const [pageIndex, setPageIndex] = useState(0)
-    const [itemsPerPage, setItemsPerPage] = useState(10)
+    const [itemsPerPage, setItemsPerPage] = useState(50)
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -57,27 +57,23 @@ function TableGeneric<DataType> ({
         return filteredData.slice(start, start + itemsPerPage)
     }, [filteredData, pageIndex, itemsPerPage])
 
-const paginationSizes = useMemo(() => {
-    const total = filteredData.length;
+    const paginationSizes = useMemo(() => {
+        const total = filteredData.length;
 
-    const roundToNearest100 = (n: number) => Math.round(n / 100) * 100;
+        const roundToNearest100 = (n: number) => Math.round(n / 100) * 100;
 
-    const divisions = [
-        roundToNearest100(total / 2),
-        roundToNearest100(total / 4),
-        roundToNearest100(total / 8)
-    ].filter(n => n > 0);
+        const divisions = [
+            roundToNearest100(total / 2),
+            roundToNearest100(total / 4),
+            roundToNearest100(total / 8)
+        ].filter(n => n > 0);
 
-    const uniqueSorted = Array.from(new Set(['All', ...divisions, 50]))
-        .filter(n => n === 'All' || n > 0)
-        .sort((a, b) => {
-            if (a === 'All') return -1;
-            if (b === 'All') return 1;
-            return a - b;
-        });
+        const uniqueSorted = Array.from(new Set([total, ...divisions, 50]))
+            .filter(n => n > 0)
+            .sort((a, b) => a - b);
 
-    return uniqueSorted;
-}, [filteredData.length]);
+        return uniqueSorted;
+    }, [filteredData.length]);
 
     const pageCount = Math.ceil(filteredData.length / itemsPerPage)
 
@@ -265,16 +261,17 @@ const paginationSizes = useMemo(() => {
     </span>
     <span>- Results per page:</span>
     <select
-      value={itemsPerPage}
-      onChange={(e) => {
+    value={itemsPerPage}
+    onChange={(e) => {
         setPageIndex(0)
         setItemsPerPage(Number(e.target.value))
-      }}
-      className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
+    }}
+    className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
     >
-
     {paginationSizes.map(size => (
-    <option key={size} value={size}>{size}</option>
+        <option key={size} value={size}>
+        {size === filteredData.length ? `${size} (All)` : size}
+        </option>
     ))}
     </select>
   </div>
