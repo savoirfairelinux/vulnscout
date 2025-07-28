@@ -11,10 +11,10 @@ services:
     ports:
       - "7275:7275"
     volumes:
-      - ./test/input/:/scan/inputs/spdx
       - ../src:/scan/src
-      - .cache:/cache/vulnscout
+      - ./cache:/cache/vulnscout
       - ./test/output:/scan/outputs
+      - ./test/input/:/scan/inputs/spdx
     environment:
       - FLASK_RUN_PORT=7275
       - FLASK_RUN_HOST=0.0.0.0

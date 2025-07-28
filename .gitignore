@@ -83,3 +83,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Vulnscout files
+.vulnscout/test/
+.vulnscout/cache/
