@@ -182,7 +182,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
