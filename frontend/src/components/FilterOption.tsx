@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCaretDown } from '@fortawesome/free-solid-svg-icons';
 
@@ -11,6 +11,7 @@ type Props = {
 
 function FilterOption({ label, options, selected, setSelected }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
 
     const toggleOption = (value: string) => {
         if (selected.includes(value)) {
@@ -20,8 +21,27 @@ function FilterOption({ label, options, selected, setSelected }: Readonly<Props>
         }
     };
 
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (
+                dropdownRef.current &&
+                !dropdownRef.current.contains(event.target as Node)
+            ) {
+                setIsOpen(false);
+            }
+        };
+
+        if (isOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isOpen]);
+
     return (
-        <div className="ml-4 relative inline-block text-left">
+        <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className={`py-1 px-2 rounded flex items-center gap-1 ${
