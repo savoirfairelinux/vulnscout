@@ -118,7 +118,7 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
                 size: 100
             }),
             columnHelper.accessor('epss', {
-                header: 'Exploitability',
+                header: 'Exploitability (EPSS)',
                 cell: info => {
                     const epss = info.getValue()
                     return epss.score && <>
