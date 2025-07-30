@@ -4,11 +4,11 @@ name="vulnscout"
 build_context=.
 
 [build]
-command="make"
+command="make -C tests"
 flavors="test jenkins_test"
 
 [test]
-command="make test"
+command="make -C tests test"
 
 [jenkins_test]
-command="make jenkins_test"
+command="make -C tests jenkins_test"
