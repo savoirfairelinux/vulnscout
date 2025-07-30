@@ -54,7 +54,7 @@ class Package:
 
     def generate_generic_cpe(self) -> str:
         """Build a generic cpe string for the package, add it to the cpe list and return it."""
-        item = f"cpe:2.3:*:*:{self.name}:{self.version}:*:*:*:*:*:*:*"
+        item = f"cpe:2.3:*:*:{self.name or '*'}:{self.version or '*'}:*:*:*:*:*:*:*"
         self.add_cpe(item)
         return item
 

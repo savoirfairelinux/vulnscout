@@ -1,6 +1,6 @@
 = VulnScout
 Savoir-faire Linux
-v0.6.0, {docdate}: developement builds
+v0.7.0-beta.2, {docdate}: developement builds
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 :toc:
@@ -71,7 +71,7 @@ More information on <<Authentification>> section.
 `BUILD_TAG="local-build" cqfd -b docker_build run`
 
 2. Then, copy `bin/vulnscout.sh` into root of your project repository. Create a `.vulnscout` folder also at root. +
-Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.l`.
+Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.
 
 3. In your new copied file, customize variables to bind the correct paths. +
 Replace the `DOCKER_IMAGE` value by your image name like `vulnscout:local-build`.
@@ -87,6 +87,12 @@ Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and o
 3. Run `docker-compose up` to start the scanner and open http://localhost:7275 to view the results.
 
 == Specific configuration
+
+=== Environment variables
+
+The following environment variables may be used to configure the scanner:
+
+* `NVD_API_KEY`: An API key for NVD. This is required to properly use the NVD datasource.
 
 === Configuration for Yocto projects
 

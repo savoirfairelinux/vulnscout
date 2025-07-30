@@ -16,7 +16,7 @@
 set -euo pipefail # Enable error checking
 
 # Configuration are changed automatically by bin/release_tag.sh
-VULNSCOUT_VERSION="v0.6.0"
+VULNSCOUT_VERSION="v0.7.0-beta.2"
 DOCKER_IMAGE="sflinux/vulnscout:$VULNSCOUT_VERSION"
 VULNSCOUT_GIT_URI="https://github.com/savoirfairelinux/vulnscout.git"
 INTERACTIVE_MODE="true"
@@ -158,6 +158,7 @@ function scan() {
 	if [[ -n "${COMPANY_NAME-}" ]]; then docker_args+=" -e COMPANY_NAME=${COMPANY_NAME}"; fi
 	if [[ -n "${CONTACT_EMAIL-}" ]]; then docker_args+=" -e CONTACT_EMAIL=${CONTACT_EMAIL}"; fi
 	if [[ -n "${DOCUMENT_URL-}" ]]; then docker_args+=" -e DOCUMENT_URL=${DOCUMENT_URL}"; fi
+	if [[ -n "${NVD_API_KEY-}" ]]; then docker_args+=" -e NVD_API_KEY=${NVD_API_KEY}"; fi
 
 	if [[ -n "${SPDX_SOURCES-}" ]]; then
 		for source in "${SPDX_SOURCES[@]}"; do
