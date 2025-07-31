@@ -9,6 +9,7 @@
 
 from ..views.spdx import SPDX
 from ..views.fast_spdx import FastSPDX
+from ..views.fast_spdx3 import FastSPDX3
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
@@ -30,16 +31,21 @@ def read_inputs(controllers):
 
     spdx = SPDX(controllers)
     fastspdx = FastSPDX(controllers)
+    fastspdx3 = FastSPDX3(controllers)
 
     for file in glob.glob(f"{os.getenv('INPUT_SPDX_FOLDER', INPUT_SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"spdx_merge: Merging {file}")
-            if use_fastspdx:
-                with open(file, "r") as f:
-                    fastspdx.parse_from_dict(json.loads(f.read()))
-            else:
-                spdx.load_from_file(file)
-                spdx.parse_and_merge()
+            with open(file, "r") as f:
+                data = json.load(f)
+
+                if fastspdx3.could_parse_spdx(data):
+                    fastspdx3.parse_controllers_from_dict(data)
+                elif use_fastspdx:
+                    fastspdx.parse_from_dict(data)
+                else:
+                    spdx.load_from_file(file)
+                    spdx.parse_and_merge()
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
                 print(f"Error parsing SPDX file: {file} {e}")
@@ -55,7 +61,7 @@ def output_results(controllers):
 
     verbose(f"spdx_merge: Writing {os.getenv('OUTPUT_SPDX_FILE', OUTPUT_SPDX_FILE)}")
     with open(os.getenv("OUTPUT_SPDX_FILE", OUTPUT_SPDX_FILE), "w") as f:
-        f.write(spdx.output_as_json())
+        f.write(spdx.output_as_json(with_cpe=True))
 
 
 def main():

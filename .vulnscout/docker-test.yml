@@ -1,0 +1,22 @@
+# This is a template file, you should copy it to docker-compose.yml and edit it to fit your needs
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+
+services:
+
+  vulnscout:
+    image: sflinux/vulnscout:latest
+    container_name: vulnscout
+    restart: "no"
+    ports:
+      - "7275:7275"
+    volumes:
+      - ../src:/scan/src
+      - ./cache:/cache/vulnscout
+      - ./test/output:/scan/outputs
+      - ./test/input/:/scan/inputs/spdx
+    environment:
+      - FLASK_RUN_PORT=7275
+      - FLASK_RUN_HOST=0.0.0.0
+      - IGNORE_PARSING_ERRORS=false
+      - GENERATE_DOCUMENTS=summary.adoc, time_estimates.csv
