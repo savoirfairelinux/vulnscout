@@ -33,8 +33,8 @@ ARG GRYPE_VERSION=v0.78.0
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
 
 # Install dependencies for python backend
-COPY docker/requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
+COPY requirements/base.txt ./
+RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
 
 # Create /scan/src
 RUN mkdir -p src
