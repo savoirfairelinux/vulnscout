@@ -4,10 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.vulnerability import Vulnerability
-from ..                                                                                                                                                          controllers.packages import PackagesController
-import json
+from ..controllers.packages import PackagesController
 import time
-import re
 from typing import Optional
 from ..controllers.epss_db import EPSS_DB
 
@@ -98,7 +96,7 @@ class VulnerabilitiesController:
                 nb_vuln += 1
 
         print(f"Fetched EPSS data for {nb_vuln} vulnerabilities from local DB in {time.time() - start_time} seconds.")
- 
+
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities as a dictionary of dictionaries."""
         return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
