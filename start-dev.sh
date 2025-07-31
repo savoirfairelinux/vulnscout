@@ -21,15 +21,20 @@ echo "Frontend dev server started (PID $npm_pid)"
 # Function to cleanup background process on exit (Ctrl+C)
 cleanup() {
     echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
-    kill "$npm_pid" 2>/dev/null
-    wait "$npm_pid" 2>/dev/null
+    kill -- -$(ps -o pgid= $npm_pid | grep -o '[0-9]*') 2>/dev/null
+    wait $npm_pid 2>/dev/null
     exit 0
 }
 trap cleanup SIGINT SIGTERM EXIT
 
+sleep 1
+
 ## Backend Development Environment Setup Script
+# Close any existing docker-compose processes
+docker rm -f vulnscout 2>/dev/null
+
 # Start docker services
-docker compose -f .vulnscout/docker-test.yml up
+docker compose -f .vulnscout/example/docker-example.yml up
 
 # When docker-compose finishes (or script ends), cleanup npm too
 cleanup
