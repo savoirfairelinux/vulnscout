@@ -11,15 +11,13 @@ services:
       # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
       # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
       # Also accepted .tar, .tar.gz, .tar.zst for all inputs
-      # Examples:
-      # - /path/to/yocto/build/tmp/deploy/images/name/image.spdx.tar.zst:/scan/inputs/spdx/name_image_spdx.tar.zst:ro
-      # - /path/to/yocto/cdx-export-folder:/scan/inputs/cdx/yocto_layer:ro
-      # - /path/to/yocto/build/tmp/deploy/images/name/image.rootfs.json:/scan/inputs/yocto_cve_check/name_image_rootfs.json:ro
       - ../../src:/scan/src # Mount the source code on actual source code path. Only needed for development if you want to test changes in the source code.
       - ../cache:/cache/vulnscout # Cache directory for VulnScout to store the DB EPSS and NVD
-      - ../example/output:/scan/outputs
-      - ../example/input/:/scan/inputs/spdx
+      - ./output:/scan/outputs
       # - ./tmp:/scan/tmp # Debug only
+      - ./input/cve-yocto.json:/scan/inputs/yocto_cve_check/cve-yocto.json:ro
+      - ./input/example.rootfs.spdx.tar.zst:/scan/inputs/spdx/example.rootfs.spdx.tar.zst:ro
+      - ./input/cyclonedx-export:/scan/inputs/cdx:ro
     environment:
       - FLASK_RUN_PORT=7275
       - FLASK_RUN_HOST=0.0.0.0
