@@ -33,12 +33,13 @@ ARG GRYPE_VERSION=v0.78.0
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
 
 # Install dependencies for python backend
-COPY requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
+COPY requirements/base.txt ./
+RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
 
-COPY scan.sh ./
-RUN chmod +x scan.sh
+# Create /scan/src
+RUN mkdir -p src
 COPY src ./src
+RUN chmod +x src/scan.sh
 COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
@@ -48,4 +49,4 @@ LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
 LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
 LABEL org.opencontainers.image.version="v0.7.0-beta.2"
 
-CMD ./scan.sh
+CMD ["/scan/src/scan.sh"]

@@ -6,6 +6,7 @@ from datetime import datetime
 
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
+
 class EPSS_DB:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -59,7 +60,7 @@ class EPSS_DB:
         return None
 
     def needs_update(self, days: int = 1) -> bool:
-        res = self.cursor.execute(  
+        res = self.cursor.execute(
             "SELECT value FROM epss_metadata WHERE key = 'last_updated';"
         ).fetchone()
         if not res:

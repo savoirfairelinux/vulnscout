@@ -1,0 +1,31 @@
+services:
+  vulnscout:
+    image: sflinux/vulnscout:latest
+    container_name: vulnscout
+    restart: "no"
+    ports:
+      - "7275:7275"
+    volumes:
+      # Hint: format is path/on/your/host:/path/in/container:ro (ro = read-only, use only on inputs files)
+      # Put .spdx.json files in /scan/inputs/spdx
+      # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
+      # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
+      # Also accepted .tar, .tar.gz, .tar.zst for all inputs
+      - ../../src:/scan/src # Mount the source code on actual source code path. Only needed for development if you want to test changes in the source code.
+      - ../cache:/cache/vulnscout # Cache directory for VulnScout to store the DB EPSS and NVD
+      - ./output:/scan/outputs
+      # - ./tmp:/scan/tmp # Debug only
+      - ./input/cve-yocto.json:/scan/inputs/yocto_cve_check/cve-yocto.json:ro
+      - ./input/example.rootfs.spdx.tar.zst:/scan/inputs/spdx/example.rootfs.spdx.tar.zst:ro
+      - ./input/cyclonedx-export:/scan/inputs/cdx:ro
+    environment:
+      - FLASK_RUN_PORT=7275
+      - FLASK_RUN_HOST=0.0.0.0
+      - IGNORE_PARSING_ERRORS=false
+      - GENERATE_DOCUMENTS=summary.adoc, time_estimates.csv
+      # - DEBUG_SKIP_SCAN=false # Enable to skip scan and re-use last scan result instead
+      # - PRODUCT_NAME=""
+      # - PRODUCT_VERSION="1.0.0"
+      # - COMPANY_NAME="Savoir-faire Linux"
+      # - CONTACT_EMAIL="abc@xyz.org"
+      # - DOCUMENT_URL="https://example.com/unique/identifier"

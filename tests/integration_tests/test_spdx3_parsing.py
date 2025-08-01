@@ -533,6 +533,7 @@ def test_package_missing_required_fields(spdx3_parser):
     assert len(spdx3_parser.packagesCtrl) == 1
     assert "valid-package@2.0" in spdx3_parser.packagesCtrl
 
+
 def test_vex_relationship_invalid_structure(spdx3_parser):
     """Test parsing VEX relationships with invalid structure."""
     spdx_data = {
