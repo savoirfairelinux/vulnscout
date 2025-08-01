@@ -3,13 +3,13 @@ test: test_backend test_frontend
 
 test_backend:
 	flake8 ../src
-	mypy --config-file tox.ini
-	pytest --cov-report html --cov=src
-	pdoc ./src -o ./htmldocs
+	mypy --config-file tox.ini ../src
+	pytest --cov-report html --cov=../src
+	pdoc ../src -o ./htmldocs
 	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
 
 test_frontend:
-	cd frontend && \
+	cd ../frontend && \
 	npm ci --include=dev && \
 	npm test
 
