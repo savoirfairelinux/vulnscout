@@ -68,7 +68,6 @@ class EPSS_DB:
         )
         self.conn.commit()
 
-
     def get_score(self, cve_id: str):
         row = self.cursor.execute(
             "SELECT epss, percentile FROM epss_scores WHERE cve = ?;",
