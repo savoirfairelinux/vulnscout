@@ -52,6 +52,7 @@ function main() {
         (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
     fi
 
+    python3 -m src.bin.epss_db_builder &
     python3 -m src.bin.nvd_db_builder &
 
     if [[ "${DEBUG_SKIP_SCAN-}" != "true" ]]; then
@@ -127,7 +128,7 @@ function full_scan_steps() {
     set_status "5" "Scanning CDX with OSV (WIP)"
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
         osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
-        osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || trueyyy
+        osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
     fi
 
     if [[ -e "$YOCTO_CVE_INPUTS_PATH" ]]; then

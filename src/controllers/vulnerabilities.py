@@ -91,8 +91,7 @@ class VulnerabilitiesController:
         for vuln in self.vulnerabilities.values():
             result = self.epss_db.get_score(vuln.id)
             if result:
-                vuln.epss_score = result['score']
-                vuln.epss_percentile = result['percentile']
+                vuln.set_epss(result['score'], result['percentile']),
                 nb_vuln += 1
 
         print(f"Fetched EPSS data for {nb_vuln} vulnerabilities from local DB in {time.time() - start_time} seconds.")
