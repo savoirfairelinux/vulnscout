@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
-import { escape } from "lodash-es";
+import FilterOption from "../components/FilterOption";
 
 type Props = {
     packages: Package[];
@@ -38,12 +38,11 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages ({ packages }: Readonly<Props>) {
+function TablePackages({ packages }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
-    const [hidePatched, setHidePatched] = useState(false);
-    const [hideIgnored, setHideIgnored] = useState(false);
     const [search, setSearch] = useState<string>('');
-    const [filterSource, setFilterSource] = useState<string|undefined>(undefined)
+    const [selectedSources, setSelectedSources] = useState<string[]>([]);
+    const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -60,12 +59,17 @@ function TablePackages ({ packages }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
+    const statusOptions = useMemo(() => {
+        const statuses = new Set<string>();
+        for (const pkg of packages) {
+            Object.keys(pkg.vulnerabilities).forEach(status => statuses.add(status));
+        }
+        return Array.from(statuses);
+    }, [packages]);
+
     const hide_filter = useMemo(() => {
-        let hide_filter = []
-        if (hidePatched) hide_filter.push('fixed')
-        if (hideIgnored) hide_filter.push('not affected')
-        return hide_filter
-    }, [hidePatched, hideIgnored])
+        return statusOptions.filter(status => selectedStatuses.includes(status))
+    }, [selectedStatuses])
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
@@ -96,37 +100,48 @@ function TablePackages ({ packages }: Readonly<Props>) {
     }, [showSeverity, hide_filter]);
 
     const filteredPackages = useMemo(() => {
-        if (filterSource == undefined) return packages
-        return packages.filter((el) => el.source.includes(filterSource))
-    }, [packages, filterSource])
+        return packages.filter((el) => {
+            if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
+                return false;
+            }
+
+            if (selectedStatuses.length) {
+                const vulnStatuses = Object.keys(el.vulnerabilities);
+                if (!vulnStatuses.some(status => selectedStatuses.includes(status))) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }, [packages, selectedSources, selectedStatuses]);
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
-            <div className="ml-4">Source</div>
-            <select
-                name="source_selector"
-                onChange={(event) => setFilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
-                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
-            >
-                <option value="__none__">All sources</option>
-                {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
-            </select>
-            <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>Severity {showSeverity ? 'enabled' : 'disabled'}</button>
-            <label className="ml-2">
-                <input name="hide_patched" type="checkbox" className="mr-1" checked={hidePatched} onChange={() => {setHidePatched(!hidePatched)}} />
-                Hide fixed vulns
-            </label>
-            <label className="ml-2">
-                <input name="hide_ignored" type="checkbox" className="mr-1" checked={hideIgnored} onChange={() => {setHideIgnored(!hideIgnored)} } />
-                Hide ignored vulns
-            </label>
+            
+            <FilterOption
+                label="Source"
+                options={sources_list}
+                selected={selectedSources}
+                setSelected={setSelectedSources}
+            />
+
+            <FilterOption
+                label="Status"
+                options={statusOptions}
+                selected={selectedStatuses}
+                setSelected={setSelectedStatuses}
+            />
+
+            <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>
+                Severity {showSeverity ? 'enabled' : 'disabled'}
+            </button>
         </div>
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
     </>);
 }
-
 
 export default TablePackages;

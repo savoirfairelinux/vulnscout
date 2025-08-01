@@ -8,7 +8,7 @@ import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
-import { escape } from "lodash-es";
+import FilterOption from "../components/FilterOption";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -47,13 +47,11 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
-    const [filterSource, setFilterSource] = useState<string|undefined>(undefined);
-    const [hidePatched, setHidePatched] = useState(false);
-    const [hideIgnored, setHideIgnored] = useState(false);
-    const [hideActive, setHideActive] = useState(false);
-    const [hidePending, setHidePending] = useState(false);
+    const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
+    const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+    const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({})
-
+    
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
             if (search != '') setSearch('');
@@ -179,14 +177,12 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
 
     const filteredvulnerabilities = useMemo(() => {
         return vulnerabilities.filter((el) => {
-            if (filterSource != undefined && el.found_by.every(val => val != filterSource)) return false
-            if (hideIgnored && el.simplified_status == 'not affected') return false
-            if (hidePatched && el.simplified_status == 'fixed') return false
-            if (hideActive && el.simplified_status == 'active') return false
-            if (hidePending && el.simplified_status == 'pending analysis') return false
-            return true
-        })
-    }, [vulnerabilities, filterSource, hideIgnored, hidePatched, hideActive, hidePending])
+            if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
+            if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
+            if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
+            return true;
+        });
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -196,31 +192,28 @@ function TableVulnerabilities ({ vulnerabilities, appendAssessment, patchVuln }:
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
-            <div className="ml-4">Source</div>
-            <select
-                name="source_selector"
-                onChange={(event) => setFilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
-                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
-            >
-                <option value="__none__">All sources</option>
-                {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>{source}</option>)}
-            </select>
-            <label className="ml-2">
-                <input name="hide_patched" type="checkbox" className="mr-1" checked={hidePatched} onChange={() => {setHidePatched(!hidePatched)} } />
-                Hide fixed
-            </label>
-            <label className="ml-2">
-                <input name="hide_ignored" type="checkbox" className="mr-1" checked={hideIgnored} onChange={() => {setHideIgnored(!hideIgnored)} } />
-                Hide ignored
-            </label>
-            <label className="ml-2">
-                <input name="hide_active" type="checkbox" className="mr-1" checked={hideActive} onChange={() => {setHideActive(!hideActive)} } />
-                Hide active
-            </label>
-            <label className="ml-2">
-                <input name="hide_pending" type="checkbox" className="mr-1" checked={hidePending} onChange={() => {setHidePending(!hidePending)} } />
-                Hide pending review
-            </label>
+
+            <FilterOption
+                label="Source"
+                options={sources_list}
+                selected={selectedSources}
+                setSelected={setSelectedSources}
+            />
+
+            <FilterOption
+                label="Severity"
+                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity)))}
+                selected={selectedSeverities}
+                setSelected={setSelectedSeverities}
+            />
+
+            <FilterOption
+                label="Status"
+                options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
+                selected={selectedStatuses}
+                setSelected={setSelectedStatuses}
+            />
+
         </div>
 
 

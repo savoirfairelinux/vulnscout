@@ -4,7 +4,7 @@ import type { PackageVulnerabilities } from '../handlers/patch_finder';
 import PatchFinderLogic from '../handlers/patch_finder';
 import { useMemo, useState } from "react";
 import debounce from 'lodash-es/debounce';
-import { escape } from "lodash-es";
+import FilterOption from "../components/FilterOption";
 
 import PackageDetails from "../components/PackageDetails";
 import type { version as VersionLineEntry } from "../components/VersionsLine";
@@ -20,7 +20,7 @@ type Props = {
 function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [showLegend, setShowLegend] = useState<boolean>(true);
-    const [filterSource, setFilterSource] = useState<string|undefined>(undefined);
+    const [selectedSources, setSelectedSources] = useState<string[]>([]);
 
     const actual_pkgs = useMemo(() => {
         let output: {[key: string]: string} = {}
@@ -46,29 +46,26 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
     }, []), [patchData])
 
     const RenderData = useMemo(() => {
-        return PatchFinderLogic.compute_versions_and_patch(patchData, actual_pkgs, filterSource, search)
-    }, [patchData, actual_pkgs, filterSource, search])
+        return PatchFinderLogic.compute_versions_and_patch(patchData, actual_pkgs, selectedSources, search)
+    }, [patchData, actual_pkgs, selectedSources, search])
 
     const RenderDetailled = useMemo(() => {
-        return PatchFinderLogic.compute_vulns_per_versions(patchData, actual_pkgs, filterSource, search)
-    }, [patchData, actual_pkgs, filterSource, search])
+        return PatchFinderLogic.compute_vulns_per_versions(patchData, actual_pkgs, selectedSources, search)
+    }, [patchData, actual_pkgs, selectedSources, search])
 
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div className="ml-2">Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[400px]" placeholder="Search by version or vulnerability ID" />
-            <div className="ml-4">Source</div>
-            <select
-                name="source_selector"
-                onChange={(event) => setFilterSource(event.target.value == "__none__" ? undefined : event.target.value)}
-                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 h-8"
-            >
-                <option value="__none__">All sources</option>
-                {sources_list.map(source => <option value={escape(source)} key={encodeURIComponent(source)}>
-                    {source.replace('(', '').replace(')', '')}
-                </option>)}
-            </select>
+
+            <FilterOption
+                label="Source"
+                options={sources_list}
+                selected={selectedSources}
+                setSelected={setSelectedSources}
+            />
+
             <div className="flex-1"></div>
             <button className="p-2 px-4 bg-sky-900 hover:bg-sky-950" onClick={() => setShowLegend(!showLegend)}>{showLegend ? 'Hide' : 'Show'} Legend</button>
         </div>

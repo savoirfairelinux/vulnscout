@@ -135,7 +135,7 @@ class PatchFinderLogic {
     static compute_versions_and_patch(
         data: PackageVulnerabilities,
         current: {[key: string]: string},
-        filter_source: string|undefined,
+        selectedSources: string[],
         search: string
     ): {[key: string]: PackageVersions} {
 
@@ -162,7 +162,7 @@ class PatchFinderLogic {
                 info.nb_vulns++;
 
                 for (const [source, patch_infos] of Object.entries(vuln_data)) {
-                    if (filter_source != undefined && source != filter_source) continue;
+                    if (selectedSources.length > 0 && !selectedSources.includes(source)) continue;
                     if (!patch_infos.solve_all) continue;
                     if (
                         search != '' && !(
@@ -198,7 +198,7 @@ class PatchFinderLogic {
     static compute_vulns_per_versions (
         data: PackageVulnerabilities,
         current: {[key: string]: string},
-        filter_source: string|undefined,
+        selectedSources: string[],
         search: string
 ): {[key: string]: VersionVulns} {
 
@@ -209,7 +209,7 @@ class PatchFinderLogic {
 
             for (const [vuln_id, vuln_data] of Object.entries(pkg_data)) {
                 for (const [source, patch_infos] of Object.entries(vuln_data)) {
-                    if (filter_source != undefined && source != filter_source) continue;
+                    if (selectedSources.length > 0 && !selectedSources.includes(source)) continue;
                     if (!patch_infos.solve_all) continue;
                     if (
                         search != '' && !(
