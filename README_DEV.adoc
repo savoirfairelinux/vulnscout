@@ -4,135 +4,170 @@ You can either use CQFD to run testing tools in a container or install the tools
 CQFD is better for testing quickly but if you plan to modify the code and commit,
 you would probably prefer local installation which integrate with pre-commit.
 
-=== Nothing to install, all in CQFD
+=== Option 1: Quick Setup with CQFD (No local installation)
 
-.Already used to CQFD? Go ahead, else read this setup tutorial
-[%collapsible]
-====
+==== Setup CQFD and Docker
 
-* Install Docker by following the official
-  documentation: https://docs.docker.com/engine/install/
+* Install Docker: https://docs.docker.com/engine/install/
 
-Make sure that Docker does not require `sudo`.
+Make sure Docker runs without requiring `sudo`. To do so, add your user to the `docker` group:
 
-Please use the following commands to add your user account to the `docker`
-group:
-
-[bash]
+[source,bash]
 ----
-  $ sudo groupadd docker
-  $ sudo usermod -aG docker $USER
+sudo groupadd docker
+sudo usermod -aG docker $USER
 ----
 
-Log out and log back in, so that your group membership can be re-evaluated.
+Log out and log back in to apply the changes.
 
-* Install cqfd:
+* Install CQFD:
 
-[bash]
+[source,bash]
 ----
-  $ git clone https://github.com/savoirfairelinux/cqfd.git
-  $ cd cqfd
-  $ sudo make install
-----
-
-The project page on GitHub (https://github.com/savoirfairelinux/cqfd[link])
-contains detailed information on usage and installation.
-
-====
-
-The first step with `cqfd` is to create the build container. Do this using:
-
-[bash]
-----
-  $ cqfd init
+git clone https://github.com/savoirfairelinux/cqfd.git
+cd cqfd
+sudo make install
 ----
 
-NOTE: The step above is only required once, as once the container image has been
-created on your machine, it will become persistent. Further calls to `cqfd init`
-will do nothing, unless the container definition (`.cqfd/docker/Dockerfile`) has
-changed in the source tree.
+For more information, visit the CQFD GitHub repository: https://github.com/savoirfairelinux/cqfd
 
-=== Install and setup locally without CQFD
+==== Initialize CQFD for this project
 
-- Ensure to have make, Docker, Python 3 and Node.js with NPM installed on your machine.
-- Clone the project.
-- Run `pip install -r requirements-dev.txt` to install the backend dev dependencies.
-- Run `pre-commit install` to enable pre-commit (code quality and linter).
-- Move to frontend and install npm dev dependencies +
-`cd frontend && npm install --include=dev`
-- Done ! You are ready to code.
+Once installed, initialize the container image:
 
-== Commands used to manage this repository
-
-=== Unit and Integration testing
-
-* Run all the Python and Node.js tests with:
-
-[bash]
+[source,bash]
 ----
-  $ cqfd -b test
-  # or
-  $ make test
+cqfd init
 ----
 
-* You can also run only backend or frontend tests (not available with CQFD):
+NOTE: This only needs to be done once, unless the container definition (`.cqfd/docker/Dockerfile`) is modified.
 
-[bash]
+=== Option 2: Local Development Setup (Recommended for Contributors)
+
+1. Ensure the following tools are installed on your system:
+   - `make`
+   - `Docker`
+   - `Python 3`
+   - `Node.js` and `npm`
+
+2. Install backend development dependencies:
+
+[source,bash]
 ----
-  $ make test_backend
-  $ make test_frontend
+pip install -r requirements/dev.txt
 ----
 
-* To test Docker image build, you can use:
+3. Set up pre-commit for automatic code linting:
 
+[source,bash]
 ----
-  $ export BUILD_TAG="$(pwgen -n 12 -1)"
-  $ make docker_build docker_test docker_clean
+pip install pre-commit
+pre-commit install
 ----
 
-=== Publishing new version
+5. Install frontend development dependencies:
 
-1. Identify which version is next and determine which one you want to create. +
-Support Semantic Versioning 2.0.0 (https://semver.org/), with a leading `v` and support metadata. +
-For example, `v1.2.3` or `v1.2.3+build.4`.
+[source,bash]
+----
+cd frontend
+nvm use 20
+npm install --include=dev
+----
 
-2. Run the following command to create a new tag: +
-`bin/release_tag.sh v1.0.0-rc.1` (using your determined tag).
+== Testing (Unit + Integration)
 
-3. The script will update files with the new version, then will ask you if you want to make a new commit or amend the last one. +
-**Before you choose, it is recommended to check the changes** you are about to commit. +
-Use Ctrl+C to cancel the script if changes is not corresponding to what you wanted.
+Run the full test suite (backend + frontend):
 
-4. After commit validation, it run a `git review` which, at most case, will ask you to confirm with `yes`. +
-You can Ctrl+C to cancel the script if you don't want to push the commit.
+[source,bash]
+----
+cqfd -b test
+# or
+make -C tests
+----
 
-5. The script will ask you a message for creating the tag.
-**If you don't want to create a tag now (example: you have pending review), make Ctrl+C to cancel the script.** +
-If you confirm with empty text, it create tag with `Release v*.*.*` message.
+Run tests separately (only for local setup):
+
+[source,bash]
+----
+make -C tests test_backend
+make -C tests test_frontend
+----
+
+Test Docker image build:
 
 6. The script will push the tag to the remote repository. This will trigger the CI pipeline to build and publish the new docker image.
 
-=== Linter, Unit tests, Code coverage and Code Quality
+[source,bash]
+----
+export BUILD_TAG="$(pwgen -n 12 -1)"
+make -C tests docker_build docker_test docker_clean
+----
 
-* Python Backend (Python3 + Flask)
-** Linter: `flake8`
-** Type check: `mypy --config-file tox.ini`
-** Unit tests: `pytest`
-** Code coverage in terminal: `pytest --cov=src`
-** Code coverage as HTML: `pytest --cov-report html --cov=src`
-* Web Frontend (Typescript + React)
-** Run with `npm run dev`
-** Build with `npm run build`
-** Unit test: `npm run test` (use jest + testing-library/react)
-** Linter: `npm run lint` (use ESlinter)
-** Code coverage: `npm run coverage`
-* Build documentation: `asciidoctor-pdf README.adoc`
+== Publishing a new version
 
-NOTE: You can run all the tools using `make test` command. If you have installed pre-commit,
-flake8 will also run before every commit to ensure linting is good.
-If you use CQFD, running `cqfd -b test` will run all the tests (equivalent to `make test`).
+We use [Semantic Versioning 2.0.0](https://semver.org/) prefixed with `v`, e.g., `v1.2.3` or `v1.2.3+build.4`.
 
-=== Pre commit
+1. Determine the next version number.
+2. Create a release tag:
+
+[source,bash]
+----
+ci/release_tag.sh v1.0.0-rc.1
+----
+
+3. The script will update relevant files. Review changes carefully.
+   Press `Ctrl+C` to cancel if anything is incorrect.
+
+4. After validation, the script will propose a `git review`.
+   Confirm by typing `yes`, or cancel with `Ctrl+C`.
+
+5. Enter a tag message when prompted.
+   - Leave it blank to use the default message `Release v*.*.*`
+   - Cancel with `Ctrl+C` to skip tag creation (e.g., if review is still pending)
+
+6. The script will push the tag and trigger a Jenkins pipeline to build and publish the Docker image.
+
+== Code quality and linting
+
+=== Python backend (Flask)
+
+- Linter: `flake8`
+- Type checking (from tests/ folder): `mypy --config-file tox.ini`
+- Unit tests: `pytest`
+- Coverage (terminal): `pytest --cov=src`
+- Coverage (HTML): `pytest --cov-report html --cov=src`
+
+=== Frontend (React + TypeScript)
+
+- Dev server: `npm run dev`
+- Build: `npm run build`
+- Unit tests: `npm run test` (uses Jest + Testing Library)
+- Linter: `npm run lint` (ESLint)
+- Coverage report: `npm run coverage`
+
+To build the documentation as PDF:
+
+[source,bash]
+----
+asciidoctor-pdf README.adoc
+----
+
+NOTE: Running `make test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit.  
+With CQFD, use `cqfd -b test` to run the full suite.
+
+== Pre-commit hook
+
+We use `pre-commit` to automatically run `flake8` before every commit.
+
+To enable it:
+
+[source,bash]
+----
+pip install pre-commit
+pre-commit install
+----
+
+This helps enforce code quality and consistency across all contributions.
 
 To ensure a good quality of code, we use pre-commit to run flake8 before commiting.
 To install pre-commit, run `pip install pre-commit`.

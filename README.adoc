@@ -1,14 +1,31 @@
 = VulnScout
 Savoir-faire Linux
-v0.7.0-beta.2, {docdate}: developement builds
+v0.7.0, {docdate}: developement builds
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
 :toc:
 
 == Introduction
 
-Scanning project to export Software Bill of Materials (SBOM) and list of Vulnerabilities that affect them.
-Support for Cyclone DX, SPDX, Yocto JSON files and Open VEX.
+=== What is VulnScout?
+
+VulnScout is a tool designed to help developers and security analysts identify vulnerabilities in their software components and dependencies using an SBOM (Software Bill of Materials). Rather than analyzing code or binaries directly, VulnScout examines metadata that lists all components and dependencies in your codebase. It supports popular input formats such as SPDX, CycloneDX, Grype JSON, and Yocto JSON.
+
+It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype to figure out which parts of your codebase might be affected by security issues (CVE). You can use it locally through a web interface that provides visualization tools or command line that generates enriched output files.
+
+=== What can VulnScout do?
+
+* Analyze SBOMs: Parses and merges SBOMs from multiple formats (SPDX, CycloneDX, Grype JSON and Yocto cve_check output).
+* Detect vulnerabilities: Associates packages with known CVEs from multiple sources (e.g., NVD, EPSS, Grype and OSV).
+* Enrich SBOM files: Combines vulnerability data found in the input files with data pulled from external sources.
+* Generate detailed reports: Provides scan summaries in multiple formats, including an interactive web dashboard and text file.
+* Help track fixes: The web dashboard allows you to assign and track which vulnerabilities are fixed and which are still open and provides various metrics to help decision-making (score, exploitability, risk exposure...).
+
+=== Architecture
+
+image::doc/diagrams/architecture.png[An architecture diagram showing different components of the VulnScout app]
+
+=== Terminology
 
 This document use a lot of format names, accronyms and abbreviations which is evident for people working on them, but not for everyone. Here is a definition of the most used ones:
 
@@ -19,28 +36,28 @@ SPDX:: Software Package Data Exchange. A standard format for SBOMs developed by 
 CDX:: Cyclone DX. A standard format for SBOMs developed as an OWASP project. Mostly found as JSON or XML files.
 Yocto:: A build system for embedded Linux systems. It is used to build custom Linux distributions for embedded systems.
 
-<<<
-
-== Usage
+== Features
 
 You can use VulnScout to scan your project, make report about your dependencies and vulnerabilities, and to manage them.
 
-**Support following inputs** :
+=== Supported input formats
 
 * SPDX 2.3 (Packages)
-* ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
+* SPDX 3.0 (Packages + vulnerabilities)
 * Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 * Grype native JSON format (Packages + vulnerabilities)
 * Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
 
-**Support following outputs** :
+=== Supported output formats
 
 * SPDX 2.3 (Packages)
-* ##Draft##: SPDX 3.0 (Packages + vulnerabilities)
+* SPDX 3.0 (Packages + vulnerabilities)
 * Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 * openVex (vulnerabilities + Assessments)
 
-**Grab data from following sources** :
+=== Vulnerability Data Sources
+
+The tool pulls vulnerability and risk data from multiple trusted sources:
 
 * NVD (National Vulnerability Database)
 * All datasource supported by Grype
@@ -48,100 +65,70 @@ You can use VulnScout to scan your project, make report about your dependencies 
 * ##OSV## (Open Source Vulnerabilities) Comming soon
 * Information embedded in inputs files
 
-== Deployment
+== Getting Started with VulnScout
 
-This project is made to run on local in a docker container.
+VulnScout is designed to run locally in a Docker container.
+It will require having `docker-compose` or `docker compose` available on your host.
 
-=== Recommended setup using vulnscout.sh wrapper
+If you need to install `docker compose`, look at: https://docs.docker.com/compose/install/
 
-1. Copy `bin/vulnscout.sh` at root of your project repository.
+=== Run Vulnscout project example
 
-2. Create a `.vulnscout` folder at root of your project repository. +
-Copy one of the example file in `bin/.vulnscout-example` folder into your `.vulnscout` folder. +
-Adjust theses variables to your needs.
+This project contains a default usable example of Vulnscout. 
+To use it, you can simply run the default script with the command:
 
-3. Run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
-
-4. If you get error when running container, try use `docker login` to authenticate to the registry. +
-More information on <<Authentification>> section.
-
-=== Alternative setup: Build and use a local image
-
-1. Start by building the image at root of repository: +
-`BUILD_TAG="local-build" cqfd -b docker_build run`
-
-2. Then, copy `bin/vulnscout.sh` into root of your project repository. Create a `.vulnscout` folder also at root. +
-Copy one of the `.rc` conf file from `bin/.vulnscout-example` into your `.vulnscout` folder.
-
-3. In your new copied file, customize variables to bind the correct paths. +
-Replace the `DOCKER_IMAGE` value by your image name like `vulnscout:local-build`.
-
-Now, after each build, you can run `./vulnscout.sh scan` to run a new scan and open http://localhost:7275 to view the results.
-
-=== Alternative setup: Use docker-compose instead of vulnscout.sh
-
-1. Copy `docker-compose.template.yml` from this repository as `docker-compose.yml` at root of your project repository.
-
-2. Edit this file to bind your volumes. Follow instructions in the file. Then adjust environment variables.
-
-3. Run `docker-compose up` to start the scanner and open http://localhost:7275 to view the results.
-
-== Specific configuration
-
-=== Environment variables
-
-The following environment variables may be used to configure the scanner:
-
-* `NVD_API_KEY`: An API key for NVD. This is required to properly use the NVD datasource.
-
-=== Configuration for Yocto projects
-
-After having setup one of the <<Deployment>> tutorial, you have some steps needed make Yocto output necessary files.
-
-TIP: CycloneDX is not mandatory to use VulnScout. If you want to use only SPDX and CVE-checker, skip step 1-3 and at step 4, ignore the line `cyclonedx-export`.
-
-1. In the Yocto repository, if you use git submodules features, you can run: +
-`git submodule add https://github.com/savoirfairelinux/meta-cyclonedx.git sources/meta-cyclonedx` +
-(tips: if you have a `.gitmodules`, you should use this command).
-
-2. If you don't have a `.gitmodules` file and don't want to use git submodules, you can add the source manually by going in `sources` folder and running the following command: `git clone https://github.com/savoirfairelinux/meta-cyclonedx.git`
-
-3. After cloning meta-cyclonedx, you must enter inside (`cd sources/meta-cyclonedx`) and `git checkout` to a tag for your yocto version.
-
-4. Add the following lines if their are not present in your `conf/local.conf` file: +
-[source,conf]
+[source,shell]
 ----
-INHERIT += "create-spdx" <1>
-INHERIT += "cyclonedx-export" <2>
-INHERIT += "cve-check" <3>
-include conf/distro/include/cve-extra-exclusions.inc <4>
+./start-example.sh
 ----
-<1> Native export to SPDX, handled by Yocto
-<2> Export to Cyclone DX format, made by the meta-cyclonedx layer
-<3> Check for CVE using Native Yocto tool
-<4> Exclude some old CVE that was corrected
 
-Then you are almost ready. Make a new build of your Yocto project to generate SPDX, CDX and CVE files. +
-To allow vulnscout to find your SBOM files, ensure you have copied and configured `.rc` file in the `.vulnscout` folder. +
-If you haven't already done it, check the examples in `bin/.vulnscout-example/yocto.rc` folder of this repository.
+==== Use Vulnscount with Yocto
+
+We have a dedicated layer for Vulnscout integration in Yocto.
+
+You can find the layer here: https://github.com/savoirfairelinux/meta-vulnscout
+
+To be short, a simple `inherit vulnscout` in your image recipe will be enough to configure vulnscout for your project.
+
+The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
 === Configuration tips for others projects
 
-If you are not using Yocto, you can still use the scanner. What you need is at least one SBOM in SPDX or CDX format. Grype and OSV scanner will then try to find all vulnerabilities matching packages in the SBOM. If your SBOM includes vulnerabilities, they will also be included in the final merge.
+You don’t need to use Yocto to benefit from VulnScout.  
+All you need is at least one Software Bill of Materials (SBOM) file in SPDX or CycloneDX format.
 
-If you followed correctly the <<Deployment>> section, you should have a `.vulnscout` folder at the root of your project.
-You can edit this file in it and make the path bindings for SPDX / CDX variables:
+Grype and OSV scanners will analyze the SBOM for known vulnerabilities.  
+If your SBOMs already include vulnerabilities, those will also be merged into the final results.
+
+You can simply create a new sub-folder in .vulnscout and place a modified `yaml` using your configuration. 
+
+To configure your `yaml` file, you can look at the example provided in `.vulnscout/example/docker-example.yml`.
+
+==== Tips for Editing your `yaml` File
 
 [TIP]
 ====
-- You can delete the YOCTO_CVE variable if you don't use Yocto CVE-check.
-- You can refer as many files and folder as needed. They are Bash arrays.
-- Scanner support reading in `.tar`, `.tar.zst` and `.tar.gz` archives.
-- If your inputs may contains invalid files, you can set `IGNORE_PARSING_ERRORS` to `true` in your `.rc` file.
+- `.tar`, `.tar.gz`, and `.tar.zst` archives are supported as SBOM inputs.
+- To ignore parsing errors for malformed SBOMs, set:
+  `IGNORE_PARSING_ERRORS=true`
 ====
 
-You can now run `./vulnscout.sh scan` to start the scanner and open http://localhost:7275 to view the results.
+Once it is done, you can run the new custom configuration with a `docker compose` command:
 
-<<<
+[source,shell]
+----
+docker compose -f /path/to/yaml up
+----
 
-include::README_DEV.adoc[]
+Then open your browser to view the results:
+
+[source,plaintext]
+----
+http://localhost:7275
+----
+
+==== License
+
+`Copyright (C) 2017-2025 Savoir-faire Linux, Inc.`
+
+Vulnscout is released under the GPL-3.0 license.
