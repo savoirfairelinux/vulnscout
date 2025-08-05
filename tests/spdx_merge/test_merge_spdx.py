@@ -10,7 +10,7 @@ import os
 
 @pytest.fixture
 def setup(tmp_path):
-    os.environ["INPUT_SPDX_FOLDER"] = "tests/spdx_merge/data"
+    os.environ["INPUT_SPDX_FOLDER"] = "spdx_merge/data"
     os.environ["OUTPUT_SPDX_FILE"] = str(tmp_path / "output.spdx.json")
 
 

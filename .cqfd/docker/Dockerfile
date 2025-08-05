@@ -14,5 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements/dev.txt /tmp/dev.txt
 
+RUN mkdir -p /cache/vulnscout && chmod -R 777 /cache
+
 RUN pip install --no-cache-dir -r /tmp/dev.txt \
     && rm -rf /tmp/dev.txt
