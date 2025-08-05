@@ -1,28 +1,31 @@
+MAKEFILE_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
+SRC_DIR := $(MAKEFILE_DIR)../src
+FRONTEND_DIR := $(MAKEFILE_DIR)../frontend
 
 test: test_backend test_frontend
 
 test_backend:
-	flake8 ../src
-	mypy --config-file tox.ini ../src
-	pytest --cov-report html --cov=../src
-	pdoc ../src -o ./htmldocs
+	flake8 $(SRC_DIR)
+	mypy --config-file tox.ini $(SRC_DIR)
+	pytest --cov-report html --cov=$(SRC_DIR)
+	pdoc $(SRC_DIR) -o ./htmldocs
 	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
 
 test_frontend:
-	cd ../frontend && \
+	cd $(FRONTEND_DIR) && \
 	npm ci --include=dev && \
 	npm test
 
 jenkins_test: jenkins_test_backend jenkins_test_frontend
 
 jenkins_test_backend:
-	flake8
-	pytest --cov=src --junitxml=./junit_backend.xml
-	pdoc ./src -o ./htmldocs
+	flake8 $(SRC_DIR)
+	pytest --cov=$(SRC_DIR) --junitxml=./junit_backend.xml
+	pdoc $(SRC_DIR) -o ./htmldocs
 	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
 
 jenkins_test_frontend:
-	cd frontend && \
+	cd $(FRONTEND_DIR) && \
 	npm ci --include=dev && \
 	npm test -- --runInBand
 
