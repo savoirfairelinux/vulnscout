@@ -24,6 +24,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
+    const [filteredVulns, setFilteredVulns] = useState<Vulnerability[] | null>(null);
 
     useEffect(() => {
         Promise.allSettled([
@@ -89,6 +90,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         }));
     }
 
+    function goToVulnsTabWithFilter(filtered: Vulnerability[]) {
+        setFilteredVulns(filtered);
+        setTab('vulnerabilities');
+    }
+
     const [tab, setTab] = useState("metrics");
 
     return (
@@ -96,9 +102,21 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             <NavigationBar tab={tab} changeTab={setTab} darkMode={darkMode} setDarkMode={setDarkMode} />
 
             <div className="p-8">
-                {tab == 'metrics' && <Metrics packages={pkgs} vulnerabilities={vulns} />}
+                {tab === 'metrics' &&
+                <Metrics
+                    packages={pkgs}
+                    vulnerabilities={vulns}
+                    setVulns={setVulns}
+                    goToVulnsTabWithFilter={goToVulnsTabWithFilter}
+                />}
                 {tab == 'packages' && <TablePackages packages={pkgs} />}
-                {tab == 'vulnerabilities' && <TableVulnerabilities appendAssessment={appendAssessment} patchVuln={patchVuln} vulnerabilities={vulns} />}
+                {tab === 'vulnerabilities' &&
+                <TableVulnerabilities
+                    appendAssessment={appendAssessment}
+                    patchVuln={patchVuln}
+                    vulnerabilities={vulns}
+                    {...(filteredVulns && { filteredVulns: filteredVulns })}
+                />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
                 {tab == 'exports' && <Exports />}
             </div>
