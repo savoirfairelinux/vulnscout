@@ -1,0 +1,799 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.4",
+  "serialNumber": "urn:uuid:87b5cc5a-ee50-449f-bcdf-cabea628c2a2",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2025-07-28T17:09:21.841580+00:00",
+    "tools": [
+      {
+        "name": "yocto"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "libtasn1",
+      "version": "4.19.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libtasn1:4.19.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libtasn1@4.19.0",
+      "bom-ref": "96d5fddb-56bd-48dc-aa6b-9a9022c3a904"
+    },
+    {
+      "name": "libunistring",
+      "version": "1.2",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libunistring:1.2:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libunistring@1.2",
+      "bom-ref": "1b63c12a-ad30-471c-80dd-4a8e71482784"
+    },
+    {
+      "name": "nettle",
+      "version": "3.9.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:nettle:3.9.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/nettle@3.9.1",
+      "bom-ref": "bf82b821-1918-4cff-997a-dca407f3788d"
+    },
+    {
+      "name": "libidn2",
+      "version": "2.3.7",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libidn2:2.3.7:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libidn2@2.3.7",
+      "bom-ref": "987de745-a467-49f3-b3fe-6516d197fa40"
+    },
+    {
+      "name": "libseccomp",
+      "version": "2.5.5",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libseccomp:2.5.5:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libseccomp@2.5.5",
+      "bom-ref": "86afb9b1-17b0-4d43-8eb8-1fa8303559a9"
+    },
+    {
+      "name": "libgpg-error",
+      "version": "1.48",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libgpg-error:1.48:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libgpg-error@1.48",
+      "bom-ref": "9106dc23-04f7-43ca-af5e-b3c58d84fda3"
+    },
+    {
+      "name": "libgcrypt",
+      "version": "1.10.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libgcrypt:1.10.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libgcrypt@1.10.3",
+      "bom-ref": "15806ace-8884-4c1e-8753-6e1c0d865817"
+    },
+    {
+      "name": "gnutls",
+      "version": "3.8.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:gnutls:3.8.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/gnutls@3.8.4",
+      "bom-ref": "4f2b8d7c-bdb8-4dde-8c36-765bb35e57ae"
+    },
+    {
+      "name": "lzlib",
+      "version": "1.14",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:lzlib:1.14:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/lzlib@1.14",
+      "bom-ref": "785fcfc7-ea31-40b4-b5f4-c727fde89723"
+    },
+    {
+      "name": "zstandard",
+      "version": "1.5.5",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:zstandard:1.5.5:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/zstandard@1.5.5",
+      "bom-ref": "a6ba6e89-2a51-452e-99e7-bffa339e4b05"
+    },
+    {
+      "name": "libmpc",
+      "version": "1.3.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libmpc:1.3.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libmpc@1.3.1",
+      "bom-ref": "49817ac4-f9e1-41e3-9418-2cca282c8cb9"
+    },
+    {
+      "name": "curl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:haxx:curl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/haxx/curl@8.7.1",
+      "bom-ref": "7b83d4b3-5aa9-4946-8218-4d4bfcac1ad7",
+      "group": "haxx"
+    },
+    {
+      "name": "libcurl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:haxx:libcurl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/haxx/libcurl@8.7.1",
+      "bom-ref": "17aef314-b405-45d3-bc79-563b7c40e06c",
+      "group": "haxx"
+    },
+    {
+      "name": "curl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:curl:curl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/curl/curl@8.7.1",
+      "bom-ref": "1aba5890-0082-49f2-96a4-95af0f15c591",
+      "group": "curl"
+    },
+    {
+      "name": "libcurl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:curl:libcurl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/curl/libcurl@8.7.1",
+      "bom-ref": "6cf11ec8-8e37-4034-86b8-8d414f7d9935",
+      "group": "curl"
+    },
+    {
+      "name": "libcurl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:libcurl:libcurl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libcurl/libcurl@8.7.1",
+      "bom-ref": "7bbb0467-a461-4d30-8b69-ae505be48650",
+      "group": "libcurl"
+    },
+    {
+      "name": "curl",
+      "version": "8.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:daniel_stenberg:curl:8.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/daniel_stenberg/curl@8.7.1",
+      "bom-ref": "e6b4ad3a-e144-44a0-b4fd-00c47130835a",
+      "group": "daniel_stenberg"
+    },
+    {
+      "name": "mpfr",
+      "version": "4.2.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:mpfr:4.2.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/mpfr@4.2.1",
+      "bom-ref": "dc78dce9-5080-451e-bf10-2d75a97d5e95"
+    },
+    {
+      "name": "file",
+      "version": "5.45",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:file:5.45:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/file@5.45",
+      "bom-ref": "60d2c848-8aa7-433d-92f5-8c068facd97c"
+    },
+    {
+      "name": "libarchive",
+      "version": "3.7.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libarchive:3.7.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libarchive@3.7.4",
+      "bom-ref": "466aeb78-6d55-4840-a8e8-68bd826f8c6a"
+    },
+    {
+      "name": "libmicrohttpd",
+      "version": "1.0.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libmicrohttpd:1.0.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libmicrohttpd@1.0.1",
+      "bom-ref": "d0ed2ee5-80fd-4bdb-b3fa-c6b3dab5ce20"
+    },
+    {
+      "name": "unzip",
+      "version": "6.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:unzip:6.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/unzip@6.0",
+      "bom-ref": "726d2af1-2858-4ef5-bf60-719f0fb1942d"
+    },
+    {
+      "name": "diffutils",
+      "version": "3.10",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:diffutils:3.10:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/diffutils@3.10",
+      "bom-ref": "c1f92201-4c6c-4a04-aec9-3606da44baa6"
+    },
+    {
+      "name": "gawk",
+      "version": "5.3.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:gawk:5.3.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/gawk@5.3.0",
+      "bom-ref": "6b682a55-7482-44aa-8d1c-5a58bd06294a"
+    },
+    {
+      "name": "ca-certificates",
+      "version": "20211016",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:ca-certificates:20211016:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/ca-certificates@20211016",
+      "bom-ref": "c789d1bf-1f02-44e6-86e5-36d0440a2ef9"
+    },
+    {
+      "name": "gcc",
+      "version": "13.3.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:gcc:13.3.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/gcc@13.3.0",
+      "bom-ref": "98d53d29-d340-4e2d-a712-ba2ea5e93887"
+    },
+    {
+      "name": "pcre2",
+      "version": "10.43",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:pcre2:10.43:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/pcre2@10.43",
+      "bom-ref": "671e738b-602e-4e5f-aae1-c308d50ae7fc"
+    },
+    {
+      "name": "elfutils",
+      "version": "0.191",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:elfutils:0.191:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/elfutils@0.191",
+      "bom-ref": "bb6b1279-5ff8-4b34-803e-0114fc0a7ba4"
+    },
+    {
+      "name": "binutils",
+      "version": "2.42",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:binutils:2.42:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/binutils@2.42",
+      "bom-ref": "c5a3ad94-159c-4653-b24f-15bb18d3ee4c"
+    },
+    {
+      "name": "tzdata",
+      "version": "2024a",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:tzdata:2024a:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/tzdata@2024a",
+      "bom-ref": "b6c36368-cd67-46b1-b865-eced330b6dc4"
+    },
+    {
+      "name": "libmnl",
+      "version": "1.0.5",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libmnl:1.0.5:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libmnl@1.0.5",
+      "bom-ref": "e4d4655a-5101-492a-8bd6-4366426380b5"
+    },
+    {
+      "name": "s390-tools",
+      "version": "2.31.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:s390-tools:2.31.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/s390-tools@2.31.0",
+      "bom-ref": "73500893-115a-4730-96da-88288ce41797"
+    },
+    {
+      "name": "acl",
+      "version": "2.3.2",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:acl:2.3.2:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/acl@2.3.2",
+      "bom-ref": "8973033f-eb4f-42b4-9d72-8f86b14ad23a"
+    },
+    {
+      "name": "tcp-wrappers",
+      "version": "7.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:tcp-wrappers:7.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/tcp-wrappers@7.6",
+      "bom-ref": "d664dbaa-3ccd-467e-97c5-3d32f3d59da0"
+    },
+    {
+      "name": "readline",
+      "version": "8.2",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:readline:8.2:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/readline@8.2",
+      "bom-ref": "4886d59e-0838-4a37-8835-8938dbdb3519"
+    },
+    {
+      "name": "gmp",
+      "version": "6.3.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:gmp:6.3.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/gmp@6.3.0",
+      "bom-ref": "b8af9920-f1c2-4ddc-b167-6acfdafa4003"
+    },
+    {
+      "name": "libcap",
+      "version": "2.69",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libcap:2.69:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libcap@2.69",
+      "bom-ref": "71f52152-6c91-4109-b61a-f8391d97f334"
+    },
+    {
+      "name": "iptables",
+      "version": "1.8.10",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:iptables:1.8.10:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/iptables@1.8.10",
+      "bom-ref": "341c5165-6ff9-46d6-8de0-628252f552ce"
+    },
+    {
+      "name": "libtirpc",
+      "version": "1.3.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libtirpc:1.3.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libtirpc@1.3.4",
+      "bom-ref": "ddda3283-ed88-494e-8ee4-a973b43ca0cd"
+    },
+    {
+      "name": "sqlite",
+      "version": "3.45.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:sqlite:3.45.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/sqlite@3.45.1",
+      "bom-ref": "45b32c2d-ccc7-4d4e-b18d-d6a1be3ca698"
+    },
+    {
+      "name": "libnsl2",
+      "version": "2.0.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libnsl2:2.0.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libnsl2@2.0.1",
+      "bom-ref": "6d16383f-9087-4fff-b726-84548e272d0c"
+    },
+    {
+      "name": "expat",
+      "version": "2.6.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:expat:2.6.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/expat@2.6.3",
+      "bom-ref": "aac8cca4-c429-4856-8ccb-40554a219e62"
+    },
+    {
+      "name": "libexpat",
+      "version": "2.6.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libexpat:2.6.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libexpat@2.6.3",
+      "bom-ref": "7a475b40-14f1-408b-9ef6-6fed8f2ba49a"
+    },
+    {
+      "name": "libffi",
+      "version": "3.4.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libffi:3.4.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libffi@3.4.6",
+      "bom-ref": "d2c835fb-6f79-429f-9e84-45001282f9f8"
+    },
+    {
+      "name": "gdbm",
+      "version": "1.23",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:gdbm:1.23:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/gdbm@1.23",
+      "bom-ref": "780a69a6-44a1-4a2a-aab5-0e1b4306b655"
+    },
+    {
+      "name": "libedit",
+      "version": "20230828-3.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libedit:20230828-3.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libedit@20230828-3.1",
+      "bom-ref": "f43c0a2e-e5a3-44d4-b786-e1f6de97f4d8"
+    },
+    {
+      "name": "shadow-securetty",
+      "version": "4.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:shadow-securetty:4.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/shadow-securetty@4.6",
+      "bom-ref": "9b86dc4f-9a14-424e-ab01-a856eae71d3f"
+    },
+    {
+      "name": "attr",
+      "version": "2.5.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:attr:2.5.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/attr@2.5.1",
+      "bom-ref": "f8001f08-d38c-4c13-ba9f-83314d84f7cd"
+    },
+    {
+      "name": "openssl",
+      "version": "3.2.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:openssl:openssl:3.2.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/openssl/openssl@3.2.3",
+      "bom-ref": "cfb10c1c-fe14-4907-a088-598ce9a1a9a1",
+      "group": "openssl"
+    },
+    {
+      "name": "bzip2",
+      "version": "1.0.8",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:bzip2:1.0.8:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/bzip2@1.0.8",
+      "bom-ref": "e3d33944-9d64-447a-8a19-5c31b4576fba"
+    },
+    {
+      "name": "perl",
+      "version": "5.38.2",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:perl:5.38.2:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/perl@5.38.2",
+      "bom-ref": "49a43f22-0a2b-45af-8cec-b1f1319d5b09"
+    },
+    {
+      "name": "psmisc",
+      "version": "23.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:psmisc:23.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/psmisc@23.6",
+      "bom-ref": "eae2ba5f-18d5-4f41-b3f3-d2e52eaeffee"
+    },
+    {
+      "name": "shadow",
+      "version": "4.14.2",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:shadow:4.14.2:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/shadow@4.14.2",
+      "bom-ref": "70f65afd-4ae4-4715-aaa8-398cd15e696e"
+    },
+    {
+      "name": "kmod",
+      "version": "31",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:kmod:31:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/kmod@31",
+      "bom-ref": "91ddd11f-9b67-4785-a339-f0ee7ffc1003"
+    },
+    {
+      "name": "bc",
+      "version": "1.07.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:bc:1.07.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/bc@1.07.1",
+      "bom-ref": "731d7977-9de9-4665-b5f8-d1e5f4bcadd6"
+    },
+    {
+      "name": "python",
+      "version": "3.12.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:python:3.12.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/python@3.12.6",
+      "bom-ref": "d08b739b-a2ed-44d6-b869-c367fc73cd27"
+    },
+    {
+      "name": "cpython",
+      "version": "3.12.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:cpython:3.12.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/cpython@3.12.6",
+      "bom-ref": "3cb1f6f9-3e24-470e-aa6a-26d2db78f3b9"
+    },
+    {
+      "name": "bash-completion",
+      "version": "2.12.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:bash-completion:2.12.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/bash-completion@2.12.0",
+      "bom-ref": "6a64c321-eff8-4a5b-8999-bb69b341f501"
+    },
+    {
+      "name": "grep",
+      "version": "3.11",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:grep:3.11:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/grep@3.11",
+      "bom-ref": "4d9a3736-27a7-448e-808a-1b91927b3bc0"
+    },
+    {
+      "name": "sysvinit-inittab",
+      "version": "2.88dsf",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:sysvinit-inittab:2.88dsf:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/sysvinit-inittab@2.88dsf",
+      "bom-ref": "c3ab083f-f9fe-445c-be1d-ca20d2fd4f0c"
+    },
+    {
+      "name": "findutils",
+      "version": "4.9.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:findutils:4.9.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/findutils@4.9.0",
+      "bom-ref": "ab7f193c-8579-4d1d-a526-8428e652a944"
+    },
+    {
+      "name": "xz",
+      "version": "5.4.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:xz:5.4.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/xz@5.4.6",
+      "bom-ref": "b6a66edf-d4b4-4948-8d50-3bf0294be7f4"
+    },
+    {
+      "name": "shadow-sysroot",
+      "version": "4.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:shadow-sysroot:4.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/shadow-sysroot@4.6",
+      "bom-ref": "7fb05338-c608-4495-a5d1-a898a3148d0c"
+    },
+    {
+      "name": "iproute2",
+      "version": "6.7.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:iproute2:6.7.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/iproute2@6.7.0",
+      "bom-ref": "82076592-8a2f-421e-bd4c-4e74b70f4e8e"
+    },
+    {
+      "name": "procps",
+      "version": "4.0.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:procps:4.0.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/procps@4.0.4",
+      "bom-ref": "283e1949-8b2c-43a8-89fd-01cf069e138f"
+    },
+    {
+      "name": "e2fsprogs",
+      "version": "1.47.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:e2fsprogs:1.47.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/e2fsprogs@1.47.0",
+      "bom-ref": "45a4d16b-04d5-4a50-9bed-39bc56232079"
+    },
+    {
+      "name": "socat",
+      "version": "1.8.0.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:socat:1.8.0.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/socat@1.8.0.0",
+      "bom-ref": "b7315c27-fc11-4805-97fa-4a225559fffc"
+    },
+    {
+      "name": "coreutils",
+      "version": "9.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:coreutils:9.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/coreutils@9.4",
+      "bom-ref": "632655ef-9f8c-4449-aae8-7451f4a499cb"
+    },
+    {
+      "name": "util-linux-libuuid",
+      "version": "2.39.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:util-linux-libuuid:2.39.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/util-linux-libuuid@2.39.3",
+      "bom-ref": "8b8c2f3b-eb76-442d-a988-155317c691ae"
+    },
+    {
+      "name": "sed",
+      "version": "4.9",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:sed:4.9:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/sed@4.9",
+      "bom-ref": "6844d726-8998-4789-a715-3bba4431a6c4"
+    },
+    {
+      "name": "libcap-ng",
+      "version": "0.8.5",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libcap-ng:0.8.5:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libcap-ng@0.8.5",
+      "bom-ref": "354ca63b-546e-43a5-83fc-10da548222d8"
+    },
+    {
+      "name": "libxcrypt",
+      "version": "4.4.36",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:libxcrypt:4.4.36:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/libxcrypt@4.4.36",
+      "bom-ref": "f7ab898e-3a51-4a68-bd27-601a346a6105"
+    },
+    {
+      "name": "btrfs-tools",
+      "version": "6.7.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:btrfs-tools:6.7.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/btrfs-tools@6.7.1",
+      "bom-ref": "25b32638-b357-4b1a-82a9-320a0636fc02"
+    },
+    {
+      "name": "which",
+      "version": "2.21",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:which:2.21:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/which@2.21",
+      "bom-ref": "dce0e407-8b54-47f9-9e0b-f4f6d3bb4b1d"
+    },
+    {
+      "name": "bash",
+      "version": "5.2.21",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:bash:5.2.21:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/bash@5.2.21",
+      "bom-ref": "d87eea53-0862-4d5f-bdaa-613414ca915a"
+    },
+    {
+      "name": "init-ifupdown",
+      "version": "1.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:init-ifupdown:1.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/init-ifupdown@1.0",
+      "bom-ref": "696c9e55-a850-48b0-b442-439b6dba8252"
+    },
+    {
+      "name": "zip",
+      "version": "3.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:zip:3.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/zip@3.0",
+      "bom-ref": "a9123905-8b83-4f1a-a6b5-86ce97b56ab1"
+    },
+    {
+      "name": "netbase",
+      "version": "6.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:netbase:6.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/netbase@6.4",
+      "bom-ref": "09502946-0fda-4814-9d3d-67614439c91c"
+    },
+    {
+      "name": "modutils-initscripts",
+      "version": "1.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:modutils-initscripts:1.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/modutils-initscripts@1.0",
+      "bom-ref": "d226e0c2-012c-40d7-bc4d-d65727c25264"
+    },
+    {
+      "name": "ptest-runner",
+      "version": "2.4.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:ptest-runner:2.4.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/ptest-runner@2.4.4",
+      "bom-ref": "2574f392-1d17-46a3-88c5-ecf22f06bf49"
+    },
+    {
+      "name": "linux-libc-headers",
+      "version": "6.6",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:linux-libc-headers:6.6:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/linux-libc-headers@6.6",
+      "bom-ref": "80091953-7f2d-41df-af55-da798b12fd46"
+    },
+    {
+      "name": "sysvinit",
+      "version": "3.04",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:sysvinit:3.04:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/sysvinit@3.04",
+      "bom-ref": "747cf7a3-255d-4a00-bcf8-f506a947caf7"
+    },
+    {
+      "name": "update-rc.d",
+      "version": "0.8",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:update-rc.d:0.8:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/update-rc.d@0.8",
+      "bom-ref": "30ea04f8-a909-4603-a2d9-2bc30d56ae5b"
+    },
+    {
+      "name": "init-system-helpers",
+      "version": "1.66",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:init-system-helpers:1.66:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/init-system-helpers@1.66",
+      "bom-ref": "87f20121-3620-4480-a026-d841d86c6f30"
+    },
+    {
+      "name": "eudev",
+      "version": "3.2.14",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:eudev:3.2.14:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/eudev@3.2.14",
+      "bom-ref": "c5331ed7-9143-4d49-a130-09dbef154ad9"
+    },
+    {
+      "name": "base-passwd",
+      "version": "3.6.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:base-passwd:3.6.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/base-passwd@3.6.3",
+      "bom-ref": "0e207d7a-705e-4c19-bfcc-c2de83af32f8"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:zlib:1.3.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/zlib@1.3.1",
+      "bom-ref": "4150a080-6184-4d72-a9a6-c1bd0175abd3"
+    },
+    {
+      "name": "busybox",
+      "version": "1.36.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:busybox:1.36.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/busybox@1.36.1",
+      "bom-ref": "20daadd3-c24d-4f48-a5de-3fc428797570"
+    },
+    {
+      "name": "base-files",
+      "version": "3.0.14",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:base-files:3.0.14:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/base-files@3.0.14",
+      "bom-ref": "f2c82878-c571-400a-9115-5acb735ed8ff"
+    },
+    {
+      "name": "glibc",
+      "version": "2.39",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:glibc:2.39:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/glibc@2.39",
+      "bom-ref": "281b339b-2087-4815-96a4-6ee380f2e80a"
+    },
+    {
+      "name": "initscripts",
+      "version": "1.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:initscripts:1.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/initscripts@1.0",
+      "bom-ref": "ea6128f9-ee9f-42be-b027-fa499c259143"
+    },
+    {
+      "name": "opkg-utils",
+      "version": "0.6.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:opkg-utils:0.6.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/opkg-utils@0.6.3",
+      "bom-ref": "903bd3bd-36cd-4c41-a5cf-4250dea5664a"
+    },
+    {
+      "name": "ncurses",
+      "version": "6.4",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:ncurses:6.4:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/ncurses@6.4",
+      "bom-ref": "e0d00755-2e79-46a6-94ad-67948117fa95"
+    },
+    {
+      "name": "util-linux",
+      "version": "2.39.3",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:util-linux:2.39.3:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/util-linux@2.39.3",
+      "bom-ref": "fee8c21d-a655-4418-8c0a-255f103aa445"
+    },
+    {
+      "name": "make",
+      "version": "4.4.1",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:make:4.4.1:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/make@4.4.1",
+      "bom-ref": "89e42c96-ff73-4293-afd8-3d20db2933a0"
+    },
+    {
+      "name": "run-postinsts",
+      "version": "1.0",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:run-postinsts:1.0:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/run-postinsts@1.0",
+      "bom-ref": "18299607-37a7-4e17-a957-1145725765b7"
+    },
+    {
+      "name": "linux_kernel",
+      "version": "6.6.21",
+      "type": "library",
+      "cpe": "cpe:2.3:*:*:linux_kernel:6.6.21:*:*:*:*:*:*:*",
+      "purl": "pkg:generic/linux_kernel@6.6.21",
+      "bom-ref": "683fb1ea-3feb-4db0-b64c-25c490ce642b"
+    }
+  ]
+}

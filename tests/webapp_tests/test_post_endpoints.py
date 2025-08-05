@@ -34,7 +34,7 @@ def app(init_files):
         "ASSESSMENTS_FILE": init_files["assessments"],
         "OPENVEX_FILE": init_files["openvex"],
         "TIME_ESTIMATES_PATH": init_files["time_estimates"],
-        "NVD_DB_PATH": "tests/webapp_tests/mini_nvd.db"
+        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
     })
 
     yield app

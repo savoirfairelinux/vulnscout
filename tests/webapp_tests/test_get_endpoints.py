@@ -30,7 +30,7 @@ def app(init_files):
         "PKG_FILE": init_files["packages"],
         "VULNS_FILE": init_files["vulnerabilities"],
         "ASSESSMENTS_FILE": init_files["assessments"],
-        "NVD_DB_PATH": "tests/webapp_tests/mini_nvd.db"
+        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
     })
 
     yield app
