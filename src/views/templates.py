@@ -18,8 +18,9 @@ class Templates:
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
 
+        template_dir = os.path.join(os.path.dirname(__file__), "templates")
         self.internal_loader = FileSystemLoader([
-            "src/views/templates",
+            template_dir,
             "views/templates"
         ])
         self.external_loader = FileSystemLoader([
