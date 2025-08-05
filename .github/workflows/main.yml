@@ -1,6 +1,6 @@
 name: Run Vulnscout Tests
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
     test-vulnscout:
