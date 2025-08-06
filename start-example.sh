@@ -1,5 +1,59 @@
 #!/bin/bash
 
+# Exit on any command failure
+set -e
+
+show_help() {
+  echo "Usage: ./start-example.sh [--dev | --help]"
+  echo ""
+  echo "Options:"
+  echo "  --dev      Start frontend in development mode (npm run dev) and backend with Docker Compose"
+  echo "  --help     Show this help message and exit"
+  echo ""
+  echo "Default mode:"
+  echo "  If no arguments are passed, frontend will be built (npm run build)."
+}
+
+case "$1" in
+  --dev)
+    NPM_MODE="dev"
+    ;;
+  --help|-h)
+    show_help
+    exit 0
+    ;;
+  "")
+    NPM_MODE="build"
+    ;;
+  *)
+    echo "Error: Unknown argument '$1'"
+    show_help
+    exit 1
+    ;;
+esac
+
+## Check for required tools
+if ! command -v npm &> /dev/null; then
+  echo "Error: npm is not installed or not in PATH."
+  exit 1
+fi
+
+if ! command -v docker &> /dev/null; then
+  echo "Error: Docker is not installed or not in PATH."
+  exit 1
+fi
+
+if docker compose version &> /dev/null; then
+  DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+  DOCKER_COMPOSE="docker-compose"
+else
+  echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
+  exit 1
+fi
+
+echo "Docker Compose command found: $DOCKER_COMPOSE"
+
 ## Frontend Development Environment Setup Script
 
 # Create the .env file in frontend if it doesn't exist
@@ -14,27 +68,39 @@ if [ ! -d frontend/node_modules ]; then
 fi
 
 # Start frontend dev server from within the frontend folder
-(cd frontend && npm run dev) &
-npm_pid=$!  # Save the npm process PID
-echo "Frontend dev server started (PID $npm_pid)"
 
-# Function to cleanup background process on exit (Ctrl+C)
-cleanup() {
-    echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
-    kill -- -$(ps -o pgid= $npm_pid | grep -o '[0-9]*') 2>/dev/null
-    wait $npm_pid 2>/dev/null
-    exit 0
-}
-trap cleanup SIGINT SIGTERM EXIT
+# Run frontend
+if [ "$NPM_MODE" == "dev" ]; then
+  echo "Starting frontend in development mode..."
+  (cd frontend && npm run dev) &
+  npm_pid=$!
+  echo "Frontend dev server started (PID $npm_pid)"
 
-sleep 1
+  # Function to cleanup background process on exit (Ctrl+C)
+  # Only needed in dev mode because we run npm in the background in dev mode
+  # In build mode, we just run npm build and exit
+  cleanup() {
+      echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
+      kill -- -$(ps -o pgid= $npm_pid | grep -o '[0-9]*') 2>/dev/null
+      wait $npm_pid 2>/dev/null
+      exit 0
+  }
+  trap cleanup SIGINT SIGTERM EXIT
+
+  sleep 1
+else
+  echo "Building frontend..."
+  (cd frontend && npm run build)
+fi
 
 ## Backend Development Environment Setup Script
 # Close any existing docker-compose processes
 docker rm -f vulnscout 2>/dev/null
 
 # Start docker services
-docker compose -f .vulnscout/example/docker-example.yml up
+$DOCKER_COMPOSE -f .vulnscout/example/docker-example.yml up
 
-# When docker-compose finishes (or script ends), cleanup npm too
-cleanup
+# When docker-compose finishes (or script ends), cleanup npm too if dev mode
+if [ "$NPM_MODE" == "dev" ]; then
+  cleanup
+fi
