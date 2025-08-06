@@ -1,4 +1,18 @@
-== Developpers: How to setup your environment and be ready to code
+= Development Guide for vulnscout
+
+This document provides guidelines for developers working on the vulnscout project, including setup, testing, and code quality practices.
+
+== Modify the frontend
+
+To modify the frontend, you will need to run vulnscout in development mode.
+To do so, you can run the following command:
+
+[source,bash]
+----
+./start-example.sh --dev
+----
+
+== Testing the project
 
 You can either use CQFD to run testing tools in a container or install the tools on your machine.
 CQFD is better for testing quickly but if you plan to modify the code and commit,
@@ -6,7 +20,7 @@ you would probably prefer local installation which integrate with pre-commit.
 
 === Option 1: Quick Setup with CQFD (No local installation)
 
-==== Setup CQFD and Docker
+==== Step 1: Setup CQFD and Docker
 
 * Install Docker: https://docs.docker.com/engine/install/
 
@@ -31,7 +45,7 @@ sudo make install
 
 For more information, visit the CQFD GitHub repository: https://github.com/savoirfairelinux/cqfd
 
-==== Initialize CQFD for this project
+==== Step 2: Initialize CQFD for this project
 
 Once installed, initialize the container image:
 
@@ -42,22 +56,42 @@ cqfd init
 
 NOTE: This only needs to be done once, unless the container definition (`.cqfd/docker/Dockerfile`) is modified.
 
+==== Step 3: Run all the tests with CQFD
+
+To run all tests using CQFD, execute the following command:
+
+[source,bash]
+----
+cqfd
+----
+
+Also, you can run the tests separately:
+
+[source,bash]
+----
+cqfd -b test_backend
+cqfd -b test_frontend
+----
+
 === Option 2: Local Development Setup (Recommended for Contributors)
 
-1. Ensure the following tools are installed on your system:
-   - `make`
-   - `Docker`
-   - `Python 3`
-   - `Node.js` and `npm`
+==== Step 1: Install Dependencies
 
-2. Install backend development dependencies:
+Ensure the following tools are installed on your system:
+
+- `make`
+- `Docker`
+- `Python 3`
+- `Node.js` and `npm`
+
+==== Step 2: Install backend development dependencies
 
 [source,bash]
 ----
 pip install -r requirements/dev.txt
 ----
 
-3. Set up pre-commit for automatic code linting:
+==== Step 3: Set up pre-commit for automatic code linting
 
 [source,bash]
 ----
@@ -65,7 +99,7 @@ pip install pre-commit
 pre-commit install
 ----
 
-5. Install frontend development dependencies:
+==== Step 4: Install frontend development dependencies
 
 [source,bash]
 ----
@@ -74,18 +108,16 @@ nvm use 20
 npm install --include=dev
 ----
 
-== Testing (Unit + Integration)
+==== Step 5: Testing (Unit + Integration)
 
 Run the full test suite (backend + frontend):
 
 [source,bash]
 ----
-cqfd -b test
-# or
 make -C tests
 ----
 
-Run tests separately (only for local setup):
+Run tests separately:
 
 [source,bash]
 ----
@@ -93,9 +125,10 @@ make -C tests test_backend
 make -C tests test_frontend
 ----
 
-Test Docker image build:
+== Testing the Docker image
 
-6. The script will push the tag to the remote repository. This will trigger the CI pipeline to build and publish the new docker image.
+You can test the Docker image using the provided `tests` Makefile.
+To build and test the Docker image, run:
 
 [source,bash]
 ----
@@ -107,25 +140,25 @@ make -C tests docker_build docker_test docker_clean
 
 We use [Semantic Versioning 2.0.0](https://semver.org/) prefixed with `v`, e.g., `v1.2.3` or `v1.2.3+build.4`.
 
-1. Determine the next version number.
-2. Create a release tag:
+- Determine the next version number.
+- Create a release tag:
 
 [source,bash]
 ----
 ci/release_tag.sh v1.0.0-rc.1
 ----
 
-3. The script will update relevant files. Review changes carefully.
+- The script will update relevant files. Review changes carefully.
    Press `Ctrl+C` to cancel if anything is incorrect.
 
-4. After validation, the script will propose a `git review`.
+- After validation, the script will propose a `git review`.
    Confirm by typing `yes`, or cancel with `Ctrl+C`.
 
-5. Enter a tag message when prompted.
+- Enter a tag message when prompted.
    - Leave it blank to use the default message `Release v*.*.*`
    - Cancel with `Ctrl+C` to skip tag creation (e.g., if review is still pending)
 
-6. The script will push the tag and trigger a Jenkins pipeline to build and publish the Docker image.
+- The script will push the tag and trigger a CI pipeline to build and publish the Docker image.
 
 == Code quality and linting
 
@@ -145,14 +178,7 @@ ci/release_tag.sh v1.0.0-rc.1
 - Linter: `npm run lint` (ESLint)
 - Coverage report: `npm run coverage`
 
-To build the documentation as PDF:
-
-[source,bash]
-----
-asciidoctor-pdf README.adoc
-----
-
-NOTE: Running `make test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit.  
+NOTE: Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit.  
 With CQFD, use `cqfd -b test` to run the full suite.
 
 == Pre-commit hook
@@ -168,7 +194,3 @@ pre-commit install
 ----
 
 This helps enforce code quality and consistency across all contributions.
-
-To ensure a good quality of code, we use pre-commit to run flake8 before commiting.
-To install pre-commit, run `pip install pre-commit`.
-Then, to enable pre-commit, run `pre-commit install`.

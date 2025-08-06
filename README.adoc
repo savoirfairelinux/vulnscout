@@ -5,6 +5,10 @@ v0.7.0, {docdate}: developement builds
 :source-highlighter: highlight.js
 :toc:
 
+image::./doc/images/vulnscout_logo.jpeg[alt=vulnscout logo]
+
+image::https://img.shields.io/badge/License-GPL%203.0-green.svg[License, link=https://opensource.org/license/gpl-3-0]
+
 == Introduction
 
 === What is VulnScout?
@@ -23,7 +27,7 @@ It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype
 
 === Architecture
 
-image::doc/diagrams/architecture.png[An architecture diagram showing different components of the VulnScout app]
+image::doc/images/architecture.png[An architecture diagram showing different components of the VulnScout app]
 
 === Terminology
 
