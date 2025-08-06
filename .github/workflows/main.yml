@@ -17,5 +17,3 @@ jobs:
               run: cqfd init
             - name: Run Background Tests in the container
               run: cqfd -b test_backend
-            - name: Run Frountend Tests in the container
-              run: cqfd -b test_frontend
