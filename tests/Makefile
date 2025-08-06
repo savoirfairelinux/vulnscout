@@ -16,19 +16,6 @@ test_frontend:
 	npm ci --include=dev && \
 	npm test
 
-jenkins_test: jenkins_test_backend jenkins_test_frontend
-
-jenkins_test_backend:
-	flake8 $(SRC_DIR)
-	pytest --cov=$(SRC_DIR) --junitxml=./junit_backend.xml
-	pdoc $(SRC_DIR) -o ./htmldocs
-	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
-
-jenkins_test_frontend:
-	cd $(FRONTEND_DIR) && \
-	npm ci --include=dev && \
-	npm test -- --runInBand
-
 docker_build:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
 	docker build -t "sflinux/vulnscout:${BUILD_TAG}" .

@@ -1,0 +1,19 @@
+name: Run Vulnscout Tests
+
+on: [push, pull_request]
+
+jobs:
+    test-vulnscout:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v2
+            - name: Install cqfd on the CI
+              run: |
+                git clone https://github.com/savoirfairelinux/cqfd.git
+                cd cqfd
+                sudo make install
+            - name: Init cqfd container on the project 
+              run: cqfd init
+            - name: Run Background Tests in the container
+              run: cqfd -b test_backend

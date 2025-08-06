@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Prepare, commit and push a new release tag
-# Pushing a tag will then run a Jenkins pipeline to build and deploy docker image
+# Pushing a tag will then run a CI pipeline to build and deploy docker image
 #
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
@@ -103,4 +103,4 @@ git tag -am "$tag_msg" "$version"
 # Push the tag
 git push $VULNSCOUT_GIT_URI tag "$version"
 
-echo "Version $version published with success, check Jenkins pipeline for deployment of Docker image."
+echo "Version $version published with success, check CI pipeline for deployment of Docker image."
