@@ -43,7 +43,7 @@ if ! command -v docker &> /dev/null; then
   exit 1
 fi
 
-if command -v docker compose &> /dev/null; then
+if docker compose version &> /dev/null; then
   DOCKER_COMPOSE="docker compose"
 elif command -v docker-compose &> /dev/null; then
   DOCKER_COMPOSE="docker-compose"
