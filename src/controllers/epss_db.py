@@ -35,9 +35,27 @@ class EPSS_DB:
         urllib.request.urlretrieve(EPSS_URL, tmp_gz)
 
         with gzip.open(tmp_gz, "rt") as f:
-            next(f)
-            reader = csv.DictReader(f)
-            rows = [(row['cve'], float(row['epss']), float(row['percentile'])) for row in reader if row['cve'].startswith("CVE")]
+            while True:
+                pos = f.tell()
+                line = f.readline()
+                if not line:
+                    raise ValueError("No valid header found in the CSV file")
+                lower_line = line.strip().lower()
+                if 'cve' in lower_line and 'epss' in lower_line and 'percentile' in lower_line:
+                    f.seek(pos)
+                    break
+
+            reader = csv.DictReader(f, skipinitialspace=True)
+            rows = []
+            for row in reader:
+                cve = row.get('cve') or row.get('CVE')
+                epss = row.get('epss')
+                percentile = row.get('percentile')
+                if cve and cve.startswith("CVE") and epss and percentile:
+                    try:
+                        rows.append((cve, float(epss), float(percentile)))
+                    except ValueError:
+                        continue
 
         self.cursor.execute("DELETE FROM epss_scores")
         self.cursor.executemany(

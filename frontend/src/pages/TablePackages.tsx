@@ -5,6 +5,7 @@ import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import ToggleSwitch from "../components/ToggleSwitch";
 
 type Props = {
     packages: Package[];
@@ -135,9 +136,13 @@ function TablePackages({ packages }: Readonly<Props>) {
                 setSelected={setSelectedStatuses}
             />
 
-            <button className={["ml-4 py-1 px-2", showSeverity ? 'bg-sky-950' : 'bg-sky-900'].join(' ')} onClick={() => setShowSeverity(!showSeverity)}>
-                Severity {showSeverity ? 'enabled' : 'disabled'}
-            </button>
+            <div className="ml-4">
+                <ToggleSwitch
+                    enabled={showSeverity}
+                    setEnabled={setShowSeverity}
+                    label="Severity"
+                />
+            </div>
         </div>
 
         <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />

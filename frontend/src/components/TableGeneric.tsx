@@ -198,7 +198,8 @@ function TableGeneric<DataType> ({
                                 key={row.id}
                                 className={[
                                     "flex absolute w-full row-with-hover-effect",
-                                    row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600'
+                                    row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600',
+                                    "hover:bg-slate-800"
                                 ].join(' ')}
                                 onClick={(e) => ctrl_click(e, row)}
                                 style={{
@@ -222,7 +223,7 @@ function TableGeneric<DataType> ({
                                     })}
                                 </tr>,
                                 hoverField != undefined && <tr
-                                    className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center"
+                                    className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
                                     key={`${row.id}_hoverpanel`}
                                     style={{
                                         transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll

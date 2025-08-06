@@ -9,7 +9,8 @@ import FilterOption from "../components/FilterOption";
 import PackageDetails from "../components/PackageDetails";
 import type { version as VersionLineEntry } from "../components/VersionsLine";
 import VersionsLine from "../components/VersionsLine";
-
+import ToggleSwitch from "../components/ToggleSwitch";
+``
 type Props = {
     vulnerabilities: Vulnerability[];
     packages: Package[];
@@ -67,7 +68,12 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
             />
 
             <div className="flex-1"></div>
-            <button className="p-2 px-4 bg-sky-900 hover:bg-sky-950" onClick={() => setShowLegend(!showLegend)}>{showLegend ? 'Hide' : 'Show'} Legend</button>
+
+            <ToggleSwitch
+                enabled={showLegend}
+                setEnabled={setShowLegend}
+                label="Legend"
+            />
         </div>
 
         {!db_ready && <div className="p-4 bg-orange-600">

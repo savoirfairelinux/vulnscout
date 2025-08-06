@@ -110,7 +110,7 @@ You can Ctrl+C to cancel the script if you don't want to push the commit.
 **If you don't want to create a tag now (example: you have pending review), make Ctrl+C to cancel the script.** +
 If you confirm with empty text, it create tag with `Release v*.*.*` message.
 
-6. The script will push the tag to the remote repository. This will trigger the Jenkins pipeline to build and publish the new docker image.
+6. The script will push the tag to the remote repository. This will trigger the CI pipeline to build and publish the new docker image.
 
 === Linter, Unit tests, Code coverage and Code Quality
 
