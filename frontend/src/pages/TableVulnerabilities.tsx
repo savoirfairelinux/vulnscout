@@ -9,6 +9,8 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faEdit } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -109,7 +111,7 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
                 cell: info => info.getValue(),
                 sortDescFirst: true,
                 footer: (info) => `Total: ${info.table.getRowCount()}`,
-                size: 125
+                size: 132
             }),
             columnHelper.accessor('severity.severity', {
                 header: 'Severity',
@@ -155,7 +157,7 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
                 sortingFn: (rowA, rowB) => {
                     return rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds
                 },
-                size: 100
+                size: 125
             }),
             columnHelper.accessor('found_by', {
                 header: 'Sources',
@@ -164,15 +166,18 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
             }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
-                cell: info => <button
-                    className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg"
-                    onClick={() => setModalVuln(info.getValue())}
-                >
-                        edit
-                </button>,
+                cell: info =>
+                <div className="w-full text-center">
+                    <button
+                        className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg"
+                        onClick={() => setModalVuln(info.getValue())}
+                    >
+                        <FontAwesomeIcon icon={faEdit} />
+                    </button>
+                </div>,
                 enableSorting: false,
-                minSize: 50,
-                size: 50
+                minSize: 18,
+                size: 18
             })
         ]
     }, []);
