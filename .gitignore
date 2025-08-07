@@ -87,3 +87,4 @@ venv.bak/
 # Vulnscout files
 .vulnscout/example/output/
 .vulnscout/cache/
+frontend/package-lock.json
