@@ -41,16 +41,25 @@ function TableGeneric<DataType> ({
             ignoreLocation: true,
             useExtendedSearch: true,
             shouldSort: true,
-            minMatchCharLength: 2
+            minMatchCharLength: 2,
+            useExtendedSearch: true,
+            ignoreLocation: true
         });
     }, [fuseKeys, data]);
 
     const filteredData = useMemo(() => {
         if (search && search.length > 2) {
-            return fuse.search(search).map(result => result.item);
+            const processedSearch = search
+                .trim()
+                .split(/\s+/)
+                .map(term => `'${term}`)
+                .join(' ')
+            
+            return fuse.search(processedSearch).map(result => result.item);
         }
         return data;
     }, [search, fuse, data]);
+
 
     const paginatedData = useMemo(() => {
         const start = pageIndex * itemsPerPage
