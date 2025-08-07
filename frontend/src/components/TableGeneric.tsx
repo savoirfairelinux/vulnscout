@@ -42,8 +42,6 @@ function TableGeneric<DataType> ({
             useExtendedSearch: true,
             shouldSort: true,
             minMatchCharLength: 2,
-            useExtendedSearch: true,
-            ignoreLocation: true
         });
     }, [fuseKeys, data]);
 
