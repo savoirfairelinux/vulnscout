@@ -44,6 +44,7 @@ function TablePackages({ packages }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+    const [selectedLicences, setSelectedLicences] = useState<string[]>([]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -59,6 +60,14 @@ function TablePackages({ packages }: Readonly<Props>) {
         }
         return acc;
     }, []), [packages])
+
+    const licences_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
+        for (const licence of pkg.licences) {
+            if (licence != '' && !acc.includes(licence))
+                acc.push(licence)
+        }
+        return acc;
+    }, []), [packages]);
 
     const statusOptions = useMemo(() => {
         const statuses = new Set<string>();
@@ -79,10 +88,14 @@ function TablePackages({ packages }: Readonly<Props>) {
                 header: 'Name',
                 cell: info => info.getValue(),
                 footer: (info) => `Total: ${info.table.getRowCount()}`
-            }),
+             }),
             columnHelper.accessor('version', {
                 header: 'Version',
                 cell: info => info.getValue()
+            }),
+            columnHelper.accessor('licences', {
+                header: 'Licences',
+                cell: info => info.getValue().join(', ')
             }),
             columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
                 header: 'Vulnerabilities',
@@ -113,6 +126,10 @@ function TablePackages({ packages }: Readonly<Props>) {
                 }
             }
 
+            if  (selectedLicences.length && !selectedLicences.some(lic => el.licences.includes(lic))) {
+                return false;
+            }
+
             return true;
         });
     }, [packages, selectedSources, selectedStatuses]);
@@ -134,6 +151,13 @@ function TablePackages({ packages }: Readonly<Props>) {
                 options={statusOptions}
                 selected={selectedStatuses}
                 setSelected={setSelectedStatuses}
+            />
+
+            <FilterOption
+                label="Licences"
+                options={licences_list}
+                selected={selectedLicences}
+                setSelected={setSelectedLicences}
             />
 
             <div className="ml-4">
