@@ -132,7 +132,7 @@ function TablePackages({ packages }: Readonly<Props>) {
 
             return true;
         });
-    }, [packages, selectedSources, selectedStatuses]);
+    }, [packages, selectedSources, selectedStatuses, selectedLicences]);
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
