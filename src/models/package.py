@@ -6,13 +6,21 @@
 import semver
 from typing import Optional
 
+
 class Package:
     """
     Represent a package composed of a name, a version and identifiers like cpe or purl.
     Packages can be compared, merged and exported or imported as dictionaries.
     """
 
-    def __init__(self, name: str, version: str, cpe: Optional[list[str]] = None, purl: Optional[list[str]] = None, licences: Optional[list[str]] = None):
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        cpe: Optional[list[str]] = None,
+        purl: Optional[list[str]] = None,
+        licences: Optional[list[str]] = None
+    ):
         """
         Create a package by name (str) and version (str).
         Version should be a semver compatible string.
@@ -39,8 +47,8 @@ class Package:
         for p in purls:
             self.add_purl(p)
 
-        for l in lics:
-            self.add_licence(l)
+        for lic in lics:
+            self.add_licence(lic)
 
     def add_cpe(self, cpe: str):
         """Add a single cpe (str) identifier to the package if not already present."""
@@ -168,16 +176,22 @@ class Package:
     @staticmethod
     def from_dict(data: dict):
         """Import a package from a dictionary."""
-        return Package(data["name"], data["version"], data.get("cpe", []), data.get("purl", []), data.get("licences", []))
+        return Package(
+            data["name"],
+            data["version"],
+            data.get("cpe", []),
+            data.get("purl", []),
+            data.get("licences", [])
+        )
 
     def merge(self, other) -> bool:
-        """Merge two packages by adding the cpe, purl and licence identifiers of the other package to the current one."""
+        """Merge two packages by adding the cpe, purl, licence identifiers of the other package to the current one."""
         if self == other:
             for c in other.cpe:
                 self.add_cpe(c)
             for p in other.purl:
                 self.add_purl(p)
-            for l in other.licences:
-                self.add_licence(l)
+            for lic in other.licences:
+                self.add_licence(lic)
             return True
         return False

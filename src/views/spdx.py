@@ -25,8 +25,6 @@ from io import StringIO
 from os import getenv
 import re
 
-from src.models import package
-
 
 class SPDX:
     """
