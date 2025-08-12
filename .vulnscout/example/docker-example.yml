@@ -23,6 +23,7 @@ services:
       - FLASK_RUN_HOST=0.0.0.0
       - IGNORE_PARSING_ERRORS=false
       - GENERATE_DOCUMENTS=summary.adoc, time_estimates.csv
+      # - NVD_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
       # - DEBUG_SKIP_SCAN=false # Enable to skip scan and re-use last scan result instead
       # - PRODUCT_NAME=""
       # - PRODUCT_VERSION="1.0.0"
