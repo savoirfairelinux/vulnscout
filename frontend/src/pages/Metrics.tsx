@@ -149,13 +149,13 @@
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
-                    labels: ['Pending analysis', 'Fixed', 'Not Affected', 'Active'],
+                    labels: ['Community Analysis Pending', 'Fixed', 'Not Affected', 'Active'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
                             if (hideSeverity[vuln.severity.severity]) return acc;
                             const status = vuln.simplified_status;
-                            const index = status == 'pending analysis' ? 0 : status == 'fixed' ? 1 : status == 'not affected' ? 2 : 3;
+                            const index = status == 'Community Analysis Pending' ? 0 : status == 'fixed' ? 1 : status == 'not affected' ? 2 : 3;
                             acc[index]++;
                             return acc;
                         }, [0, 0, 0, 0]),

@@ -65,7 +65,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function loadPatchData (vulns_list: Vulnerability[]) {
-        const active_status = ['active', 'pending analysis']
+        const active_status = ['active', 'Community Analysis Pending']
         PatchFinderLogic
         .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
         .then((patchData) => {

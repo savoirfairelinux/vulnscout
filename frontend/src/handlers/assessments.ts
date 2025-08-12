@@ -1,6 +1,6 @@
 const STATUS_VEX_TO_GRAPH: { [key: string]: string } = {
-    "under_investigation": "pending analysis",
-    "in_triage": "pending analysis",
+    "under_investigation": "Community Analysis Pending",
+    "in_triage": "Community Analysis Pending",
     "false_positive": "not affected",
     "not_affected": "not affected",
     "exploitable": "active",
