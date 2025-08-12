@@ -149,20 +149,20 @@
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
-                    labels: ['Community Analysis Pending', 'Fixed', 'Not Affected', 'Active'],
+                    labels: ['Not Affected', 'Fixed', 'Community Analysis Pending', 'Exploitable'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
                             if (hideSeverity[vuln.severity.severity]) return acc;
                             const status = vuln.simplified_status;
-                            const index = status == 'Community Analysis Pending' ? 0 : status == 'fixed' ? 1 : status == 'not affected' ? 2 : 3;
+                            const index = status == 'not affected' ? 0 : status == 'fixed' ? 1 : status == 'Community Analysis Pending' ? 2 : 3;
                             acc[index]++;
                             return acc;
                         }, [0, 0, 0, 0]),
                         backgroundColor: [
-                            'rgba(180, 180, 180)',
-                            '#40A578',
                             'rgba(0, 150, 150)',
+                            '#009900',
+                            'rgba(255, 128, 0)',
                             '#F94C10',
                         ],
                         hoverOffset: 4
@@ -308,7 +308,7 @@
 
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
-                            <div className="text-xl p-1">Active vulnerabilities</div>
+                            <div className="text-xl p-1">Exploitable vulnerabilities</div>
                             <select className="bg-zinc-800 ml-2 p-1" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
                                 <option value="12_months">1 year</option>
                                 <option value="6_months">6 months</option>
