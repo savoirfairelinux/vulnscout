@@ -19,7 +19,7 @@ class Package:
         version: str,
         cpe: Optional[list[str]] = None,
         purl: Optional[list[str]] = None,
-        licences: Optional[list[str]] = None
+        licences: str = ""
     ):
         """
         Create a package by name (str) and version (str).
@@ -30,7 +30,7 @@ class Package:
         self.version = version.split("+git")[0]
         cpes = cpe or []
         purls = purl or []
-        lics = licences or []
+        lics = licences or ""
 
         # handle vendor:package format
         if len(name.split(':')) == 2:
@@ -41,14 +41,11 @@ class Package:
         self.id = f"{self.name}@{self.version}"
         self.cpe: list[str] = []
         self.purl: list[str] = []
-        self.licences: list[str] = []
+        self.licences: str = lics
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
             self.add_purl(p)
-
-        for lic in lics:
-            self.add_licence(lic)
 
     def add_cpe(self, cpe: str):
         """Add a single cpe (str) identifier to the package if not already present."""
@@ -63,13 +60,6 @@ class Package:
             return
         if purl not in self.purl:
             self.purl.append(purl)
-
-    def add_licence(self, licence: str):
-        """Add a single licence (str) to the package if not already present."""
-        if not licence:
-            return
-        if licence not in self.licences:
-            self.licences.append(licence)
 
     def generate_generic_cpe(self) -> str:
         """Build a generic cpe string for the package, add it to the cpe list and return it."""
@@ -191,7 +181,5 @@ class Package:
                 self.add_cpe(c)
             for p in other.purl:
                 self.add_purl(p)
-            for lic in other.licences:
-                self.add_licence(lic)
             return True
         return False

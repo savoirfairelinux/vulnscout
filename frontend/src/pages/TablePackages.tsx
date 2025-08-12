@@ -61,14 +61,21 @@ function TablePackages({ packages }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
-    const licences_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
-        for (const licence of pkg.licences) {
-            if (licence != '' && !acc.includes(licence))
-                acc.push(licence)
-        }
-        return acc;
-    }, []), [packages]);
-
+    const licences_list = useMemo(() => {
+        const licenceSet = new Set<string>();
+        packages.forEach(pkg => {
+            const licence = pkg.licences;
+            if (licence) {
+                licence.split(/\s+(?:AND|OR)\s+/).forEach(l => {
+                    if (l && !licenceSet.has(l)) {
+                        licenceSet.add(l);
+                    }
+                });
+            }
+        });
+        return Array.from(licenceSet);
+    }, [packages]);
+    
     const statusOptions = useMemo(() => {
         const statuses = new Set<string>();
         for (const pkg of packages) {
@@ -95,7 +102,7 @@ function TablePackages({ packages }: Readonly<Props>) {
             }),
             columnHelper.accessor('licences', {
                 header: 'Licences',
-                cell: info => info.getValue().join(', ')
+                cell: info => info.getValue()
             }),
             columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
                 header: 'Vulnerabilities',
@@ -126,9 +133,10 @@ function TablePackages({ packages }: Readonly<Props>) {
                 }
             }
 
-            if  (selectedLicences.length && !selectedLicences.some(lic => el.licences.includes(lic))) {
+           if (selectedLicences.length && !selectedLicences.includes(el.licences)) {
                 return false;
             }
+
 
             return true;
         });
