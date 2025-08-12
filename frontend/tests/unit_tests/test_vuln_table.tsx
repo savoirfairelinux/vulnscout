@@ -71,7 +71,7 @@ describe('Vulnerability Table', () => {
                 state: 'unknown'
             },
             status: 'affected',
-            simplified_status: 'active',
+            simplified_status: 'Exploitable',
             assessments: []
         },
         {
@@ -375,12 +375,12 @@ describe('Vulnerability Table', () => {
         expect(pkg_xyz).toBeInTheDocument();
     })
 
-    test('filter out active', async () => {
+    test('filter out Exploitable', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const hide_active = await screen.getByRole('checkbox', {name: /hide active/i});
+        const hide_active = await screen.getByRole('checkbox', {name: /hide Exploitable/i});
         const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 500 });
 
         // ACT
