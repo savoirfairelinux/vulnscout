@@ -17,16 +17,9 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
   return (
     <nav>
       <ul className={["flex flex-row font-bold items-center", bgColor].join(' ')}>
-        <li className="px-4 py-2 mr-4 text-lg">
+        <li className={["px-4 py-2 mr-4 text-lg cursor-pointer", bgHoverColor].join(' ')} onClick={() => changeTab('metrics')}>
             <FontAwesomeIcon icon={faBinoculars} className='mr-1 fa-rotate-180' size='xl' />
             VulnScout
-        </li>
-
-        <li className={["px-4 py-2", bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
-            <button onClick={() => changeTab('metrics')}>
-                <FontAwesomeIcon icon={faChartLine} className='mr-1' />
-                Dashboard
-            </button>
         </li>
         <li className={["px-4 py-2", bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
             <button onClick={() => changeTab('packages')}>
