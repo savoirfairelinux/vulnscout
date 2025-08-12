@@ -28,13 +28,13 @@ RUN curl -L "https://github.com/google/osv-scanner/releases/download/$OSV_SCANNE
     && chmod +x /usr/local/bin/osv-scanner
 
 # Install CycloneDX
-ARG CYCLONEDX_VERSION=v0.25.1
+ARG CYCLONEDX_VERSION=v0.29.1
 RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CYCLONEDX_VERSION/cyclonedx-linux-musl-x64" -o cyclonedx-cli && \
     chmod +x cyclonedx-cli && \
     mv cyclonedx-cli /usr/local/bin/
 
 # Install Grype
-ARG GRYPE_VERSION=v0.78.0
+ARG GRYPE_VERSION=v0.97.2
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
 
 # Install dependencies for python backend
