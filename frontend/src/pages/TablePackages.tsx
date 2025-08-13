@@ -6,6 +6,7 @@ import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import { useRef } from "react";
 
 type Props = {
     packages: Package[];
@@ -45,6 +46,7 @@ function TablePackages({ packages }: Readonly<Props>) {
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedLicences, setSelectedLicences] = useState<string[]>([]);
+    const tableRef = useRef<HTMLDivElement>(null); // ref to table container
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -190,6 +192,7 @@ function TablePackages({ packages }: Readonly<Props>) {
                 options={licences_list}
                 selected={selectedLicences}
                 setSelected={setSelectedLicences}
+                parentRef={tableRef}
             />
 
             <div className="ml-4">
@@ -201,7 +204,9 @@ function TablePackages({ packages }: Readonly<Props>) {
             </div>
         </div>
 
-        <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+        <div ref={tableRef}>
+            <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+        </div>
     </>);
 }
 
