@@ -6,6 +6,7 @@ import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import { useRef } from "react";
 
 type Props = {
     packages: Package[];
@@ -44,6 +45,8 @@ function TablePackages({ packages }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+    const [selectedLicences, setSelectedLicences] = useState<string[]>([]);
+    const tableRef = useRef<HTMLDivElement>(null); // ref to table container
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -60,6 +63,31 @@ function TablePackages({ packages }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
+    const licences_list = useMemo(() => {
+        const licenceSet = new Set<string>();
+        let hasCustomLicence = false;
+
+        packages.forEach(pkg => {
+            const licence = pkg.licences;
+            if (licence) {
+                licence.split(/\s+(?:AND|OR)\s+/).forEach(l => {
+                    if (/DocumentRef|LicenseRef/i.test(l)) {
+                        hasCustomLicence = true;
+                    } else {
+                        licenceSet.add(l);
+                    }
+                });
+            }
+        });
+
+        const result = Array.from(licenceSet).sort((a, b) => a.localeCompare(b)); // <-- sort alphabetically
+        if (hasCustomLicence) {
+            result.push("Custom Licence");
+        }
+        return result;
+    }, [packages]);
+
+    
     const statusOptions = useMemo(() => {
         const statuses = new Set<string>();
         for (const pkg of packages) {
@@ -79,9 +107,13 @@ function TablePackages({ packages }: Readonly<Props>) {
                 header: 'Name',
                 cell: info => info.getValue(),
                 footer: (info) => `Total: ${info.table.getRowCount()}`
-            }),
+             }),
             columnHelper.accessor('version', {
                 header: 'Version',
+                cell: info => info.getValue()
+            }),
+            columnHelper.accessor('licences', {
+                header: 'Licences',
                 cell: info => info.getValue()
             }),
             columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
@@ -113,10 +145,29 @@ function TablePackages({ packages }: Readonly<Props>) {
                 }
             }
 
+            if (selectedLicences.length) {
+                const licenceParts = el.licences
+                    ? el.licences.split(/\s+(?:AND|OR)\s+/)
+                    : [];
+
+                const hasCustom = licenceParts.some(l => /DocumentRef|LicenseRef/i.test(l));
+
+                const matches = selectedLicences.some(sel => {
+                    if (sel === "Custom Licence") {
+                        return hasCustom;
+                    }
+                    return licenceParts.includes(sel);
+                });
+
+                if (!matches) {
+                    return false;
+                }
+            }
+
             return true;
         });
-    }, [packages, selectedSources, selectedStatuses]);
-
+    }, [packages, selectedSources, selectedStatuses, selectedLicences]);
+    
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
@@ -136,6 +187,14 @@ function TablePackages({ packages }: Readonly<Props>) {
                 setSelected={setSelectedStatuses}
             />
 
+            <FilterOption
+                label="Licences"
+                options={licences_list}
+                selected={selectedLicences}
+                setSelected={setSelectedLicences}
+                parentRef={tableRef}
+            />
+
             <div className="ml-4">
                 <ToggleSwitch
                     enabled={showSeverity}
@@ -145,7 +204,9 @@ function TablePackages({ packages }: Readonly<Props>) {
             </div>
         </div>
 
-        <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+        <div ref={tableRef}>
+            <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+        </div>
     </>);
 }
 
