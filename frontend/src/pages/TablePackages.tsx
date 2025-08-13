@@ -63,18 +63,28 @@ function TablePackages({ packages }: Readonly<Props>) {
 
     const licences_list = useMemo(() => {
         const licenceSet = new Set<string>();
+        let hasCustomLicence = false;
+
         packages.forEach(pkg => {
             const licence = pkg.licences;
             if (licence) {
                 licence.split(/\s+(?:AND|OR)\s+/).forEach(l => {
-                    if (l && !licenceSet.has(l)) {
+                    if (/DocumentRef|LicenseRef/i.test(l)) {
+                        hasCustomLicence = true;
+                    } else {
                         licenceSet.add(l);
                     }
                 });
             }
         });
-        return Array.from(licenceSet);
+
+        const result = Array.from(licenceSet).sort((a, b) => a.localeCompare(b)); // <-- sort alphabetically
+        if (hasCustomLicence) {
+            result.push("Custom Licence");
+        }
+        return result;
     }, [packages]);
+
     
     const statusOptions = useMemo(() => {
         const statuses = new Set<string>();
@@ -133,15 +143,29 @@ function TablePackages({ packages }: Readonly<Props>) {
                 }
             }
 
-           if (selectedLicences.length && !selectedLicences.includes(el.licences)) {
-                return false;
-            }
+            if (selectedLicences.length) {
+                const licenceParts = el.licences
+                    ? el.licences.split(/\s+(?:AND|OR)\s+/)
+                    : [];
 
+                const hasCustom = licenceParts.some(l => /DocumentRef|LicenseRef/i.test(l));
+
+                const matches = selectedLicences.some(sel => {
+                    if (sel === "Custom Licence") {
+                        return hasCustom;
+                    }
+                    return licenceParts.includes(sel);
+                });
+
+                if (!matches) {
+                    return false;
+                }
+            }
 
             return true;
         });
     }, [packages, selectedSources, selectedStatuses, selectedLicences]);
-
+    
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
