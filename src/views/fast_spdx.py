@@ -42,7 +42,7 @@ class FastSPDX ():
                 continue
             version = self.get_field(pkg, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
             primary_package_purpose = self.get_field(pkg, ["primaryPackagePurpose", "PrimaryPackagePurpose"])
-            licences = self.get_field(pkg, ["licenseDeclared", "LicenseDeclared", "licenseConcluded", "LicenseConcluded", "licenseInfoFromFiles", "LicenseInfoFromFiles"])
+            licences = self.get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
 
             package = Package(name, version or "", [], [], licences or "")
             cpe_type = "a"

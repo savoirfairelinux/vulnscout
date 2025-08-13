@@ -23,7 +23,6 @@ from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
 from os import getenv
-import re
 
 
 class SPDX:
