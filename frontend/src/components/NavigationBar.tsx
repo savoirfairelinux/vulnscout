@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChartLine, faBox, faShieldHalved, faFileExport, faBinoculars, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faBinoculars, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-green-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
