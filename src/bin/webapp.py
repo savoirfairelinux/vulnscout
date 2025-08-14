@@ -59,6 +59,29 @@ def create_app():
                     "status": "done",
                     "maxsteps": MAX_SCRIPT_STEPS,
                     "step": MAX_SCRIPT_STEPS,
+                    "message": "Scan complete",
+                    "loadingbar": 100
+                }
+            else:
+                last_line = text.splitlines()[-1].split(" ")
+                step = int(last_line[0])
+                loadingbar = int(last_line[-1])
+                message = " ".join(last_line[1:-1])
+                return {
+                    "status": "running",
+                    "maxsteps": MAX_SCRIPT_STEPS,
+                    "step": step,
+                    "message": message,
+                    "loadingbar": loadingbar
+                }
+        
+        with open(app.config["SCAN_FILE"], "r") as f:
+            text = f.read()
+            if "__END_OF_SCAN_SCRIPT__" in text:
+                return {
+                    "status": "done",
+                    "maxsteps": MAX_SCRIPT_STEPS,
+                    "step": MAX_SCRIPT_STEPS,
                     "message": "Scan complete"
                 }
             else:
@@ -67,7 +90,8 @@ def create_app():
                     "status": "running",
                     "maxsteps": MAX_SCRIPT_STEPS,
                     "step": int(step.pop(0)),
-                    "message": " ".join(step)
+                    "message": " ".join(step),
+                    "loadingbar": 50
                 }
 
     @app.middleware("/api")

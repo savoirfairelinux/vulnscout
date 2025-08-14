@@ -14,6 +14,7 @@ function App() {
     topline: 'Project analysis is running...',
     details: 'Step 0 : starting script'
   });
+  const [loadingBarValue, setLoadingBarValue] = useState(0);
   const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
@@ -33,6 +34,7 @@ function App() {
           topline: 'Project analysis is running...',
           details: `Step ${data?.step ?? '0'}/${data?.maxsteps ?? '?'} : ${data?.message}`
         });
+        setLoadingBarValue(data?.loadingbar ?? 0);
       })
       .catch(error => {
         console.error('Error:', error);
@@ -40,10 +42,10 @@ function App() {
           topline: 'Error fetching scan status',
           details: String(error)
         });
+        setLoadingBarValue(0);
       });
     }, 1000);
 
-    // Clean up the interval on unmount
     return () => clearInterval(interval);
   }, [loading]);
 
@@ -54,6 +56,7 @@ function App() {
           <Loading
             topline={loadingText.topline}
             details={loadingText.details}
+            progress={loadingBarValue}
           />
         ) : (
           <Explorer

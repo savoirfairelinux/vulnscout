@@ -48,7 +48,7 @@ function main() {
 
     # 0. Run server to start page
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
-        set_status "0" "Server started"
+        set_status "0" "Server started" "0"
         (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
     fi
 
@@ -60,11 +60,16 @@ function main() {
     fi
 
     # 7. Merge all vulnerability from scan results
-    set_status "7" "Merging vulnerability results"
+    set_status "7" "Merging vulnerability results" "0"
+    start=$(date +%s)
 
     python3 -m src.bin.merger_ci
 
-    set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->"
+    end=$(date +%s)
+    runtime=$((end - start))
+    set_status "7" "Runtime is $runtime seconds" "0"
+
+    set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->" "0"
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         fg %?flask # Bring back process named 'flask' (flask run) to foreground.
@@ -74,28 +79,28 @@ function main() {
 
 function full_scan_steps() {
     # 1. Search for .tar , .tar.gz and .tar.zst files in /scan/inputs and extract them
-    set_status "1" "Extracting tar files"
+    set_status "1" "Extracting tar files" "0"
     extract_tar_folder $INPUTS_PATH
 
     # 2. Search for SPDX JSON files in /scan/inputs/spdx and merge them
     if [[ -e "$SPDX_INPUTS_PATH" ]]; then
-        set_status "2" "Searching SPDX JSON files"
+        set_status "2" "Searching SPDX JSON files" "0"
 
         rm -Rf $SPDX_TMP_PATH
         mkdir -p $SPDX_TMP_PATH
 
         copy_spdx_files $SPDX_INPUTS_PATH $SPDX_TMP_PATH
 
-        set_status "2" "Merging $((SPDX_FILE_COUNTER-1)) SPDX files"
+        set_status "2" "Merging $((SPDX_FILE_COUNTER-1)) SPDX files" "0"
         INPUT_SPDX_FOLDER="$SPDX_TMP_PATH" OUTPUT_SPDX_FILE="$TMP_PATH/merged.spdx.json" python3 -m src.bin.spdx_merge
     else
-        set_status "2" "No SPDX files found, skipping"
+        set_status "2" "No SPDX files found, skipping" "0"
     fi
 
 
     # 3. Search for CycloneDX JSON or XML files in /scan/inputs/cdx and merge them
     if [[ -e "$CDX_INPUTS_PATH" ]]; then
-        set_status "3" "Searching CDX JSON files"
+        set_status "3" "Searching CDX JSON files" "0"
 
         rm -Rf $CDX_TMP_PATH
         mkdir -p $CDX_TMP_PATH
@@ -103,7 +108,7 @@ function full_scan_steps() {
         copy_cdx_files $CDX_INPUTS_PATH $CDX_TMP_PATH
 
         if [[ ${#CDX_FILE_LIST[@]} -ge 1 ]]; then
-            set_status "3" "Merging ${#CDX_FILE_LIST[@]} CDX files"
+            set_status "3" "Merging ${#CDX_FILE_LIST[@]} CDX files" "0"
 
             cyclonedx-cli merge \
                 --output-file "$TMP_PATH/merged.cdx.json" \
@@ -112,36 +117,36 @@ function full_scan_steps() {
                 --version "$PRODUCT_VERSION" \
                 --input-files "${CDX_FILE_LIST[@]}"
         else
-            set_status "3" "No CDX files found, skipping"
+            set_status "3" "No CDX files found, skipping" "0"
         fi
     fi
 
     if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
-        set_status "4" "Scanning SPDX with Grype"
+        set_status "4" "Scanning SPDX with Grype" "0"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
     fi
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
-        set_status "4" "Scanning CDX with Grype"
+        set_status "4" "Scanning CDX with Grype" "0"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
     fi
 
-    set_status "5" "Scanning CDX with OSV (WIP)"
+    set_status "5" "Scanning CDX with OSV (WIP)" "0"
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
         osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
         osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
     fi
 
     if [[ -e "$YOCTO_CVE_INPUTS_PATH" ]]; then
-        set_status "6" "Copy CVE-check result from Yocto"
+        set_status "6" "Copy CVE-check result from Yocto" "0"
 
         rm -Rf $YOCTO_CVE_TMP_PATH
         mkdir -p $YOCTO_CVE_TMP_PATH
 
         copy_yocto_cve_files $YOCTO_CVE_INPUTS_PATH $YOCTO_CVE_TMP_PATH
 
-        set_status "6" "Found $((YOCTO_CVE_FILE_COUNTER-1)) CVE files issued by Yocto CVE check"
+        set_status "6" "Found $((YOCTO_CVE_FILE_COUNTER-1)) CVE files issued by Yocto CVE check" "0"
     else
-        set_status "6" "No CVE check result found from Yocto"
+        set_status "6" "No CVE check result found from Yocto" "0"
     fi
 }
 
@@ -153,14 +158,16 @@ function full_scan_steps() {
 # Arguments:
 #   Step number
 #   Message to describe running step
+#   Progression (0-100)
 # Outputs:
 #   to /scan/status.txt and console
 #######################################
-function set_status() {
+function set_status() { 
     local step=$1
     local message=$2
+    local progress=$3
 
-    echo "$step $message" >> "$BASE_DIR/status.txt"
+    echo "$step $message $progress" >> "$BASE_DIR/status.txt"
     echo "$message"
 }
 
