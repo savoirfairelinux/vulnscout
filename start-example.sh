@@ -8,29 +8,37 @@ show_help() {
   echo ""
   echo "Options:"
   echo "  --dev      Start frontend in development mode (npm run dev) and backend with Docker Compose"
+  echo "  --spdx3    Use the SPDX-3 example instead of SPDX-2"
   echo "  --help     Show this help message and exit"
   echo ""
   echo "Default mode:"
-  echo "  If no arguments are passed, frontend will be built (npm run build)."
+  echo "  If no arguments are passed, frontend will be built (npm run build) for SPDX2."
 }
 
-case "$1" in
-  --dev)
-    NPM_MODE="dev"
-    ;;
-  --help|-h)
-    show_help
-    exit 0
-    ;;
-  "")
-    NPM_MODE="build"
-    ;;
-  *)
-    echo "Error: Unknown argument '$1'"
-    show_help
-    exit 1
-    ;;
-esac
+# Default settings
+NPM_MODE="build"
+DOCKER_COMPOSE_FILE=".vulnscout/example/docker-example.yml"
+
+# Parse arguments
+for arg in "$@"; do
+  case "$arg" in
+    --dev)
+      NPM_MODE="dev"
+      ;;
+    --spdx3)
+      DOCKER_COMPOSE_FILE=".vulnscout/example-spdx3/docker-example-spdx3.yml"
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Error: Unknown argument '$arg'"
+      show_help
+      exit 1
+      ;;
+  esac
+done
 
 ## Check for required tools
 if ! command -v npm &> /dev/null; then
@@ -98,7 +106,7 @@ fi
 docker rm -f vulnscout 2>/dev/null
 
 # Start docker services
-$DOCKER_COMPOSE -f .vulnscout/example/docker-example.yml up
+$DOCKER_COMPOSE -f "$DOCKER_COMPOSE_FILE" up
 
 # When docker-compose finishes (or script ends), cleanup npm too if dev mode
 if [ "$NPM_MODE" == "dev" ]; then
