@@ -16,7 +16,7 @@ from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
 import glob
 import os
-import json
+import orjson
 
 INPUT_SPDX_FOLDER = "/scan/tmp/spdx"
 OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
@@ -36,8 +36,8 @@ def read_inputs(controllers):
     for file in glob.glob(f"{os.getenv('INPUT_SPDX_FOLDER', INPUT_SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"spdx_merge: Merging {file}")
-            with open(file, "r") as f:
-                data = json.load(f)
+            with open(file, "rb") as f:
+                data = orjson.loads(f)
 
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_controllers_from_dict(data)
@@ -64,6 +64,7 @@ def output_results(controllers):
         f.write(spdx.output_as_json(with_cpe=True))
 
 
+
 def main():
     pkg_ctrl = PackagesController()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
@@ -76,7 +77,6 @@ def main():
 
     read_inputs(controllers)
     output_results(controllers)
-
 
 if __name__ == "__main__":
     main()

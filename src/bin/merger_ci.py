@@ -24,7 +24,7 @@ from ..controllers.conditions_parser import ConditionParser
 from ..models.assessment import VulnAssessment
 from ..helpers.verbose import verbose
 import glob
-import json
+import orjson
 import os
 from datetime import date, datetime, timezone
 
@@ -162,8 +162,8 @@ def read_inputs(controllers):
 
     verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
     try:
-        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
-            openvex.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "rb") as f:
+            openvex.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
         print("Warning: Did not find openvex file, which is used to store history of analysis."
               + " This is normal at first start but not in later analysis")
@@ -178,8 +178,8 @@ def read_inputs(controllers):
     verbose(f"merger_ci: Reading {os.getenv('CDX_PATH', CDX_PATH)}")
     error_cdx_not_found_displayed = False
     try:
-        with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
-            cdx.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("CDX_PATH", CDX_PATH), "rb") as f:
+            cdx.load_from_dict(orjson.loads(f.read()))
             cdx.parse_and_merge()
     except FileNotFoundError:
         print("Warning: Did not find CycloneDX files. If you intended to scan CycloneDX files,"
@@ -188,8 +188,8 @@ def read_inputs(controllers):
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_CDX_PATH', GRYPE_CDX_PATH)}")
     try:
-        with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
-            scanGrype.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "rb") as f:
+            scanGrype.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
         if not error_cdx_not_found_displayed:
             print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
@@ -203,8 +203,8 @@ def read_inputs(controllers):
     for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"merger_ci: Reading {file}")
-            with open(file, "r") as f:
-                data = json.load(f)
+            with open(file, "rb") as f:
+                data = orjson.loads(f.read())
 
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
@@ -223,21 +223,21 @@ def read_inputs(controllers):
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
     try:
-        with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
-            scanGrype.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "rb") as f:
+            scanGrype.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
         print("Warning: Did not find Grype analysis of SPDX files. If you intended to scan"
               + " SPDX files, this mean there was an issue when analysing them.")
 
     for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
         verbose(f"merger_ci: Reading {file}")
-        with open(file, "r") as f:
-            scanYocto.load_from_dict(json.loads(f.read()))
+        with open(file, "rb") as f:
+            scanYocto.load_from_dict(orjson.loads(f.read()))
 
     verbose(f"merger_ci: Reading {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
     try:
-        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "r") as f:
-            timeEstimates.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "rb") as f:
+            timeEstimates.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -265,18 +265,18 @@ def output_results(controllers, files):
         "assessments": controllers["assessments"].to_dict()
     }
     verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
-    with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "w") as f:
-        f.write(json.dumps(output))
-    with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "w") as f:
-        f.write(json.dumps(output["packages"]))
-    with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "w") as f:
-        f.write(json.dumps(output["vulnerabilities"]))
-    with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
-        f.write(json.dumps(output["assessments"]))
+    with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "wb") as f:
+        f.write(orjson.dumps(output))
+    with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "wb") as f:
+        f.write(orjson.dumps(output["packages"]))
+    with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "wb") as f:
+        f.write(orjson.dumps(output["vulnerabilities"]))
+    with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "wb") as f:
+        f.write(orjson.dumps(output["assessments"]))
 
     verbose(f"merger_ci: Exporting {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
-    with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "w") as f:
-        f.write(json.dumps(files["openvex"].to_dict(), indent=2))
+    with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "wb") as f:
+        f.write(orjson.dumps(files["openvex"].to_dict(), option=orjson.OPT_INDENT_2).decode())
 
     verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
     with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
@@ -287,8 +287,8 @@ def output_results(controllers, files):
         f.write(spdx.output_as_json())
 
     verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
-    with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
-        f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
+    with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "wb") as f:
+        f.write(orjson.dumps(files["time_estimates"].to_dict(), option=orjson.OPT_INDENT_2))
 
     list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
     metadata = {
