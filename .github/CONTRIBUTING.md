@@ -4,7 +4,7 @@ Thank you for considering contributing to this project! We welcome all contribut
 
 ## How to Contribute
 
-1. **Fork the repository** and create your branch from `main`.
+1. **Fork the repository** and create your branch from `staging`.
 2. **Write clear, concise code** and follow the existing code style.
 3. **Add or update tests** as appropriate for your changes.
 4. **Document your changes** in the code and update documentation files if needed.
@@ -16,7 +16,7 @@ All contributors are expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md
 
 ## Pull Request Process
 
-- Ensure your branch is up to date with `main`.
+- Ensure your branch is up to date with `staging`.
 - All checks (tests, linters, etc.) must pass before merging.
 - Provide a detailed description of your changes.
 - Reference any related issues in your pull request.
