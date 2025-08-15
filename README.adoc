@@ -87,6 +87,13 @@ To use it, you can simply run the default script with the command:
 ./start-example.sh
 ----
 
+Or, if you prefer to run another example based on SPDX-3.0, you can use the following command:
+
+[source,shell]
+----
+./start-example.sh --spdx3
+----
+
 ==== Use Vulnscount with Yocto
 
 We have a dedicated layer for Vulnscout integration in Yocto.
