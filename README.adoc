@@ -112,7 +112,7 @@ To configure your `yaml` file, you can look at the example provided in `.vulnsco
 
 [TIP]
 ====
-- `.tar`, `.tar.gz`, and `.tar.zst` archives are supported as SBOM inputs.
+- `.tar`, `.tar.gz`, `.tar.zst`, and `.spdx.json` archives are supported as SBOM inputs.
 - To ignore parsing errors for malformed SBOMs, set:
   `IGNORE_PARSING_ERRORS=true`
 ====
