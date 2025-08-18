@@ -53,7 +53,7 @@ setup_devtools() {
   sleep 1
 
   # Modify the docker-compose file to mount the backend src/ directory in addition
-  DOCKER_EXTRA_VOLUMES="-f .vulnscout/docker-npm-override.yml"
+  DOCKER_EXTRA_VOLUMES="-f .vulnscout/docker-dev-override.yml"
 }
 
 # Default settings
@@ -104,6 +104,10 @@ fi
 echo "Docker Compose command found: $DOCKER_COMPOSE"
 
 ## Backend Development Environment Setup Script
+
+# Update the docker image if necessary
+docker pull sflinux/vulnscout:latest
+
 # Close any existing docker-compose processes
 docker rm -f vulnscout 2>/dev/null || true
 
