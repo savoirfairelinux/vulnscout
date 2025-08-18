@@ -11,11 +11,9 @@ services:
       # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
       # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
       # Also accepted .tar, .tar.gz, .tar.zst for all inputs
-      - ../../src:/scan/src:Z # Mount the source code on actual source code path. Only needed for development if you want to test changes in the source code.
       - ../cache:/cache/vulnscout:Z # Cache directory for VulnScout to store the DB EPSS and NVD
       - ./output:/scan/outputs:Z
-      # - ./tmp:/scan/tmp # Debug only
-      - ./input/cve-yocto.json:/scan/inputs/yocto_cve_check/cve-yocto.json:ro,Z
+      - ./input/example.rootfs.json:/scan/inputs/yocto_cve_check/example.rootfs.json:ro,Z
       - ./input/example.rootfs.spdx.tar.zst:/scan/inputs/spdx/example.rootfs.spdx.tar.zst:ro,Z
       - ./input/cyclonedx-export:/scan/inputs/cdx:ro,Z
     environment:
@@ -23,6 +21,7 @@ services:
       - FLASK_RUN_HOST=0.0.0.0
       - IGNORE_PARSING_ERRORS=false
       - GENERATE_DOCUMENTS=summary.adoc, time_estimates.csv
+      # - NVD_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
       # - DEBUG_SKIP_SCAN=false # Enable to skip scan and re-use last scan result instead
       # - PRODUCT_NAME=""
       # - PRODUCT_VERSION="1.0.0"

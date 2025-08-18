@@ -9,6 +9,7 @@ import os
 import random
 import string
 from datetime import datetime, timezone
+from typing import Any, List
 from ..models.iso8601_duration import Iso8601Duration
 
 
@@ -77,7 +78,8 @@ class Templates:
 
             if len(vuln_obj['assessments']) > 0:
                 try:
-                    if (filter_epss is None or float(vuln_obj["epss"]["score"]) >= filter_epss):
+                    epss_score = float((vuln_obj.get("epss", {}).get("score")) or 0.0)
+                    if (filter_epss is None or epss_score >= filter_epss):
                         kwargs["vulnerabilities"][vuln_obj['id']] = vuln_obj
                 except Exception:
                     pass
@@ -112,6 +114,32 @@ class Templates:
         os.remove(f"{random_name}.adoc")
         os.remove(f"{random_name}.pdf")
         return pdf
+
+    def adoc_to_html(self, adoc: str) -> bytes:
+        random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
+        adoc_path = f"{random_name}.adoc"
+        html_path = f"{random_name}.html"
+        with open(adoc_path, "w+") as f:
+            f.write(adoc)
+
+        # Use asciidoctor to render HTML
+        execution = subprocess.run(["asciidoctor", adoc_path], capture_output=True)
+        if execution.returncode != 0:
+            print(execution.stdout)
+            print(execution.stderr)
+            try:
+                if os.path.exists(adoc_path):
+                    os.remove(adoc_path)
+                if os.path.exists(html_path):
+                    os.remove(html_path)
+            finally:
+                raise Exception("Error converting adoc to html: asciidoctor returned non-zero exit code")
+
+        with open(html_path, "rb") as f:
+            html = f.read()
+        os.remove(adoc_path)
+        os.remove(html_path)
+        return html
 
     def list_documents(self):
         docs = []
@@ -187,16 +215,37 @@ class TemplatesExtensions:
         return value[:limit]
 
     @staticmethod
-    def sort_by_epss(value: dict[str, dict] | list[dict]) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
-        return sorted(value, key=lambda x: float(x["epss"]["score"] or "0.0"), reverse=True)  # type: ignore
+    def sort_by_epss(value: dict[str, dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+        vals: List[dict[str, Any]]
+        if isinstance(value, dict):
+            vals = list(value.values())
+        else:
+            vals = list(value)
+        return sorted(
+            vals,
+            key=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0),
+            reverse=True
+        )
 
     @staticmethod
-    def filter_epss_score(value: dict[str, dict] | list[dict], minimum: float) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
-        return [v for v in value if float(v["epss"]["score"]) * 100 >= minimum]  # type: ignore
+    def filter_epss_score(value: dict[str, dict[str, Any]] | list[dict[str, Any]], minimum: float
+                          ) -> list[dict[str, Any]]:
+        vals: List[dict[str, Any]]
+        if isinstance(value, dict):
+            vals = list(value.values())
+        else:
+            vals = list(value)
+        result: List[dict[str, Any]] = []
+        for v in vals:
+            score = 0.0
+            try:
+                epss_raw = (v.get("epss") or {}).get("score")
+                score = float(epss_raw or 0.0) * 100
+            except Exception:
+                score = 0.0
+            if score >= minimum:
+                result.append(v)
+        return result
 
     @staticmethod
     def sort_by_effort(value: dict[str, dict] | list[dict]) -> list[dict]:

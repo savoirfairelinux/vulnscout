@@ -76,8 +76,8 @@ def init_app(app):
                         doc["extension"] = doc["id"].split(".")[-1]
                     else:
                         doc["extension"] = "bin"
-                    if doc["extension"] == "adoc":
-                        doc["extension"] = "adoc|pdf"
+                    if doc["extension"] in ["adoc", "asciidoc"]:
+                        doc["extension"] = "adoc|pdf|html"
 
                     if doc["id"] in CategoriesDictionary:
                         for cat in CategoriesDictionary[doc["id"]]:
@@ -128,6 +128,12 @@ def init_app(app):
                 resp = make_response(templ.adoc_to_pdf(content))
                 resp.headers["Content-Type"] = "application/pdf"
                 resp.headers["Content-Disposition"] = f"attachment; filename={doc_name}.pdf"
+                return resp
+
+            if base_mime == "text/asciidoc" and expected_mime == "text/html":
+                resp = make_response(templ.adoc_to_html(content))
+                resp.headers["Content-Type"] = "text/html"
+                resp.headers["Content-Disposition"] = f"attachment; filename={doc_name}.html"
                 return resp
 
             return {"error": f"Cannot convert {base_mime} to {expected_mime}"}, 400
