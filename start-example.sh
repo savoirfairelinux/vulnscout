@@ -53,7 +53,7 @@ setup_devtools() {
   sleep 1
 
   # Modify the docker-compose file to mount the backend src/ directory in addition
-  DOCKER_EXTRA_VOLUMES="-f .vulnscout/docker-npm-override.yml"
+  DOCKER_EXTRA_VOLUMES="-f .vulnscout/docker-dev-override.yml"
 }
 
 # Default settings
