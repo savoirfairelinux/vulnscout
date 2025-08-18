@@ -10,7 +10,6 @@ services:
       # Put .spdx.json files in /scan/inputs/spdx
       # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
       # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
-      - ../../src:/scan/src:Z # Mount the source code on actual source code path. Only needed for development if you want to test changes in the source code.
       - ../cache:/cache/vulnscout:Z # Cache directory for VulnScout to store the DB EPSS and NVD
       - ./output:/scan/outputs:Z
       - ./input/core-image-minimal-qemux86-64.rootfs.json:/scan/inputs/yocto_cve_check/core-image-minimal-qemux86-64.rootfs.json:ro,Z
