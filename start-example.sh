@@ -104,6 +104,10 @@ fi
 echo "Docker Compose command found: $DOCKER_COMPOSE"
 
 ## Backend Development Environment Setup Script
+
+# Update the docker image if necessary
+docker pull sflinux/vulnscout:latest
+
 # Close any existing docker-compose processes
 docker rm -f vulnscout 2>/dev/null || true
 
