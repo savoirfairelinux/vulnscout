@@ -1,5 +1,6 @@
 import os
 
+
 class SetStatus:
     def __init__(self, base_dir):
         self.base_dir = base_dir
@@ -8,4 +9,3 @@ class SetStatus:
     def set_status(self, step, message, progress):
         with open(self.status_file, "a") as f:
             f.write(f"{step} {message} {progress}\n")
-        print(message)

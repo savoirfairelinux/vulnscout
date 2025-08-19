@@ -161,6 +161,7 @@ def evaluate_condition(controllers, condition):
     if have_failed:
         exit(2)
 
+
 def read_inputs(controllers, status):
     """Read from well-known files to grab vulnerabilities with per-category progress."""
     scanGrype = GrypeVulns(controllers)
@@ -180,8 +181,10 @@ def read_inputs(controllers, status):
     verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
     status.set_status("7", "Reading OpenVEX file", "0")
     try:
-        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "rb") as f:
-            openvex.load_from_dict(orjson.loads(f))
+        vex_path = os.getenv("OPENVEX_PATH", OPENVEX_PATH)
+        if os.path.exists(vex_path):
+            with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "rb") as f:
+                openvex.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
         print("Warning: Did not find OpenVEX file. Normal on first start.")
     except Exception as e:
@@ -300,7 +303,6 @@ def read_inputs(controllers, status):
     }
 
 
-
 def output_results(controllers, files, status):
     """Output the results to files with progress updates."""
     spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
@@ -397,7 +399,7 @@ def output_results(controllers, files, status):
 def main():
     base_dir = os.getenv("BASE_DIR", "/scan")
     status = SetStatus(base_dir)
-    
+
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)

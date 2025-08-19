@@ -356,7 +356,7 @@ function copy_cdx_files() {
                 else
                     cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
                     CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
-                    set_status "5" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+                    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                     ((CDX_FILE_COUNTER++))
                     ((current_file++))
                 fi
@@ -373,7 +373,7 @@ function copy_cdx_files() {
                     local new_file_name=${filename//.xml/.json}
                     cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
                     CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
-                    set_status "5" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+                    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                     ((CDX_FILE_COUNTER++))
                     ((current_file++))
                 fi

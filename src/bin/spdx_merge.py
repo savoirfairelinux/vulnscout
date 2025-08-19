@@ -64,7 +64,6 @@ def output_results(controllers):
         f.write(spdx.output_as_json(with_cpe=True))
 
 
-
 def main():
     pkg_ctrl = PackagesController()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
@@ -77,6 +76,7 @@ def main():
 
     read_inputs(controllers)
     output_results(controllers)
+
 
 if __name__ == "__main__":
     main()
