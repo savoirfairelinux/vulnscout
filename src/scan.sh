@@ -108,11 +108,6 @@ function full_scan_steps() {
 
         copy_cdx_files $CDX_INPUTS_PATH $CDX_TMP_PATH
 
-        if [[ "$SKIP_VALIDATION" == "true" ]]; then
-            set_status "0" "Inputs unchanged; skipping validation" "100"
-            exit 0
-        fi
-
         if [[ ${#CDX_FILE_LIST[@]} -ge 1 ]]; then
             set_status "3" "Merging ${#CDX_FILE_LIST[@]} CDX files" "0"
 
@@ -346,38 +341,42 @@ function copy_cdx_files() {
             local filename
             filename=$(basename "$file")
 
-            if [[ "$file" == *.json ]]; then
-                if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
-                    echo "File $file is not a valid CycloneDX JSON file"
-                    if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
-                        echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
-                        exit 1
-                    fi
-                else
-                    cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
-                    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
-                    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
-                    ((CDX_FILE_COUNTER++))
-                    ((current_file++))
-                fi
+if [[ "$file" == *.json ]]; then
+    if [[ "$SKIP_VALIDATION" != "true" ]]; then
+        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+            echo "File $file is not a valid CycloneDX JSON file"
+            if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
+                echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
+                exit 1
             fi
+        fi
+    fi
+    cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
+    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
+    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+    ((CDX_FILE_COUNTER++))
+    ((current_file++))
+fi
 
-            if [[ "$file" == *.xml ]]; then
-                if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
-                    echo "File $file is not a valid CycloneDX XML file"
-                    if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
-                        echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
-                        exit 1
-                    fi
-                else
-                    local new_file_name=${filename//.xml/.json}
-                    cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
-                    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
-                    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
-                    ((CDX_FILE_COUNTER++))
-                    ((current_file++))
-                fi
+if [[ "$file" == *.xml ]]; then
+    if [[ "$SKIP_VALIDATION" != "true" ]]; then
+        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+            echo "File $file is not a valid CycloneDX XML file"
+            if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
+                echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
+                exit 1
             fi
+        fi
+    fi
+    new_file_name=${filename//.xml/.json}
+    cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
+    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
+    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+    ((CDX_FILE_COUNTER++))
+    ((current_file++))
+fi
+
+
         fi
     done
 }
