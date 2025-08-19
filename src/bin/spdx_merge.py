@@ -36,8 +36,8 @@ def read_inputs(controllers):
     for file in glob.glob(f"{os.getenv('INPUT_SPDX_FOLDER', INPUT_SPDX_FOLDER)}/*.spdx.json"):
         try:
             verbose(f"spdx_merge: Merging {file}")
-            with open(file, "rb") as f:
-                data = orjson.loads(f)
+            with open(file, "r") as f:
+                data = orjson.loads(f.read())
 
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_controllers_from_dict(data)

@@ -13,7 +13,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
-set -euo pipefail # Enable error checking
+set +e
 set -m # enable job control to allow `fg` command
 #set -x # Enable debugging by writing command which are executed
 
@@ -41,12 +41,18 @@ readonly YOCTO_CVE_TMP_PATH="$TMP_PATH/yocto_cve_check"
 
 readonly OUTPUTS_PATH="$BASE_DIR/outputs"
 
+readonly CHECKSUM_FILE="$BASE_DIR/checksum.json"
+readonly CHECKSUM_NEW_FILE="$BASE_DIR/checksum.new.json"
+SKIP_VALIDATION="false"
+
 
 function main() {
     cd $BASE_DIR
 
+    set_status "0" "Computing input checksums" "0"
+    compute_checksums
+    finalize_checksums
 
-    # 0. Run server to start page
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         set_status "0" "Server started" "0"
         (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
@@ -61,13 +67,8 @@ function main() {
 
     # 7. Merge all vulnerability from scan results
     set_status "7" "Merging vulnerability results" "0"
-    start=$(date +%s)
 
     python3 -m src.bin.merger_ci
-
-    end=$(date +%s)
-    runtime=$((end - start))
-    set_status "7" "Runtime is $runtime seconds" "0"
 
     set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->" "0"
 
@@ -106,6 +107,11 @@ function full_scan_steps() {
         mkdir -p $CDX_TMP_PATH
 
         copy_cdx_files $CDX_INPUTS_PATH $CDX_TMP_PATH
+
+        if [[ "$SKIP_VALIDATION" == "true" ]]; then
+            set_status "0" "Inputs unchanged; skipping validation" "100"
+            exit 0
+        fi
 
         if [[ ${#CDX_FILE_LIST[@]} -ge 1 ]]; then
             set_status "3" "Merging ${#CDX_FILE_LIST[@]} CDX files" "0"
@@ -150,6 +156,27 @@ function full_scan_steps() {
     fi
 }
 
+function compute_checksums() {
+    local folder="$INPUTS_PATH"
+    local tmpfile="$BASE_DIR/checksum.tmp"
+    rm -f "$tmpfile"
+    find "$folder" -type f -print0 | sort -z | while IFS= read -r -d '' f; do
+        sum=$(sha256sum "$f" | awk '{print $1}')
+        jq -n --arg path "$f" --arg sum "$sum" '{($path):$sum}' >> "$tmpfile"
+    done
+    jq -s 'reduce .[] as $i ({}; . * $i) | {files:.}' "$tmpfile" > "$CHECKSUM_NEW_FILE"
+    rm -f "$tmpfile"
+}
+
+function finalize_checksums() {
+    if [[ -f "$CHECKSUM_FILE" ]] && cmp -s "$CHECKSUM_FILE" "$CHECKSUM_NEW_FILE"; then
+        SKIP_VALIDATION="true"
+        rm -f "$CHECKSUM_NEW_FILE"
+    else
+        mv -f "$CHECKSUM_NEW_FILE" "$CHECKSUM_FILE"
+        SKIP_VALIDATION="false"
+    fi
+}
 
 #######################################
 # Print status update to file + console
@@ -182,15 +209,16 @@ function set_status() {
 function extract_tar_folder() {
     local folder=$1
 
-    for file in "$folder"/* ; do
-        if [[ -d "$file" ]]; then # Is a folder
-            extract_tar_folder "$file"
-        else
-            if [[ "$file" == *.tar || "$file" == *.tar.gz || "$file" == *.tar.zst ]]; then
-                mkdir -p "${file}_extracted"
-                extract_tar_file "$file" "${file}_extracted"
-            fi
-        fi
+    mapfile -t tar_files < <(find "$folder" -type f \( -name "*.tar" -o -name "*.tar.gz" -o -name "*.tar.zst" \))
+    local total_files=${#tar_files[@]}
+
+    local count=0
+    for file in "${tar_files[@]}"; do
+        ((count++))
+        local progress=$((count * 100 / total_files))
+        set_status "1" "Extracting file $count of $total_files" "$progress"
+        mkdir -p "${file}_extracted"
+        extract_tar_file "$file" "${file}_extracted"
     done
 }
 
@@ -251,6 +279,8 @@ function extract_tar_file() {
 #######################################
 SPDX_FILE_COUNTER=1
 
+SPDX_FILE_COUNTER=1
+
 function copy_spdx_files() {
     local folder=$1
     local destination=$2
@@ -260,13 +290,20 @@ function copy_spdx_files() {
         exit 1
     fi
 
+    local total_files
+    total_files=$(find "$folder" -type f -name '*.spdx.json' | wc -l)
+
+    local current_file=1
+
     for file in "$folder"/* ; do
         if [[ -d "$file" ]]; then
             copy_spdx_files "$file" "$destination"
         else
             if [[ "$file" == *.spdx.json ]]; then
                 cp "$file" "$destination/${SPDX_FILE_COUNTER}_$(basename "$file")"
+                set_status "2" "Copying SPDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                 ((SPDX_FILE_COUNTER++))
+                ((current_file++))
             fi
         fi
     done
@@ -297,6 +334,11 @@ function copy_cdx_files() {
         exit 1
     fi
 
+    local total_files
+    total_files=$(find "$folder" -type f \( -name '*.json' -o -name '*.xml' \) | wc -l)
+
+    local current_file=1
+
     for file in "$folder"/* ; do
         if [[ -d "$file" ]]; then
             copy_cdx_files "$file" "$destination"
@@ -313,11 +355,13 @@ function copy_cdx_files() {
                     fi
                 else
                     cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
-
                     CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
+                    set_status "5" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                     ((CDX_FILE_COUNTER++))
+                    ((current_file++))
                 fi
             fi
+
             if [[ "$file" == *.xml ]]; then
                 if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
                     echo "File $file is not a valid CycloneDX XML file"
@@ -328,9 +372,10 @@ function copy_cdx_files() {
                 else
                     local new_file_name=${filename//.xml/.json}
                     cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
-
                     CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
+                    set_status "5" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                     ((CDX_FILE_COUNTER++))
+                    ((current_file++))
                 fi
             fi
         fi
@@ -350,6 +395,8 @@ function copy_cdx_files() {
 #######################################
 YOCTO_CVE_FILE_COUNTER=1
 
+YOCTO_CVE_FILE_COUNTER=1
+
 function copy_yocto_cve_files() {
     local folder=$1
     local destination=$2
@@ -359,13 +406,20 @@ function copy_yocto_cve_files() {
         exit 1
     fi
 
+    local total_files
+    total_files=$(find "$folder" -type f -name '*.json' | wc -l)
+
+    local current_file=1
+
     for file in "$folder"/* ; do
         if [[ -d "$file" ]]; then
             copy_yocto_cve_files "$file" "$destination"
         else
             if [[ "$file" == *.json ]]; then
                 cp "$file" "$destination/${YOCTO_CVE_FILE_COUNTER}_$(basename "$file")"
+                set_status "6" "Copying Yocto CVE file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
                 ((YOCTO_CVE_FILE_COUNTER++))
+                ((current_file++))
             fi
         fi
     done

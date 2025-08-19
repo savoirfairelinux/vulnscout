@@ -23,6 +23,7 @@ from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
 from ..models.assessment import VulnAssessment
 from ..helpers.verbose import verbose
+from .set_status import SetStatus
 import glob
 import orjson
 import os
@@ -78,18 +79,30 @@ def revert_expiration_vuln(vuln_id, packages, previous_assessment):
     return state
 
 
-def post_treatment(controllers, files):
+def post_treatment(controllers, status):
     """Do some actions on data after collect and aggregation."""
     # 1. fetch EPSS
+    status.set_status("7", "Fetching EPSS scores", "0")
     controllers["vulnerabilities"].fetch_epss_scores()
+    status.set_status("7", "Fetching EPSS scores", "100")
 
     # 2. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
-    for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
+    vulns = list(controllers["vulnerabilities"].vulnerabilities.items())
+    total_vulns = len(vulns) or 1
+
+    for idx, (vuln_id, vuln) in enumerate(vulns, start=1):
+        status.set_status(
+            "7",
+            f"Processing vulnerability {idx} of {total_vulns}",
+            f"{idx / total_vulns * 100:.1f}"
+        )
+
         assessments = controllers["assessments"].gets_by_vuln(vuln_id)
         already_expired = False
         is_last_assessment_an_expiration = False
         last_assessment_before_expiration = None
         need_expiration = False
+
         for assessment in assessments:
             is_last_assessment_an_expiration = False
             if assessment.status in ["affected", "exploitable", "under_investigation", "in_triage"]:
@@ -105,11 +118,12 @@ def post_treatment(controllers, files):
 
         if is_items_only_openvex(vuln.found_by) and need_expiration and not already_expired:
             controllers["assessments"].add(expire_vuln(vuln_id, vuln.packages))
-
         elif is_last_assessment_an_expiration and not is_items_only_openvex(vuln.found_by):
             controllers["assessments"].add(
                 revert_expiration_vuln(vuln_id, vuln.packages, last_assessment_before_expiration)
             )
+
+    status.set_status("7", "Finished processing vulnerabilities", "100")
 
 
 def evaluate_condition(controllers, condition):
@@ -147,9 +161,8 @@ def evaluate_condition(controllers, condition):
     if have_failed:
         exit(2)
 
-
-def read_inputs(controllers):
-    """Read from well-known files to grab vulnerabilities."""
+def read_inputs(controllers, status):
+    """Read from well-known files to grab vulnerabilities with per-category progress."""
     scanGrype = GrypeVulns(controllers)
     scanYocto = YoctoVulns(controllers)
     openvex = OpenVex(controllers)
@@ -160,52 +173,71 @@ def read_inputs(controllers):
     fastspdx = FastSPDX(controllers)
     templates = Templates(controllers)
 
+    def update_progress(current, total):
+        return f"{current / total * 100}" if total else "100"
+
+    # --- OpenVEX ---
     verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
+    status.set_status("7", "Reading OpenVEX file", "0")
     try:
         with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "rb") as f:
-            openvex.load_from_dict(orjson.loads(f.read()))
+            openvex.load_from_dict(orjson.loads(f))
     except FileNotFoundError:
-        print("Warning: Did not find openvex file, which is used to store history of analysis."
-              + " This is normal at first start but not in later analysis")
+        print("Warning: Did not find OpenVEX file. Normal on first start.")
     except Exception as e:
         if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
             print(f"Error parsing OpenVEX file: {e}")
-            print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
             raise e
         else:
             print(f"Ignored: Error parsing OpenVEX file: {e}")
+    status.set_status("7", "Reading OpenVEX file", "100")
 
-    verbose(f"merger_ci: Reading {os.getenv('CDX_PATH', CDX_PATH)}")
-    error_cdx_not_found_displayed = False
-    try:
-        with open(os.getenv("CDX_PATH", CDX_PATH), "rb") as f:
-            cdx.load_from_dict(orjson.loads(f.read()))
-            cdx.parse_and_merge()
-    except FileNotFoundError:
-        print("Warning: Did not find CycloneDX files. If you intended to scan CycloneDX files,"
-              + " this mean there was an issue when collecting them.")
-        error_cdx_not_found_displayed = True
+    # --- CycloneDX ---
+    cdx_files = glob.glob(f"{os.getenv('CDX_PATH', CDX_PATH)}/*.json")
+    total_cdx_files = len(cdx_files) or 1
+    for idx, file in enumerate(cdx_files, start=1):
+        verbose(f"merger_ci: Reading {file}")
+        status.set_status(
+            "7",
+            f"Reading CycloneDX file {idx} of {total_cdx_files}",
+            update_progress(idx, total_cdx_files)
+        )
+        try:
+            with open(file, "rb") as f:
+                cdx.load_from_dict(orjson.loads(f.read()))
+        except Exception as e:
+            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+                print(f"Error parsing CycloneDX file: {file} {e}")
+                raise e
+            else:
+                print(f"Ignored: Error parsing CycloneDX file: {file} {e}")
+    cdx.parse_and_merge()
+    status.set_status("7", "Reading CycloneDX files", "100")
 
+    # --- Grype CycloneDX ---
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_CDX_PATH', GRYPE_CDX_PATH)}")
+    status.set_status("7", "Reading Grype CycloneDX analysis", "0")
     try:
         with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "rb") as f:
             scanGrype.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
-        if not error_cdx_not_found_displayed:
-            print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
-                  + " CycloneDX files, this mean there was an issue when analysing them.")
+        print("Warning: Did not find Grype analysis of CDX files.")
+    status.set_status("7", "Reading Grype CycloneDX analysis", "100")
 
-    use_fastspdx = False
-    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
-        use_fastspdx = True
-        verbose("spdx_merge: Using FastSPDX parser")
-
-    for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+    # --- SPDX files ---
+    use_fastspdx = os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true'
+    spdx_files = glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json")
+    total_spdx_files = len(spdx_files)
+    for idx, file in enumerate(spdx_files, start=1):
+        verbose(f"merger_ci: Reading {file}")
+        status.set_status(
+            "7",
+            f"Reading SPDX file {idx} of {total_spdx_files}",
+            update_progress(idx, total_spdx_files)
+        )
         try:
-            verbose(f"merger_ci: Reading {file}")
             with open(file, "rb") as f:
                 data = orjson.loads(f.read())
-
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
                 elif use_fastspdx:
@@ -216,25 +248,37 @@ def read_inputs(controllers):
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
                 print(f"Error parsing SPDX file: {file} {e}")
-                print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e
             else:
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
+    # --- Grype SPDX ---
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
+    status.set_status("7", "Reading Grype SPDX analysis", "0")
     try:
         with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "rb") as f:
             scanGrype.load_from_dict(orjson.loads(f.read()))
     except FileNotFoundError:
-        print("Warning: Did not find Grype analysis of SPDX files. If you intended to scan"
-              + " SPDX files, this mean there was an issue when analysing them.")
+        print("Warning: Did not find Grype analysis of SPDX files.")
+    status.set_status("7", "Reading Grype SPDX analysis", "100")
 
-    for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
+    # --- Yocto files ---
+    yocto_files = glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json")
+    total_yocto_files = len(yocto_files)
+    for idx, file in enumerate(yocto_files, start=1):
         verbose(f"merger_ci: Reading {file}")
+        status.set_status(
+            "7",
+            f"Reading Yocto file {idx} of {total_yocto_files}",
+            update_progress(idx, total_yocto_files)
+        )
         with open(file, "rb") as f:
             scanYocto.load_from_dict(orjson.loads(f.read()))
+    status.set_status("7", "Reading Yocto files", "100")
 
+    # --- Time estimates ---
     verbose(f"merger_ci: Reading {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
+    status.set_status("7", "Reading time estimates file", "0")
     try:
         with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "rb") as f:
             timeEstimates.load_from_dict(orjson.loads(f.read()))
@@ -243,10 +287,10 @@ def read_inputs(controllers):
     except Exception as e:
         if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
             print(f"Error parsing time_estimates.json file: {e}")
-            print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
             raise e
         else:
             print(f"Ignored: Error parsing time_estimates.json file: {e}")
+    status.set_status("7", "Reading time estimates file", "100")
 
     return {
         "openvex": openvex,
@@ -256,40 +300,71 @@ def read_inputs(controllers):
     }
 
 
-def output_results(controllers, files):
-    """Output the results to files."""
+
+def output_results(controllers, files, status):
+    """Output the results to files with progress updates."""
     spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
+
+    # --- Step 1: Export main data ---
+    status.set_status("7", "Exporting main data", "0")
     output = {
         "packages": controllers["packages"].to_dict(),
         "vulnerabilities": controllers["vulnerabilities"].to_dict(),
         "assessments": controllers["assessments"].to_dict()
     }
-    verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
-    with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "wb") as f:
-        f.write(orjson.dumps(output))
-    with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "wb") as f:
-        f.write(orjson.dumps(output["packages"]))
-    with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "wb") as f:
-        f.write(orjson.dumps(output["vulnerabilities"]))
-    with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "wb") as f:
-        f.write(orjson.dumps(output["assessments"]))
 
-    verbose(f"merger_ci: Exporting {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
-    with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "wb") as f:
-        f.write(orjson.dumps(files["openvex"].to_dict(), option=orjson.OPT_INDENT_2).decode())
+    file_steps = [
+        ("OUTPUT_PATH", output),
+        ("OUTPUT_PKG_PATH", output["packages"]),
+        ("OUTPUT_VULN_PATH", output["vulnerabilities"]),
+        ("OUTPUT_ASSESSEMENT_PATH", output["assessments"])
+    ]
 
-    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
-    with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
+    total_files = len(file_steps)
+    for idx, (env_var, data) in enumerate(file_steps, start=1):
+        path = os.getenv(env_var, globals().get(env_var))
+        verbose(f"merger_ci: Exporting {path}")
+        status.set_status(
+            "7",
+            f"Exporting {idx} of {total_files}: {path}",
+            f"{idx / total_files * 100:.1f}"
+        )
+        with open(path, "wb") as f:
+            f.write(orjson.dumps(data))
+
+    # --- Step 2: Export OpenVEX ---
+    openvex_path = os.getenv("OPENVEX_PATH", OPENVEX_PATH)
+    verbose(f"merger_ci: Exporting {openvex_path}")
+    status.set_status("7", "Exporting OpenVEX file", "0")
+    with open(openvex_path, "wb") as f:
+        f.write(orjson.dumps(files["openvex"].to_dict(), option=orjson.OPT_INDENT_2))
+    status.set_status("7", "Exporting OpenVEX file", "100")
+
+    # --- Step 3: Export CycloneDX ---
+    cdx_path = os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH)
+    verbose(f"merger_ci: Exporting {cdx_path}")
+    status.set_status("7", "Exporting CycloneDX file", "0")
+    with open(cdx_path, "w") as f:
         f.write(files["cdx"].output_as_json())
+    status.set_status("7", "Exporting CycloneDX file", "100")
 
-    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
-    with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
+    # --- Step 4: Export SPDX ---
+    spdx_path = os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH)
+    verbose(f"merger_ci: Exporting {spdx_path}")
+    status.set_status("7", "Exporting SPDX file", "0")
+    with open(spdx_path, "w") as f:
         f.write(spdx.output_as_json())
+    status.set_status("7", "Exporting SPDX file", "100")
 
-    verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
-    with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "wb") as f:
+    # --- Step 5: Export time estimates ---
+    time_path = os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH)
+    verbose(f"merger_ci: Exporting {time_path}")
+    status.set_status("7", "Exporting time estimates", "0")
+    with open(time_path, "wb") as f:
         f.write(orjson.dumps(files["time_estimates"].to_dict(), option=orjson.OPT_INDENT_2))
+    status.set_status("7", "Exporting time estimates", "100")
 
+    # --- Step 6: Generate documents from templates ---
     list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
     metadata = {
         "author": os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
@@ -297,20 +372,32 @@ def output_results(controllers, files):
     }
     if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
         metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
-    for doc in list_docs:
+
+    total_docs = len([d for d in list_docs if d.strip()])
+    for idx, doc in enumerate(list_docs, start=1):
+        doc = doc.strip()
         if not doc:
             continue
         try:
-            doc = doc.strip()
             verbose(f"merger_ci: Generating report from template {doc}")
+            status.set_status(
+                "7",
+                f"Generating document {idx} of {total_docs}: {doc}",
+                f"{idx / total_docs * 100:.1f}"
+            )
             content = files["templates"].render(doc, **metadata)
             with open(f"/scan/outputs/{doc}", "w") as f:
                 f.write(content)
         except Exception as e:
             print(f"Warning: failed to generate document from {doc}: {e}")
 
+    status.set_status("7", "Finished exporting all results", "100")
+
 
 def main():
+    base_dir = os.getenv("BASE_DIR", "/scan")
+    status = SetStatus(base_dir)
+    
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
@@ -320,11 +407,11 @@ def main():
         "assessments": assessCtrl
     }
 
-    files = read_inputs(controllers)
+    files = read_inputs(controllers, status)
     verbose("merger_ci: Finished reading inputs")
 
     verbose("merger_ci: Start Post-treatment")
-    post_treatment(controllers, files)
+    post_treatment(controllers, status)
     verbose("merger_ci: Finished post-treatment")
 
     if os.getenv("FAIL_CONDITION", "") != "":
@@ -333,7 +420,7 @@ def main():
         verbose("merger_ci: Finished evaluating conditions")
 
     verbose("merger_ci: Start exporting results")
-    output_results(controllers, files)
+    output_results(controllers, files, status)
     verbose("merger_ci: Finished exporting results")
 
 

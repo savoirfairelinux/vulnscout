@@ -19,7 +19,7 @@ FROM alpine:3.20
 RUN mkdir -p /scan/inputs /scan/tmp /scan/outputs /cache/vulnscout
 WORKDIR /scan
 
-RUN apk add --no-cache bash curl git zstd icu python3 py3-pip asciidoctor ruby && \
+RUN apk add --no-cache bash curl git zstd icu python3 py3-pip asciidoctor ruby jq && \
     gem install asciidoctor-pdf --version 2.3.15
 
 # Install OSV Scanner
