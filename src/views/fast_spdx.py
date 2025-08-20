@@ -42,8 +42,9 @@ class FastSPDX ():
                 continue
             version = self.get_field(pkg, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
             primary_package_purpose = self.get_field(pkg, ["primaryPackagePurpose", "PrimaryPackagePurpose"])
+            licences = self.get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
 
-            package = Package(name, version or "", [], [])
+            package = Package(name, version or "", [], [], licences or "")
             cpe_type = "a"
             if primary_package_purpose == "OPERATING-SYSTEM" or primary_package_purpose == "OPERATING_SYSTEM":
                 cpe_type = "o"

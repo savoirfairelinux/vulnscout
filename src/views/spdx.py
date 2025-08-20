@@ -57,12 +57,17 @@ class SPDX:
         Merge components from SBOM into controller.
         """
         for package in self.sbom.packages:
-            pkg = Package(package.name, package.version or "", [], [])
+            pkg = Package(package.name, package.version or "", [], [], "")
             cpe_type = "a"
+
             if package.primary_package_purpose == PackagePurpose.OPERATING_SYSTEM:
                 cpe_type = "o"
             if package.primary_package_purpose == PackagePurpose.DEVICE:
                 cpe_type = "h"
+            license_declared = package.license_declared
+            if license_declared is not None:
+                license_str = str(license_declared)
+                pkg.licences = license_str
             pkg.add_cpe(f"cpe:2.3:{cpe_type}:*:{package.name or '*'}:{package.version or '*'}:*:*:*:*:*:*:*")
             pkg.generate_generic_cpe()
             pkg.generate_generic_purl()

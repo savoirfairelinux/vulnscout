@@ -2,6 +2,17 @@
 
 This document provides guidelines for developers working on the vulnscout project, including setup, testing, and code quality practices.
 
+== Requirements
+
+NVM 22 is required to develop on vulnscout without any issues. 
+Installation guide for NVM : https://github.com/nvm-sh/nvm
+
+[source,bash]
+----
+nvm install 22
+nvm use 22
+----
+
 == Modify the frontend
 
 To modify the frontend, you will need to run vulnscout in development mode.
@@ -9,7 +20,7 @@ To do so, you can run the following command:
 
 [source,bash]
 ----
-./start-example.sh --dev
+./start-example.sh --npm-dev
 ----
 
 == Testing the project

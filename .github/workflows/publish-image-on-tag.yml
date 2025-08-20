@@ -1,0 +1,46 @@
+name: Publish Docker Hub image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to build from
+        required: true
+        type: string
+      publish_latest:
+        description: Also push :latest
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: sflinux/vulnscout
+  IMAGE_TAG: ${{ inputs.tag }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Docker login
+        run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build image from Dockerfile
+        run: docker build -f Dockerfile -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
+      - name: Push image tag
+        run: docker push ${IMAGE_NAME}:${IMAGE_TAG}
+
+      - name: Tag and push latest (optional)
+        if: ${{ inputs.publish_latest }}
+        run: |
+          docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+          docker push ${IMAGE_NAME}:latest

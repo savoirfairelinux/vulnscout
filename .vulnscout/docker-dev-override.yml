@@ -1,0 +1,6 @@
+# ONLY development with NPM
+services:
+  vulnscout:
+    volumes:
+      # You need to mount the source code on actual source code path with "../../src:/scan/src:Z"
+      - ../../src:/scan/src:Z
