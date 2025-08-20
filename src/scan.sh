@@ -41,8 +41,8 @@ readonly YOCTO_CVE_TMP_PATH="$TMP_PATH/yocto_cve_check"
 
 readonly OUTPUTS_PATH="$BASE_DIR/outputs"
 
-readonly CHECKSUM_FILE="$BASE_DIR/checksum.json"
-readonly CHECKSUM_NEW_FILE="$BASE_DIR/checksum.new.json"
+readonly CHECKSUM_FILE="$OUTPUTS_PATH/checksum.json"
+readonly CHECKSUM_NEW_FILE="$OUTPUTS_PATH/checksum.new.json"
 export SKIP_VALIDATION="false"
 
 

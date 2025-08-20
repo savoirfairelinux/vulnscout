@@ -196,7 +196,11 @@ def read_inputs(controllers, status):
     status.set_status("7", "Reading OpenVEX file", "100")
 
     # --- CycloneDX ---
-    cdx_files = glob.glob(f"{os.getenv('CDX_PATH', CDX_PATH)}/*.json")
+    cdx_input = os.getenv('CDX_PATH', CDX_PATH)
+    if os.path.isfile(cdx_input):
+        cdx_files = [cdx_input]
+    else:
+        cdx_files = glob.glob(f"{cdx_input}/*.json")
     total_cdx_files = len(cdx_files) or 1
     for idx, file in enumerate(cdx_files, start=1):
         verbose(f"merger_ci: Reading {file}")
