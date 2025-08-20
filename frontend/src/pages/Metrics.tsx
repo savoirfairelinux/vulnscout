@@ -293,14 +293,14 @@
                 <div className="w-full flex flex-wrap">
 
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Severity</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Severity</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Pie data={dataSetVulnBySeverity} options={vulnBySeverityOptions} />
                         </div>
                     </div>
 
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Status</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Status</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Pie data={dataSetVulnByStatus} options={vulnByStatusOptions} />
                         </div>
@@ -308,7 +308,7 @@
 
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
-                            <div className="text-xl p-1">Active vulnerabilities</div>
+                            <div className="text-xl p-1 text-white">Active vulnerabilities</div>
                             <select className="bg-zinc-800 ml-2 p-1" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
                                 <option value="12_months">1 year</option>
                                 <option value="6_months">6 months</option>
@@ -325,7 +325,7 @@
                     </div>
 
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Source</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Source</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Bar data={dataSetVulnBySource} options={BarOptions} />
                         </div>
