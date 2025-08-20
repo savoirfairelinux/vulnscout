@@ -43,7 +43,7 @@ readonly OUTPUTS_PATH="$BASE_DIR/outputs"
 
 readonly CHECKSUM_FILE="$BASE_DIR/checksum.json"
 readonly CHECKSUM_NEW_FILE="$BASE_DIR/checksum.new.json"
-SKIP_VALIDATION="false"
+export SKIP_VALIDATION="false"
 
 
 function main() {
@@ -151,20 +151,33 @@ function full_scan_steps() {
     fi
 }
 
+#######################################
+# Compute SHA256 checksums for all files under INPUTS_PATH
+# and write them as JSON to CHECKSUM_NEW_FILE
+#######################################
 function compute_checksums() {
     local folder="$INPUTS_PATH"
     local tmpfile="$BASE_DIR/checksum.tmp"
     rm -f "$tmpfile"
+
+    # Generate a JSON object for each file
     find "$folder" -type f -print0 | sort -z | while IFS= read -r -d '' f; do
         sum=$(sha256sum "$f" | awk '{print $1}')
         jq -n --arg path "$f" --arg sum "$sum" '{($path):$sum}' >> "$tmpfile"
     done
-    jq -s 'reduce .[] as $i ({}; . * $i) | {files:.}' "$tmpfile" > "$CHECKSUM_NEW_FILE"
+
+    # Merge all JSON objects into a single JSON object under "files" key
+    jq -s 'reduce .[] as $item ({}; . * $item) | {files:.}' "$tmpfile" | jq --sort-keys . > "$CHECKSUM_NEW_FILE"
     rm -f "$tmpfile"
 }
 
+#######################################
+# Compare the new checksum file with the old one.
+# If identical, SKIP_VALIDATION=true. Otherwise, update CHECKSUM_FILE.
+#######################################
 function finalize_checksums() {
-    if [[ -f "$CHECKSUM_FILE" ]] && cmp -s "$CHECKSUM_FILE" "$CHECKSUM_NEW_FILE"; then
+    # If old checksum exists and is identical to new one
+    if [[ -f "$CHECKSUM_FILE" ]] && jq --sort-keys . "$CHECKSUM_FILE" | cmp -s - "$CHECKSUM_NEW_FILE"; then
         SKIP_VALIDATION="true"
         rm -f "$CHECKSUM_NEW_FILE"
     else
@@ -341,42 +354,40 @@ function copy_cdx_files() {
             local filename
             filename=$(basename "$file")
 
-if [[ "$file" == *.json ]]; then
-    if [[ "$SKIP_VALIDATION" != "true" ]]; then
-        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
-            echo "File $file is not a valid CycloneDX JSON file"
-            if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
-                echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
-                exit 1
+            if [[ "$file" == *.json ]]; then
+                if [[ "$SKIP_VALIDATION" != "true" ]]; then
+                    if [[ "$IGNORE_PARSING_ERRORS" != "true" ]]; then
+                        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+                            echo "Skipping invalid CycloneDX JSON file: $file"
+                            ((current_file++))
+                            continue
+                        fi
+                    fi
+                fi
+                set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+                cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
+                CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
+                ((CDX_FILE_COUNTER++))
+                ((current_file++))
             fi
-        fi
-    fi
-    cp "$file" "$destination/${CDX_FILE_COUNTER}_$filename"
-    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$filename")
-    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
-    ((CDX_FILE_COUNTER++))
-    ((current_file++))
-fi
 
-if [[ "$file" == *.xml ]]; then
-    if [[ "$SKIP_VALIDATION" != "true" ]]; then
-        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
-            echo "File $file is not a valid CycloneDX XML file"
-            if [[ "$IGNORE_PARSING_ERRORS" != 'true' ]]; then
-                echo "Hint: set IGNORE_PARSING_ERRORS=true to ignore this error"
-                exit 1
+            if [[ "$file" == *.xml ]]; then
+                if [[ "$SKIP_VALIDATION" != "true" ]]; then
+                    if [[ "$IGNORE_PARSING_ERRORS" != "true" ]]; then
+                        if ! cyclonedx-cli validate --input-file "$file" --fail-on-errors &> /dev/null; then
+                            echo "Skipping invalid CycloneDX XML file: $file"
+                            ((current_file++))
+                            continue
+                        fi
+                    fi
+                fi
+                new_file_name=${filename//.xml/.json}
+                cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
+                CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
+                set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
+                ((CDX_FILE_COUNTER++))
+                ((current_file++))
             fi
-        fi
-    fi
-    new_file_name=${filename//.xml/.json}
-    cyclonedx-cli convert --input-file "$file" --output-format json --output-file "$destination/${CDX_FILE_COUNTER}_$new_file_name"
-    CDX_FILE_LIST+=("$destination/${CDX_FILE_COUNTER}_$new_file_name")
-    set_status "3" "Copying CycloneDX file $current_file of $total_files" "$(awk "BEGIN {printf \"%.2f\", ($current_file/$total_files)*100}")"
-    ((CDX_FILE_COUNTER++))
-    ((current_file++))
-fi
-
-
         fi
     done
 }
