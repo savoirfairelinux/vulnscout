@@ -44,12 +44,3 @@ jobs:
         run: |
           docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
           docker push ${IMAGE_NAME}:latest
-
-        description: Git tag to build from
-        required: true
-        type: string
-      publish_latest:
-        description: Also push :latest
-        required: false
-        default: false
-        type: boolean
