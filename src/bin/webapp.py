@@ -64,9 +64,18 @@ def create_app():
                 }
             else:
                 last_line = text.splitlines()[-1].split(" ")
-                step = int(last_line[0])
-                loadingbar = int(float(last_line[-1]))
-                message = " ".join(last_line[1:-1])
+                try:
+                    step = int(last_line[0])
+                except (ValueError, IndexError):
+                    step = 0
+                try:
+                    loadingbar = int(float(last_line[-1]))
+                except (ValueError, IndexError):
+                    loadingbar = None
+                try:
+                    message = " ".join(last_line[1:-1])
+                except IndexError:
+                    message = ""
                 return {
                     "status": "running",
                     "maxsteps": MAX_SCRIPT_STEPS,

@@ -10,7 +10,7 @@ function Loading(
   {
     topline = 'Project analysis is running...',
     details = 'Step 0 : starting script',
-    progress = 0
+    progress
   }: Readonly<Props>
 ) {
   return (
@@ -19,13 +19,17 @@ function Loading(
       <h1 id='topline' className='text-5xl p-8'>{topline}</h1>
       <h2 id='details' className='text-3xl p-4'>{details}</h2>
 
-      <div className='w-1/2 mx-auto bg-gray-300 dark:bg-neutral-700 h-4 rounded-full overflow-hidden'>
-        <div
-          className='bg-green-500 h-4 transition-all duration-500 ease-out'
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-      <p className='text-xl mt-2'>{progress}%</p>
+      {progress !== null && (
+        <>
+          <div className='w-1/2 mx-auto bg-gray-300 dark:bg-neutral-700 h-4 rounded-full overflow-hidden'>
+            <div
+              className='bg-green-500 h-4 transition-all duration-500 ease-out'
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className='text-xl mt-2'>{progress}%</p>
+        </>
+      )}
     </div>
   )
 }

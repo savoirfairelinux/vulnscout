@@ -14,7 +14,7 @@ function App() {
     topline: 'Project analysis is running...',
     details: 'Step 0 : starting script'
   });
-  const [loadingBarValue, setLoadingBarValue] = useState(0);
+  const [loadingBarValue, setLoadingBarValue] = useState();
   const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
@@ -34,7 +34,7 @@ function App() {
           topline: 'Project analysis is running...',
           details: `Step ${data?.step ?? '0'}/${data?.maxsteps ?? '?'} : ${data?.message}`
         });
-        setLoadingBarValue(data?.loadingbar ?? 0);
+        setLoadingBarValue(data?.loadingbar);
       })
       .catch(error => {
         console.error('Error:', error);

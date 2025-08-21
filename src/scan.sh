@@ -123,11 +123,11 @@ function full_scan_steps() {
     fi
 
     if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
-        set_status "4" "Scanning SPDX with Grype" "0"
+        set_status "4" "Scanning SPDX with Grype"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
     fi
     if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
-        set_status "4" "Scanning CDX with Grype" "0"
+        set_status "4" "Scanning CDX with Grype"
         grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
     fi
 
@@ -200,7 +200,7 @@ function finalize_checksums() {
 function set_status() { 
     local step=$1
     local message=$2
-    local progress=$3
+    local progress=${3:-""}
 
     echo "$step $message $progress" >> "$BASE_DIR/status.txt"
     echo "$message"
