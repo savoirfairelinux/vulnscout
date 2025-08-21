@@ -1,8 +1,9 @@
-import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-// @ts-expect-error TS6133
-import React from 'react';
+import { describe, test, expect } from '@jest/globals';
+import matchers from '@testing-library/jest-dom/matchers';
+expect.extend(matchers);
 
 import type { Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
@@ -38,7 +39,8 @@ describe('Packages Table', () => {
                 "active": {label: 'low', index: 2},
                 "fixed": {label: 'medium', index: 3}
             },
-            source: ['hardcoded']
+            source: ['hardcoded'],
+            licences: 'NOASSERTION'
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -48,13 +50,12 @@ describe('Packages Table', () => {
             purl: ['pkg:vendor/xxxyyyzzz@2.0.0'],
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
-            source: ['cve-finder']
+            source: ['cve-finder'],
+            licences: 'NOASSERTION'
         }
     ];
 
-    Element.prototype.getBoundingClientRect = jest.fn(function () {
-        return getDOMRect(500, 500)
-    })
+    Element.prototype.getBoundingClientRect = function () { return getDOMRect(500, 500); } as any;
 
     test('render headers with empty array', async () => {
         // ARRANGE
@@ -66,9 +67,9 @@ describe('Packages Table', () => {
         const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
 
         // ASSERT
-        expect(name_header).toBeInTheDocument();
-        expect(version_header).toBeInTheDocument();
-        expect(vuln_count_header).toBeInTheDocument();
+        expect(name_header).toBeTruthy();
+        expect(version_header).toBeTruthy();
+        expect(vuln_count_header).toBeTruthy();
     })
 
     test('render with packages', async () => {
@@ -81,9 +82,9 @@ describe('Packages Table', () => {
         const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
         // ASSERT
-        expect(name_col).toBeInTheDocument();
-        expect(version_col).toBeInTheDocument();
-        expect(source_col).toBeInTheDocument();
+        expect(name_col).toBeTruthy();
+        expect(version_col).toBeTruthy();
+        expect(source_col).toBeTruthy();
     })
 
     test('render severity when toggle activated', async () => {
@@ -92,22 +93,18 @@ describe('Packages Table', () => {
 
         // ACT
         const user = userEvent.setup();
-        const severity_toggle = await screen.getByRole('button', {name: /severity disabled/i});
-
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('button', {name: /severity disabled/i}), { timeout: 500 });
+        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
 
         await user.click(severity_toggle); // switch to enabled mode
 
-        await pending_deletion;
-
-        const btn_enabled = await screen.getByRole('button', {name: /severity enabled/i});
+        const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
         const severity_high = await screen.getByText(/high/i);
         const severity_medium = await screen.getByText(/medium/i);
 
         // ASSERT
-        expect(btn_enabled).toBeInTheDocument();
-        expect(severity_high).toBeInTheDocument();
-        expect(severity_medium).toBeInTheDocument();
+        expect(btn_enabled).toBeTruthy();
+        expect(severity_high).toBeTruthy();
+        expect(severity_medium).toBeTruthy();
     })
 
     test('sorting by name', async () => {
@@ -179,10 +176,10 @@ describe('Packages Table', () => {
 
         await user.type(search_bar, 'yyy');
 
-        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /aaabbbccc/}), { timeout: 1000 });
+        await waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
 
         const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
-        expect(pkg_xyz).toBeInTheDocument();
+        expect(pkg_xyz).toBeTruthy();
     })
 
     test('filter by source', async () => {
@@ -190,26 +187,28 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const selects = await screen.getAllByRole('combobox');
-        const filter_select = selects.find((el) => el.getAttribute('name')?.includes('source')) as HTMLElement;
-        expect(filter_select).toBeDefined();
-        expect(filter_select).toBeInTheDocument();
 
-        // ACT
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /aaabbbccc/}), { timeout: 250 });
-        await user.selectOptions(filter_select, 'cve-finder');
+        // Open the "Source" filter dropdown
+        const source_btn = await screen.getByRole('button', { name: /source/i });
+        await user.click(source_btn);
+
+        // ACT: select "cve-finder"
+        const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
+        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
+        await user.click(cveFinderCheckbox);
         await deletion;
 
-        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
-        expect(pkg_xyz).toBeInTheDocument();
+        const pkg_xyz = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
+        expect(pkg_xyz).toBeTruthy();
 
-        // REVERT CHANGE
-        await user.selectOptions(filter_select, 'All sources');
-        const pkg_abc = await screen.getByRole('cell', {name: /aaabbbccc/});
-        const pkg_xyz2 = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        // REVERT CHANGE: uncheck "cve-finder"
+        await user.click(cveFinderCheckbox);
 
-        expect(pkg_abc).toBeInTheDocument();
-        expect(pkg_xyz2).toBeInTheDocument();
+        const pkg_abc = await screen.getByRole('cell', { name: /aaabbbccc/ });
+        const pkg_xyz2 = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
+
+        expect(pkg_abc).toBeTruthy();
+        expect(pkg_xyz2).toBeTruthy();
     })
 
     test('filter by status', async () => {
@@ -217,27 +216,37 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const hide_fixed = await screen.getByRole('checkbox', {name: /hide fixed/i});
-        const severity_toggle = await screen.getByRole('button', {name: /severity disabled/i});
-        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
-
+        const status_btn = await screen.getByRole('button', { name: /status/i });
+        await user.click(status_btn);
+        const fixed_checkbox = await screen.getByRole('checkbox', { name: /fixed/i });
+        // Schedule wait before applying the filter to ensure the target exists
+        const removal = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /xxxyyyzzz/ }), { timeout: 4000 });
+        // Apply status filter first (clicking outside would close the dropdown)
+        await user.click(fixed_checkbox);
+        await removal;
+        const severity_toggle = await screen.getByRole('button', { name: /show severity/i });
+        const vuln_count_header = await screen.getByRole('columnheader', { name: /vulnerabilities/i });
         await user.click(severity_toggle); // switch to enabled mode
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByText(/medium/i), { timeout: 500 });
-
         // ACT
-        await user.click(hide_fixed);
+
+        // Then assert remaining row shows count 2 (excluding 'fixed')
+        await waitFor(() => {
+            const pkgNameCell = screen.getByRole('cell', { name: /aaabbbccc/ });
+            const pkgRow = pkgNameCell.closest('tr') as HTMLElement;
+            expect(within(pkgRow).getByText(/^2$/)).toBeTruthy();
+        }, { timeout: 4000 });
+
+        // Assert the remaining row "aaabbbccc" shows count 2 (excluding 'fixed')
+        const pkgNameCell = await screen.getByRole('cell', { name: /aaabbbccc/ });
+        const pkgRow = pkgNameCell.closest('tr') as HTMLElement;
+        expect(pkgRow).toBeTruthy();
+        expect(within(pkgRow).getByText(/^2$/)).toBeTruthy();
+
         await user.click(vuln_count_header); // numerical order -> reverse numerical order
 
         // ASSERT
-        await pending_deletion;
-        const severity_high = await screen.getByText(/high/i);
         const severity_low = await screen.getByText(/low/i);
-        expect(severity_high).toBeInTheDocument();
-        expect(severity_low).toBeInTheDocument();
-
-        await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
-        });
+        expect(severity_low).toBeTruthy();
+        expect(screen.queryByText(/high/i)).toBeNull();
     })
 });

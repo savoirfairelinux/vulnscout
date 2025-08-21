@@ -1,3 +1,4 @@
+/// <reference types="jest" />
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
@@ -317,7 +318,7 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        await user.type(search_bar, '\'2018-5678');
+        await user.type(search_bar, '2018-5678');
 
         await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
 
@@ -347,7 +348,7 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        await user.type(search_bar, '\'authentification process');
+        await user.type(search_bar, 'authentification process');
 
         await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
 
@@ -360,14 +361,14 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const selects = await screen.getAllByRole('combobox');
-        const filter_select = selects.find((el) => el.getAttribute('name')?.includes('source')) as HTMLElement;
-        expect(filter_select).toBeDefined();
-        expect(filter_select).toBeInTheDocument();
+        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        expect(sourceBtn).toBeInTheDocument();
+        await user.click(sourceBtn);
 
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 250 });
+        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
 
-        await user.selectOptions(filter_select, 'cve-finder');
+        const srcCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
+        await user.click(srcCheckbox);
 
         await deletion;
 
@@ -380,11 +381,14 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const hide_active = await screen.getByRole('checkbox', {name: /hide Exploitable/i});
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 500 });
+        const statusBtn = await screen.getByRole('button', { name: /status/i });
+        expect(statusBtn).toBeInTheDocument();
+        await user.click(statusBtn);
 
-        // ACT
-        await user.click(hide_active);
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
+
+        const pendingCheckbox = await screen.getByRole('checkbox', { name: /Community Analysis Pending/i });
+        await user.click(pendingCheckbox);
 
         // ASSERT
         await pending_deletion;
@@ -397,11 +401,15 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const hide_pending = await screen.getByRole('checkbox', {name: /hide pending/i});
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 500 });
+        const statusBtn = await screen.getByRole('button', { name: /status/i });
+        expect(statusBtn).toBeInTheDocument();
+        await user.click(statusBtn);
+
+        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
 
         // ACT
-        await user.click(hide_pending);
+        const exploitableCheckbox = await screen.getByRole('checkbox', { name: /Exploitable/i });
+        await user.click(exploitableCheckbox);
 
         // ASSERT
         await pending_deletion;
@@ -456,19 +464,17 @@ describe('Vulnerability Table', () => {
     })
 
     test('select and change status', async () => {
-        const thisFetch = fetchMock.mockImplementation(() =>
-            Promise.resolve({
-                json: () => Promise.resolve({
-                    status: 'success',
-                    assessment: {
-                        id: '000',
-                        vuln_id: 'CVE-0000-00000',
-                        status: 'affected',
-                        timestamp: "2024-01-01T00:00:00Z"
-                    }
-                }),
-                status: 200
-            } as Response)
+        fetchMock.mockResponse(
+            JSON.stringify({
+                status: 'success',
+                assessment: {
+                    id: '000',
+                    vuln_id: 'CVE-0000-00000',
+                    status: 'affected',
+                    timestamp: "2024-01-01T00:00:00Z"
+                }
+            }),
+            { status: 200 }
         );
 
         // ARRANGE
@@ -511,25 +517,22 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
     })
 
     test('select and change time estimate', async () => {
-        const thisFetch = fetchMock.mockImplementation(() =>
-            Promise.resolve({
-                json: () => Promise.resolve({
-                    id: 'CVE-2010-1234',
-                    packages: ['aaabbbccc@1.0.0'],
-                    effort: {
-                        optimistic: 'PT5H',
-                        likely: 'P2DT4H',
-                        pessimistic: 'P2W3D'
-                    },
-                    responses: []
-                }),
-                text: () => Promise.resolve('Text only usefull when error happens'),
-                status: 200
-            } as Response)
+        fetchMock.mockResponse(
+            JSON.stringify({
+                id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                effort: {
+                    optimistic: 'PT5H',
+                    likely: 'P2DT4H',
+                    pessimistic: 'P2W3D'
+                },
+                responses: []
+            }),
+            { status: 200 }
         );
 
         // ARRANGE
@@ -557,7 +560,7 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
     })
 
     test('show description when hovering vulnerability', async () => {

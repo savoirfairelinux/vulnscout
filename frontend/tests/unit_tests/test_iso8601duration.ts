@@ -1,6 +1,16 @@
+import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import Iso8601Duration from "../../src/handlers/iso8601duration";
 
 describe('Iso8601Duration', () => {
+    // Silence console.warn noise during parsing edge-cases in constructor/parser
+    let __warnBackup: typeof console.warn;
+    beforeAll(() => {
+        __warnBackup = console.warn;
+        console.warn = (() => {}) as unknown as typeof console.warn;
+    });
+    afterAll(() => {
+        console.warn = __warnBackup;
+    });
 
     test('parse undefined', () => {
         let duration = new Iso8601Duration(undefined);
