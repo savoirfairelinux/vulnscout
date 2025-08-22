@@ -71,7 +71,7 @@ describe('Vulnerability Table', () => {
                 state: 'unknown'
             },
             status: 'affected',
-            simplified_status: 'active',
+            simplified_status: 'Exploitable',
             assessments: []
         },
         {
@@ -129,7 +129,7 @@ describe('Vulnerability Table', () => {
                 state: 'unknown'
             },
             status: 'under_investigation',
-            simplified_status: 'pending analysis',
+            simplified_status: 'Community Analysis Pending',
             assessments: []
         }
     ];
@@ -176,7 +176,7 @@ describe('Vulnerability Table', () => {
         const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
         const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
-        const status_col = await screen.getByRole('cell', {name: /pending analysis/i});
+        const status_col = await screen.getByRole('cell', {name: /Community Analysis Pending/i});
         const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
         // ASSERT
@@ -375,12 +375,12 @@ describe('Vulnerability Table', () => {
         expect(pkg_xyz).toBeInTheDocument();
     })
 
-    test('filter out active', async () => {
+    test('filter out Exploitable', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const hide_active = await screen.getByRole('checkbox', {name: /hide active/i});
+        const hide_active = await screen.getByRole('checkbox', {name: /hide Exploitable/i});
         const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 500 });
 
         // ACT
@@ -392,7 +392,7 @@ describe('Vulnerability Table', () => {
         expect(vuln_xyz).toBeInTheDocument();
     })
 
-    test('filter out pending analysis', async () => {
+    test('filter out Community Analysis Pending', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
 

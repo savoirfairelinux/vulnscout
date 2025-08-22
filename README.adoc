@@ -24,6 +24,7 @@ It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype
 * Enrich SBOM files: Combines vulnerability data found in the input files with data pulled from external sources.
 * Generate detailed reports: Provides scan summaries in multiple formats, including an interactive web dashboard and text file.
 * Help track fixes: The web dashboard allows you to assign and track which vulnerabilities are fixed and which are still open and provides various metrics to help decision-making (score, exploitability, risk exposure...).
+* Help track licenses: The web dashboard provides insights into the licenses of the components in your codebase and helps ensure compliance.
 
 === Architecture
 
@@ -84,6 +85,13 @@ To use it, you can simply run the default script with the command:
 [source,shell]
 ----
 ./start-example.sh
+----
+
+Or, if you prefer to run another example based on SPDX-3.0, you can use the following command:
+
+[source,shell]
+----
+./start-example.sh --spdx3
 ----
 
 ==== Use Vulnscount with Yocto

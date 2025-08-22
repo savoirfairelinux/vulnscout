@@ -7,10 +7,12 @@ type Props = {
     options: string[];
     selected: string[];
     setSelected: (values: string[]) => void;
+    parentRef?: React.RefObject<HTMLElement>;
 };
 
-function FilterOption({ label, options, selected, setSelected }: Readonly<Props>) {
+function FilterOption({ label, options, selected, setSelected, parentRef }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
+    const [maxHeight, setMaxHeight] = useState<string>('2500px'); 
     const dropdownRef = useRef<HTMLDivElement>(null);
 
     const toggleOption = (value: string) => {
@@ -34,11 +36,17 @@ function FilterOption({ label, options, selected, setSelected }: Readonly<Props>
         if (isOpen) {
             document.addEventListener("mousedown", handleClickOutside);
         }
-
         return () => {
             document.removeEventListener("mousedown", handleClickOutside);
         };
     }, [isOpen]);
+
+    useEffect(() => {
+        if (parentRef?.current) {
+            const parentHeight = parentRef.current.offsetHeight;
+            setMaxHeight(`${parentHeight * 0.6}px`); // 60% of parent height
+        }
+    }, [parentRef, isOpen]);
 
     return (
         <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
@@ -53,7 +61,10 @@ function FilterOption({ label, options, selected, setSelected }: Readonly<Props>
             </button>
 
             {isOpen && (
-                <div className="absolute mt-1 w-48 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50">
+                <div 
+                    className="absolute mt-1 w-48 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50"
+                    style={{ maxHeight, overflowY: 'auto' }} // <-- dynamic max-height
+                >
                     <div className="p-2 space-y-1">
                         {options.map(option => (
                             <label key={option} className="flex items-center space-x-2">

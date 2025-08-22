@@ -13,16 +13,24 @@ class Package:
     Packages can be compared, merged and exported or imported as dictionaries.
     """
 
-    def __init__(self, name: str, version: str, cpe: Optional[list[str]] = None, purl: Optional[list[str]] = None):
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        cpe: Optional[list[str]] = None,
+        purl: Optional[list[str]] = None,
+        licences: str = ""
+    ):
         """
         Create a package by name (str) and version (str).
         Version should be a semver compatible string.
-        cpe and purl are optional lists of identifiers.
+        cpe, purl and licences are optional lists of identifiers.
         """
         self.name = name
         self.version = version.split("+git")[0]
         cpes = cpe or []
         purls = purl or []
+        lics = licences or ""
 
         # handle vendor:package format
         if len(name.split(':')) == 2:
@@ -33,6 +41,7 @@ class Package:
         self.id = f"{self.name}@{self.version}"
         self.cpe: list[str] = []
         self.purl: list[str] = []
+        self.licences: str = lics
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -136,12 +145,12 @@ class Package:
     def __contains__(self, item) -> bool:
         """
         Check if the item is in the package.
-        The item can be a Package class or a string representation of Package.id, cpe or purl.
+        The item can be a Package class or a string representation of Package.id, cpe, purl or licence.
         """
         if isinstance(item, Package):
             return item.id == self.id
         if isinstance(item, str):
-            return item == self.id or item in self.cpe or item in self.purl
+            return item == self.id or item in self.cpe or item in self.purl or item in self.licences
         return False
 
     def to_dict(self) -> dict:
@@ -150,16 +159,23 @@ class Package:
             "name": self.name,
             "version": self.version,
             "cpe": self.cpe,
-            "purl": self.purl
+            "purl": self.purl,
+            "licences": self.licences
         }
 
     @staticmethod
     def from_dict(data: dict):
         """Import a package from a dictionary."""
-        return Package(data["name"], data["version"], data.get("cpe", []), data.get("purl", []))
+        return Package(
+            data["name"],
+            data["version"],
+            data.get("cpe", []),
+            data.get("purl", []),
+            data.get("licences", [])
+        )
 
     def merge(self, other) -> bool:
-        """Merge two packages by adding the cpe and purl identifiers of the other package to the current one."""
+        """Merge two packages by adding the cpe, purl, licence identifiers of the other package to the current one."""
         if self == other:
             for c in other.cpe:
                 self.add_cpe(c)

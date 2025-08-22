@@ -8,10 +8,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+
+---
+## [v0.7.1] - 2025-08-20
+
 ### Added
-- CHANGELOG.md created (commit `df50b24`).
-- HTTPS update in `vulnscout.sh`.
-- General cleanup, typo fixes, and documentation improvements.
+- Licenses support.
+- HTML report generation for AsciiDoc documents.
+- docker-compose: example for NVD_API_KEY.
+- CI: publish Docker image on tag.
+
+### Changed
+- Frontend enhancements and UI/UX improvements.
+
+### Fixed
+- Removed unused dependency faChartLine in frontend.
+- Improved project examples.
+- Added notification when vulnscout is ready to use.
+- Resolved NPM issue on default Ubuntu with pip install; NPM no longer mandatory for testing.
+- Corrected docker-compose mount path (mount src instead of npm).
+- Ensured docker pull step is included.
+
+---
+## [v0.7.0] - 2025-08-07
+
+### Added
+- SPDX 3.0 support.
+- Contribution guide.
+- Changelog file.
+- Code of conduct.
+- Caching support.
+- Pagination in vulnerability dashboard.
+- PR request template.
+- SELinux support.
+- Clickable pie charts in frontend.
+- Toggle switch component.
+- Architecture diagram and improved documentation.
+- Background highlight when hovering rows.
+- Start-example script enhancements.
+- CQFD testing improvements.
+- New test procedure in CI for CQFD.
+- Filtering options for vulnerabilities.
+- Sync with meta-vulnscout.
+- Time estimate editor and related tests.
+
+### Changed
+- Updated configuration file name in documentation.
+- Modified label for Exploitability/EPSS for clarity.
+- UI/UX improvements in search results.
+- Improved search code and fixed related bugs.
+- Updated template paths and fixed related tests.
+
+### Fixed
+- EPSS builder issue.
+- CQFD testing fixes.
+- Search code bug.
+- Template path and test fixes.
 
 ---
 
