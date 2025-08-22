@@ -309,7 +309,7 @@
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
                             <div className="text-xl p-1 text-white">Exploitable vulnerabilities</div>
-                            <select className="bg-zinc-800 ml-2 p-1" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
+                            <select className="bg-zinc-800 ml-2 p-1 text-white" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
                                 <option value="12_months">1 year</option>
                                 <option value="6_months">6 months</option>
                                 <option value="12_weeks">12 weeks</option>
