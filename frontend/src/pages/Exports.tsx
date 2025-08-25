@@ -32,7 +32,7 @@ const asExportDoc = (data: any): ExportDoc | [] => {
 
 
 function Exports ({}: Props) {
-    const [tab, setTab] = useState<string>("recommended");
+    const [tab, setTab] = useState<string>("all");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
     const [popupOptions, setPopupOptions] = useState<PopupOptions|undefined>(undefined);
@@ -54,77 +54,66 @@ function Exports ({}: Props) {
 
 
     return (<>
-        <div className="w-full pt-32 flex" onClick={() => setOpenDl(null)}>
-            <div className="grow"></div>
-            <div className="flex gap-6 text-lg flex-wrap">
+        <div className="w-full pt-32 flex justify-center" onClick={() => setOpenDl(null)}>
+        <div className="w-[70%]">
+            <div className="flex gap-2 bg-sky-800 rounded-2xl p-2 shadow-lg backdrop-blur-md justify-center">
+            {[
+                { key: "all", icon: faBoxes, label: "All" },
 
-                <div
-                    className={[tab == 'recommended' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join(" ")}
-                    onClick={() => {setTab('recommended'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faStar} className="mr-2" />
-                        Recommended
-                </div>
-                <div
-                    className={[tab == 'built-in' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join("")}
-                    onClick={() => {setTab('built-in'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faThumbTack} className="mr-2" />
-                        Built-in reports
-                </div>
-                <div
-                    className={[tab == 'custom' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join("")}
-                    onClick={() => {setTab('custom'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faFolderOpen} className="mr-2" />
-                        Custom reports
-                </div>
-                <div
-                    className={[tab == 'sbom' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join("")}
-                    onClick={() => {setTab('sbom'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faFileShield} className="mr-2" />
-                        SBOM files
-                </div>
-                <div
-                    className={[tab == 'misc' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join("")}
-                    onClick={() => {setTab('misc'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faCompassDrafting} className="mr-2" />
-                        Miscellaneous
-                </div>
-                <div
-                    className={[tab == 'all' ? "border-b-2 border-white/60" : "hover:border-b-2 hover:border-white/40"].join("")}
-                    onClick={() => {setTab('all'); setOpenDl(null)}}>
-                        <FontAwesomeIcon icon={faBoxes} className="mr-2" />
-                        All
-                </div>
-
+                { key: "built-in", icon: faThumbTack, label: "Built-in reports" },
+                { key: "custom", icon: faFolderOpen, label: "Custom reports" },
+                { key: "sbom", icon: faFileShield, label: "SBOM files" },
+            ].map(({ key, icon, label }) => (
+                <button
+                key={key}
+                onClick={(e) => {
+                    e.stopPropagation()
+                    setTab(key)
+                    setOpenDl(null)
+                }}
+                className={[
+                    "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200",
+                    tab === key
+                    ? "bg-white/20 text-white shadow-inner"
+                    : "text-white/70 hover:text-white hover:bg-white/10",
+                ].join(" ")}
+                >
+                <FontAwesomeIcon icon={icon} className="w-4 h-4" />
+                {label}
+                </button>
+            ))}
             </div>
-            <div className="grow"></div>
-        </div>
+    </div>
+</div>
+
+<div className="w-full pt-4 flex justify-center">
+  <div className="w-[70%] bg-gray-700 from-zinc-800 to-zinc-900 rounded-3xl p-6 grid grid-cols-3 gap-6 justify-center shadow-xl border border-white/10 backdrop-blur-sm">
+    {docs.filter((doc) => doc.category.includes(tab) || tab === 'all').map((doc) => (
+      <FileTag
+        name={doc.id}
+        key={encodeURIComponent(doc.id)}
+        extension={doc.extension}
+        opened={openDl === doc.id}
+        onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
+        openOptions={(name: string, ext: string) => setPopupOptions({ docName: name, extension: ext })}
+      />
+    ))}
+
+    {docs.filter((doc) => doc.category.includes(tab) || tab === 'all').length === 0 && (
+      <div className="col-span-2 flex flex-col items-center justify-center text-white/70 w-full py-10">
+        <div className="text-lg font-medium">No documents found</div>
+        {tab === 'custom' && (
+          <div className="mt-2 text-sm">
+            You can upload your own templates in 
+            <code className="p-1 mx-1 bg-white/10 rounded">.vulnscout/templates</code>
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+</div>
 
 
-        <div className="w-full pt-4 flex">
-            <div className="grow"></div>
-
-            <div className="min-w-[40%] max-w-[60%] bg-zinc-500/25 rounded-2xl p-4 px-12 flex gap-4 flex-wrap">
-                {docs.filter((doc) => doc.category.includes(tab) || tab == 'all').map((doc) => (
-                    <FileTag
-                        name={doc.id}
-                        key={encodeURIComponent(doc.id)}
-                        extension={doc.extension}
-                        opened={openDl == doc.id}
-                        onOpen={() => openDl == doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
-                        openOptions={(name: string, ext: string) => setPopupOptions({docName: name, extension: ext})}
-                    />
-                ))}
-
-                {docs.filter((doc) => doc.category.includes(tab) || tab == 'all').length == 0 && <>
-                    <div className="text-white text-center w-full">No documents found</div>
-                    {tab == 'custom' && (
-                        <div className="text-white text-center w-full">You can upload your own templates in <code className="p-1 mx-1 bg-zinc-300/25">.vulnscout/templates</code></div>
-                    )}
-                </>}
-            </div>
-
-            <div className="grow"></div>
-        </div>
 
         {popupOptions && <PopupExportOptions
             docName={popupOptions.docName}
