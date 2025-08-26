@@ -96,6 +96,14 @@ function TablePackages({ packages }: Readonly<Props>) {
         return Array.from(statuses);
     }, [packages]);
 
+    const resetFilters = () => {
+        setSearch('');
+        setSelectedSources([]);
+        setSelectedStatuses([]);
+        setSelectedLicences([]);
+        setShowSeverity(false);
+    }
+
     const hide_filter = useMemo(() => {
         return statusOptions.filter(status => selectedStatuses.includes(status))
     }, [selectedStatuses])
@@ -202,6 +210,13 @@ function TablePackages({ packages }: Readonly<Props>) {
                     label="Severity"
                 />
             </div>
+
+            <button
+                onClick={resetFilters}
+                className="ml-auto bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
+            >
+                Reset Filters
+            </button>
         </div>
 
         <div ref={tableRef}>
