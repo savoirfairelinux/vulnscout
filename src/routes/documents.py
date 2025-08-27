@@ -15,12 +15,12 @@ from ..views.templates import Templates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.openvex import OpenVex
+from typing import Dict, List
 
 
-CategoriesDictionary = {
-    # You can associate specific files to specific categories
-    # "example.adoc": ["misc", "category_name"]
-}
+# You can associate specific files to specific categories
+# "example.adoc": ["misc", "category_name"]
+CategoriesDictionary: Dict[str, List[str]] = {}
 
 
 def guess_mime_type(doc_name):
