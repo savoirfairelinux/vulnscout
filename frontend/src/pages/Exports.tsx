@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faStar, faThumbTack, faFolderOpen, faFileShield, faCompassDrafting, faBoxes } from "@fortawesome/free-solid-svg-icons";
+import { faThumbTack, faFolderOpen, faFileShield, faBoxes } from "@fortawesome/free-solid-svg-icons";
 import FileTag from "../components/FileTag";
 import PopupExportOptions from "../components/PopupExportOptions";
 import type { Options as PopupOptions } from "../components/PopupExportOptions";
@@ -56,6 +56,10 @@ function Exports ({}: Props) {
     return (<>
         <div className="w-full pt-32 flex justify-center" onClick={() => setOpenDl(null)}>
         <div className="w-[70%]">
+            <h1 className="text-3xl font-bold mb-4">Export</h1>
+            <p className="mb-6">Generate reports and SBOM files from your scan results.</p>
+
+            {/* Tabs */}
             <div className="flex gap-2 bg-sky-800 rounded-2xl p-2 shadow-lg backdrop-blur-md justify-center">
             {[
                 { key: "all", icon: faBoxes, label: "All" },
@@ -95,7 +99,6 @@ function Exports ({}: Props) {
         extension={doc.extension}
         opened={openDl === doc.id}
         onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
-        openOptions={(name: string, ext: string) => setPopupOptions({ docName: name, extension: ext })}
       />
     ))}
 

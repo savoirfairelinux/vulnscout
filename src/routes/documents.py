@@ -18,8 +18,8 @@ from ..views.openvex import OpenVex
 
 
 CategoriesDictionary = {
-    "summary.adoc": ["recommended"],
-    "vulnerabilities.csv": ["misc"]
+    # You can associate specific files to specific categories
+    # "example.adoc": ["misc", "category_name"]
 }
 
 
@@ -63,8 +63,8 @@ def init_app(app):
         try:
             docs = templ.list_documents()
 
-            docs.append({"id": "SPDX 2.3", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
-            # docs.append({"id": "SPDX 3.0", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "SPDX 2.3", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
+            # docs.append({"id": "SPDX 3.0", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.4", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.5", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.6", "extension": "json", "is_template": False, "category": ["sbom"]})
@@ -77,7 +77,7 @@ def init_app(app):
                     else:
                         doc["extension"] = "bin"
                     if doc["extension"] in ["adoc", "asciidoc"]:
-                        doc["extension"] = "adoc|pdf|html"
+                        doc["extension"] = "adoc | pdf | html"
 
                     if doc["id"] in CategoriesDictionary:
                         for cat in CategoriesDictionary[doc["id"]]:

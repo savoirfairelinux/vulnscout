@@ -1,6 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faDownload } from '@fortawesome/free-solid-svg-icons';
-import React from 'react';
 
 const documentTypes: { [key: string]: string | undefined } = {
   'ADOC': 'AsciiDoc',
@@ -16,15 +15,15 @@ type Props = {
 };
 
 function FileTag({ name, extension, opened, onOpen }: Readonly<Props>) {
-  const formats = extension.split('|');
+  const formats = extension.split(' | ');
 
   return (
     <div className="relative inline-block">
       <button
-        className="border-2 border-sfl-light rounded-lg px-4 py-2 bg-white shadow hover:bg-sfl-light w-full"
+        className="border-2 border-sfl-light rounded-lg px-4 py-2 bg-slate-800 text-white shadow hover:bg-sfl-light w-full"
         onClick={onOpen}
       >
-        {name}
+        {name} ({extension})
       </button>
 
       <div
@@ -33,11 +32,6 @@ function FileTag({ name, extension, opened, onOpen }: Readonly<Props>) {
           !opened && "hidden"
         ].join(" ")}
       >
-        <div className="font-semibold text-gray-800">
-            hover title
-        </div>
-        <div className="text-sm text-gray-500 mb-3">hover description</div>
-
         {formats.map((value) => (
           <div
             key={value}
@@ -47,7 +41,7 @@ function FileTag({ name, extension, opened, onOpen }: Readonly<Props>) {
                 name
               )}?ext=${encodeURIComponent(value)}`}
               target="_blank"
-              className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 text-white py-2 px-4 hover:bg-blue-700"
+              className="flex items-left justify-left gap-2 rounded-xl bg-sfl-dark text-white py-2 px-4"
             >
               <FontAwesomeIcon icon={faDownload} />
               Download {documentTypes?.[value.toUpperCase()] ?? value.toUpperCase()}
