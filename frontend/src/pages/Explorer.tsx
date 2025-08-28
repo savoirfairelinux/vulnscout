@@ -82,7 +82,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function appendCVSS(vulnId: string, vector: string) {
-        console.log("Appending CVSS", vector);
+        console.log("Appending CVSS", vector, vulnId);
         const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
         if (cvss !== null) {
             setVulns(Vulnerabilities.append_cvss(vulns, vulnId, cvss));
@@ -121,7 +121,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
-                    // calculateCvssFromVector={calculateCvssFromVector}
+                    appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
                     {...(filteredVulns && { filteredVulns: filteredVulns })}

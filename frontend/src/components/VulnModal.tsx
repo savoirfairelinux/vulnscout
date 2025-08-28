@@ -32,7 +32,6 @@ const dt_options: Intl.DateTimeFormatOptions = {
 function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
-  const [customCvssEntries, setCustomCvssEntries] = useState<any[]>([]);
   
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
@@ -85,19 +84,6 @@ function VulnModal(props: Readonly<Props>) {
             const data = await response.text();
             alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
         }
-    };
-
-    const onAddCvss = (vector: string) => {
-        
-        console.log(calculateCvssFromVector("vector"));
-        const newCvss = {
-            author: "custom",       // mark it as user-added
-            version: "3.1",         // assume CVSS v3.1, or parse from vector if needed
-            vector_string: vector,  // keep the raw vector for reference
-            base_score: 5.0         // TODO: calculate real score from vector
-        };
-        setCustomCvssEntries((prev) => [...prev, newCvss]);
-        setShowCustomCvss(false);
     };
 
     return (
@@ -160,51 +146,47 @@ function VulnModal(props: Readonly<Props>) {
                                     <code>{vuln.related_vulnerabilities.join(', ')}</code>
                                 </li>
                             </ul>
-                            
-                                          <div className="flex flex-col ml-4">
-                <div className="flex justify-between items-center mb-2 relative">
-                  <h3 className="text-lg font-bold text-white">CVSS</h3>
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowCustomCvss(!showCustomCvss)}
-                      className="ml-2 px-3 py-1 text-sm rounded-lg bg-sky-600 hover:bg-sky-700 text-white"
-                    >
-                      Add Custom
-                    </button>
 
-                    {showCustomCvss && (
-                      <div className="absolute right-0 mt-2 z-50 w-64">
-                        <CustomCvss
-                            onCancel={() => setShowCustomCvss(false)}
-                            onAddCvss={(vector) => { onAddCvss(vector); appendCVSS(vuln.id, vector); }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
+<div className="ml-4">
+  {/* Title + Button */}
+  <div className="flex justify-between items-center mb-2">
+    <h3 className="text-lg font-bold text-white">CVSS</h3>
+    <div className="relative">
+      <button
+        onClick={() => setShowCustomCvss(!showCustomCvss)}
+        className="ml-2 px-3 py-1 text-sm rounded-lg bg-sky-600 hover:bg-sky-700 text-white"
+      >
+        Add Custom
+      </button>
 
-                {vuln.severity.cvss.map((cvss) => (
-                  <div
-                    key={encodeURIComponent(
-                      `${cvss.author}-${cvss.version}-${cvss.base_score}`
-                    )}
-                    className="bg-gray-800 p-2 rounded-xl flex-initial mt-2"
-                  >
-                    <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
-                    <CvssGauge data={cvss} />
-                  </div>
-                ))}
+      {showCustomCvss && (
+        <div className="absolute right-0 mt-2 z-50 w-64">
+          <CustomCvss
+            onCancel={() => setShowCustomCvss(false)}
+            onAddCvss={(vector) => {
+              appendCVSS(vuln.id, vector);
+            }}
+          />
+        </div>
+      )}
+    </div>
+  </div>
 
-                {customCvssEntries.map((cvss, idx) => (
-                  <div
-                    key={`custom-${idx}`}
-                    className="bg-gray-800 p-2 rounded-xl flex-initial mt-2"
-                  >
-                    <h3 className="text-center font-bold">Custom CVSS</h3>
-                    <CvssGauge data={cvss} />
-                  </div>
-                ))}
-              </div>
+  {/* Graphs */}
+  <div className="flex flex-wrap gap-2">
+    {vuln.severity.cvss.map((cvss) => (
+      <div
+        key={encodeURIComponent(
+          `${cvss.author}-${cvss.version}-${cvss.base_score}`
+        )}
+        className="bg-gray-800 p-2 rounded-xl flex-1 min-w-[150px]"
+      >
+        <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
+        <CvssGauge data={cvss} />
+      </div>
+    ))}
+  </div>
+</div>
 
                         </div>
 
