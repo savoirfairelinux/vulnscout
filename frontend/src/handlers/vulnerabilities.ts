@@ -1,6 +1,7 @@
 import type { Assessment } from "./assessments";
 import { asStringArray } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
+import { Cvss3P1, Cvss2, Cvss3P0, Cvss4P0 } from 'ae-cvss-calculator';
 
 type CVSS = {
     author: string;
@@ -185,7 +186,102 @@ class Vulnerabilities {
             return vuln
         })
     }
+
+    static append_cvss(vulns: Vulnerability[], vuln_id: string, cvss: CVSS): Vulnerability[] {
+        return vulns.map((vuln) => {
+            if (vuln.id === vuln_id) {
+                return {
+                    ...vuln,
+                    severity: {
+                        ...vuln.severity,
+                        cvss: [...vuln.severity.cvss, cvss]
+                    }
+                };
+            }
+            return vuln;
+        });
+    }
+
+    static calculate_cvss_from_vector(vector: string): CVSS | null {
+        const sev = (s: number) => {
+            if (s === 0) return "NONE";
+            if (s < 4.0) return "LOW";
+            if (s < 7.0) return "MEDIUM";
+            if (s < 9.0) return "HIGH";
+            return "CRITICAL";
+        };
+
+        try {
+            if (vector.startsWith("CVSS:4.0")) {
+                const cv = new Cvss4P0(vector);
+                const scores: any = cv.calculateScores();
+
+                const base = Number(scores?.overall ?? 0);
+
+                return {
+                    author: "vulnscout", // We can modify this once we introduce user notion in VS
+                    severity: sev(base),
+                    version: "4.0",
+                    vector_string: scores?.vector ?? vector,
+                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
+                    base_score: base,
+                    exploitability_score: 0, // Cvss4P0 does not provide exploitability
+                    impact_score: 0 // Cvss4P0 does not provide impact
+                };
+            } else if (vector.startsWith("CVSS:3.1")) {
+                const cv = new Cvss3P1(vector);
+                const scores: any = cv.calculateScores(false);
+                const base = Number(scores?.base ?? scores?.overall ?? 0);
+                return {
+                    author: "vulnscout",
+                    severity: sev(base),
+                    version: "3.1",
+                    vector_string: scores?.vector ?? vector,
+                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
+                    base_score: base,
+                    exploitability_score: Number(scores?.exploitability ?? 0),
+                    impact_score: Number(scores?.impact ?? 0)
+                };
+            } else if (vector.startsWith("CVSS:3.0")) {
+                const cv = new Cvss3P0(vector);
+                const scores: any = cv.calculateScores(false);
+                const base = Number(scores?.base ?? scores?.overall ?? 0);
+                return {
+                    author: "unknown",
+                    severity: sev(base),
+                    version: "3.0",
+                    vector_string: scores?.vector ?? vector,
+                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
+                    base_score: base,
+                    exploitability_score: Number(scores?.exploitability ?? 0),
+                    impact_score: Number(scores?.impact ?? 0)
+                };
+            } else {
+                const cv = new Cvss2(vector);
+                const scores: any = cv.calculateScores();
+                const base = Number(scores?.overall ?? scores?.base ?? 0);
+                return {
+                    author: "unknown",
+                    severity: sev(base),
+                    version: "2.0",
+                    vector_string: scores?.vector ?? vector,
+                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
+                    base_score: base,
+                    exploitability_score: Number(scores?.exploitability ?? 0),
+                    impact_score: Number(scores?.impact ?? 0)
+                };
+            }
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
+    }
+
+
+ 
+
 }
+
 
 export default Vulnerabilities;
 export { SEVERITY_ORDER };

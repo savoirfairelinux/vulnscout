@@ -23,6 +23,7 @@
     "@fortawesome/react-fontawesome": "^0.2.2",
     "@tanstack/react-table": "^8.17.3",
     "@tanstack/react-virtual": "^3.5.1",
+    "ae-cvss-calculator": "^1.0.8",
     "chart.js": "^4.4.3",
     "dotenv": "^16.4.5",
     "fuse.js": "^7.0.0",

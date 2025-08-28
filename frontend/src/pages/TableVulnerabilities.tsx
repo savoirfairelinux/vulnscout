@@ -14,6 +14,7 @@ type Props = {
     vulnerabilities: Vulnerability[];
     filteredVulns?: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
+    appendCVSS: (vulnId: string, vector: string) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 
@@ -44,7 +45,7 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessment, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
@@ -264,6 +265,7 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
             vuln={modalVuln}
             onClose={() => setModalVuln(undefined)}
             appendAssessment={appendAssessment}
+            appendCVSS={appendCVSS}
             patchVuln={patchVuln}
         ></VulnModal>}
     </>)
