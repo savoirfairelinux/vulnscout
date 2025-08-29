@@ -247,7 +247,7 @@ class Vulnerabilities {
                 const scores: any = cv.calculateScores(false);
                 const base = Number(scores?.base ?? scores?.overall ?? 0);
                 return {
-                    author: "unknown",
+                    author: "vulnscout",
                     severity: sev(base),
                     version: "3.0",
                     vector_string: scores?.vector ?? vector,
@@ -261,7 +261,7 @@ class Vulnerabilities {
                 const scores: any = cv.calculateScores();
                 const base = Number(scores?.overall ?? scores?.base ?? 0);
                 return {
-                    author: "unknown",
+                    author: "vulnscout",
                     severity: sev(base),
                     version: "2.0",
                     vector_string: scores?.vector ?? vector,

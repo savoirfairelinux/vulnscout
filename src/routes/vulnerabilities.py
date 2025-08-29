@@ -7,6 +7,7 @@ import json
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..views.time_estimates import TimeEstimates
+from ..models.cvss import CVSS
 
 VULNS_FILE = "/scan/tmp/vulnerabilities-merged.json"
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
@@ -37,10 +38,11 @@ def init_app(app):
         if vuln:
             if request.method == 'PATCH':
                 payload_data = request.get_json()
+
                 if "effort" in payload_data:
                     if not ("optimistic" in payload_data["effort"]
-                       and "likely" in payload_data["effort"]
-                       and "pessimistic" in payload_data["effort"]):
+                    and "likely" in payload_data["effort"]
+                    and "pessimistic" in payload_data["effort"]):
                         return "Invalid effort values", 400
 
                     if not vuln.set_effort(
@@ -49,6 +51,16 @@ def init_app(app):
                         payload_data["effort"]["pessimistic"]
                     ):
                         return "Invalid effort values", 400
+
+                if "cvss" in payload_data:
+                    new_cvss = payload_data["cvss"]
+                    required_keys = {"base_score", "vector_string", "version"}
+                    if not required_keys.issubset(new_cvss.keys()):
+                        return "Invalid CVSS data", 400
+
+                    cvss_obj = CVSS.from_dict(new_cvss)
+                    vuln.register_cvss(cvss_obj)
+
                 with open(app.config["VULNS_FILE"], "w") as f:
                     f.write(json.dumps(vulnsCtrl.to_dict()))
                 with open(app.config["TIME_ESTIMATES_PATH"], "w") as f:

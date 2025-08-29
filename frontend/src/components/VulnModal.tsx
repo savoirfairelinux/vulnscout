@@ -1,4 +1,5 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -16,7 +17,7 @@ type Props = {
     vuln: Vulnerability;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
-    appendCVSS: (vulnId: string, vector: string) => void;
+    appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 
@@ -53,6 +54,42 @@ function VulnModal(props: Readonly<Props>) {
             onClose();
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
+        }
+    };
+
+    const addCvss = async (vector: string) => {
+        const content = appendCVSS(vuln.id, vector);
+        
+        if (content === null) {
+            alert("The vector string is invalid, please check the format.");
+            return;
+        }
+
+        
+        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+            method: 'PATCH',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                cvss: content
+            })
+        });
+
+        if (response.status == 200) {
+            const data = await response.json();
+
+            if (Array.isArray(data?.severity?.cvss)) {
+                vuln.severity.cvss = data.severity.cvss;
+            }
+
+            patchVuln(vuln.id, vuln);
+            onClose();
+        } else {
+            const data = await response.text();
+            console.error("API error response:", response.status, data);
+            alert(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`);
         }
     };
 
@@ -164,7 +201,7 @@ function VulnModal(props: Readonly<Props>) {
           <CustomCvss
             onCancel={() => setShowCustomCvss(false)}
             onAddCvss={(vector) => {
-              appendCVSS(vuln.id, vector);
+              addCvss(vector);
             }}
           />
         </div>

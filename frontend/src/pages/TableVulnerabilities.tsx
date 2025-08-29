@@ -1,4 +1,5 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState } from "react";
@@ -14,7 +15,7 @@ type Props = {
     vulnerabilities: Vulnerability[];
     filteredVulns?: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
-    appendCVSS: (vulnId: string, vector: string) => void;
+    appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 

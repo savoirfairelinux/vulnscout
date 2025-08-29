@@ -82,11 +82,12 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function appendCVSS(vulnId: string, vector: string) {
-        console.log("Appending CVSS", vector, vulnId);
         const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
         if (cvss !== null) {
             setVulns(Vulnerabilities.append_cvss(vulns, vulnId, cvss));
+            return cvss;
         }
+        return null;
     }
 
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
