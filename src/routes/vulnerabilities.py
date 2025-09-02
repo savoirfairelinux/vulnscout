@@ -41,8 +41,8 @@ def init_app(app):
 
                 if "effort" in payload_data:
                     if not ("optimistic" in payload_data["effort"]
-                    and "likely" in payload_data["effort"]
-                    and "pessimistic" in payload_data["effort"]):
+                       and "likely" in payload_data["effort"]
+                       and "pessimistic" in payload_data["effort"]):
                         return "Invalid effort values", 400
 
                     if not vuln.set_effort(

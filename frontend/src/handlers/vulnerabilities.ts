@@ -1,7 +1,7 @@
 import type { Assessment } from "./assessments";
 import { asStringArray } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
-import { Cvss3P1, Cvss2, Cvss3P0, Cvss4P0 } from 'ae-cvss-calculator';
+import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
 type CVSS = {
     author: string;
@@ -203,80 +203,56 @@ class Vulnerabilities {
     }
 
     static calculate_cvss_from_vector(vector: string): CVSS | null {
-        const sev = (s: number) => {
-            if (s === 0) return "NONE";
-            if (s < 4.0) return "LOW";
-            if (s < 7.0) return "MEDIUM";
-            if (s < 9.0) return "HIGH";
-            return "CRITICAL";
-        };
+        const sev = (s: number) =>
+            s === 0 ? "NONE" :
+            s < 4.0 ? "LOW" :
+            s < 7.0 ? "MEDIUM" :
+            s < 9.0 ? "HIGH" : "CRITICAL";
+
+        const detectAttackVector = (vec: string) =>
+            vec.includes("AV:N") ? "NETWORK" :
+            vec.includes("AV:A") ? "ADJACENT" :
+            vec.includes("AV:L") ? "LOCAL" :
+            vec.includes("AV:P") ? "PHYSICAL" : undefined;
 
         try {
+            let cv: any, scores: any, version: string;
+
             if (vector.startsWith("CVSS:4.0")) {
-                const cv = new Cvss4P0(vector);
-                const scores: any = cv.calculateScores();
-
-                const base = Number(scores?.overall ?? 0);
-
-                return {
-                    author: "vulnscout", // We can modify this once we introduce user notion in VS
-                    severity: sev(base),
-                    version: "4.0",
-                    vector_string: scores?.vector ?? vector,
-                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
-                    base_score: base,
-                    exploitability_score: 0, // Cvss4P0 does not provide exploitability
-                    impact_score: 0 // Cvss4P0 does not provide impact
-                };
+                cv = new Cvss4P0(vector);
+                scores = cv.calculateScores();
+                version = "4.0";
             } else if (vector.startsWith("CVSS:3.1")) {
-                const cv = new Cvss3P1(vector);
-                const scores: any = cv.calculateScores(false);
-                const base = Number(scores?.base ?? scores?.overall ?? 0);
-                return {
-                    author: "vulnscout",
-                    severity: sev(base),
-                    version: "3.1",
-                    vector_string: scores?.vector ?? vector,
-                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
-                    base_score: base,
-                    exploitability_score: Number(scores?.exploitability ?? 0),
-                    impact_score: Number(scores?.impact ?? 0)
-                };
+                cv = new Cvss3P1(vector);
+                scores = cv.calculateScores(false);
+                version = "3.1";
             } else if (vector.startsWith("CVSS:3.0")) {
-                const cv = new Cvss3P0(vector);
-                const scores: any = cv.calculateScores(false);
-                const base = Number(scores?.base ?? scores?.overall ?? 0);
-                return {
-                    author: "vulnscout",
-                    severity: sev(base),
-                    version: "3.0",
-                    vector_string: scores?.vector ?? vector,
-                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
-                    base_score: base,
-                    exploitability_score: Number(scores?.exploitability ?? 0),
-                    impact_score: Number(scores?.impact ?? 0)
-                };
+                cv = new Cvss3P0(vector);
+                scores = cv.calculateScores(false);
+                version = "3.0";
             } else {
-                const cv = new Cvss2(vector);
-                const scores: any = cv.calculateScores();
-                const base = Number(scores?.overall ?? scores?.base ?? 0);
-                return {
-                    author: "vulnscout",
-                    severity: sev(base),
-                    version: "2.0",
-                    vector_string: scores?.vector ?? vector,
-                    attack_vector: vector.includes("AV:N") ? "NETWORK" : vector.includes("AV:A") ? "ADJACENT" : vector.includes("AV:L") ? "LOCAL" : vector.includes("AV:P") ? "PHYSICAL" : undefined,
-                    base_score: base,
-                    exploitability_score: Number(scores?.exploitability ?? 0),
-                    impact_score: Number(scores?.impact ?? 0)
-                };
+                cv = new Cvss2(vector);
+                scores = cv.calculateScores();
+                version = "2.0";
             }
+
+            const base = Number(scores?.base ?? scores?.overall ?? 0);
+
+            return {
+                author: "vulnscout",
+                severity: sev(base),
+                version,
+                vector_string: scores?.vector ?? vector,
+                attack_vector: detectAttackVector(vector),
+                base_score: base,
+                exploitability_score: Number(scores?.exploitability ?? 0),
+                impact_score: Number(scores?.impact ?? 0)
+            };
         } catch (e) {
             console.error(e);
             return null;
         }
     }
-
 
  
 
