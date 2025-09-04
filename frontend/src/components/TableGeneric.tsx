@@ -17,6 +17,7 @@ type Props<DataType> = {
     tableHeight?: string;
     selected?: RowSelectionState;
     updateSelected?: OnChangeFn<RowSelectionState>;
+    hasPagination?: boolean;
 };
 /* tslint:enable:no-explicit-any */
 
@@ -29,7 +30,8 @@ function TableGeneric<DataType> ({
     estimateRowHeight = 66,
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
     selected = undefined,
-    updateSelected = () => {}
+    updateSelected = () => {},
+    hasPagination = true
 }: Readonly<Props<DataType>>) {
     const [pageIndex, setPageIndex] = useState(0)
     const [itemsPerPage, setItemsPerPage] = useState(50)
@@ -238,102 +240,103 @@ function TableGeneric<DataType> ({
                         })}
                     </tbody>
                     <tfoot className="grid sticky bottom-0 z-10">
-                        {table.getFooterGroups().map(footerGroup => (
+                        {table.getFooterGroups().some(group =>
+                            group.headers.some(header => header.column.columnDef.footer)
+                        ) &&
+                            table.getFooterGroups().map(footerGroup => (
                             <tr key={footerGroup.id} className="bg-slate-700 flex w-full">
-                            {footerGroup.headers.map(header => (
+                                {footerGroup.headers.map(header => (
                                 <th
                                     key={header.id}
                                     className="px-4 py-2 border border-slate-600 flex-auto"
                                     style={{width: header.getSize()}}
                                 >
-                                {header.isPlaceholder
+                                    {header.isPlaceholder
                                     ? null
                                     : flexRender(
                                         header.column.columnDef.footer,
                                         header.getContext()
-                                    )}
+                                        )}
                                 </th>
-                            ))}
+                                ))}
                             </tr>
-                        ))}
-                    </tfoot>
+                            ))}
+                        </tfoot>
                 </table>
             </div>
 
+        {hasPagination &&
+            <div className="flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
+            <div className="flex items-center gap-2">
+                <span>
+                {pageIndex * itemsPerPage + 1}-
+                {Math.min((pageIndex + 1) * itemsPerPage, filteredData.length)} / {filteredData.length}
+                </span>
+                <span>- Results per page:</span>
+                <select
+                value={itemsPerPage}
+                onChange={(e) => {
+                    setPageIndex(0)
+                    setItemsPerPage(Number(e.target.value))
+                }}
+                className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
+                >
+                {paginationSizes.map(size => (
+                    <option key={size} value={size}>
+                    {size === filteredData.length ? `${size} (All)` : size}
+                    </option>
+                ))}
+                </select>
+            </div>
 
-<div className="flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
-  <div className="flex items-center gap-2">
-    <span>
-      {pageIndex * itemsPerPage + 1}-
-      {Math.min((pageIndex + 1) * itemsPerPage, filteredData.length)} / {filteredData.length}
-    </span>
-    <span>- Results per page:</span>
-    <select
-    value={itemsPerPage}
-    onChange={(e) => {
-        setPageIndex(0)
-        setItemsPerPage(Number(e.target.value))
-    }}
-    className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
-    >
-    {paginationSizes.map(size => (
-        <option key={size} value={size}>
-        {size === filteredData.length ? `${size} (All)` : size}
-        </option>
-    ))}
-    </select>
-  </div>
-
-  <div className="flex flex-wrap justify-end items-center gap-2">
-    <button
-      className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-      disabled={pageIndex === 0}
-      onClick={() => setPageIndex(0)}
-    >
-      First
-    </button>
-    <button
-      className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-      disabled={pageIndex === 0}
-      onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))}
-    >
-      Previous
-    </button>
-    {getPageNumbers(pageIndex, pageCount).map((p, i) =>
-      typeof p === 'string' ? (
-        <span key={i} className="px-2">...</span>
-      ) : (
-        <button
-          key={i}
-          className={[
-            'px-2 py-1 rounded',
-            p === pageIndex ? 'bg-blue-600' : 'bg-slate-600'
-          ].join(' ')}
-          onClick={() => setPageIndex(p)}
-        >
-          {p + 1}
-        </button>
-      )
-    )}
-    <button
-      className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-      disabled={pageIndex + 1 >= pageCount}
-      onClick={() => setPageIndex(prev => prev + 1)}
-    >
-      Next
-    </button>
-    <button
-      className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-      disabled={pageIndex + 1 >= pageCount}
-      onClick={() => setPageIndex(pageCount - 1)}
-    >
-      Last
-    </button>
-  </div>
-</div>
-
-
-            
+            <div className="flex flex-wrap justify-end items-center gap-2">
+                <button
+                className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                disabled={pageIndex === 0}
+                onClick={() => setPageIndex(0)}
+                >
+                First
+                </button>
+                <button
+                className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                disabled={pageIndex === 0}
+                onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))}
+                >
+                Previous
+                </button>
+                {getPageNumbers(pageIndex, pageCount).map((p, i) =>
+                typeof p === 'string' ? (
+                    <span key={i} className="px-2">...</span>
+                ) : (
+                    <button
+                    key={i}
+                    className={[
+                        'px-2 py-1 rounded',
+                        p === pageIndex ? 'bg-blue-600' : 'bg-slate-600'
+                    ].join(' ')}
+                    onClick={() => setPageIndex(p)}
+                    >
+                    {p + 1}
+                    </button>
+                )
+                )}
+                <button
+                className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                disabled={pageIndex + 1 >= pageCount}
+                onClick={() => setPageIndex(prev => prev + 1)}
+                >
+                Next
+                </button>
+                <button
+                className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
+                disabled={pageIndex + 1 >= pageCount}
+                onClick={() => setPageIndex(pageCount - 1)}
+                >
+                Last
+                </button>
+            </div>
+            </div>
+        }
 
         </div>
     );

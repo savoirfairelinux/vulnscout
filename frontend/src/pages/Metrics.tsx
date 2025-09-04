@@ -4,14 +4,19 @@
         import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
+        import TableGeneric from "../components/TableGeneric";
+        import SeverityTag from "../components/SeverityTag";
+        import VulnModal from "../components/VulnModal";
+        import type { Assessment } from "../handlers/assessments";
 
         ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
 
         type Props = {
             packages: Package[];
             vulnerabilities: Vulnerability[];
-            setVulns: (vulns: Vulnerability[]) => void;
             goToVulnsTabWithFilter: (vulns: Vulnerability[]) => void;
+  appendAssessment: (added: Assessment) => void;
+  patchVuln: (vulnId: string, data: any) => void;
         };
 
         const pieOptions = {
@@ -95,12 +100,47 @@
             });
         }
 
-        function Metrics ({ vulnerabilities, goToVulnsTabWithFilter }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, patchVuln }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
             const [hideStatus, setHideStatus] = useState<{[key: string] : boolean}>({});
             const [timeScale, setTimeScale] = useState<string>("6_months")
+            const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+
+  const vulnColumns = useMemo(
+    () => [
+      { accessorKey: "rank", header: "#", size: 40, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "cve", header: "CVE", size: 150, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "package", header: "Package", size: 200, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "severity", header: "Severity", size: 120, cell: (info: any) => <SeverityTag severity={info.getValue()} />, enableSorting: false },
+      {
+        accessorKey: "edit",
+        header: "Actions",
+        size: 80,
+        cell: (info: any) => {
+          const vuln = info.row.original.original;
+          return (
+            <button
+              className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+              onClick={() => setModalVuln(vuln)}
+            >
+              Edit
+            </button>
+          );
+        },
+        enableSorting: false
+      },
+    ],
+    []
+  );
+
+  const packageColumns = [
+  { accessorKey: "id", header: "#", size: 50, cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "name", header: "Name", cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "version", header: "Version", cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "count", header: "Vulnerabilities", cell: (info: any) => info.getValue(), enableSorting: false },
+];
 
             const time_scales = useMemo(() => {
                 const scale = Number(timeScale.split('_')[0]);
@@ -219,8 +259,55 @@
                     hoverOffset: 4
                 }]
             }
+            
+  const topVulnerablePackages = useMemo(() => {
+    const counts: Record<string, { count: number; version?: string }> = {};
+    vulnerabilities.forEach((vuln) => {
+      vuln.packages.forEach((pkg) => {
+        const [pkgName, pkgVersion] = pkg.split("@");
+        if (!counts[pkgName]) {
+          counts[pkgName] = { count: 0, version: pkgVersion };
+        }
+        counts[pkgName].count += 1;
+      });
+    });
+    return Object.entries(counts)
+      .sort(([, a], [, b]) => b.count - a.count)
+      .slice(0, 5)
+      .map(([name, { count, version }], index) => ({
+        id: index + 1,
+        name,
+        version: version ?? "-",
+        count,
+        licences: "",
+        vulnerabilities: { exploitable: count },
+        maxSeverity: { label: "UNKNOWN", index: 0 },
+        source: [],
+      }));
+  }, [vulnerabilities]);
 
-            const dataSetVulnBySource = useMemo(() => {
+  const TopVulns = useMemo(() => {
+    return [...vulnerabilities]
+      .map((vuln, index) => {
+        const maxCvss = vuln.severity.cvss?.length
+          ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
+          : 0;
+        return {
+          id: index + 1,
+          rank: 0,
+          cve: vuln.id,
+          package: vuln.packages.join(", "),
+          severity: vuln.severity.severity,
+          maxCvss,
+          original: vuln,
+        };
+      })
+      .sort((a, b) => b.maxCvss - a.maxCvss)
+      .slice(0, 5)
+      .map((vuln, idx) => ({ ...vuln, rank: idx + 1 }));
+  }, [vulnerabilities]);
+  
+              const dataSetVulnBySource = useMemo(() => {
                 return {
                     labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
                     datasets: [{
@@ -290,8 +377,9 @@
             }
 
             return (
+    <>
                 <div className="w-full flex flex-wrap">
-
+                  
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Severity</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
@@ -330,10 +418,64 @@
                             <Bar data={dataSetVulnBySource} options={BarOptions} />
                         </div>
                     </div>
+      </div>
 
+      <div className="w-full flex flex-wrap">
+        <div className="w-1/2 lg:w-1/2 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-2xl font-bold">Most critical vulnerabilities</h3>
+            <button
+              className="bg-blue-800 hover:bg-blue-700 px-3 py-1 rounded-lg text-sm"
+              onClick={() => goToVulnsTabWithFilter(vulnerabilities)}
+            >
+              See all
+            </button>
+          </div>
+          <TableGeneric
+            columns={vulnColumns}
+            data={TopVulns}
+            search=""
+            fuseKeys={["package", "severity"]}
+            hoverField="description"
+            tableHeight="100%"
+            hasPagination={false}
+          />
+                    </div>
+
+        <div className="w-1/2 lg:w-1/2 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-2xl font-bold">Most vulnerable packages</h3>
+            <button
+              className="bg-blue-800 hover:bg-blue-700 px-3 py-1 rounded-lg text-sm"
+              onClick={() => goToVulnsTabWithFilter([])} 
+              // replace with a function to navigate to the packages tab
+            >
+              See all
+            </button>
+          </div>
+          <TableGeneric
+            columns={packageColumns}
+            data={topVulnerablePackages}
+            search=""
+            fuseKeys={["name", "version"]}
+            hoverField="description"
+            tableHeight="100%"
+            hasPagination={false}
+          />
+        </div>
                 </div>
-            );
 
+      {modalVuln && (
+        <VulnModal
+          vuln={modalVuln}
+          onClose={() => setModalVuln(undefined)}
+          appendAssessment={appendAssessment}
+          patchVuln={patchVuln}
+        />
+      )}
+    </>
+            );
+            
         }
 
         export default Metrics;

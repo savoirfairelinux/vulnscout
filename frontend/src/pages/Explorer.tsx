@@ -115,8 +115,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 <Metrics
                     packages={pkgs}
                     vulnerabilities={vulns}
-                    setVulns={setVulns}
                     goToVulnsTabWithFilter={goToVulnsTabWithFilter}
+                    appendAssessment={appendAssessment}
+                    patchVuln={patchVuln}
                 />}
                 {tab == 'packages' && <TablePackages packages={pkgs} />}
                 {tab === 'vulnerabilities' &&
