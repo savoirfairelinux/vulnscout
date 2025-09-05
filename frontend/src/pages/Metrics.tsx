@@ -15,8 +15,9 @@
             packages: Package[];
             vulnerabilities: Vulnerability[];
             goToVulnsTabWithFilter: (vulns: Vulnerability[]) => void;
-  appendAssessment: (added: Assessment) => void;
-  patchVuln: (vulnId: string, data: any) => void;
+            appendAssessment: (added: Assessment) => void;
+            patchVuln: (vulnId: string, data: any) => void;
+            setTab?: (tab: string) => void;
         };
 
         const pieOptions = {
@@ -100,7 +101,7 @@
             });
         }
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, patchVuln }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, patchVuln, setTab }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
@@ -299,13 +300,17 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           package: vuln.packages.join(", "),
           severity: vuln.severity.severity,
           maxCvss,
+          texts: vuln.texts,
           original: vuln,
         };
       })
       .sort((a, b) => b.maxCvss - a.maxCvss)
       .slice(0, 5)
-      .map((vuln, idx) => ({ ...vuln, rank: idx + 1 }));
-  }, [vulnerabilities]);
+      .map((vuln, idx) => ({
+        ...vuln,
+        rank: idx + 1,
+        }));
+    }, [vulnerabilities]);
   
               const dataSetVulnBySource = useMemo(() => {
                 return {
@@ -425,7 +430,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-2xl font-bold">Most critical vulnerabilities</h3>
             <button
-              className="bg-blue-800 hover:bg-blue-700 px-3 py-1 rounded-lg text-sm"
+              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
               onClick={() => goToVulnsTabWithFilter(vulnerabilities)}
             >
               See all
@@ -434,9 +439,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           <TableGeneric
             columns={vulnColumns}
             data={TopVulns}
-            search=""
-            fuseKeys={["package", "severity"]}
-            hoverField="description"
+            hoverField="texts"
             tableHeight="100%"
             hasPagination={false}
           />
@@ -446,9 +449,8 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-2xl font-bold">Most vulnerable packages</h3>
             <button
-              className="bg-blue-800 hover:bg-blue-700 px-3 py-1 rounded-lg text-sm"
-              onClick={() => goToVulnsTabWithFilter([])} 
-              // replace with a function to navigate to the packages tab
+              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+              onClick={() => setTab("packages")}
             >
               See all
             </button>
@@ -456,9 +458,6 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           <TableGeneric
             columns={packageColumns}
             data={topVulnerablePackages}
-            search=""
-            fuseKeys={["name", "version"]}
-            hoverField="description"
             tableHeight="100%"
             hasPagination={false}
           />
