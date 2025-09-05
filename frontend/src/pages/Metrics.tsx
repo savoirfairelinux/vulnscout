@@ -17,7 +17,7 @@
             goToVulnsTabWithFilter: (vulns: Vulnerability[]) => void;
             appendAssessment: (added: Assessment) => void;
             patchVuln: (vulnId: string, data: any) => void;
-            setTab?: (tab: string) => void;
+            setTab: (tab: string) => void;
         };
 
         const pieOptions = {
