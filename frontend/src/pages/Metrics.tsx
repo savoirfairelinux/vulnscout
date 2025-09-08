@@ -382,8 +382,8 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
             }
 
             return (
-    <>
-                <div className="w-full flex flex-wrap">
+    <div className="h-full flex flex-col overflow-hidden">
+                <div className="w-full flex flex-wrap flex-shrink-0">
                   
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Severity</div>
@@ -425,8 +425,8 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
                     </div>
       </div>
 
-      <div className="w-full flex flex-wrap">
-        <div className="w-1/2 lg:w-1/2 p-4">
+      <div className="w-full flex flex-wrap flex-1 min-h-0">
+        <div className="w-1/2 lg:w-1/2 p-4 flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-2xl font-bold">Most critical vulnerabilities</h3>
             <button
@@ -436,16 +436,18 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
               See all
             </button>
           </div>
-          <TableGeneric
-            columns={vulnColumns}
-            data={TopVulns}
-            hoverField="texts"
-            tableHeight="100%"
-            hasPagination={false}
-          />
+          <div className="flex-1 min-h-0">
+            <TableGeneric
+              columns={vulnColumns}
+              data={TopVulns}
+              hoverField="texts"
+              tableHeight="100%"
+              hasPagination={false}
+            />
+          </div>
                     </div>
 
-        <div className="w-1/2 lg:w-1/2 p-4">
+        <div className="w-1/2 lg:w-1/2 p-4 flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-2xl font-bold">Most vulnerable packages</h3>
             <button
@@ -455,12 +457,14 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
               See all
             </button>
           </div>
-          <TableGeneric
-            columns={packageColumns}
-            data={topVulnerablePackages}
-            tableHeight="100%"
-            hasPagination={false}
-          />
+          <div className="flex-1 min-h-0">
+            <TableGeneric
+              columns={packageColumns}
+              data={topVulnerablePackages}
+              tableHeight="100%"
+              hasPagination={false}
+            />
+          </div>
         </div>
                 </div>
 
@@ -472,7 +476,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           patchVuln={patchVuln}
         />
       )}
-    </>
+    </div>
             );
             
         }
