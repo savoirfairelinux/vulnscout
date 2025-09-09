@@ -225,7 +225,7 @@ describe('Vulnerabilities', () => {
         expect(enrichedvuln[0].assessments.length).toEqual(1);
 
         expect(enrichedvuln[1].status).toEqual('affected');
-        expect(enrichedvuln[1].simplified_status).toEqual('active');
+        expect(enrichedvuln[1].simplified_status).toEqual('Exploitable');
         expect(enrichedvuln[1].assessments.length).toEqual(2);
     });
 });
@@ -299,7 +299,7 @@ describe('PatchFinder', () => {
         const computed = PatchFinderLogic.compute_versions_and_patch(
             patchs,
             {"aaabbbccc": "1.0.0"},
-            undefined,
+            [],
             ''
         );
 
@@ -327,7 +327,7 @@ describe('PatchFinder', () => {
         const computed = PatchFinderLogic.compute_vulns_per_versions(
             patchs,
             {"aaabbbccc": "1.0.0"},
-            undefined,
+            [],
             ''
         );
 

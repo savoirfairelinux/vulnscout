@@ -55,7 +55,8 @@ describe('Render patch found', () => {
             purl: [],
             vulnerabilities: {},
             maxSeverity: {},
-            source: []
+            source: [],
+            licences: "NOASSERTION"
         }
     ]
 
@@ -158,7 +159,7 @@ describe('Render patch found', () => {
         // ACT
         const user = userEvent.setup();
         const legend_btn = await screen.getByRole('button', {name: /hide legend/i});
-        const legend_title = await screen.getByText(/^legend$/i);
+        const legend_title = await screen.getByRole('heading', { name: /^legend$/i, level: 2 });
 
         // ASSERT
         expect(legend_btn).toBeInTheDocument();
