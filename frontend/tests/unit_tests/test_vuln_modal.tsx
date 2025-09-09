@@ -67,7 +67,7 @@ describe('Vulnerability Modal', () => {
 
     test('render important data in header', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const id = await screen.getByText(/^\s*CVE-2010-1234\s*$/i);
@@ -92,7 +92,7 @@ describe('Vulnerability Modal', () => {
 
     test('render text description', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const title = await screen.getByText(/description/i);
@@ -105,7 +105,7 @@ describe('Vulnerability Modal', () => {
 
     test('render urls and datasource', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const datasource = await screen.getByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i);
@@ -118,7 +118,7 @@ describe('Vulnerability Modal', () => {
 
     test('render efforts estimations', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const likely = await screen.getByText(/1d 2h/i);
@@ -131,7 +131,7 @@ describe('Vulnerability Modal', () => {
 
     test('render assessment data', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const status = await screen.getAllByText(/active/i);
@@ -151,7 +151,7 @@ describe('Vulnerability Modal', () => {
     test('closing button', async () => {
         // ARRANGE
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const closeBtns = await screen.getAllByText(/Close/i);
@@ -188,7 +188,7 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={updateCb} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={updateCb} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
         // ACT
@@ -213,7 +213,7 @@ describe('Vulnerability Modal', () => {
 
     test('help button for time estimates', async () => {
         // ARRANGE
-        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const show_help = await screen.getByRole('button', {name: /show help/i});
@@ -251,7 +251,7 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} patchVuln={updateCb} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} />);
         const user = userEvent.setup();
 
         // ACT
