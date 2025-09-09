@@ -1,12 +1,11 @@
 import type { Package, VulnCounts, Severities } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
-import { useRef } from "react";
 
 type Props = {
     packages: Package[];
@@ -44,9 +43,8 @@ function TablePackages({ packages }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedLicences, setSelectedLicences] = useState<string[]>([]);
-    const tableRef = useRef<HTMLDivElement>(null); // ref to table container
+    const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -80,25 +78,12 @@ function TablePackages({ packages }: Readonly<Props>) {
             }
         });
 
-        const result = Array.from(licenceSet).sort((a, b) => a.localeCompare(b)); // <-- sort alphabetically
+        const result = Array.from(licenceSet).sort((a, b) => a.localeCompare(b));
         if (hasCustomLicence) {
             result.push("Custom Licence");
         }
         return result;
     }, [packages]);
-
-    
-    const statusOptions = useMemo(() => {
-        const statuses = new Set<string>();
-        for (const pkg of packages) {
-            Object.keys(pkg.vulnerabilities).forEach(status => statuses.add(status));
-        }
-        return Array.from(statuses);
-    }, [packages]);
-
-    const hide_filter = useMemo(() => {
-        return statusOptions.filter(status => selectedStatuses.includes(status))
-    }, [selectedStatuses])
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
@@ -119,10 +104,10 @@ function TablePackages({ packages }: Readonly<Props>) {
             columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
                 header: 'Vulnerabilities',
                 cell: info => <>
-                    <span className="min-w-8 mr-2 inline-block">{addVulnCounts(info.getValue().counts, hide_filter)}</span>
-                    {showSeverity && <SeverityTag severity={highestSeverity(info.getValue().severity, hide_filter).label} />}
+                    <span className="min-w-8 mr-2 inline-block">{addVulnCounts(info.getValue().counts, [])}</span>
+                    {showSeverity && <SeverityTag severity={highestSeverity(info.getValue().severity, []).label} />}
                 </>,
-                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, hide_filter)
+                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, [])
             }),
             columnHelper.accessor('source', {
                 header: 'Sources',
@@ -130,19 +115,12 @@ function TablePackages({ packages }: Readonly<Props>) {
                 enableSorting: false
             })
         ]
-    }, [showSeverity, hide_filter]);
+    }, [showSeverity]);
 
     const filteredPackages = useMemo(() => {
         return packages.filter((el) => {
             if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
                 return false;
-            }
-
-            if (selectedStatuses.length) {
-                const vulnStatuses = Object.keys(el.vulnerabilities);
-                if (!vulnStatuses.some(status => selectedStatuses.includes(status))) {
-                    return false;
-                }
             }
 
             if (selectedLicences.length) {
@@ -166,7 +144,7 @@ function TablePackages({ packages }: Readonly<Props>) {
 
             return true;
         });
-    }, [packages, selectedSources, selectedStatuses, selectedLicences]);
+    }, [packages, selectedSources, selectedLicences]);
     
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -178,13 +156,6 @@ function TablePackages({ packages }: Readonly<Props>) {
                 options={sources_list}
                 selected={selectedSources}
                 setSelected={setSelectedSources}
-            />
-
-            <FilterOption
-                label="Status"
-                options={statusOptions}
-                selected={selectedStatuses}
-                setSelected={setSelectedStatuses}
             />
 
             <FilterOption
