@@ -1,4 +1,4 @@
-import { render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import { describe, test, expect } from '@jest/globals';
@@ -40,7 +40,7 @@ describe('Packages Table', () => {
                 "fixed": {label: 'medium', index: 3}
             },
             source: ['hardcoded'],
-            licences: 'NOASSERTION'
+            licences: 'MIT AND Apache-2.0'
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -51,11 +51,27 @@ describe('Packages Table', () => {
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
             source: ['cve-finder'],
-            licences: 'NOASSERTION'
+            licences: 'GPL-3.0'
+        },
+        {
+            id: 'customlicense@1.5.0',
+            name: 'customlicense',
+            version: '1.5.0',
+            cpe: ['cpe:2.3:a:vendor:customlicense:1.5.0:*:*:*:*:*:*:*:*'],
+            purl: ['pkg:vendor/customlicense@1.5.0'],
+            vulnerabilities: {"active": 1, "fixed": 2},
+            maxSeverity: {
+                "active": {label: 'medium', index: 3},
+                "fixed": {label: 'low', index: 2}
+            },
+            source: ['cve-finder', 'hardcoded'],
+            licences: 'DocumentRef-custom-license LicenseRef-proprietary'
         }
     ];
 
-    Element.prototype.getBoundingClientRect = function () { return getDOMRect(500, 500); } as any;
+    Element.prototype.getBoundingClientRect = function () {
+        return getDOMRect(500, 500)
+    }
 
     test('render headers with empty array', async () => {
         // ARRANGE
@@ -64,12 +80,16 @@ describe('Packages Table', () => {
         // ACT
         const name_header = await screen.getByRole('columnheader', {name: /name/i});
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
+        const licences_header = await screen.getByRole('columnheader', {name: /licences/i});
         const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
+        const sources_header = await screen.getByRole('columnheader', {name: /sources/i});
 
         // ASSERT
         expect(name_header).toBeTruthy();
         expect(version_header).toBeTruthy();
+        expect(licences_header).toBeTruthy();
         expect(vuln_count_header).toBeTruthy();
+        expect(sources_header).toBeTruthy();
     })
 
     test('render with packages', async () => {
@@ -79,11 +99,15 @@ describe('Packages Table', () => {
         // ACT
         const name_col = await screen.getByRole('cell', {name: /aaabbbccc/});
         const version_col = await screen.getByRole('cell', {name: /1.0.0/});
-        const source_col = await screen.getByRole('cell', {name: /hardcoded/});
+        const licences_col = await screen.getByRole('cell', {name: /MIT AND Apache-2.0/});
+        const vuln_count_col = await screen.getByRole('cell', {name: /^8$/});
+        const source_col = await screen.getByRole('cell', {name: /^hardcoded$/});
 
         // ASSERT
         expect(name_col).toBeTruthy();
         expect(version_col).toBeTruthy();
+        expect(licences_col).toBeTruthy();
+        expect(vuln_count_col).toBeTruthy();
         expect(source_col).toBeTruthy();
     })
 
@@ -98,13 +122,13 @@ describe('Packages Table', () => {
         await user.click(severity_toggle); // switch to enabled mode
 
         const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
-        const severity_high = await screen.getByText(/high/i);
-        const severity_medium = await screen.getByText(/medium/i);
+        const severity_high = await screen.getByText('high');
+        const severity_mediums = await screen.getAllByText('medium');
 
         // ASSERT
         expect(btn_enabled).toBeTruthy();
         expect(severity_high).toBeTruthy();
-        expect(severity_medium).toBeTruthy();
+        expect(severity_mediums.length).toBeGreaterThan(0);
     })
 
     test('sorting by name', async () => {
@@ -211,42 +235,53 @@ describe('Packages Table', () => {
         expect(pkg_xyz2).toBeTruthy();
     })
 
-    test('filter by status', async () => {
+    test('filter by licences', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const status_btn = await screen.getByRole('button', { name: /status/i });
-        await user.click(status_btn);
-        const fixed_checkbox = await screen.getByRole('checkbox', { name: /fixed/i });
-        // Schedule wait before applying the filter to ensure the target exists
-        const removal = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /xxxyyyzzz/ }), { timeout: 4000 });
-        // Apply status filter first (clicking outside would close the dropdown)
-        await user.click(fixed_checkbox);
-        await removal;
-        const severity_toggle = await screen.getByRole('button', { name: /show severity/i });
-        const vuln_count_header = await screen.getByRole('columnheader', { name: /vulnerabilities/i });
-        await user.click(severity_toggle); // switch to enabled mode
-        // ACT
 
-        // Then assert remaining row shows count 2 (excluding 'fixed')
-        await waitFor(() => {
-            const pkgNameCell = screen.getByRole('cell', { name: /aaabbbccc/ });
-            const pkgRow = pkgNameCell.closest('tr') as HTMLElement;
-            expect(within(pkgRow).getByText(/^2$/)).toBeTruthy();
-        }, { timeout: 4000 });
+        // Open the "Licences" filter dropdown
+        const licences_btn = await screen.getByRole('button', { name: /licences/i });
+        await user.click(licences_btn);
 
-        // Assert the remaining row "aaabbbccc" shows count 2 (excluding 'fixed')
-        const pkgNameCell = await screen.getByRole('cell', { name: /aaabbbccc/ });
-        const pkgRow = pkgNameCell.closest('tr') as HTMLElement;
-        expect(pkgRow).toBeTruthy();
-        expect(within(pkgRow).getByText(/^2$/)).toBeTruthy();
+        // ACT: select "MIT"
+        const mitCheckbox = await screen.getByRole('checkbox', { name: /^MIT$/i });
+        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /xxxyyyzzz/ }), { timeout: 2000 });
+        await user.click(mitCheckbox);
+        await deletion;
 
-        await user.click(vuln_count_header); // numerical order -> reverse numerical order
+        const pkg_abc = await screen.getByRole('cell', { name: /aaabbbccc/ });
+        expect(pkg_abc).toBeTruthy();
 
-        // ASSERT
-        const severity_low = await screen.getByText(/low/i);
-        expect(severity_low).toBeTruthy();
-        expect(screen.queryByText(/high/i)).toBeNull();
+        // REVERT CHANGE: uncheck "MIT"
+        await user.click(mitCheckbox);
+
+        const pkg_abc2 = await screen.getByRole('cell', { name: /aaabbbccc/ });
+        const pkg_xyz = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
+
+        expect(pkg_abc2).toBeTruthy();
+        expect(pkg_xyz).toBeTruthy();
+    })
+
+    test('filter by custom licence', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // Open the "Licences" filter dropdown
+        const licences_btn = await screen.getByRole('button', { name: /licences/i });
+        await user.click(licences_btn);
+
+        // ACT: select "Custom Licence"
+        const customCheckbox = await screen.getByRole('checkbox', { name: /Custom Licence/i });
+        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
+        await user.click(customCheckbox);
+        await deletion;
+
+        const pkg_custom = await screen.getByRole('cell', { name: /customlicense/ });
+        expect(pkg_custom).toBeTruthy();
+        expect(screen.queryByRole('cell', { name: /xxxyyyzzz/ })).toBeNull();
     })
 });
