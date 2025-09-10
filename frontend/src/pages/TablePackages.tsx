@@ -84,6 +84,13 @@ function TablePackages({ packages }: Readonly<Props>) {
         }
         return result;
     }, [packages]);
+    
+    const resetFilters = () => {
+        setSearch('');
+        setSelectedSources([]);
+        setSelectedLicences([]);
+        setShowSeverity(false);
+    }
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
@@ -173,6 +180,13 @@ function TablePackages({ packages }: Readonly<Props>) {
                     label="Severity"
                 />
             </div>
+
+            <button
+                onClick={resetFilters}
+                className="ml-auto bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
+            >
+                Reset Filters
+            </button>
         </div>
 
         <div ref={tableRef}>
