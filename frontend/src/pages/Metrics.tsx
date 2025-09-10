@@ -428,7 +428,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
       <div className="w-full flex flex-wrap">
         <div className="w-1/2 lg:w-1/2 p-4">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-2xl font-bold">Most critical vulnerabilities</h3>
+            <h3 className="text-2xl font-bold">Most critical unfixed vulnerabilities</h3>
             <button
               className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
               onClick={() => goToVulnsTabWithFilter(vulnerabilities)}
