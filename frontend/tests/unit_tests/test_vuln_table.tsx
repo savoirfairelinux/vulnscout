@@ -145,7 +145,7 @@ describe('Vulnerability Table', () => {
 
     test('render headers with empty array', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -168,7 +168,7 @@ describe('Vulnerability Table', () => {
 
     test('render with vulnerabilities', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -193,7 +193,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -213,7 +213,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by severity', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
@@ -233,7 +233,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by attack vector', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
@@ -253,7 +253,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by exploitability score', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
@@ -273,7 +273,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by efforts needed', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const effort_header = await screen.getByRole('columnheader', {name: /effort/i});
@@ -293,7 +293,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by status', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -313,7 +313,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for vulnerability ID', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -328,7 +328,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for package name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -343,7 +343,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for description', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -358,7 +358,7 @@ describe('Vulnerability Table', () => {
 
     test('filter by source', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const sourceBtn = await screen.getByRole('button', { name: /source/i });
@@ -378,7 +378,7 @@ describe('Vulnerability Table', () => {
 
     test('filter out Exploitable', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const statusBtn = await screen.getByRole('button', { name: /status/i });
@@ -398,7 +398,7 @@ describe('Vulnerability Table', () => {
 
     test('filter out Community Analysis Pending', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const statusBtn = await screen.getByRole('button', { name: /status/i });
@@ -419,7 +419,7 @@ describe('Vulnerability Table', () => {
 
     test('select all in table and unselecting', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -439,7 +439,7 @@ describe('Vulnerability Table', () => {
 
     test('select using ctrl+click and reset selection', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
@@ -478,7 +478,7 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -536,7 +536,7 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -565,7 +565,7 @@ describe('Vulnerability Table', () => {
 
     test('show description when hovering vulnerability', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} patchVuln={() => {}} />);
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const id_col = await screen.getByRole('cell', {name: vulnerabilities[0].id});

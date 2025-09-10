@@ -1,19 +1,23 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
+import CustomCvss from "./CustomCvss";
 import SeverityTag from "./SeverityTag";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
+import { useState } from "react";
 
 type Props = {
     vuln: Vulnerability;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
+    appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
 };
 
@@ -27,8 +31,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
 };
 
 function VulnModal(props: Readonly<Props>) {
-    const { vuln, onClose, appendAssessment, patchVuln } = props;
-
+    const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
+    const [showCustomCvss, setShowCustomCvss] = useState(false);
+  
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -49,6 +54,42 @@ function VulnModal(props: Readonly<Props>) {
             onClose();
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
+        }
+    };
+
+    const addCvss = async (vector: string) => {
+        const content = appendCVSS(vuln.id, vector);
+        
+        if (content === null) {
+            alert("The vector string is invalid, please check the format.");
+            return;
+        }
+
+        
+        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+            method: 'PATCH',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                cvss: content
+            })
+        });
+
+        if (response.status == 200) {
+            const data = await response.json();
+
+            if (Array.isArray(data?.severity?.cvss)) {
+                vuln.severity.cvss = data.severity.cvss;
+            }
+
+            patchVuln(vuln.id, vuln);
+            onClose();
+        } else {
+            const data = await response.text();
+            console.error("API error response:", response.status, data);
+            alert(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`);
         }
     };
 
@@ -142,12 +183,46 @@ function VulnModal(props: Readonly<Props>) {
                                     <code>{vuln.related_vulnerabilities.join(', ')}</code>
                                 </li>
                             </ul>
-                            {vuln.severity.cvss.map((cvss) => (
-                                <div key={encodeURIComponent(`${cvss.author}-${cvss.version}-${cvss.base_score}`)} className="bg-gray-800 p-2 rounded-xl flex-initial ml-4">
-                                    <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
-                                    <CvssGauge data={cvss} />
+
+                            <div className="ml-4">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h3 className="text-lg font-bold text-white">CVSS</h3>
+                                    <div className="relative">
+                                    <button
+                                        onClick={() => setShowCustomCvss(!showCustomCvss)}
+                                        className="ml-2 px-3 py-1 text-sm rounded-lg bg-sky-600 hover:bg-sky-700 text-white"
+                                    >
+                                        Add Custom
+                                    </button>
+
+                                    {showCustomCvss && (
+                                        <div className="absolute right-0 mt-2 z-50 w-64">
+                                        <CustomCvss
+                                            onCancel={() => setShowCustomCvss(false)}
+                                            onAddCvss={(vector) => {
+                                                addCvss(vector);
+                                            }}
+                                        />
+                                        </div>
+                                    )}
+                                    </div>
                                 </div>
-                            ))}
+
+                                <div className="flex flex-wrap gap-2">
+                                    {vuln.severity.cvss.map((cvss) => (
+                                    <div
+                                        key={encodeURIComponent(
+                                        `${cvss.author}-${cvss.version}-${cvss.base_score}`
+                                        )}
+                                        className="bg-gray-800 p-2 rounded-xl flex-1 min-w-[150px]"
+                                    >
+                                        <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
+                                        <CvssGauge data={cvss} />
+                                    </div>
+                                    ))}
+                                </div>
+                            </div>
+
                         </div>
 
                         {vuln.texts.map((text) => {

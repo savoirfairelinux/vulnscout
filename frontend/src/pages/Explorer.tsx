@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import NavigationBar from "../components/NavigationBar";
 import type { Package } from "../handlers/packages";
-import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { PackageVulnerabilities } from "../handlers/patch_finder";
 import Packages from "../handlers/packages";
@@ -81,6 +81,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setVulns(Vulnerabilities.append_assessment(vulns, added));
     }
 
+    function appendCVSS(vulnId: string, vector: string) {
+        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
+        if (cvss !== null) {
+            setVulns(Vulnerabilities.append_cvss(vulns, vulnId, cvss));
+            return cvss;
+        }
+        return null;
+    }
+
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
         setVulns(vulns.map(vuln => {
             if (vuln.id === vulnId) {
@@ -113,6 +122,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
+                    appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
                     {...(filteredVulns && { filteredVulns: filteredVulns })}
