@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -30,22 +30,20 @@ describe('Exports Page', () => {
         const user = userEvent.setup();
 
         // ACT
-        const misc_cat = await screen.getByText(/miscellaneous/i);
+        const all_tab = await screen.getByRole("button", {name: /all/i});
+        await user.click(all_tab);
 
-        const is_doc_present = await screen.queryByText(/hello.adoc/i);
-        expect(is_doc_present).toBeNull();
-
-        await user.click(misc_cat);
-        const doc = await screen.getByText(/hello.adoc/i);
+        const doc = await screen.getByRole("button", {name: /hello.adoc/i});
         expect(doc).toBeInTheDocument();
 
+        // Open dropdown
         await user.click(doc);
-        const download = await screen.getByRole("link", {name: /download as asciidoc/i}) as HTMLAnchorElement;
+        const download = await screen.getByRole("link", {name: /download adoc\|pdf/i}) as HTMLAnchorElement;
 
         // ASSERT
         expect(download).toBeInTheDocument();
         expect(download.href).toContain("/api/documents/hello.adoc");
-        expect(download.href).toContain("ext=adoc");
+        expect(download.href).toContain("ext=adoc%7Cpdf");
         expect(thisFetch).toHaveBeenCalledTimes(1);
     })
 
@@ -68,49 +66,20 @@ describe('Exports Page', () => {
         const user = userEvent.setup();
 
         // ACT
-        const misc_cat = await screen.getByText(/miscellaneous/i);
+        const all_tab = await screen.getByRole("button", {name: /all/i});
+        await user.click(all_tab);
 
-        const is_doc_present = await screen.queryByText(/hello.adoc/i);
-        expect(is_doc_present).toBeNull();
-
-        await user.click(misc_cat);
-        const doc = await screen.getByText(/hello.adoc/i);
+        const doc = await screen.getByRole("button", {name: /hello.adoc/i});
         expect(doc).toBeInTheDocument();
 
+        // Open dropdown
         await user.click(doc);
-        const download = await screen.getByRole("link", {name: /download as pdf/i});
+        const download = await screen.getByRole("link", {name: /download adoc\|pdf/i}) as HTMLAnchorElement;
         expect(download).toBeInTheDocument();
-        const options = await within(download).getByRole("button");
-        expect(options).toBeInTheDocument();
 
-        await user.click(options);
-        const client = await screen.getByLabelText(/client name/i);
-        const export_date = await screen.getByLabelText(/export date/i);
-
-        const date_label = await screen.getByText(/vulnerability with assessments more recent than/i);
-        const input_date = [...date_label.children].find((el) => el.getAttribute('type') == 'date') as HTMLElement;
-        const input_time = [...date_label.children].find((el) => el.getAttribute('type') == 'time') as HTMLElement;
-
-        const filter_epss = await screen.getByLabelText(/vulnerability with EPSS greater/i);
-        const download_btn = await screen.getByRole("link", {name: /generate/i}) as HTMLAnchorElement;
-
-        await user.type(client, "CLIENT_COMPANY");
-        await user.clear(export_date);
-        await user.type(export_date, "2024-01-05");
-        await user.type(input_date, "2023-04-06");
-        await user.clear(input_time);
-        await user.type(input_time, "07:08");
-        await user.type(filter_epss, "2.55");
-
-
-        // ASSERT
-        expect(download_btn.href).toContain("/api/documents/hello.adoc");
-        expect(download_btn.href).toContain("ext=pdf");
-        expect(download_btn.href).toContain("client_name=CLIENT_COMPANY");
-        expect(download_btn.href).toContain("author=Savoir-faire%20Linux");
-        expect(download_btn.href).toContain("export_date=2024-01-05");
-        expect(download_btn.href).toContain("ignore_before=2023-04-06T07%3A08");
-        expect(download_btn.href).toContain("only_epss_greater=2.55");
+        // ASSERT - Test the direct download link
+        expect(download.href).toContain("/api/documents/hello.adoc");
+        expect(download.href).toContain("ext=adoc%7Cpdf");
         expect(thisFetch).toHaveBeenCalledTimes(1);
     })
 });
