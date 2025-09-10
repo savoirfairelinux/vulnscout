@@ -104,6 +104,9 @@ function TableGeneric<DataType> ({
     //The virtualizer needs to know the scrollable container element
     const tableContainerRef = useRef<HTMLDivElement>(null)
 
+    // Only use virtualization if tableHeight is not 'auto'
+    const useVirtualization = tableHeight !== 'auto'
+
     const rowVirtualizer = useVirtualizer({
         count: rows.length,
         estimateSize: () => estimateRowHeight, //estimate row height for accurate scrollbar dragging
@@ -115,6 +118,7 @@ function TableGeneric<DataType> ({
             ? element => element?.getBoundingClientRect().height
             : undefined,
         overscan: 5,
+        enabled: useVirtualization,
     })
 
     function ctrl_click (event: React.MouseEvent, row: Row<DataType>) {
@@ -149,8 +153,8 @@ function TableGeneric<DataType> ({
     }
 
     return (
-        <div className="flex flex-col" style={{ height: tableHeight }}>
-            <div className="relative overflow-auto" ref={tableContainerRef}>
+        <div className="flex flex-col" style={{ height: tableHeight === 'auto' ? 'auto' : tableHeight }}>
+            <div className={`relative ${tableHeight === 'auto' ? '' : 'overflow-auto'}`} ref={tableContainerRef}>
                 <table className="border-collapse border border-slate-500 w-full text-white grid">
                     <thead className="grid sticky top-0 z-20">
                         {table.getHeaderGroups().map(headerGroup => (
@@ -187,24 +191,68 @@ function TableGeneric<DataType> ({
                             </tr>
                         ))}
                     </thead>
-                    <tbody className="relative grid" style={{height: `${rowVirtualizer.getTotalSize()}px`}}>
+                    <tbody className={`relative grid ${useVirtualization ? '' : 'auto-rows-auto'}`} style={useVirtualization ? {height: `${rowVirtualizer.getTotalSize()}px`} : {}}>
 
-                        {rowVirtualizer.getVirtualItems().map(virtualRow => {
-                            const row: Row<DataType> = rows[virtualRow.index]
-                            return [
+                        {useVirtualization ? (
+                            rowVirtualizer.getVirtualItems().map(virtualRow => {
+                                const row: Row<DataType> = rows[virtualRow.index]
+                                return [
+                                    <tr
+                                    data-index={virtualRow.index} //needed for dynamic row height measurement
+                                    ref={node => rowVirtualizer.measureElement(node)} //measure dynamic row height
+                                    key={row.id}
+                                    className={[
+                                        "flex absolute w-full row-with-hover-effect",
+                                        row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600',
+                                        "hover:bg-slate-800"
+                                    ].join(' ')}
+                                    onClick={(e) => ctrl_click(e, row)}
+                                    style={{
+                                        transform: `translateY(${virtualRow.start}px)`, //this should always be a `style` as it changes on scroll
+                                    }}
+                                    >
+                                        {row.getVisibleCells().map(cell => {
+                                            return (
+                                            <td
+                                                key={cell.id}
+                                                className="p-4 border border-slate-500 flex-auto"
+                                                style={{
+                                                    width: cell.column.getSize(),
+                                                }}
+                                            >
+                                                {flexRender(
+                                                    cell.column.columnDef.cell,
+                                                    cell.getContext()
+                                                )}
+                                            </td>)
+                                        })}
+                                    </tr>,
+                                    hoverField != undefined && <tr
+                                        className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
+                                        key={`${row.id}_hoverpanel`}
+                                        style={{
+                                            transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll
+                                                `translateY(calc(${virtualRow.start}px - 100%))` :
+                                                `translateY(calc(${virtualRow.end}px))`
+                                        }}
+                                    >
+                                        <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
+                                            <b className='mb-2'>Description of {row.id}</b><br/>
+                                            {(row.original as any)?.[hoverField]?.map((a: any) => a?.content)?.join('\n---\n') ?? "No description was provided"}
+                                        </td>
+                                    </tr>
+                                ]
+                            })
+                        ) : (
+                            rows.map((row) => [
                                 <tr
-                                data-index={virtualRow.index} //needed for dynamic row height measurement
-                                ref={node => rowVirtualizer.measureElement(node)} //measure dynamic row height
                                 key={row.id}
                                 className={[
-                                    "flex absolute w-full row-with-hover-effect",
+                                    "flex w-full row-with-hover-effect",
                                     row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600',
                                     "hover:bg-slate-800"
                                 ].join(' ')}
                                 onClick={(e) => ctrl_click(e, row)}
-                                style={{
-                                    transform: `translateY(${virtualRow.start}px)`, //this should always be a `style` as it changes on scroll
-                                }}
                                 >
                                     {row.getVisibleCells().map(cell => {
                                         return (
@@ -225,19 +273,14 @@ function TableGeneric<DataType> ({
                                 hoverField != undefined && <tr
                                     className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
                                     key={`${row.id}_hoverpanel`}
-                                    style={{
-                                        transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll
-                                            `translateY(calc(${virtualRow.start}px - 100%))` :
-                                            `translateY(calc(${virtualRow.end}px))`
-                                    }}
                                 >
                                     <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
                                         <b className='mb-2'>Description of {row.id}</b><br/>
                                         {(row.original as any)?.[hoverField]?.map((a: any) => a?.content)?.join('\n---\n') ?? "No description was provided"}
                                     </td>
                                 </tr>
-                            ]
-                        })}
+                            ])
+                        )}
                     </tbody>
                     <tfoot className="grid sticky bottom-0 z-10">
                         {table.getFooterGroups().some(group =>
