@@ -85,25 +85,12 @@ function TablePackages({ packages }: Readonly<Props>) {
         return result;
     }, [packages]);
     
-    const statusOptions = useMemo(() => {
-        const statuses = new Set<string>();
-        for (const pkg of packages) {
-            Object.keys(pkg.vulnerabilities).forEach(status => statuses.add(status));
-        }
-        return Array.from(statuses);
-    }, [packages]);
-
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
-        setSelectedStatuses([]);
         setSelectedLicences([]);
         setShowSeverity(false);
     }
-
-    const hide_filter = useMemo(() => {
-        return statusOptions.filter(status => selectedStatuses.includes(status))
-    }, [selectedStatuses])
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
