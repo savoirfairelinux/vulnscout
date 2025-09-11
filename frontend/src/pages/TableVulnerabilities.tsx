@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -13,10 +13,11 @@ import FilterOption from "../components/FilterOption";
 
 type Props = {
     vulnerabilities: Vulnerability[];
-    filteredVulns?: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    filterLabel?: "Source" | "Severity" | "Status";
+    filterValue?: string;
 };
 
 const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -46,15 +47,21 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedRows, setSelectedRows] = useState<RowSelectionState>({})
-    const [useFilteredProp, setUseFilteredProp] = useState(true);
+    const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
+
+    useEffect(() => {
+        if (!filterLabel || !filterValue) return;
+        if (filterLabel === "Source") setSelectedSources([filterValue]);
+        if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
+        if (filterLabel === "Status") setSelectedStatuses([filterValue]);
+    }, [filterLabel, filterValue]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -179,16 +186,14 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
         ]
     }, []);
 
-    const baseData = useFilteredProp && filteredVulns ? filteredVulns : vulnerabilities;
-
     const dataToDisplay = useMemo(() => {
-        return baseData.filter((el) => {
+        return vulnerabilities.filter((el) => {
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             return true;
         });
-    }, [baseData, selectedSeverities, selectedStatuses, selectedSources]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -200,7 +205,6 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedRows({});
-        setUseFilteredProp(false);
     }
 
     return (<>
