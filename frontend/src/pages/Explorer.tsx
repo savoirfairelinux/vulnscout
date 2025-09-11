@@ -107,16 +107,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [tab, setTab] = useState("metrics");
 
     return (
-        <div className="w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee]">
+        <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
             <NavigationBar tab={tab} changeTab={setTab} darkMode={darkMode} setDarkMode={setDarkMode} />
 
-            <div className="p-8">
+            <div className="p-8 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
                     packages={pkgs}
                     vulnerabilities={vulns}
-                    setVulns={setVulns}
                     goToVulnsTabWithFilter={goToVulnsTabWithFilter}
+                    appendAssessment={appendAssessment}
+                    patchVuln={patchVuln}
+                    setTab={setTab}
+                    appendCVSS={appendCVSS}
                 />}
                 {tab == 'packages' && <TablePackages packages={pkgs} />}
                 {tab === 'vulnerabilities' &&
