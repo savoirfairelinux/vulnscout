@@ -270,7 +270,7 @@ describe('PatchFinder', () => {
     });
 
     test('with some patchs found', async () => {
-        let thisFetch = fetchMock.mockImplementationOnce(() =>
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve(PATCH_FINDER)
             } as Response)
@@ -287,7 +287,7 @@ describe('PatchFinder', () => {
     });
 
     test('compute versions and patch', async () => {
-        let thisFetch = fetchMock.mockImplementationOnce(() =>
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve(PATCH_FINDER)
             } as Response)
@@ -315,7 +315,7 @@ describe('PatchFinder', () => {
     });
 
     test('compute vulns per versions', async () => {
-        let thisFetch = fetchMock.mockImplementationOnce(() =>
+        const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve(PATCH_FINDER)
             } as Response)

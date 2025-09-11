@@ -318,9 +318,13 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
+        // Capture the row that should disappear before triggering the search.
+        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
+
         await user.type(search_bar, '2018-5678');
 
-        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
+        // Allow for debounce + filter render (debounce is 750ms in component)
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -333,9 +337,11 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
+        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
+
         await user.type(search_bar, 'yyy');
 
-        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -348,9 +354,11 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
+        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2018-5678/});
+
         await user.type(search_bar, 'authentification process');
 
-        await waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
@@ -385,7 +393,9 @@ describe('Vulnerability Table', () => {
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
+        // Ensure the exploitable row exists before starting the removal watcher.
+        const exploitableRow = await screen.findByRole('cell', {name: /CVE-2010-1234/});
+        const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 1000 });
 
         const pendingCheckbox = await screen.getByRole('checkbox', { name: /Community Analysis Pending/i });
         await user.click(pendingCheckbox);
@@ -405,7 +415,9 @@ describe('Vulnerability Table', () => {
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
-        const pending_deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
+        // Ensure the target row is present before starting removal watcher
+        const communityRow = await screen.findByRole('cell', {name: /CVE-2018-5678/});
+        const pending_deletion = waitForElementToBeRemoved(communityRow, { timeout: 1000 });
 
         // ACT
         const exploitableCheckbox = await screen.getByRole('checkbox', { name: /Exploitable/i });
@@ -549,9 +561,9 @@ describe('Vulnerability Table', () => {
         await user.click(edit_time_btn);
 
         // TimeEstimateEditor testing, taken from test_vuln_modal
-        const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
-        const likely = await screen.getByPlaceholderText(/balanced estimate/i);
-        const pessimistic = await screen.getByPlaceholderText(/longest estimate/i);
+        const optimistic = await screen.findByPlaceholderText(/shortest estimate/i);
+        const likely = await screen.findByPlaceholderText(/balanced estimate/i);
+        const pessimistic = await screen.findByPlaceholderText(/longest estimate/i);
         const btn = await screen.getByText(/save estimation/i);
 
         await user.type(optimistic, '5h');

@@ -14,7 +14,8 @@ test_backend:
 test_frontend:
 	cd $(FRONTEND_DIR) && \
 	npm ci --include=dev && \
-	npm test
+	echo "Running frontend tests with full coverage reporters"; \
+	npm test -- --coverage;
 
 docker_build:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
