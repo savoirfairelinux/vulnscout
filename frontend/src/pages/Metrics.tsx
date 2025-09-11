@@ -15,7 +15,7 @@
         type Props = {
             packages: Package[];
             vulnerabilities: Vulnerability[];
-            goToVulnsTabWithFilter: (vulns: Vulnerability[]) => void;
+            goToVulnsTabWithFilter: (filterType: "Source" | "Severity" | "Status", value: string) => void;
             appendAssessment: (added: Assessment) => void;
             patchVuln: (vulnId: string, data: any) => void;
             setTab: (tab: string) => void;
@@ -89,25 +89,11 @@
             return date;
         }
 
-        function filterVulnerabilities(vulns: Vulnerability[], severity?: string, status?: string): Vulnerability[] {
-            return vulns.filter(vuln => {
-                const matchesSeverity = severity
-                    ? vuln.severity?.severity?.toLowerCase() === severity.toLowerCase()
-                    : true;
 
-                const matchesStatus = status
-                    ? vuln.simplified_status?.toLowerCase() === status.toLowerCase()
-                    : true;
-
-                return matchesSeverity && matchesStatus;
-            });
-        }
 
 function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
-            const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
-            const [hideStatus, setHideStatus] = useState<{[key: string] : boolean}>({});
             const [timeScale, setTimeScale] = useState<string>("6_months")
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
 
@@ -166,13 +152,12 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                 return refs;
             }, [timeScale]);
 
-            const dataSetVulnBySeverity = useMemo(() => {
+            const dataSetVulnBySeverity = useMemo(() => {                
                 return {
                     labels: ['Unknown', 'Low', 'Medium', 'High', 'Critical'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideStatus[vuln.simplified_status]) return acc;
                             const severity = vuln.severity.severity.toUpperCase();
                             const index = Math.max(SEVERITY_ORDER.indexOf(severity) - 1, 0)
                             acc[index]++;
@@ -188,7 +173,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideStatus]);
+            }, [vulnerabilities]);
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
@@ -196,7 +181,6 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideSeverity[vuln.severity.severity]) return acc;
                             const status = vuln.simplified_status;
                             const index = status == 'not affected' ? 0 : status == 'fixed' ? 1 : status == 'Community Analysis Pending' ? 2 : 3;
                             acc[index]++;
@@ -211,7 +195,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideSeverity]);
+            }, [vulnerabilities]);
 
             const nb_points = Number(timeScale.split('_')[0])
             const vulnEvolutionTime = {
@@ -320,8 +304,6 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideStatus[vuln.simplified_status]) return acc;
-                            if (hideSeverity[vuln.severity.severity]) return acc;
                             let added = false;
                             if (vuln.found_by.includes('grype')) { acc[1]++; added = true; }
                             if (vuln.found_by.includes('yocto')) { acc[2]++; added = true; }
@@ -339,7 +321,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideSeverity, hideStatus]);
+            }, [vulnerabilities]);
 
 
             const vulnBySeverityOptions = {
@@ -349,7 +331,6 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     legend: {
                         ...pieOptions.plugins.legend,
                         onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
-                            setHideSeverity({...hideSeverity, [legendItem.text.toLowerCase()]: !legendItem.hidden});
                             defaultPieHandler.call(this, e, legendItem, legend);
                         }
                     }
@@ -357,9 +338,17 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const label = dataSetVulnBySeverity.labels[index];
-                    const vuls = filterVulnerabilities(vulnerabilities, label as string, undefined);
-                    goToVulnsTabWithFilter(vuls);                }
+                    const severityOrder = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+                    const targetSeverity = severityOrder[index];
+                    
+                    const matchingSeverity = vulnerabilities.find(v => 
+                        v.severity.severity.toUpperCase() === targetSeverity
+                    )?.severity.severity;
+                    
+                    if (matchingSeverity) {
+                        goToVulnsTabWithFilter("Severity", matchingSeverity);
+                    }
+                }
             }
 
             const vulnByStatusOptions = {
@@ -369,7 +358,6 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     legend: {
                         ...pieOptions.plugins.legend,
                         onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
-                            setHideStatus({...hideStatus, [legendItem.text.toLowerCase()]: !legendItem.hidden});
                             defaultPieHandler.call(this, e, legendItem, legend);
                         }
                     }
@@ -377,9 +365,16 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const label = dataSetVulnByStatus.labels[index];
-                    const vuls = filterVulnerabilities(vulnerabilities, undefined, label as string);
-                    goToVulnsTabWithFilter(vuls);
+                    const statusOrder = ['not affected', 'fixed', 'Community Analysis Pending', 'Exploitable'];
+                    const targetStatus = statusOrder[index];
+                    
+                    const matchingStatus = vulnerabilities.find(v => 
+                        v.simplified_status === targetStatus
+                    )?.simplified_status;
+                    
+                    if (matchingStatus) {
+                        goToVulnsTabWithFilter("Status", matchingStatus);
+                    }
                 }
             }
 
@@ -433,7 +428,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             <h3 className="text-2xl font-bold">Most critical unfixed vulnerabilities</h3>
             <button
               className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-              onClick={() => goToVulnsTabWithFilter(vulnerabilities)}
+              onClick={() => setTab('vulnerabilities')}
             >
               See all
             </button>

@@ -24,7 +24,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
-    const [filteredVulns, setFilteredVulns] = useState<Vulnerability[] | null>(null);
+    const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | undefined>(undefined);
+    const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
 
     useEffect(() => {
         Promise.allSettled([
@@ -99,16 +100,26 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         }));
     }
 
-    function goToVulnsTabWithFilter(filtered: Vulnerability[]) {
-        setFilteredVulns(filtered);
+    function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status", value: string) {
+        setFilterLabel(filterType);
+        setFilterValue(value);
         setTab('vulnerabilities');
     }
 
     const [tab, setTab] = useState("metrics");
 
+    // This function ensures vulns get reset when switching outside filtering context
+    function handleTabChange(newTab: string) {
+        if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
+            setFilterLabel(undefined);
+            setFilterValue(undefined);
+        }
+        setTab(newTab);
+    }
+
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
-            <NavigationBar tab={tab} changeTab={setTab} darkMode={darkMode} setDarkMode={setDarkMode} />
+            <NavigationBar tab={tab} changeTab={handleTabChange} darkMode={darkMode} setDarkMode={setDarkMode} />
 
             <div className="p-8 flex-1 overflow-auto">
                 {tab === 'metrics' &&
@@ -128,7 +139,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
-                    {...(filteredVulns && { filteredVulns: filteredVulns })}
+                    filterLabel={filterLabel}
+                    filterValue={filterValue}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
                 {tab == 'exports' && <Exports />}
