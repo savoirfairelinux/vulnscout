@@ -1,5 +1,6 @@
         import { useMemo, useState } from "react";
         import type { Package } from "../handlers/packages";
+        import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
         import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
@@ -18,6 +19,7 @@
             appendAssessment: (added: Assessment) => void;
             patchVuln: (vulnId: string, data: any) => void;
             setTab: (tab: string) => void;
+            appendCVSS: (vulnId: string, vector: string) => CVSS | null;
         };
 
         const pieOptions = {
@@ -101,7 +103,7 @@
             });
         }
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, patchVuln, setTab }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
@@ -473,6 +475,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, pa
           vuln={modalVuln}
           onClose={() => setModalVuln(undefined)}
           appendAssessment={appendAssessment}
+          appendCVSS={appendCVSS}
           patchVuln={patchVuln}
         />
       )}
