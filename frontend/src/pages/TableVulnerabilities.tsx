@@ -221,7 +221,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Severity"
-                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity)))}
+                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) => 
+                    SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(b.toLowerCase()) - SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(a.toLowerCase())
+                )}
                 selected={selectedSeverities}
                 setSelected={setSelectedSeverities}
             />
