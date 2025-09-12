@@ -249,7 +249,11 @@ class Vulnerabilities {
                 impact_score: Number(scores?.impact ?? 0)
             };
         } catch (e) {
-            console.error(e);
+            // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
+            if (!(e instanceof Error && e.message === 'invalid vector')) {
+                // eslint-disable-next-line no-console
+                console.error(e);
+            }
             return null;
         }
     }
