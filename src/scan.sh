@@ -21,7 +21,7 @@ set -m # enable job control to allow `fg` command
 # Initialize variables
 PRODUCT_NAME=${PRODUCT_NAME-"PRODUCT_NAME"}
 PRODUCT_VERSION=${PRODUCT_VERSION-"1.0.0"}
-COMPANY_NAME=${COMPANY_NAME-"Savoir-faire Linux"}
+AUTHOR_NAME=${AUTHOR_NAME-"Savoir-faire Linux"}
 CONTACT_EMAIL=${CONTACT_EMAIL-""}
 DOCUMENT_URL=${DOCUMENT_URL-"https://spdx.org/spdxdocs/${PRODUCT_NAME}-${PRODUCT_VERSION}.spdx.json"}
 INTERACTIVE_MODE=${INTERACTIVE_MODE-"true"}
