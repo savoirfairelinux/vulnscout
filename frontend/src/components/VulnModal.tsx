@@ -33,7 +33,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
-  
+    const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
+
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -49,12 +50,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
         const data = await response.json()
         if (data?.status === 'success') {
             const casted = asAssessment(data?.assessment);
-            // real-time update of assessments list
             if (!Array.isArray(casted) && typeof casted === "object") {
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
                 patchVuln(vuln.id, vuln);
                 alert("Successfully added assessment.");
+                setClearAssessmentFields(true);
+                setTimeout(() => setClearAssessmentFields(false), 100);
             }
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
@@ -283,7 +285,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             <li className="ms-4 text-white">
                                 <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                 <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} />
+                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} clearFields={clearAssessmentFields} />
                             </li>
                         </ol>
                     </div>
