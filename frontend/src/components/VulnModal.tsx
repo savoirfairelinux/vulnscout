@@ -51,7 +51,6 @@ function VulnModal(props: Readonly<Props>) {
             const casted = asAssessment(data?.assessment);
             if (!Array.isArray(casted) && typeof casted === "object")
                 appendAssessment(casted);
-            onClose();
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
         }
@@ -85,7 +84,8 @@ function VulnModal(props: Readonly<Props>) {
             }
 
             patchVuln(vuln.id, vuln);
-            onClose();
+            setShowCustomCvss(false);
+            alert("successfully added Custom CVSS.");
         } else {
             const data = await response.text();
             console.error("API error response:", response.status, data);
@@ -116,7 +116,7 @@ function VulnModal(props: Readonly<Props>) {
                 vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
             patchVuln(vuln.id, vuln);
-            onClose();
+            alert("Successfully added estimation.");
         } else {
             const data = await response.text();
             alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
