@@ -33,6 +33,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
+    const [clearTimeFields, setClearTimeFields] = useState(false);
   
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
@@ -116,6 +117,8 @@ function VulnModal(props: Readonly<Props>) {
                 vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
             patchVuln(vuln.id, vuln);
+            setClearTimeFields(true);
+            setTimeout(() => setClearTimeFields(false), 100);
             alert("Successfully added estimation.");
         } else {
             const data = await response.text();
@@ -243,6 +246,7 @@ function VulnModal(props: Readonly<Props>) {
                         <TimeEstimateEditor
                             progressBar={undefined}
                             onSaveTimeEstimation={(data) => saveEstimation(data)}
+                            clearFields={clearTimeFields}
                             actualEstimate={{
                                 optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                 likely: vuln?.effort?.likely?.formatHumanShort(),
