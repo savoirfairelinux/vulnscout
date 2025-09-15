@@ -46,7 +46,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             content.vuln_id = vuln;
             content.packages = pkg_vulns[vuln] ?? [];
             try {
-                const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln)}/assessments`, {
+                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln)}/assessments`, {
                     method: 'POST',
                     mode: 'cors',
                     headers: {
@@ -98,7 +98,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         for (const vuln_id of selectedVulns) {
             try {
                 const vuln = vulns[vuln_id];
-                const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
                     method: 'PATCH',
                     mode: 'cors',
                     headers: {

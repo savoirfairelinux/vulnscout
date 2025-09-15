@@ -38,7 +38,7 @@ function VulnModal(props: Readonly<Props>) {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
 
-        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
             method: 'POST',
             mode: 'cors',
             headers: {
@@ -65,8 +65,8 @@ function VulnModal(props: Readonly<Props>) {
             return;
         }
 
-        
-        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+
+        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
@@ -94,7 +94,7 @@ function VulnModal(props: Readonly<Props>) {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
-        const response = await fetch(`/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
