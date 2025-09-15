@@ -29,8 +29,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     minute: 'numeric',
     timeZoneName: 'shortOffset'
 };
-
-function VulnModal(props: Readonly<Props>) {
+  function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -50,8 +49,13 @@ function VulnModal(props: Readonly<Props>) {
         const data = await response.json()
         if (data?.status === 'success') {
             const casted = asAssessment(data?.assessment);
-            if (!Array.isArray(casted) && typeof casted === "object")
+            // real-time update of assessments list
+            if (!Array.isArray(casted) && typeof casted === "object") {
                 appendAssessment(casted);
+                vuln.assessments.push(casted);
+                patchVuln(vuln.id, vuln);
+                alert("Successfully added assessment.");
+            }
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
         }
