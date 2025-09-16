@@ -7,7 +7,7 @@ import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     columns: any[];
     data: DataType[];
     search?: string;
@@ -94,7 +94,7 @@ function TableGeneric<DataType> ({
         getFilteredRowModel: getFilteredRowModel(),
         enableRowSelection: selected !== undefined,
         enableMultiRowSelection: selected !== undefined,
-        // @ts-ignore
+        // @ts-expect-error: Row ID might not always be present in the data
         getRowId: row => row?.id,
         onRowSelectionChange: updateSelected,
         state: { rowSelection: selected ?? {} }
