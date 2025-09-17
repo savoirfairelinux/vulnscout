@@ -10,6 +10,8 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faEye } from '@fortawesome/free-solid-svg-icons';
 import ToggleSwitch from "../components/ToggleSwitch";
 
 type Props = {
@@ -175,12 +177,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
-                cell: info => <button
-                    className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg"
-                    onClick={() => setModalVuln(info.getValue())}
-                >
-                        edit
-                </button>,
+                    cell: info => (
+                        <button
+                            className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg flex items-center justify-center"
+                            onClick={() => setModalVuln(info.getValue())}
+                            title="see more"
+                        >
+                            <FontAwesomeIcon icon={faEye} className="w-5 h-5" />
+                        </button>
+                    ),
                 enableSorting: false,
                 minSize: 50,
                 size: 50
