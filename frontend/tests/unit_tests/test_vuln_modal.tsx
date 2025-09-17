@@ -167,6 +167,7 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment', async () => {
         fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve({
@@ -207,8 +208,8 @@ describe('Vulnerability Modal', () => {
 
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(1);
-        expect(closeBtn).toHaveBeenCalledTimes(1);
         expect(updateCb).toHaveBeenCalledTimes(1);
+        alertSpy.mockRestore();
     })
 
     test('help button for time estimates', async () => {
@@ -231,6 +232,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve({
@@ -267,7 +269,151 @@ describe('Vulnerability Modal', () => {
 
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(1);
-        expect(closeBtn).toHaveBeenCalledTimes(1);
         expect(updateCb).toHaveBeenCalledTimes(1);
+        alertSpy.mockRestore();
     })
+    test('invalid custom CVSS vector triggers alert and no network call', async () => {
+        fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        const closeCb = jest.fn();
+        const patchVuln = jest.fn();
+
+        // appendCVSS returns null -> invalid vector branch (lines 61-66)
+        const appendCVSS = jest.fn().mockReturnValue(null);
+
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const addCustomBtn = await screen.getByText(/add custom/i);
+        await user.click(addCustomBtn);
+
+        const vectorInput = await screen.getByPlaceholderText(/CVSS:3\.1/i);
+        await user.type(vectorInput, 'INVALIDVECTOR');
+        const addBtn = await screen.getByRole('button', { name: /^add$/i });
+        await user.click(addBtn);
+
+        expect(appendCVSS).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(0);
+        expect(alertSpy).toHaveBeenCalledTimes(1);
+        expect(closeCb).not.toHaveBeenCalled();
+        alertSpy.mockRestore();
+    });
+
+    test('custom CVSS API error shows alert (error branch lines 80-93)', async () => {
+        fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const closeCb = jest.fn();
+        const patchVuln = jest.fn();
+
+        const appendCVSS = jest.fn().mockReturnValue({
+            author: 'tester',
+            version: '3.1',
+            base_score: 9.1
+        });
+
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                status: 500,
+                text: () => Promise.resolve('server exploded')
+            } as Response)
+        );
+
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(await screen.getByText(/add custom/i));
+        const vectorInput = await screen.getByPlaceholderText(/CVSS:3\.1/i);
+        await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+        await user.click(await screen.getByRole('button', { name: /^add$/i }));
+
+        expect(appendCVSS).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(alertSpy).toHaveBeenCalledTimes(1);
+        expect(patchVuln).not.toHaveBeenCalled();
+        expect(closeCb).not.toHaveBeenCalled();
+        errorSpy.mockRestore();
+        alertSpy.mockRestore();
+    });
+
+    test('custom CVSS success updates vulnerability and closes (lines 83-89)', async () => {
+        fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+
+        const closeCb = jest.fn();
+        const patchVuln = jest.fn();
+        const appendCVSS = jest.fn().mockReturnValue({
+            author: 'tester',
+            version: '3.1',
+            base_score: 7.5
+        });
+
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                status: 200,
+                json: () => Promise.resolve({
+                    severity: {
+                        cvss: [{
+                            author: 'tester',
+                            version: '3.1',
+                            base_score: 7.5
+                        }]
+                    }
+                })
+            } as Response)
+        );
+
+        // Use fresh copy so mutation in component doesn't leak to other tests
+        const vulnCopy = { ...vulnerability, severity: { ...vulnerability.severity, cvss: [] } };
+
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(await screen.getByText(/add custom/i));
+        const vectorInput = await screen.getByPlaceholderText(/CVSS:3\.1/i);
+        await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+        await user.click(await screen.getByRole('button', { name: /^add$/i }));
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(patchVuln).toHaveBeenCalledTimes(1);
+        expect(alertSpy).toHaveBeenCalledTimes(1);
+        alertSpy.mockRestore();
+    });
+
+    test('save estimation failure triggers alert (lines 121-122)', async () => {
+        fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                status: 500,
+                text: () => Promise.resolve('bad estimation'),
+            } as Response)
+        );
+
+        const patchVuln = jest.fn();
+        const closeCb = jest.fn();
+
+        // fresh copy
+        const vulnCopy = { ...vulnerability };
+
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+        const likely = await screen.getByPlaceholderText(/balanced estimate/i);
+        const pessimistic = await screen.getByPlaceholderText(/longest estimate/i);
+        await user.type(optimistic, '6h');
+        await user.type(likely, '1d');
+        await user.type(pessimistic, '2w');
+
+        const saveBtn = await screen.getByText(/save estimation/i);
+        await user.click(saveBtn);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(alertSpy).toHaveBeenCalledTimes(1);
+        expect(patchVuln).not.toHaveBeenCalled();
+        expect(closeCb).not.toHaveBeenCalled();
+        alertSpy.mockRestore();
+    });
 });

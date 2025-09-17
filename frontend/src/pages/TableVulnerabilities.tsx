@@ -12,6 +12,7 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEye } from '@fortawesome/free-solid-svg-icons';
+import ToggleSwitch from "../components/ToggleSwitch";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -57,6 +58,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
+    const [hideFixed, setHideFixed] = useState<boolean>(false);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -210,7 +212,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedRows({});
+        setHideFixed(false);
     }
+
+    const handleHideFixedToggle = (enabled: boolean) => {
+        setHideFixed(enabled);
+        if (enabled) {
+            const allStatuses = Array.from(new Set(vulnerabilities.map(v => v.simplified_status)));
+            const statusesExceptFixed = allStatuses.filter(status => status !== 'fixed');
+            setSelectedStatuses(statusesExceptFixed);
+        } else {
+            setSelectedStatuses([]);
+        }
+    };
+
+    const handleStatusChange = (newStatuses: string[]) => {
+        setSelectedStatuses(newStatuses);
+        if (newStatuses.includes('fixed') && hideFixed) {
+            setHideFixed(false);
+        }
+    };
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -226,7 +247,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Severity"
-                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity)))}
+                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) => 
+                    SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(b.toLowerCase()) - SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(a.toLowerCase())
+                )}
                 selected={selectedSeverities}
                 setSelected={setSelectedSeverities}
             />
@@ -235,7 +258,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 label="Status"
                 options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
                 selected={selectedStatuses}
-                setSelected={setSelectedStatuses}
+                setSelected={handleStatusChange}
+            />
+
+            <ToggleSwitch
+                enabled={hideFixed}
+                setEnabled={handleHideFixedToggle}
+                label="Hide Fixed"
             />
 
             <button

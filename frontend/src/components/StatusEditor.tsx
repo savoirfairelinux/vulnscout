@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type PostAssessment = {
     vuln_id?: string,
@@ -13,9 +13,10 @@ type PostAssessment = {
 type Props = {
     onAddAssessment: (data: PostAssessment) => void;
     progressBar?: number;
+    clearFields?: boolean;
 }
 
-function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields}: Readonly<Props>) {
     const [status, setStatus] = useState("under_investigation");
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
@@ -38,10 +39,25 @@ function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
         });
     }
 
+    function clearInputs() {
+        setStatus("under_investigation");
+        setJustification("none");
+        setStatusNotes("");
+        setWorkaround("");
+        setImpact("");
+    }
+
+    useEffect(() => {
+        if (shouldClearFields) {
+            clearInputs();
+        }
+    }, [shouldClearFields]);
+
     return (<>
         <h3 className="m-1">
             Status:
             <select
+                value={status}
                 onChange={(event) => setStatus(event.target.value)}
                 className="p-1 px-2 bg-gray-800 mr-4"
                 name="new_assessment_status"
@@ -55,6 +71,7 @@ function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
             {status == "not_affected" && <>
                 Justification:
                 <select
+                    value={justification}
                     onChange={(event) => setJustification(event.target.value)}
                     className="p-1 px-2 bg-gray-800"
                     name="new_assessment_justification"
@@ -71,6 +88,7 @@ function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
         </h3>
         {(status == "not_affected" || status == "false_positive") && <>
             <input
+                value={impact}
                 onInput={(event: React.ChangeEvent<HTMLInputElement>) => setImpact(event.target.value)}
                 name="new_assessment_impact"
                 className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
@@ -79,6 +97,7 @@ function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
             /><br/>
         </>}
         <input
+            value={statusNotes}
             onInput={(event: React.ChangeEvent<HTMLInputElement>) => setStatusNotes(event.target.value)}
             name="new_assessment_status_notes"
             className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
@@ -86,6 +105,7 @@ function StatusEditor ({onAddAssessment, progressBar}: Readonly<Props>) {
             placeholder="Free text notes about your review, details, actions taken, ..."
         /><br/>
         <input
+            value={workaround}
             onInput={(event: React.ChangeEvent<HTMLInputElement>) => setWorkaround(event.target.value)}
             name="new_assessment_workaround"
             className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white"
