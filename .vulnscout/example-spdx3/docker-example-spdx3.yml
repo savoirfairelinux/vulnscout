@@ -24,6 +24,6 @@ services:
       # - DEBUG_SKIP_SCAN=false # Enable to skip scan and re-use last scan result instead
       # - PRODUCT_NAME=""
       # - PRODUCT_VERSION="1.0.0"
-      # - COMPANY_NAME="Savoir-faire Linux"
+      # - AUTHOR_NAME="Savoir-faire Linux"
       # - CONTACT_EMAIL="abc@xyz.org"
       # - DOCUMENT_URL="https://example.com/unique/identifier"
