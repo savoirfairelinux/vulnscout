@@ -21,18 +21,18 @@ function VersionsLine ({ versions, reduce_size=false }: Readonly<Props>) {
             {versions.map((version, index) => [
                 (index > 0 || version.left_color) && <div key={'color_'+version.title} className={["min-h-0.5 flex-1", version.left_color ?? "bg-gray-900"].join(' ')}></div>,
                 <div key={version.title} className={[
-                    "flex-none rounded-full bg-slate-100 text-center",
+                    "flex-none rounded-full bg-slate-100 text-center relative",
                     width_sizes[index] ?? 'w-7', height_sizes[index] ?? 'h-7'
                 ].join(' ')}>
                     <div className={[
-                        "absolute text-white -translate-y-8 -translate-x-[calc(50%-0.825rem)] font-mono",
+                        "absolute text-white -top-8 left-1/2 -translate-x-1/2 font-mono whitespace-nowrap",
                         reduce_size ? 'text-sm' : 'text-lg'
                     ].join(' ')}>
                         {version.title}
                     </div>
                     {(version.details || version.highlight) && <div
                         className={[
-                            "absolute text-sm text-slate-300 translate-y-8 -translate-x-[calc(50%-0.825rem)]",
+                            "absolute text-slate-300 top-8 left-1/2 -translate-x-1/2 whitespace-nowrap",
                             reduce_size ? 'text-xs' : 'text-sm'
                     ].join(' ')}>
                         {version.highlight && <span className="font-mono">{version.highlight}</span>}
