@@ -251,7 +251,7 @@ class Vulnerabilities {
         } catch (e) {
             // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
             if (!(e instanceof Error && e.message === 'invalid vector')) {
-                // eslint-disable-next-line no-console
+                 
                 console.error(e);
             }
             return null;

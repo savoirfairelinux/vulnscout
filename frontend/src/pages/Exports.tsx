@@ -5,7 +5,6 @@ import FileTag from "../components/FileTag";
 import PopupExportOptions from "../components/PopupExportOptions";
 import type { Options as PopupOptions } from "../components/PopupExportOptions";
 
-type Props = {};
 
 type ExportDoc = {
     id: string;
@@ -31,7 +30,7 @@ const asExportDoc = (data: any): ExportDoc | [] => {
 }
 
 
-function Exports ({}: Props) {
+function Exports () {
     const [tab, setTab] = useState<string>("all");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
