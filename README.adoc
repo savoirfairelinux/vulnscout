@@ -88,6 +88,12 @@ The tool pulls vulnerability and risk data from multiple trusted sources:
 * ##OSV## (Open Source Vulnerabilities) Comming soon
 * Information embedded in inputs files
 
+œœ=== Custom CVSS Scoring
+
+Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organization-specific vulnerability scoring.
+
+You can use a CVSS calculator to generate a vector string based on your own risk and severity factors, then store it alongside the standard CVSS score provided by the NVD.
+
 == Getting Started with VulnScout
 
 VulnScout is designed to run locally in a Docker container.
