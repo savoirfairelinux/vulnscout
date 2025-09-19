@@ -88,7 +88,7 @@ The tool pulls vulnerability and risk data from multiple trusted sources:
 * ##OSV## (Open Source Vulnerabilities) Comming soon
 * Information embedded in inputs files
 
-œœ=== Custom CVSS Scoring
+=== Custom CVSS Scoring
 
 Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organization-specific vulnerability scoring.
 
