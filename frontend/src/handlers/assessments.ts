@@ -70,7 +70,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
     const uniqueAssessments: Assessment[] = [];
 
     for (const assessment of assessments) {
-        // Create a unique key based on packages, status, and descriptions
+        // Create a unique key using vuln_id, packages, status, and descriptions
         const packagesKey = assessment.packages.sort().join(',');
         const descriptionsKey = [
             assessment.status_notes || '',
@@ -78,8 +78,8 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.impact_statement || '',
             assessment.workaround || ''
         ].join('|');
-        
-        const duplicateKey = `${packagesKey}::${assessment.status}::${descriptionsKey}`;
+
+        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);
