@@ -277,3 +277,94 @@ def test_get_patch_finder_status(client):
     assert data["db_ready"] is True
     assert data["vulns_count"] == 264387
     assert data["last_modified"] == "2024-10-03T13:35:12.847678+00:00"
+
+def test_render_spdx_json(client):
+    response = client.get("/api/documents/SPDX 2.3?ext=json")
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type") == "application/json"
+    cd = response.headers.get("Content-Disposition", "")
+    assert "attachment" in cd
+    assert "filename=spdx_v2_3.json" in cd
+
+    data = json.loads(response.data)
+    assert data["SPDXID"] == "SPDXRef-DOCUMENT"
+    assert data["spdxVersion"] == "SPDX-2.3"
+    assert data["dataLicense"] == "CC0-1.0"
+    assert "packages" in data
+
+def test_render_spdx_xml(monkeypatch, client):
+    # Ensure expected_mime is 'text/xml' for '?ext=xml'
+    def fake_guess(name):
+        if isinstance(name, str) and ("xml" in name or name.endswith(".xml")):
+            return "text/xml"
+        if isinstance(name, str) and ("json" in name or name.endswith(".json")):
+            return "application/json"
+        if isinstance(name, str) and ("adoc" in name or name.endswith(".adoc") or name.endswith(".asciidoc")):
+            return "text/asciidoc"
+        return "application/octet-stream"
+    monkeypatch.setattr("src.routes.documents.guess_mime_type", fake_guess)
+
+    response = client.get("/api/documents/SPDX 2.3?ext=xml")
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type") == "text/xml"
+    cd = response.headers.get("Content-Disposition", "")
+    assert "attachment" in cd and "filename=spdx_v2_3.xml" in cd
+    assert response.data.decode("utf-8").lstrip().startswith("<")
+
+def test_render_openvex_json(client):
+    response = client.get("/api/documents/OpenVex?ext=json")
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type") == "application/json"
+    cd = response.headers.get("Content-Disposition", "")
+    assert "attachment" in cd and "openvex.json" in cd
+    json.loads(response.data)
+
+
+def test_render_cdx_v1_4(client):
+    response = client.get("/api/documents/CycloneDX 1.4?ext=json")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["bomFormat"] == "CycloneDX"
+    assert data["specVersion"] == "1.4"
+
+
+def test_render_cdx_v1_5(client):
+    response = client.get("/api/documents/CycloneDX 1.5?ext=json")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["bomFormat"] == "CycloneDX"
+    assert data["specVersion"] == "1.5"
+
+
+def test_documents_list_extension_bin(monkeypatch, client):
+    def fake_list_documents(self):
+        return [{"id": "MYDOC", "is_template": True, "category": []}]
+    monkeypatch.setattr("src.routes.documents.Templates.list_documents", fake_list_documents)
+    response = client.get("/api/documents")
+    assert response.status_code == 200
+    docs = json.loads(response.data)
+    item = next(d for d in docs if d["id"] == "MYDOC")
+    assert item["extension"] == "bin"
+
+
+def test_documents_list_error(monkeypatch, client):
+    def boom(self):
+        raise Exception("boom")
+    monkeypatch.setattr("src.routes.documents.Templates.list_documents", boom)
+    response = client.get("/api/documents")
+    assert response.status_code == 500
+    data = json.loads(response.data)
+    assert "error" in data
+
+
+def test_only_epss_greater_invalid(client):
+    response = client.get("/api/documents/all_assessments.adoc?only_epss_greater=oops")
+    assert response.status_code == 200
+    assert len(response.data) > 0
+
+
+def test_render_document_invalid_conversion(client):
+    response = client.get("/api/documents/summary.adoc?ext=xml")
+    assert response.status_code >= 400
+    data = json.loads(response.data)
+    assert data["error"]

@@ -373,7 +373,7 @@ def output_results(controllers, files, status):
     # --- Step 6: Generate documents from templates ---
     list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
     metadata = {
-        "author": os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
+        "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
         "export_date": date.today().isoformat()
     }
     if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':

@@ -21,7 +21,7 @@ set -m # enable job control to allow `fg` command
 # Initialize variables
 PRODUCT_NAME=${PRODUCT_NAME-"PRODUCT_NAME"}
 PRODUCT_VERSION=${PRODUCT_VERSION-"1.0.0"}
-COMPANY_NAME=${COMPANY_NAME-"Savoir-faire Linux"}
+AUTHOR_NAME=${AUTHOR_NAME-"Savoir-faire Linux"}
 CONTACT_EMAIL=${CONTACT_EMAIL-""}
 DOCUMENT_URL=${DOCUMENT_URL-"https://spdx.org/spdxdocs/${PRODUCT_NAME}-${PRODUCT_VERSION}.spdx.json"}
 INTERACTIVE_MODE=${INTERACTIVE_MODE-"true"}
@@ -71,6 +71,16 @@ function main() {
     python3 -m src.bin.merger_ci
 
     set_status "7" "<!-- __END_OF_SCAN_SCRIPT__ -->" "0"
+
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
+    echo "---------- Initialization Done - Loading is over and WebUI is ready ----------"
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
+    echo "------------------------------------------------------------------------------"
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         fg %?flask # Bring back process named 'flask' (flask run) to foreground.

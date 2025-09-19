@@ -15,12 +15,12 @@ from ..views.templates import Templates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.openvex import OpenVex
+from typing import Dict, List
 
 
-CategoriesDictionary = {
-    "summary.adoc": ["recommended"],
-    "vulnerabilities.csv": ["misc"]
-}
+# You can associate specific files to specific categories
+# "example.adoc": ["misc", "category_name"]
+CategoriesDictionary: Dict[str, List[str]] = {}
 
 
 def guess_mime_type(doc_name):
@@ -63,8 +63,8 @@ def init_app(app):
         try:
             docs = templ.list_documents()
 
-            docs.append({"id": "SPDX 2.3", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
-            # docs.append({"id": "SPDX 3.0", "extension": "json|xml", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "SPDX 2.3", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
+            # docs.append({"id": "SPDX 3.0", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.4", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.5", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.6", "extension": "json", "is_template": False, "category": ["sbom"]})
@@ -77,7 +77,7 @@ def init_app(app):
                     else:
                         doc["extension"] = "bin"
                     if doc["extension"] in ["adoc", "asciidoc"]:
-                        doc["extension"] = "adoc|pdf|html"
+                        doc["extension"] = "adoc | pdf | html"
 
                     if doc["id"] in CategoriesDictionary:
                         for cat in CategoriesDictionary[doc["id"]]:
@@ -97,7 +97,7 @@ def init_app(app):
             base_mime = guess_mime_type(doc_name)
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
             metadata = {
-                "author": request.args.get("author") or os.getenv('COMPANY_NAME', 'Savoir-faire Linux'),
+                "author": request.args.get("author") or os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
                 "client_name": request.args.get("client_name") or "",
                 "export_date": request.args.get("export_date") or date.today().isoformat(),
                 "ignore_before": request.args.get("ignore_before") or "1970-01-01T00:00",

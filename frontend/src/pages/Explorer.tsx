@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
 import type { Package } from "../handlers/packages";
-import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { PackageVulnerabilities } from "../handlers/patch_finder";
 import Packages from "../handlers/packages";
@@ -24,7 +24,39 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
-    const [filteredVulns, setFilteredVulns] = useState<Vulnerability[] | null>(null);
+    const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | undefined>(undefined);
+    const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
+
+    const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
+        const active_status = ['Exploitable', 'Community Analysis Pending'];
+        PatchFinderLogic
+        .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
+        .then((patchData) => {
+            setPatchInfo(patchData);
+        })
+        .catch((err) => {
+            console.error(err);
+            alert("Failed to load patch data");
+        });
+    }, []);
+
+    const checkPatchReady = useCallback((vulns_list: Vulnerability[]) => {
+        PatchFinderLogic
+        .status()
+        .then((patchData) => {
+            if (patchData.db_ready) {
+                setPatchDbReady(true);
+                loadPatchData(vulns_list);
+            } else {
+                setTimeout(() => checkPatchReady(vulns_list), 15000)
+                setPatchDbReady(false);
+            }
+        })
+        .catch((err) => {
+            console.error(err);
+            alert("Failed to load patch data");
+        })
+    }, [loadPatchData]);
 
     useEffect(() => {
         Promise.allSettled([
@@ -44,41 +76,21 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             );
             setTimeout(() => checkPatchReady(enriched_vulns), 100)
         })
-    }, []);
+    }, [checkPatchReady]);
 
-    function checkPatchReady (vulns_list: Vulnerability[]) {
-        PatchFinderLogic
-        .status()
-        .then((patchData) => {
-            if (patchData.db_ready) {
-                setPatchDbReady(true);
-                loadPatchData(vulns_list);
-            } else {
-                setTimeout(() => checkPatchReady(vulns_list), 15000)
-                setPatchDbReady(false);
-            }
-        })
-        .catch((err) => {
-            console.error(err);
-            alert("Failed to load patch data");
-        })
-    }
 
-    function loadPatchData (vulns_list: Vulnerability[]) {
-        const active_status = ['Exploitable', 'Community Analysis Pending']
-        PatchFinderLogic
-        .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
-        .then((patchData) => {
-            setPatchInfo(patchData);
-        })
-        .catch((err) => {
-            console.error(err);
-            alert("Failed to load patch data");
-        })
-    }
 
     function appendAssessment(added: Assessment) {
         setVulns(Vulnerabilities.append_assessment(vulns, added));
+    }
+
+    function appendCVSS(vulnId: string, vector: string) {
+        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
+        if (cvss !== null) {
+            setVulns(Vulnerabilities.append_cvss(vulns, vulnId, cvss));
+            return cvss;
+        }
+        return null;
     }
 
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
@@ -90,32 +102,47 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         }));
     }
 
-    function goToVulnsTabWithFilter(filtered: Vulnerability[]) {
-        setFilteredVulns(filtered);
+    function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status", value: string) {
+        setFilterLabel(filterType);
+        setFilterValue(value);
         setTab('vulnerabilities');
     }
 
     const [tab, setTab] = useState("metrics");
 
-    return (
-        <div className="w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee]">
-            <NavigationBar tab={tab} changeTab={setTab} darkMode={darkMode} setDarkMode={setDarkMode} />
+    // This function ensures vulns get reset when switching outside filtering context
+    function handleTabChange(newTab: string) {
+        if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
+            setFilterLabel(undefined);
+            setFilterValue(undefined);
+        }
+        setTab(newTab);
+    }
 
-            <div className="p-8">
+    return (
+        <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
+            <NavigationBar tab={tab} changeTab={handleTabChange} darkMode={darkMode} setDarkMode={setDarkMode} />
+
+            <div className="p-8 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
                     packages={pkgs}
                     vulnerabilities={vulns}
-                    setVulns={setVulns}
                     goToVulnsTabWithFilter={goToVulnsTabWithFilter}
+                    appendAssessment={appendAssessment}
+                    patchVuln={patchVuln}
+                    setTab={setTab}
+                    appendCVSS={appendCVSS}
                 />}
                 {tab == 'packages' && <TablePackages packages={pkgs} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
+                    appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
-                    {...(filteredVulns && { filteredVulns: filteredVulns })}
+                    filterLabel={filterLabel}
+                    filterValue={filterValue}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
                 {tab == 'exports' && <Exports />}

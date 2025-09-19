@@ -1,6 +1,7 @@
 import type { Assessment } from "./assessments";
 import { asStringArray } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
+import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
 type CVSS = {
     author: string;
@@ -185,7 +186,82 @@ class Vulnerabilities {
             return vuln
         })
     }
+
+    static append_cvss(vulns: Vulnerability[], vuln_id: string, cvss: CVSS): Vulnerability[] {
+        return vulns.map((vuln) => {
+            if (vuln.id === vuln_id) {
+                return {
+                    ...vuln,
+                    severity: {
+                        ...vuln.severity,
+                        cvss: [...vuln.severity.cvss, cvss]
+                    }
+                };
+            }
+            return vuln;
+        });
+    }
+
+    static calculate_cvss_from_vector(vector: string): CVSS | null {
+        const sev = (s: number) =>
+            s === 0 ? "NONE" :
+            s < 4.0 ? "LOW" :
+            s < 7.0 ? "MEDIUM" :
+            s < 9.0 ? "HIGH" : "CRITICAL";
+
+        const detectAttackVector = (vec: string) =>
+            vec.includes("AV:N") ? "NETWORK" :
+            vec.includes("AV:A") ? "ADJACENT" :
+            vec.includes("AV:L") ? "LOCAL" :
+            vec.includes("AV:P") ? "PHYSICAL" : undefined;
+
+        try {
+            let cv: any, scores: any, version: string;
+
+            if (vector.startsWith("CVSS:4.0")) {
+                cv = new Cvss4P0(vector);
+                scores = cv.calculateScores();
+                version = "4.0";
+            } else if (vector.startsWith("CVSS:3.1")) {
+                cv = new Cvss3P1(vector);
+                scores = cv.calculateScores(false);
+                version = "3.1";
+            } else if (vector.startsWith("CVSS:3.0")) {
+                cv = new Cvss3P0(vector);
+                scores = cv.calculateScores(false);
+                version = "3.0";
+            } else {
+                cv = new Cvss2(vector);
+                scores = cv.calculateScores();
+                version = "2.0";
+            }
+
+            const base = Number(scores?.base ?? scores?.overall ?? 0);
+
+            return {
+                author: "vulnscout",
+                severity: sev(base),
+                version,
+                vector_string: scores?.vector ?? vector,
+                attack_vector: detectAttackVector(vector),
+                base_score: base,
+                exploitability_score: Number(scores?.exploitability ?? 0),
+                impact_score: Number(scores?.impact ?? 0)
+            };
+        } catch (e) {
+            // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
+            if (!(e instanceof Error && e.message === 'invalid vector')) {
+                 
+                console.error(e);
+            }
+            return null;
+        }
+    }
+
+ 
+
 }
+
 
 export default Vulnerabilities;
 export { SEVERITY_ORDER };

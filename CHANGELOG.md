@@ -10,6 +10,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 
 ---
+## [v0.7.1] - 2025-08-20
+
+### Added
+- Licenses support.
+- HTML report generation for AsciiDoc documents.
+- docker-compose: example for NVD_API_KEY.
+- CI: publish Docker image on tag.
+
+### Changed
+- Frontend enhancements and UI/UX improvements.
+
+### Fixed
+- Removed unused dependency faChartLine in frontend.
+- Improved project examples.
+- Added notification when vulnscout is ready to use.
+- Resolved NPM issue on default Ubuntu with pip install; NPM no longer mandatory for testing.
+- Corrected docker-compose mount path (mount src instead of npm).
+- Ensured docker pull step is included.
+
+---
 ## [v0.7.0] - 2025-08-07
 
 ### Added

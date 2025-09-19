@@ -1,5 +1,4 @@
-FROM nikolaik/python-nodejs:python3.12-nodejs20
-# This include python 3.12 and nodejs 20 on bookworm distro
+FROM nikolaik/python-nodejs:python3.13-nodejs24
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	asciidoc \
