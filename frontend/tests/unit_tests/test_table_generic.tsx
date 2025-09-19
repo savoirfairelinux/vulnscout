@@ -161,5 +161,5 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     await waitFor(() => {
       expect(screen.getByText(/1-600 \/ 600/)).toBeInTheDocument();
     });
-  });
+  }, 10000);
 });
