@@ -10,7 +10,6 @@ import PackageDetails from "../components/PackageDetails";
 import type { version as VersionLineEntry } from "../components/VersionsLine";
 import VersionsLine from "../components/VersionsLine";
 import ToggleSwitch from "../components/ToggleSwitch";
-``
 type Props = {
     vulnerabilities: Vulnerability[];
     packages: Package[];

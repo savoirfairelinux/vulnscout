@@ -29,11 +29,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
     minute: 'numeric',
     timeZoneName: 'shortOffset'
 };
-
-function VulnModal(props: Readonly<Props>) {
+  function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
-  
+    const [clearTimeFields, setClearTimeFields] = useState(false);
+    const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
+
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -49,9 +50,14 @@ function VulnModal(props: Readonly<Props>) {
         const data = await response.json()
         if (data?.status === 'success') {
             const casted = asAssessment(data?.assessment);
-            if (!Array.isArray(casted) && typeof casted === "object")
+            if (!Array.isArray(casted) && typeof casted === "object") {
                 appendAssessment(casted);
-            onClose();
+                vuln.assessments.push(casted);
+                patchVuln(vuln.id, vuln);
+                alert("Successfully added assessment.");
+                setClearAssessmentFields(true);
+                setTimeout(() => setClearAssessmentFields(false), 100);
+            }
         } else {
             alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
         }
@@ -85,7 +91,8 @@ function VulnModal(props: Readonly<Props>) {
             }
 
             patchVuln(vuln.id, vuln);
-            onClose();
+            setShowCustomCvss(false);
+            alert("successfully added Custom CVSS.");
         } else {
             const data = await response.text();
             console.error("API error response:", response.status, data);
@@ -116,7 +123,9 @@ function VulnModal(props: Readonly<Props>) {
                 vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
             patchVuln(vuln.id, vuln);
-            onClose();
+            setClearTimeFields(true);
+            setTimeout(() => setClearTimeFields(false), 100);
+            alert("Successfully added estimation.");
         } else {
             const data = await response.text();
             alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
@@ -243,6 +252,7 @@ function VulnModal(props: Readonly<Props>) {
                         <TimeEstimateEditor
                             progressBar={undefined}
                             onSaveTimeEstimation={(data) => saveEstimation(data)}
+                            clearFields={clearTimeFields}
                             actualEstimate={{
                                 optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                 likely: vuln?.effort?.likely?.formatHumanShort(),
@@ -275,7 +285,7 @@ function VulnModal(props: Readonly<Props>) {
                             <li className="ms-4 text-white">
                                 <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                 <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} />
+                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} clearFields={clearAssessmentFields} />
                             </li>
                         </ol>
                     </div>
