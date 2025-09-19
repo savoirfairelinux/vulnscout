@@ -33,7 +33,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 function VulnModal(props: Readonly<Props>) {
     const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
     const [showCustomCvss, setShowCustomCvss] = useState(false);
-  
+
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -59,7 +59,7 @@ function VulnModal(props: Readonly<Props>) {
 
     const addCvss = async (vector: string) => {
         const content = appendCVSS(vuln.id, vector);
-        
+
         if (content === null) {
             alert("The vector string is invalid, please check the format.");
             return;
@@ -259,7 +259,12 @@ function VulnModal(props: Readonly<Props>) {
                                     <li key={encodeURIComponent(assess.id)} className="mb-10 ms-4">
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                        <h3 className="text-lg font-semibold text-white">
+                                        <div className="text-sm mb-2">
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                {assess.packages}
+                                            </span>
+                                        </div>
+                                        <h3 className="text-lg font-semibold text-white mb-2">
                                             {assess.simplified_status}{assess.justification && <> - {assess.justification}</>}
                                         </h3>
                                         <p className="text-base font-normal text-gray-300">
