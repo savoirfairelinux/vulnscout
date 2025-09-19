@@ -14,7 +14,7 @@ function App() {
     topline: 'Project analysis is running...',
     details: 'Step 0 : starting script'
   });
-  const [loadingBarValue, setLoadingBarValue] = useState();
+  const [loadingBarValue, setLoadingBarValue] = useState<number | undefined>(undefined);
   const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
