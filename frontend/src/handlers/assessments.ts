@@ -65,6 +65,31 @@ const asAssessment = (data: any): Assessment | [] => {
     return item
 }
 
+const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => {
+    const seen = new Set<string>();
+    const uniqueAssessments: Assessment[] = [];
+
+    for (const assessment of assessments) {
+        // Create a unique key based on packages, status, and descriptions
+        const packagesKey = assessment.packages.sort().join(',');
+        const descriptionsKey = [
+            assessment.status_notes || '',
+            assessment.justification || '',
+            assessment.impact_statement || '',
+            assessment.workaround || ''
+        ].join('|');
+        
+        const duplicateKey = `${packagesKey}::${assessment.status}::${descriptionsKey}`;
+
+        if (!seen.has(duplicateKey)) {
+            seen.add(duplicateKey);
+            uniqueAssessments.push(assessment);
+        }
+    }
+
+    return uniqueAssessments;
+}
+
 class Assessments {
     /**
      * Fetch server API to list all packages
@@ -75,9 +100,10 @@ class Assessments {
             mode: "cors",
         });
         const data = await response.json();
-        return data.flatMap(asAssessment);
+        const assessments = data.flatMap(asAssessment);
+        return removeDuplicateAssessments(assessments);
     }
 }
 
 export default Assessments;
-export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment };
+export { STATUS_VEX_TO_GRAPH, asStringArray, asAssessment, removeDuplicateAssessments };
