@@ -5,4 +5,4 @@ pyparsing==3.1.2
 semver==3.0.2
 spdx-tools==0.8.3
 uuid7==0.1.0
-orjson=3.11.2
+orjson==3.11.2
