@@ -149,7 +149,7 @@ class PatchFinderLogic {
                 minor_range = new semver.Range(`~${cur_version}`)
                 major_range = new semver.Range(`^${cur_version}`)
             }
-            catch (e) { continue; }
+            catch { continue; }
             if (minor_range == null || major_range == null) continue;
             let info: PackageVersions = {
                 nb_vulns: 0,

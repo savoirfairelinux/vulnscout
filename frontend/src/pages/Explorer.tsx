@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
@@ -27,6 +27,37 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
 
+    const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
+        const active_status = ['Exploitable', 'Community Analysis Pending'];
+        PatchFinderLogic
+        .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
+        .then((patchData) => {
+            setPatchInfo(patchData);
+        })
+        .catch((err) => {
+            console.error(err);
+            alert("Failed to load patch data");
+        });
+    }, []);
+
+    const checkPatchReady = useCallback((vulns_list: Vulnerability[]) => {
+        PatchFinderLogic
+        .status()
+        .then((patchData) => {
+            if (patchData.db_ready) {
+                setPatchDbReady(true);
+                loadPatchData(vulns_list);
+            } else {
+                setTimeout(() => checkPatchReady(vulns_list), 15000)
+                setPatchDbReady(false);
+            }
+        })
+        .catch((err) => {
+            console.error(err);
+            alert("Failed to load patch data");
+        })
+    }, [loadPatchData]);
+
     useEffect(() => {
         Promise.allSettled([
             Packages.list(),
@@ -45,38 +76,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             );
             setTimeout(() => checkPatchReady(enriched_vulns), 100)
         })
-    }, []);
+    }, [checkPatchReady]);
 
-    function checkPatchReady (vulns_list: Vulnerability[]) {
-        PatchFinderLogic
-        .status()
-        .then((patchData) => {
-            if (patchData.db_ready) {
-                setPatchDbReady(true);
-                loadPatchData(vulns_list);
-            } else {
-                setTimeout(() => checkPatchReady(vulns_list), 15000)
-                setPatchDbReady(false);
-            }
-        })
-        .catch((err) => {
-            console.error(err);
-            alert("Failed to load patch data");
-        })
-    }
 
-    function loadPatchData (vulns_list: Vulnerability[]) {
-        const active_status = ['Exploitable', 'Community Analysis Pending']
-        PatchFinderLogic
-        .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
-        .then((patchData) => {
-            setPatchInfo(patchData);
-        })
-        .catch((err) => {
-            console.error(err);
-            alert("Failed to load patch data");
-        })
-    }
 
     function appendAssessment(added: Assessment) {
         setVulns(Vulnerabilities.append_assessment(vulns, added));

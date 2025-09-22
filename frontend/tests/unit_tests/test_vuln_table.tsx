@@ -591,4 +591,237 @@ describe('Vulnerability Table', () => {
         await user.unhover(id_col)
         // doesn't seem to work : expect(description).not.toBeVisible();
     })
+
+    test('filter by severity', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        expect(severityBtn).toBeInTheDocument();
+        await user.click(severityBtn);
+
+        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
+
+        const lowCheckbox = await screen.getByRole('checkbox', { name: 'low' });
+        await user.click(lowCheckbox);
+
+        await deletion;
+
+        const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        expect(vuln_abc).toBeInTheDocument();
+    })
+
+    test('hide fixed toggle functionality', async () => {
+        const vulnWithFixed: Vulnerability[] = [
+            ...vulnerabilities,
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-2020-9999',
+                simplified_status: 'fixed'
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
+        expect(hideFixedToggle).toBeInTheDocument();
+
+        // Ensure the fixed vulnerability is initially visible
+        const fixedVuln = await screen.getByRole('cell', {name: /CVE-2020-9999/});
+        expect(fixedVuln).toBeInTheDocument();
+
+        const deletion = waitForElementToBeRemoved(fixedVuln, { timeout: 1000 });
+
+        // ACT - Toggle hide fixed
+        await user.click(hideFixedToggle);
+
+        // ASSERT - Fixed vulnerability should be hidden
+        await deletion;
+        expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
+        
+        // Other vulnerabilities should still be visible
+        const otherVuln = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        expect(otherVuln).toBeInTheDocument();
+    })
+
+    test('reset filters button clears all filters', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        
+        // Set up some filters first
+        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        await user.click(sourceBtn);
+        const srcCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
+        await user.click(srcCheckbox);
+
+        // Set search
+        const search_bar = await screen.getByRole('searchbox');
+        await user.type(search_bar, '2018-5678');
+
+        // Wait for filters to take effect
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        });
+
+        // ACT - Reset filters
+        const resetBtn = await screen.getByRole('button', { name: /reset filters/i });
+        await user.click(resetBtn);
+
+        // ASSERT - All vulnerabilities should be visible again
+        await waitFor(() => {
+            const vuln1 = screen.getByRole('cell', {name: /CVE-2010-1234/});
+            const vuln2 = screen.getByRole('cell', {name: /CVE-2018-5678/});
+            expect(vuln1).toBeInTheDocument();
+            expect(vuln2).toBeInTheDocument();
+        });
+
+        // Search bar should be cleared (it doesn't have a value attribute when cleared)
+        expect(search_bar.getAttribute('value')).toBeNull();
+    })
+
+    test('open modal when clicking edit button', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const editButtons = await screen.getAllByTitle(/see more/i);
+        expect(editButtons.length).toBeGreaterThan(0);
+
+        // ACT
+        await user.click(editButtons[0]);
+
+        // ASSERT - Modal should open (we can check for modal title with specific id)
+        await waitFor(() => {
+            const modalTitle = document.getElementById('vulnerability_modal_title');
+            expect(modalTitle).toBeInTheDocument();
+        });
+    })
+
+    test('initial filter props set correct filters', async () => {
+        // ARRANGE - Render with initial filter props
+        render(
+            <TableVulnerabilities 
+                vulnerabilities={vulnerabilities} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                filterLabel="Source"
+                filterValue="hardcoded"
+            />
+        );
+
+        // ASSERT - Only hardcoded vulnerability should be visible
+        await waitFor(() => {
+            const vuln_abc = screen.getByRole('cell', {name: /CVE-2010-1234/});
+            expect(vuln_abc).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+    })
+
+    test('multiple source selection works', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        await user.click(sourceBtn);
+
+        // Select multiple sources
+        const hardcodedCheckbox = await screen.getByRole('checkbox', { name: 'hardcoded' });
+        const cveFinderCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
+        
+        await user.click(hardcodedCheckbox);
+        await user.click(cveFinderCheckbox);
+
+        // ASSERT - Both vulnerabilities should be visible
+        const vuln1 = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const vuln2 = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(vuln1).toBeInTheDocument();
+        expect(vuln2).toBeInTheDocument();
+    })
+
+    test('hide fixed toggle interaction with status filter', async () => {
+        const vulnWithFixed: Vulnerability[] = [
+            ...vulnerabilities,
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-2020-9999',
+                simplified_status: 'fixed'
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        
+        // First enable hide fixed
+        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
+        await user.click(hideFixedToggle);
+
+        // Wait for fixed vulnerability to be hidden
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
+        });
+
+        // Now manually select 'fixed' in status filter
+        const statusBtn = await screen.getByRole('button', { name: /status/i });
+        await user.click(statusBtn);
+        const fixedCheckbox = await screen.getByRole('checkbox', { name: 'fixed' });
+        await user.click(fixedCheckbox);
+
+        // ASSERT - Hide fixed toggle should be disabled when fixed is manually selected
+        expect(hideFixedToggle).toHaveAttribute('aria-pressed', 'false');
+        
+        // Fixed vulnerability should now be visible
+        await waitFor(() => {
+            const fixedVuln = screen.getByRole('cell', {name: /CVE-2020-9999/});
+            expect(fixedVuln).toBeInTheDocument();
+        });
+    })
+
+    test('search debounce functionality', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        // ACT - Type only one character (should not trigger search)
+        await user.type(search_bar, '2');
+
+        // ASSERT - Both vulnerabilities should still be visible (no filtering with < 2 chars)
+        const vuln1 = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const vuln2 = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(vuln1).toBeInTheDocument();
+        expect(vuln2).toBeInTheDocument();
+    })
+
+    test('sorting by packages column is disabled', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const packagesHeader = await screen.getByRole('columnheader', {name: /packages/i});
+        
+        // Store initial order
+        const initialHtml = document.body.innerHTML;
+        const initialOrder = initialHtml.indexOf('aaabbbccc') < initialHtml.indexOf('xxxyyyzzz');
+
+        // ACT - Try to click packages header (should not sort)
+        await user.click(packagesHeader);
+
+        // Wait a moment for any potential sorting
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // ASSERT - Order should remain the same
+        const finalHtml = document.body.innerHTML;
+        const finalOrder = finalHtml.indexOf('aaabbbccc') < finalHtml.indexOf('xxxyyyzzz');
+        expect(finalOrder).toBe(initialOrder);
+    })
 });

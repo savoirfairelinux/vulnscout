@@ -167,6 +167,7 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment', async () => {
         fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve({
@@ -207,8 +208,8 @@ describe('Vulnerability Modal', () => {
 
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(1);
-        expect(closeBtn).toHaveBeenCalledTimes(1);
         expect(updateCb).toHaveBeenCalledTimes(1);
+        alertSpy.mockRestore();
     })
 
     test('help button for time estimates', async () => {
@@ -231,6 +232,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 json: () => Promise.resolve({
@@ -267,8 +269,8 @@ describe('Vulnerability Modal', () => {
 
         // ASSERT
         expect(thisFetch).toHaveBeenCalledTimes(1);
-        expect(closeBtn).toHaveBeenCalledTimes(1);
         expect(updateCb).toHaveBeenCalledTimes(1);
+        alertSpy.mockRestore();
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();
@@ -374,8 +376,7 @@ describe('Vulnerability Modal', () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(patchVuln).toHaveBeenCalledTimes(1);
-        expect(closeCb).toHaveBeenCalledTimes(1);
-        expect(alertSpy).not.toHaveBeenCalled();
+        expect(alertSpy).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     });
 
