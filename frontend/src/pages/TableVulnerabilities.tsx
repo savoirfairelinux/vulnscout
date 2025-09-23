@@ -291,8 +291,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columns={columns}
             tableHeight={
                 selectedVulns.length >= 1 ?
-                'calc(100dvh - 44px - 64px - 48px - 16px - 48px - 16px)' :
-                'calc(100dvh - 44px - 64px - 48px - 16px)'
+                'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)' :
+                'calc(100vh - 44px - 64px - 48px - 16px - 8px)'
             }
             data={dataToDisplay}
             estimateRowHeight={66}
