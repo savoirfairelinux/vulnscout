@@ -689,7 +689,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const editButtons = await screen.getAllByTitle(/see more/i);
+        const editButtons = await screen.getAllByRole('button', { name: /edit/i });
         expect(editButtons.length).toBeGreaterThan(0);
 
         // ACT
