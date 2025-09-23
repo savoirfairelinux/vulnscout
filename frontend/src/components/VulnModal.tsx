@@ -11,7 +11,8 @@ import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
-import { useState } from "react";
+import ConfirmationModal from "./ConfirmationModal";
+import { useState, useEffect } from "react";
 
 type Props = {
     vuln: Vulnerability;
@@ -34,6 +35,47 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
+    const [showConfirmClose, setShowConfirmClose] = useState(false);
+
+    const [hasTimeChanges, setHasTimeChanges] = useState(false);
+    const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
+    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
+
+    const handleClose = () => {
+        if (hasUnsavedChanges) {
+            setShowConfirmClose(true);
+        } else {
+            onClose();
+        }
+    };
+
+    const handleConfirmClose = () => {
+        setShowConfirmClose(false);
+        onClose();
+    };
+
+    const handleCancelClose = () => {
+        setShowConfirmClose(false);
+    };
+
+    // Handle ESC key press
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                if (hasUnsavedChanges) {
+                    setShowConfirmClose(true);
+                } else {
+                    onClose();
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [hasUnsavedChanges, onClose]);
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
@@ -146,7 +188,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             {vuln.id}
                         </h3>
                         <button
-                            onClick={onClose}
+                            onClick={handleClose}
                             type="button"
                             className="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center dark:hover:bg-gray-600 dark:hover:text-white"
                         >
@@ -253,6 +295,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             progressBar={undefined}
                             onSaveTimeEstimation={(data) => saveEstimation(data)}
                             clearFields={clearTimeFields}
+                            onFieldsChange={setHasTimeChanges}
                             actualEstimate={{
                                 optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                 likely: vuln?.effort?.likely?.formatHumanShort(),
@@ -290,7 +333,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             <li className="ms-4 text-white">
                                 <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                 <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} clearFields={clearAssessmentFields} />
+                                <StatusEditor 
+                                    onAddAssessment={(data) => addAssessment(data)} 
+                                    clearFields={clearAssessmentFields}
+                                    onFieldsChange={setHasAssessmentChanges} 
+                                />
                             </li>
                         </ol>
                     </div>
@@ -298,7 +345,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     {/* Modal footer */}
                     <div className="flex items-center p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
                         <button
-                            onClick={onClose}
+                            onClick={handleClose}
                             type="button"
                             className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800"
                         >
@@ -308,6 +355,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                 </div>
             </div>
+
+            <ConfirmationModal
+                isOpen={showConfirmClose}
+                title="Unsaved Changes"
+                message="Are you sure you want to close without saving? All unsaved changes will be lost."
+                confirmText="Yes, close"
+                cancelText="No, stay"
+                showTitleIcon={true}
+                onConfirm={handleConfirmClose}
+                onCancel={handleCancelClose}
+            />
         </div>
     );
 }

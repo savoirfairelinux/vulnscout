@@ -14,14 +14,27 @@ type Props = {
     onAddAssessment: (data: PostAssessment) => void;
     progressBar?: number;
     clearFields?: boolean;
+    onFieldsChange?: (hasChanges: boolean) => void;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange}: Readonly<Props>) {
     const [status, setStatus] = useState("under_investigation");
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
+
+    // Check if fields have changes
+    useEffect(() => {
+        const hasChanges = (
+            status !== "under_investigation" ||
+            justification !== "none" ||
+            statusNotes !== "" ||
+            workaround !== "" ||
+            impact !== ""
+        );
+        onFieldsChange?.(hasChanges);
+    }, [status, justification, statusNotes, workaround, impact, onFieldsChange]);
 
     function addAssessment () {
         if (status == '' || justification == '')
