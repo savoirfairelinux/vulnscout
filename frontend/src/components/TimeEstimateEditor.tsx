@@ -20,9 +20,10 @@ type Props = {
     onSaveTimeEstimation: (data: PostTimeEstimate) => void;
     clearFields?: boolean;
     progressBar?: number;
+    onFieldsChange?: (hasChanges: boolean) => void;
 }
 
-function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate}: Readonly<Props>) {
+function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange}: Readonly<Props>) {
     const [estimateHelp, setEstimateHelp] = useState(false);
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
@@ -39,6 +40,16 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
             clearFields();
         }
     }, [shouldClearFields]);
+
+    // Check if fields have changes
+    useEffect(() => {
+        const hasChanges = (
+            newOptimistic !== "" ||
+            newLikely !== "" ||
+            newPessimistic !== ""
+        );
+        onFieldsChange?.(hasChanges);
+    }, [newOptimistic, newLikely, newPessimistic, onFieldsChange]);
 
     const saveEstimation = async () => {
         let content: PostTimeEstimate|undefined = undefined;
