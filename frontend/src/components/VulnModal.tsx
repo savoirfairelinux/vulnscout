@@ -37,7 +37,6 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
 
-    // Group assessments by timestamp + status + content for display
     const groupAssessments = (assessments: Assessment[]) => {
         const groups: { [key: string]: Assessment[] } = {};
         
