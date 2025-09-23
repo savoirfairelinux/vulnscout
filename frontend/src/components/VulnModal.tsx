@@ -12,6 +12,8 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBox } from "@fortawesome/free-solid-svg-icons";
 
 type Props = {
     vuln: Vulnerability;
@@ -34,6 +36,36 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
+
+    // Group assessments by timestamp + status + content for display
+    const groupAssessments = (assessments: Assessment[]) => {
+        const groups: { [key: string]: Assessment[] } = {};
+        
+        assessments.forEach(assess => {
+            // Create a key based on timestamp (date only), status, and assessment content
+            const date = new Date(assess.timestamp);
+            const dateKey = date.toDateString(); // This gives us just the date part
+            const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
+            const groupKey = `${dateKey}::${contentKey}`;
+            
+            if (!groups[groupKey]) {
+                groups[groupKey] = [];
+            }
+            groups[groupKey].push(assess);
+        });
+        
+        // Convert groups to array and sort by most recent timestamp
+        return Object.entries(groups)
+            .map(([key, assessments]) => ({
+                key,
+                assessments,
+                timestamp: assessments[0].timestamp, // Use first assessment's timestamp for sorting
+                packages: [...new Set(assessments.flatMap(a => a.packages))].sort() // Collect unique packages
+            }))
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    };
+
+    const groupedAssessments = groupAssessments(vuln.assessments);
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
@@ -263,25 +295,29 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
 
-                            {vuln.assessments.map(assess => {
-                                const dt = new Date(assess.timestamp);
+                            {groupedAssessments.map(group => {
+                                const dt = new Date(group.timestamp);
+                                const firstAssess = group.assessments[0]; // Use first assessment for content
                                 return (
-                                    <li key={encodeURIComponent(assess.id)} className="mb-10 ms-4">
+                                    <li key={encodeURIComponent(group.key)} className="mb-10 ms-4">
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                        <div className="text-sm mb-2">
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                {assess.packages}
-                                            </span>
+                                        <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                            {group.packages.map(pkg => (
+                                                <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                    <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                    {pkg}
+                                                </span>
+                                            ))}
                                         </div>
                                         <h3 className="text-lg font-semibold text-white mb-2">
-                                            {assess.simplified_status}{assess.justification && <> - {assess.justification}</>}
+                                            {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
                                         </h3>
                                         <p className="text-base font-normal text-gray-300">
-                                            {assess.impact_statement && <>{assess.impact_statement}<br/></>}
-                                            {!assess.impact_statement && assess.status == 'not_affected' && <>no impact statement<br/></>}
-                                            {assess.status_notes ?? 'no status notes'}<br/>
-                                            {assess.workaround ?? 'no workaround available'}
+                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
+                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
+                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
+                                            {firstAssess.workaround ?? 'no workaround available'}
                                         </p>
                                     </li>
                                 );
