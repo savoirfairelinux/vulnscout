@@ -59,15 +59,29 @@ def create_app():
                     "status": "done",
                     "maxsteps": MAX_SCRIPT_STEPS,
                     "step": MAX_SCRIPT_STEPS,
-                    "message": "Scan complete"
+                    "message": "Scan complete",
+                    "loadingbar": 100
                 }
             else:
-                step = text.splitlines()[-1].split(" ")
+                last_line = text.splitlines()[-1].split(" ")
+                try:
+                    step = int(last_line[0])
+                except (ValueError, IndexError):
+                    step = 0
+                try:
+                    loadingbar = int(float(last_line[-1]))
+                except (ValueError, IndexError):
+                    loadingbar = None
+                try:
+                    message = " ".join(last_line[1:-1])
+                except IndexError:
+                    message = ""
                 return {
                     "status": "running",
                     "maxsteps": MAX_SCRIPT_STEPS,
-                    "step": int(step.pop(0)),
-                    "message": " ".join(step)
+                    "step": step,
+                    "message": message,
+                    "loadingbar": loadingbar
                 }
 
     @app.middleware("/api")

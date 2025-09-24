@@ -56,7 +56,9 @@ def test_get_status(client):
     assert data["status"] == "done"
     assert isinstance(data["maxsteps"], int)
     assert data["step"] == data["maxsteps"]
-    assert "complete" in data["message"]
+    assert "complete" in data["message"].lower()
+    assert isinstance(data["loadingbar"], int)
+    assert data["loadingbar"] == 100
 
 
 def test_get_packages_list(client):

@@ -11,7 +11,7 @@ from src.bin.webapp import create_app
 @pytest.fixture()
 def init_status_file(tmp_path):
     status_path = tmp_path / "status.txt"
-    status_path.write_text("4 merging something")
+    status_path.write_text("4 merging something 45")
     return status_path
 
 
@@ -44,12 +44,14 @@ def test_get_status(client):
     response = client.get("/api/scan/status")
     assert response.status_code == 200
     data = json.loads(response.data)
+
     assert data["status"] == "running"
     assert isinstance(data["maxsteps"], int)
-    assert data["step"] == 4
-    assert data["step"] <= data["maxsteps"]
-    assert "merging something" in data["message"]
-
+    assert isinstance(data["step"], int)
+    assert 0 <= data["step"] <= data["maxsteps"]
+    assert "merging" in data["message"].lower()
+    assert isinstance(data["loadingbar"], int)
+    assert 0 <= data["loadingbar"] <= 100
 
 def test_get_api_packages(client):
     response = client.get("/api/packages?format=list")

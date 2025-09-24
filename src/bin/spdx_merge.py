@@ -16,7 +16,7 @@ from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
 import glob
 import os
-import json
+import orjson
 
 INPUT_SPDX_FOLDER = "/scan/tmp/spdx"
 OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
@@ -37,7 +37,7 @@ def read_inputs(controllers):
         try:
             verbose(f"spdx_merge: Merging {file}")
             with open(file, "r") as f:
-                data = json.load(f)
+                data = orjson.loads(f.read())
 
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_controllers_from_dict(data)
