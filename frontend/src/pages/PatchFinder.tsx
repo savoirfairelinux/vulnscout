@@ -10,7 +10,6 @@ import PackageDetails from "../components/PackageDetails";
 import type { version as VersionLineEntry } from "../components/VersionsLine";
 import VersionsLine from "../components/VersionsLine";
 import ToggleSwitch from "../components/ToggleSwitch";
-``
 type Props = {
     vulnerabilities: Vulnerability[];
     packages: Package[];
@@ -83,7 +82,7 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
 
         <div className="my-4 p-4 bg-slate-700 flex flex-row flex-wrap">
             {showLegend && <div className="flex-none w-full px-8 bg-slate-600">
-                <h2 className="pt-4 font-bold font-mono text-center">Legend</h2>
+                <h2 className="pt-4 font-bold font-mono text-center text-white">Legend</h2>
                 <VersionsLine reduce_size={true} versions={[
                     {title: 'current version', details: 'current'},
                     {title: 'next patch version', details: 'safe to upgrade', left_color: 'bg-gray-400 h-0.5'},
@@ -122,7 +121,7 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
                 if (versions.length <= 1) return
 
                 return <div key={pkg_name} className="flex-none w-full 2xl:w-1/2 py-8">
-                    <h2 className="pt-4 font-bold font-mono text-center">{pkg_name}</h2>
+                    <h2 className="pt-4 font-bold font-mono text-center text-white">{pkg_name}</h2>
                     <VersionsLine versions={versions}></VersionsLine>
 
                     {RenderDetailled[pkg_name] && Object.keys(RenderDetailled[pkg_name]).length > 0 &&

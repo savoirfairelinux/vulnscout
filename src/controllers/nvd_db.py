@@ -11,6 +11,9 @@ from datetime import datetime, timezone, timedelta
 from ..helpers.fixs_scrapper import FixsScrapper
 from typing import Optional, Generator, Tuple
 import time
+import sys
+
+sys.tracebacklimit = 0  # disable traceback
 
 DB_MODEL_VERSION = "nvd2.0-vulnscout1.1"
 
@@ -144,7 +147,11 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(f"Failed to call NVD API (retry = 3, status = {status}, cveId = {cve_id})")
+        raise Exception(
+            f"Failed to call NVD API after 3 retries (status: {status}, cveId: {cve_id}).\n"
+            "Providing an NVD API key may help prevent this error.\n"
+            "If the issue persists after adding the API key, it may have been invalidated."
+        )
 
     def api_get_from_index(self, start_index: int = 0) -> Tuple[int, dict]:
         """
@@ -159,7 +166,11 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(f"Failed to call NVD API (retry = 3, status = {status}, startIndex = {start_index})")
+        raise Exception(
+            f"Failed to call NVD API (retry = 3, status = {status}, startIndex = {start_index})\n"
+            "Providing an NVD API key may help prevent this error.\n"
+            "If the issue persists after adding the API key, it may have been invalidated."
+        )
 
     def api_get_by_date(self, start: str, end: str, index: int = 0) -> Tuple[int, dict]:
         """
@@ -178,8 +189,12 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(f"Failed to call NVD API (retry = 3, status = {status}"
-                        + f", startIndex = {index}, lastModStartDate = {start}, lastModEndDate = {end})")
+        raise Exception(
+            f"Failed to call NVD API (retry = 3, status = {status}"
+            + f", startIndex = {index}, lastModStartDate = {start}, lastModEndDate = {end})\n"
+            "Providing an NVD API key may help prevent this error.\n"
+            "If the issue persists after adding the API key, it may have been invalidated."
+        )
 
     def api_weaknesses_to_list_str(self, weaknesses: list) -> list[str]:
         """

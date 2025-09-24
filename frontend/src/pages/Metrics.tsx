@@ -1,17 +1,25 @@
         import { useMemo, useState } from "react";
         import type { Package } from "../handlers/packages";
+        import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
         import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
+        import TableGeneric from "../components/TableGeneric";
+        import SeverityTag from "../components/SeverityTag";
+        import VulnModal from "../components/VulnModal";
+        import type { Assessment } from "../handlers/assessments";
 
         ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
 
         type Props = {
             packages: Package[];
             vulnerabilities: Vulnerability[];
-            setVulns: (vulns: Vulnerability[]) => void;
-            goToVulnsTabWithFilter: (vulns: Vulnerability[]) => void;
+            goToVulnsTabWithFilter: (filterType: "Source" | "Severity" | "Status", value: string) => void;
+            appendAssessment: (added: Assessment) => void;
+            patchVuln: (vulnId: string, data: any) => void;
+            setTab: (tab: string) => void;
+            appendCVSS: (vulnId: string, vector: string) => CVSS | null;
         };
 
         const pieOptions = {
@@ -81,26 +89,47 @@
             return date;
         }
 
-        function filterVulnerabilities(vulns: Vulnerability[], severity?: string, status?: string): Vulnerability[] {
-            return vulns.filter(vuln => {
-                const matchesSeverity = severity
-                    ? vuln.severity?.severity?.toLowerCase() === severity.toLowerCase()
-                    : true;
 
-                const matchesStatus = status
-                    ? vuln.simplified_status?.toLowerCase() === status.toLowerCase()
-                    : true;
 
-                return matchesSeverity && matchesStatus;
-            });
-        }
-
-        function Metrics ({ vulnerabilities, goToVulnsTabWithFilter }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
-            const [hideSeverity, setHideSeverity] = useState<{[key: string] : boolean}>({});
-            const [hideStatus, setHideStatus] = useState<{[key: string] : boolean}>({});
             const [timeScale, setTimeScale] = useState<string>("6_months")
+            const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+
+  const vulnColumns = useMemo(
+    () => [
+      { accessorKey: "rank", header: "#", size: 40, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "cve", header: "CVE", size: 150, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "package", header: "Package", size: 200, cell: (info: any) => info.getValue(), enableSorting: false },
+      { accessorKey: "severity", header: "Severity", size: 120, cell: (info: any) => <SeverityTag severity={info.getValue()} />, enableSorting: false },
+      {
+        accessorKey: "edit",
+        header: "Actions",
+        size: 80,
+        cell: (info: any) => {
+          const vuln = info.row.original.original;
+          return (
+            <button
+              className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+              onClick={() => setModalVuln(vuln)}
+            >
+              Edit
+            </button>
+          );
+        },
+        enableSorting: false
+      },
+    ],
+    []
+  );
+
+  const packageColumns = [
+  { accessorKey: "id", header: "#", size: 50, cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "name", header: "Name", cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "version", header: "Version", cell: (info: any) => info.getValue(), enableSorting: false },
+  { accessorKey: "count", header: "Vulnerabilities", cell: (info: any) => info.getValue(), enableSorting: false },
+];
 
             const time_scales = useMemo(() => {
                 const scale = Number(timeScale.split('_')[0]);
@@ -123,13 +152,12 @@
                 return refs;
             }, [timeScale]);
 
-            const dataSetVulnBySeverity = useMemo(() => {
+            const dataSetVulnBySeverity = useMemo(() => {                
                 return {
                     labels: ['Unknown', 'Low', 'Medium', 'High', 'Critical'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideStatus[vuln.simplified_status]) return acc;
                             const severity = vuln.severity.severity.toUpperCase();
                             const index = Math.max(SEVERITY_ORDER.indexOf(severity) - 1, 0)
                             acc[index]++;
@@ -145,7 +173,7 @@
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideStatus]);
+            }, [vulnerabilities]);
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
@@ -153,7 +181,6 @@
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideSeverity[vuln.severity.severity]) return acc;
                             const status = vuln.simplified_status;
                             const index = status == 'not affected' ? 0 : status == 'fixed' ? 1 : status == 'Community Analysis Pending' ? 2 : 3;
                             acc[index]++;
@@ -168,7 +195,7 @@
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideSeverity]);
+            }, [vulnerabilities]);
 
             const nb_points = Number(timeScale.split('_')[0])
             const vulnEvolutionTime = {
@@ -219,15 +246,64 @@
                     hoverOffset: 4
                 }]
             }
+            
+  const topVulnerablePackages = useMemo(() => {
+    const counts: Record<string, { count: number; version?: string }> = {};
+    vulnerabilities.forEach((vuln) => {
+      vuln.packages.forEach((pkg) => {
+        const [pkgName, pkgVersion] = pkg.split("@");
+        if (!counts[pkgName]) {
+          counts[pkgName] = { count: 0, version: pkgVersion };
+        }
+        counts[pkgName].count += 1;
+      });
+    });
+    return Object.entries(counts)
+      .sort(([, a], [, b]) => b.count - a.count)
+      .slice(0, 5)
+      .map(([name, { count, version }], index) => ({
+        id: index + 1,
+        name,
+        version: version ?? "-",
+        count,
+        licences: "",
+        vulnerabilities: { exploitable: count },
+        maxSeverity: { label: "UNKNOWN", index: 0 },
+        source: [],
+      }));
+  }, [vulnerabilities]);
 
-            const dataSetVulnBySource = useMemo(() => {
+  const TopVulns = useMemo(() => {
+    return [...vulnerabilities]
+      .map((vuln, index) => {
+        const maxCvss = vuln.severity.cvss?.length
+          ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
+          : 0;
+        return {
+          id: index + 1,
+          rank: 0,
+          cve: vuln.id,
+          package: vuln.packages.join(", "),
+          severity: vuln.severity.severity,
+          maxCvss,
+          texts: vuln.texts,
+          original: vuln,
+        };
+      })
+      .sort((a, b) => b.maxCvss - a.maxCvss)
+      .slice(0, 5)
+      .map((vuln, idx) => ({
+        ...vuln,
+        rank: idx + 1,
+        }));
+    }, [vulnerabilities]);
+  
+              const dataSetVulnBySource = useMemo(() => {
                 return {
                     labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            if (hideStatus[vuln.simplified_status]) return acc;
-                            if (hideSeverity[vuln.severity.severity]) return acc;
                             let added = false;
                             if (vuln.found_by.includes('grype')) { acc[1]++; added = true; }
                             if (vuln.found_by.includes('yocto')) { acc[2]++; added = true; }
@@ -245,7 +321,7 @@
                         hoverOffset: 4
                     }]
                 }
-            }, [vulnerabilities, hideSeverity, hideStatus]);
+            }, [vulnerabilities]);
 
 
             const vulnBySeverityOptions = {
@@ -255,7 +331,6 @@
                     legend: {
                         ...pieOptions.plugins.legend,
                         onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
-                            setHideSeverity({...hideSeverity, [legendItem.text.toLowerCase()]: !legendItem.hidden});
                             defaultPieHandler.call(this, e, legendItem, legend);
                         }
                     }
@@ -263,9 +338,17 @@
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const label = dataSetVulnBySeverity.labels[index];
-                    const vuls = filterVulnerabilities(vulnerabilities, label as string, undefined);
-                    goToVulnsTabWithFilter(vuls);                }
+                    const severityOrder = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+                    const targetSeverity = severityOrder[index];
+                    
+                    const matchingSeverity = vulnerabilities.find(v => 
+                        v.severity.severity.toUpperCase() === targetSeverity
+                    )?.severity.severity;
+                    
+                    if (matchingSeverity) {
+                        goToVulnsTabWithFilter("Severity", matchingSeverity);
+                    }
+                }
             }
 
             const vulnByStatusOptions = {
@@ -275,7 +358,6 @@
                     legend: {
                         ...pieOptions.plugins.legend,
                         onClick: function (this: LegendElement<"pie">, e: ChartEvent, legendItem: LegendItem, legend: LegendElement<"pie">) {
-                            setHideStatus({...hideStatus, [legendItem.text.toLowerCase()]: !legendItem.hidden});
                             defaultPieHandler.call(this, e, legendItem, legend);
                         }
                     }
@@ -283,24 +365,32 @@
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const label = dataSetVulnByStatus.labels[index];
-                    const vuls = filterVulnerabilities(vulnerabilities, undefined, label as string);
-                    goToVulnsTabWithFilter(vuls);
+                    const statusOrder = ['not affected', 'fixed', 'Community Analysis Pending', 'Exploitable'];
+                    const targetStatus = statusOrder[index];
+                    
+                    const matchingStatus = vulnerabilities.find(v => 
+                        v.simplified_status === targetStatus
+                    )?.simplified_status;
+                    
+                    if (matchingStatus) {
+                        goToVulnsTabWithFilter("Status", matchingStatus);
+                    }
                 }
             }
 
             return (
+    <div className="w-full">
                 <div className="w-full flex flex-wrap">
-
+                  
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Severity</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Severity</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Pie data={dataSetVulnBySeverity} options={vulnBySeverityOptions} />
                         </div>
                     </div>
 
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Status</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Status</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Pie data={dataSetVulnByStatus} options={vulnByStatusOptions} />
                         </div>
@@ -308,8 +398,8 @@
 
                     <div className="w-1/3 lg:w-1/4 p-4">
                         <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
-                            <div className="text-xl p-1">Exploitable vulnerabilities</div>
-                            <select className="bg-zinc-800 ml-2 p-1" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
+                            <div className="text-xl p-1 text-white">Exploitable vulnerabilities</div>
+                            <select className="bg-zinc-800 ml-2 p-1 text-white" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
                                 <option value="12_months">1 year</option>
                                 <option value="6_months">6 months</option>
                                 <option value="12_weeks">12 weeks</option>
@@ -325,15 +415,68 @@
                     </div>
 
                     <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl">Vulnerabilities by Source</div>
+                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Source</div>
                         <div className="bg-zinc-700 p-4 w-full aspect-square">
                             <Bar data={dataSetVulnBySource} options={BarOptions} />
                         </div>
                     </div>
+      </div>
 
+      <div className="w-full flex flex-wrap">
+        <div className="w-1/2 lg:w-1/2 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-2xl font-bold">Most critical unfixed vulnerabilities</h3>
+            <button
+              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+              onClick={() => setTab('vulnerabilities')}
+            >
+              See all
+            </button>
+          </div>
+          <div>
+            <TableGeneric
+              columns={vulnColumns}
+              data={TopVulns}
+              hoverField="texts"
+              hasPagination={false}
+              tableHeight="auto"
+            />
+          </div>
+                    </div>
+
+        <div className="w-1/2 lg:w-1/2 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-2xl font-bold">Most vulnerable packages</h3>
+            <button
+              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+              onClick={() => setTab("packages")}
+            >
+              See all
+            </button>
+          </div>
+          <div>
+            <TableGeneric
+              columns={packageColumns}
+              data={topVulnerablePackages}
+              hasPagination={false}
+              tableHeight="auto"
+            />
+          </div>
+        </div>
                 </div>
-            );
 
+      {modalVuln && (
+        <VulnModal
+          vuln={modalVuln}
+          onClose={() => setModalVuln(undefined)}
+          appendAssessment={appendAssessment}
+          appendCVSS={appendCVSS}
+          patchVuln={patchVuln}
+        />
+      )}
+    </div>
+            );
+            
         }
 
         export default Metrics;

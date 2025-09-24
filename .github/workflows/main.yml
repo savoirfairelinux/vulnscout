@@ -3,17 +3,44 @@ name: Run Vulnscout Tests
 on: [push, pull_request]
 
 jobs:
-    test-vulnscout:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v2
-            - name: Install cqfd on the CI
-              run: |
-                git clone https://github.com/savoirfairelinux/cqfd.git
-                cd cqfd
-                sudo make install
-            - name: Init cqfd container on the project 
-              run: cqfd init
-            - name: Run Background Tests in the container
-              run: cqfd -b test_backend
+  tests:
+    name: ${{ matrix.target }} Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [Backend, Frontend, Docker]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install cqfd on the CI
+        if: matrix.target != 'Docker'
+        run: |
+          git clone https://github.com/savoirfairelinux/cqfd.git
+          cd cqfd
+          sudo make install
+
+      - name: Init cqfd container on the project
+        if: matrix.target != 'Docker'
+        run: cqfd init
+
+      - name: Run Backend Tests in the container
+        if: matrix.target == 'Backend'
+        run: cqfd -b test_backend
+
+      - name: Run Frontend Tests in the container
+        if: matrix.target == 'Frontend'
+        run: cqfd -b test_frontend
+
+      - name: Docker Build
+        if: matrix.target == 'Docker'
+        run: BUILD_TAG=${{ github.sha }} make -C tests docker_build
+
+      - name: Docker Test
+        if: matrix.target == 'Docker'
+        run: BUILD_TAG=${{ github.sha }} make -C tests docker_test
+
+      - name: Docker Clean
+        if: ${{ matrix.target == 'Docker' && always() }}
+        run: BUILD_TAG=${{ github.sha }} make -C tests docker_clean

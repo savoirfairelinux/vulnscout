@@ -20,3 +20,11 @@ repos:
         - tests/tox.ini
         - --check-untyped-defs
       files: ^src/
+- repo: https://github.com/pre-commit/mirrors-eslint
+  rev: v8.50.0
+  hooks:
+    - id: eslint
+      args:
+        - --config
+        - frontend/eslint.config.js
+      files: ^frontend/src/

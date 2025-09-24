@@ -45,6 +45,24 @@ Yocto:: A build system for embedded Linux systems. It is used to build custom Li
 
 You can use VulnScout to scan your project, make report about your dependencies and vulnerabilities, and to manage them.
 
+=== Export Document
+
+VulnScout can consolidate all its inputs, data created in the web dashboard, and information aggregated from different sources / scanners into a variety of output formats. These outputs include SPDX and CycloneDX documents.
+
+* SPDX 2.3: json, xml
+* CycloneDX 1.4 / 1.5 / 1.6: json
+* OpenVex: json
+
+Additionally, VulnScout can generate time estimates and detailed reports about vulnerabilities and assessments created or managed by the user. This feature helps teams track remediation progress, understand risk exposure, and document security decisions in a standardized way.
+
+* All reports: Asciidoc, HTML, PDF
+* Summary: Asciidoc, HTML, PDF
+* Time estimates: csv
+* Vulnerabilities: csv, txt
+
+.Custom Reports
+VulnScout supports custom report templates. You can place your own templates in `.vulnscout/templates` to tailor reports to your specific needs.
+
 === Supported input formats
 
 * SPDX 2.3 (Packages)
@@ -69,6 +87,12 @@ The tool pulls vulnerability and risk data from multiple trusted sources:
 * EPSS (Exploit Prediction Scoring System)
 * ##OSV## (Open Source Vulnerabilities) Comming soon
 * Information embedded in inputs files
+
+=== Custom CVSS Scoring
+
+Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organization-specific vulnerability scoring.
+
+You can use a CVSS calculator to generate a vector string based on your own risk and severity factors, then store it alongside the standard CVSS score provided by the NVD.
 
 == Getting Started with VulnScout
 

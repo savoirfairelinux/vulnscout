@@ -1,7 +1,8 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -9,12 +10,15 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import ToggleSwitch from "../components/ToggleSwitch";
 
 type Props = {
     vulnerabilities: Vulnerability[];
-    filteredVulns?: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
+    appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    filterLabel?: "Source" | "Severity" | "Status";
+    filterValue?: string;
 };
 
 const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -44,15 +48,22 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 
 const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
 
-function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessment, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedRows, setSelectedRows] = useState<RowSelectionState>({})
-    const [useFilteredProp, setUseFilteredProp] = useState(true);
+    const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
+    const [hideFixed, setHideFixed] = useState<boolean>(false);
+
+    useEffect(() => {
+        if (!filterLabel || !filterValue) return;
+        if (filterLabel === "Source") setSelectedSources([filterValue]);
+        if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
+        if (filterLabel === "Status") setSelectedStatuses([filterValue]);
+    }, [filterLabel, filterValue]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -177,16 +188,14 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
         ]
     }, []);
 
-    const baseData = useFilteredProp && filteredVulns ? filteredVulns : vulnerabilities;
-
     const dataToDisplay = useMemo(() => {
-        return baseData.filter((el) => {
+        return vulnerabilities.filter((el) => {
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             return true;
         });
-    }, [baseData, selectedSeverities, selectedStatuses, selectedSources]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -198,8 +207,26 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedRows({});
-        setUseFilteredProp(false);
+        setHideFixed(false);
     }
+
+    const handleHideFixedToggle = (enabled: boolean) => {
+        setHideFixed(enabled);
+        if (enabled) {
+            const allStatuses = Array.from(new Set(vulnerabilities.map(v => v.simplified_status)));
+            const statusesExceptFixed = allStatuses.filter(status => status !== 'fixed');
+            setSelectedStatuses(statusesExceptFixed);
+        } else {
+            setSelectedStatuses([]);
+        }
+    };
+
+    const handleStatusChange = (newStatuses: string[]) => {
+        setSelectedStatuses(newStatuses);
+        if (newStatuses.includes('fixed') && hideFixed) {
+            setHideFixed(false);
+        }
+    };
 
     return (<>
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -215,7 +242,9 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
 
             <FilterOption
                 label="Severity"
-                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity)))}
+                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) => 
+                    SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(b.toLowerCase()) - SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(a.toLowerCase())
+                )}
                 selected={selectedSeverities}
                 setSelected={setSelectedSeverities}
             />
@@ -224,7 +253,13 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
                 label="Status"
                 options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
                 selected={selectedStatuses}
-                setSelected={setSelectedStatuses}
+                setSelected={handleStatusChange}
+            />
+
+            <ToggleSwitch
+                enabled={hideFixed}
+                setEnabled={handleHideFixedToggle}
+                label="Hide Fixed"
             />
 
             <button
@@ -251,8 +286,8 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
             columns={columns}
             tableHeight={
                 selectedVulns.length >= 1 ?
-                'calc(100dvh - 44px - 64px - 48px - 16px - 48px - 16px)' :
-                'calc(100dvh - 44px - 64px - 48px - 16px)'
+                'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)' :
+                'calc(100vh - 44px - 64px - 48px - 16px - 8px)'
             }
             data={dataToDisplay}
             estimateRowHeight={66}
@@ -264,6 +299,7 @@ function TableVulnerabilities ({ vulnerabilities, filteredVulns, appendAssessmen
             vuln={modalVuln}
             onClose={() => setModalVuln(undefined)}
             appendAssessment={appendAssessment}
+            appendCVSS={appendCVSS}
             patchVuln={patchVuln}
         ></VulnModal>}
     </>)

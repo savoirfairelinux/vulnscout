@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion } from '@fortawesome/free-regular-svg-icons';
 import Iso8601Duration from '../handlers/iso8601duration';
@@ -18,14 +18,38 @@ type ActualEstimate = {
 type Props = {
     actualEstimate: ActualEstimate;
     onSaveTimeEstimation: (data: PostTimeEstimate) => void;
+    clearFields?: boolean;
     progressBar?: number;
+    onFieldsChange?: (hasChanges: boolean) => void;
 }
 
-function TimeEstimateEditor ({onSaveTimeEstimation, progressBar, actualEstimate}: Readonly<Props>) {
+function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange}: Readonly<Props>) {
     const [estimateHelp, setEstimateHelp] = useState(false);
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
     const [newPessimistic, setNewPessimistic] = useState("");
+
+    const clearFields = () => {
+        setNewOptimistic("");
+        setNewLikely("");
+        setNewPessimistic("");
+    };
+
+    useEffect(() => {
+        if (shouldClearFields) {
+            clearFields();
+        }
+    }, [shouldClearFields]);
+
+    // Check if fields have changes
+    useEffect(() => {
+        const hasChanges = (
+            newOptimistic !== "" ||
+            newLikely !== "" ||
+            newPessimistic !== ""
+        );
+        onFieldsChange?.(hasChanges);
+    }, [newOptimistic, newLikely, newPessimistic, onFieldsChange]);
 
     const saveEstimation = async () => {
         let content: PostTimeEstimate|undefined = undefined;
@@ -51,7 +75,9 @@ function TimeEstimateEditor ({onSaveTimeEstimation, progressBar, actualEstimate}
             return;
         }
 
-        if (content != undefined) onSaveTimeEstimation(content)
+        if (content != undefined) {
+            onSaveTimeEstimation(content);
+        }
     };
 
     return (<>
@@ -61,6 +87,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, progressBar, actualEstimate}
                 <h4 className="font-bold">Optimistic</h4>
                 <p>{actualEstimate.optimistic ?? "N/A"}</p>
                 <input
+                    value={newOptimistic}
                     onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewOptimistic(event.target.value)}
                     type="text"
                     className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
@@ -71,6 +98,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, progressBar, actualEstimate}
                 <h4 className="font-bold">Most Likely</h4>
                 <p>{actualEstimate.likely ?? "N/A"}</p>
                 <input
+                    value={newLikely}
                     onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewLikely(event.target.value)}
                     type="text"
                     className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
@@ -81,6 +109,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, progressBar, actualEstimate}
                 <h4 className="font-bold">Pessimistic</h4>
                 <p>{actualEstimate.pessimistic ?? "N/A"}</p>
                 <input
+                    value={newPessimistic}
                     onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewPessimistic(event.target.value)}
                     type="text"
                     className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
