@@ -6,7 +6,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom.minidom import parseString
 import uuid
@@ -260,27 +260,42 @@ class SPDX3:
 
         return json.dumps(spdx_doc, indent=2)
 
-    def dict_to_xml_element(self, data: Dict[str, Any], parent_name: str = "element", namespace_prefix: str = "spdx") -> Element:
+    def dict_to_xml_element(
+        self,
+        data: Dict[str, Any],
+        parent_name: str = "element",
+        namespace_prefix: str = "spdx"
+    ) -> Element:
         """Convert dictionary to XML element with SPDX 3.0 specific handling."""
-        
+
         # Map SPDX 3.0 types to proper XML element names
         type_mapping = {
             "software_Package": f"{namespace_prefix}:software_Package",
-            "security_Vulnerability": f"{namespace_prefix}:security_Vulnerability", 
-            "security_VexNotAffectedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexNotAffectedVulnAssessmentRelationship",
-            "security_VexAffectedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexAffectedVulnAssessmentRelationship",
-            "security_VexFixedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexFixedVulnAssessmentRelationship",
+            "security_Vulnerability": f"{namespace_prefix}:security_Vulnerability",
+            "security_VexNotAffectedVulnAssessmentRelationship": (
+                f"{namespace_prefix}:security_VexNotAffectedVulnAssessmentRelationship"
+            ),
+            "security_VexAffectedVulnAssessmentRelationship": (
+                f"{namespace_prefix}:security_VexAffectedVulnAssessmentRelationship"
+            ),
+            "security_VexFixedVulnAssessmentRelationship": (
+                f"{namespace_prefix}:security_VexFixedVulnAssessmentRelationship"
+            ),
             "Relationship": f"{namespace_prefix}:Relationship",
             "SpdxDocument": f"{namespace_prefix}:SpdxDocument",
-            "CreationInfo": f"{namespace_prefix}:CreationInfo"
+            "CreationInfo": f"{namespace_prefix}:CreationInfo",
         }
-        
+
         # Handle SPDX type mapping
         if "type" in data and data["type"] in type_mapping:
             element_name = type_mapping[data["type"]]
         else:
-            element_name = f"{namespace_prefix}:{parent_name}" if namespace_prefix and not parent_name.startswith(namespace_prefix) else parent_name
-            
+            element_name = (
+                f"{namespace_prefix}:{parent_name}"
+                if namespace_prefix and not parent_name.startswith(namespace_prefix)
+                else parent_name
+            )
+
         element = Element(element_name)
 
         for key, value in data.items():
@@ -294,6 +309,15 @@ class SPDX3:
                 # Handle spdxId as rdf:about attribute
                 element.set("rdf:about", f"#{value}")
                 continue
+            elif key == "namespaceMap":
+                # Handle namespaceMap as XML attributes on the element
+                if isinstance(value, dict):
+                    for ns_prefix, ns_uri in value.items():
+                        if not ns_prefix:  # Default namespace
+                            element.set("xmlns", ns_uri)
+                        else:
+                            element.set(f"xmlns:{ns_prefix}", ns_uri)
+                continue
             elif key in ["from", "to"] and isinstance(value, (str, list)):
                 # Handle relationship references
                 if isinstance(value, str):
@@ -303,6 +327,15 @@ class SPDX3:
                     for ref_value in value:
                         ref_elem = SubElement(element, f"{namespace_prefix}:{key}")
                         ref_elem.set("rdf:resource", f"#{ref_value}")
+                continue
+            elif key == "externalIdentifier" and isinstance(value, list):
+                # Special handling for external identifiers to ensure proper XML structure
+                for ext_id in value:
+                    ext_elem = SubElement(element, f"{namespace_prefix}:ExternalIdentifier")
+                    if isinstance(ext_id, dict):
+                        for id_key, id_value in ext_id.items():
+                            id_elem = SubElement(ext_elem, f"{namespace_prefix}:{id_key}")
+                            id_elem.text = str(id_value)
                 continue
             elif isinstance(value, dict):
                 child = self.dict_to_xml_element(value, key, namespace_prefix)
@@ -317,31 +350,54 @@ class SPDX3:
                         child.text = str(item)
                         element.append(child)
             else:
+                # Skip empty keys that would create invalid XML tags
+                if not key or key.isspace():
+                    continue
                 child = Element(f"{namespace_prefix}:{key}")
                 child.text = str(value)
                 element.append(child)
 
         return element
 
-
-
     def output_as_xml(self, author: str = "Savoir-faire Linux") -> str:
         """Generate SPDX 3.0 XML output using unified data structure approach."""
-        
+
         # Generate the same JSON structure but convert to XML
         json_doc = json.loads(self.output_as_json(author))
-        
-        # Create root element with namespaces
-        root = Element("rdf:RDF")
-        root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
-        root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
-        root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
-        
-        # Convert each item in @graph to XML element
+
+        # Find SpdxDocument and use it as the primary element
+        spdx_document = None
         for item in json_doc.get("@graph", []):
-            xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
-            root.append(xml_element)
-        
+            if item.get("type") == "SpdxDocument":
+                spdx_document = item
+                break
+
+        if spdx_document:
+            # Create an SPDX document as the root element
+            root = self.dict_to_xml_element(spdx_document)
+
+            # Add namespaces to the root element
+            root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
+            root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+            root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
+
+            # Add other elements under the root
+            for item in json_doc.get("@graph", []):
+                if item.get("type") != "SpdxDocument":  # Skip the document as it's now the root
+                    xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
+                    root.append(xml_element)
+        else:
+            # Fallback to previous approach if no SpdxDocument is found
+            root = Element("rdf:RDF")
+            root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
+            root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+            root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
+
+            # Convert each item in @graph to XML element
+            for item in json_doc.get("@graph", []):
+                xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
+                root.append(xml_element)
+
         # Convert to string with pretty formatting
         rough_string = tostring(root, encoding='unicode')
         reparsed = parseString(rough_string)
