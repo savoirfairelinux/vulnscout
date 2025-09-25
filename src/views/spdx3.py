@@ -20,7 +20,7 @@ def uuid7(as_type='str'):
 
 class SPDX3:
     """
-    SPDX3 class to generate SPDX 3.0 SBOM output.
+    Class to generate SPDX 3.0 SBOM output.
     """
 
     def __init__(self, controllers: Dict[str, Any]):
@@ -33,6 +33,7 @@ class SPDX3:
         self.packagesCtrl = controllers["packages"]
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
+
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
 
@@ -259,290 +260,88 @@ class SPDX3:
 
         return json.dumps(spdx_doc, indent=2)
 
-    def _dict_to_xml_element(self, data: Dict[str, Any], parent_name: str = "element") -> Element:
-        """Convert dictionary to XML element."""
-        element = Element(parent_name)
+    def dict_to_xml_element(self, data: Dict[str, Any], parent_name: str = "element", namespace_prefix: str = "spdx") -> Element:
+        """Convert dictionary to XML element with SPDX 3.0 specific handling."""
+        
+        # Map SPDX 3.0 types to proper XML element names
+        type_mapping = {
+            "software_Package": f"{namespace_prefix}:software_Package",
+            "security_Vulnerability": f"{namespace_prefix}:security_Vulnerability", 
+            "security_VexNotAffectedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexNotAffectedVulnAssessmentRelationship",
+            "security_VexAffectedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexAffectedVulnAssessmentRelationship",
+            "security_VexFixedVulnAssessmentRelationship": f"{namespace_prefix}:security_VexFixedVulnAssessmentRelationship",
+            "Relationship": f"{namespace_prefix}:Relationship",
+            "SpdxDocument": f"{namespace_prefix}:SpdxDocument",
+            "CreationInfo": f"{namespace_prefix}:CreationInfo"
+        }
+        
+        # Handle SPDX type mapping
+        if "type" in data and data["type"] in type_mapping:
+            element_name = type_mapping[data["type"]]
+        else:
+            element_name = f"{namespace_prefix}:{parent_name}" if namespace_prefix and not parent_name.startswith(namespace_prefix) else parent_name
+            
+        element = Element(element_name)
 
         for key, value in data.items():
             if key.startswith("@"):
                 # Handle attributes (like @context, @graph)
                 continue
+            elif key == "type":
+                # Skip type as it's already handled in element name
+                continue
+            elif key == "spdxId":
+                # Handle spdxId as rdf:about attribute
+                element.set("rdf:about", f"#{value}")
+                continue
+            elif key in ["from", "to"] and isinstance(value, (str, list)):
+                # Handle relationship references
+                if isinstance(value, str):
+                    ref_elem = SubElement(element, f"{namespace_prefix}:{key}")
+                    ref_elem.set("rdf:resource", f"#{value}")
+                else:  # list
+                    for ref_value in value:
+                        ref_elem = SubElement(element, f"{namespace_prefix}:{key}")
+                        ref_elem.set("rdf:resource", f"#{ref_value}")
+                continue
             elif isinstance(value, dict):
-                child = self._dict_to_xml_element(value, key)
+                child = self.dict_to_xml_element(value, key, namespace_prefix)
                 element.append(child)
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
-                        child = self._dict_to_xml_element(item, key.rstrip('s'))  # Remove plural 's'
+                        child = self.dict_to_xml_element(item, key.rstrip('s'), namespace_prefix)
                         element.append(child)
                     else:
-                        child = Element(key.rstrip('s'))
+                        child = Element(f"{namespace_prefix}:{key.rstrip('s')}")
                         child.text = str(item)
                         element.append(child)
             else:
-                child = Element(key)
+                child = Element(f"{namespace_prefix}:{key}")
                 child.text = str(value)
                 element.append(child)
 
         return element
 
-    def _create_xml_document_structure(self, author: str = "Savoir-faire Linux") -> Tuple[Element, str]:
-        """Create the base SPDX 3.0 XML document structure."""
 
-        document_id = f"doc-{uuid7(as_type='str')}"
-        namespace = os.getenv('DOCUMENT_URL', f"https://spdx.org/spdxdocs/{uuid7(as_type='str')}.spdx3.xml")
 
+    def output_as_xml(self, author: str = "Savoir-faire Linux") -> str:
+        """Generate SPDX 3.0 XML output using unified data structure approach."""
+        
+        # Generate the same JSON structure but convert to XML
+        json_doc = json.loads(self.output_as_json(author))
+        
         # Create root element with namespaces
-        root = Element("spdx:SpdxDocument")
+        root = Element("rdf:RDF")
         root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
         root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
         root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
-        root.set("rdf:about", f"#{document_id}")
-
-        # Add document name
-        name_elem = SubElement(root, "spdx:name")
-        name_elem.text = f"{os.getenv('PRODUCT_NAME', 'PRODUCT_NAME')}-{os.getenv('PRODUCT_VERSION', '1.0.0')}"
-
-        # Add namespace map
-        namespace_elem = SubElement(root, "spdx:namespaceMap")
-        namespace_elem.text = namespace
-
-        # Add creation info
-        creation_info_id = f"creationinfo-{uuid7(as_type='str')}"
-        creation_info_elem = SubElement(root, "spdx:creationInfo")
-        creation_info_ref = SubElement(creation_info_elem, "spdx:CreationInfo")
-        creation_info_ref.set("rdf:about", f"#{creation_info_id}")
-
-        # Add creation info details
-        spec_version_elem = SubElement(creation_info_ref, "spdx:specVersion")
-        spec_version_elem.text = "3.0.1"
-
-        data_license_elem = SubElement(creation_info_ref, "spdx:dataLicense")
-        data_license_elem.text = "CC0-1.0"
-
-        created_elem = SubElement(creation_info_ref, "spdx:created")
-        created_elem.text = datetime.now(timezone.utc).isoformat()
-
-        # Add creators
-        creator_org_elem = SubElement(creation_info_ref, "spdx:creators")
-        creator_org_elem.text = f"Organization: {author}"
-
-        creator_tool_elem = SubElement(creation_info_ref, "spdx:creators")
-        creator_tool_elem.text = "Tool: VulnScout"
-
-        return root, document_id
-
-    def _add_xml_package_element(self, root: Element, pkg) -> None:
-        """Add package element to XML structure."""
-
-        # Generate unique SPDX ID if not already mapped
-        if pkg.id not in self.pkg_to_ref:
-            self.pkg_to_ref[pkg.id] = f"pkg-{uuid7(as_type='str')}"
-
-        spdx_id = self.pkg_to_ref[pkg.id]
-
-        # Create package element
-        pkg_elem = SubElement(root, "spdx:software_Package")
-        pkg_elem.set("rdf:about", f"#{spdx_id}")
-
-        # Add package name
-        name_elem = SubElement(pkg_elem, "spdx:name")
-        name_elem.text = pkg.name
-
-        # Add version info if available
-        if pkg.version:
-            version_elem = SubElement(pkg_elem, "spdx:versionInfo")
-            version_elem.text = pkg.version
-
-        # Add primary purpose
-        purpose_elem = SubElement(pkg_elem, "spdx:software_primaryPurpose")
-        purpose_elem.text = "application"
-
-        # Add external identifiers for CPEs and PURLs
-        for cpe in pkg.cpe:
-            ext_id_elem = SubElement(pkg_elem, "spdx:externalIdentifier")
-            ext_id_ref = SubElement(ext_id_elem, "spdx:ExternalIdentifier")
-
-            type_elem = SubElement(ext_id_ref, "spdx:externalIdentifierType")
-            type_elem.text = "cpe23"
-
-            id_elem = SubElement(ext_id_ref, "spdx:identifier")
-            id_elem.text = cpe
-
-        for purl in pkg.purl:
-            ext_id_elem = SubElement(pkg_elem, "spdx:externalIdentifier")
-            ext_id_ref = SubElement(ext_id_elem, "spdx:ExternalIdentifier")
-
-            type_elem = SubElement(ext_id_ref, "spdx:externalIdentifierType")
-            type_elem.text = "purl"
-
-            id_elem = SubElement(ext_id_ref, "spdx:identifier")
-            id_elem.text = purl
-
-    def _add_xml_vulnerability_element(self, root: Element, vuln_id: str, vuln) -> None:
-        """Add vulnerability element to XML structure."""
-
-        if vuln_id not in self.vuln_to_ref:
-            self.vuln_to_ref[vuln_id] = f"vuln-{uuid7(as_type='str')}"
-
-        spdx_id = self.vuln_to_ref[vuln_id]
-
-        # Create vulnerability element
-        vuln_elem = SubElement(root, "spdx:security_Vulnerability")
-        vuln_elem.set("rdf:about", f"#{spdx_id}")
-
-        # Add CVE identifier
-        ext_id_elem = SubElement(vuln_elem, "spdx:externalIdentifier")
-        ext_id_ref = SubElement(ext_id_elem, "spdx:ExternalIdentifier")
-
-        type_elem = SubElement(ext_id_ref, "spdx:externalIdentifierType")
-        type_elem.text = "cve"
-
-        id_elem = SubElement(ext_id_ref, "spdx:identifier")
-        id_elem.text = vuln_id
-
-        # Add URLs as additional identifiers
-        for url in vuln.urls:
-            ext_id_elem = SubElement(vuln_elem, "spdx:externalIdentifier")
-            ext_id_ref = SubElement(ext_id_elem, "spdx:ExternalIdentifier")
-
-            type_elem = SubElement(ext_id_ref, "spdx:externalIdentifierType")
-            type_elem.text = "other"
-
-            id_elem = SubElement(ext_id_ref, "spdx:identifier")
-            id_elem.text = url
-
-    def _add_xml_relationship(self, root: Element, from_ref: str, to_refs: List[str], relationship_type: str) -> None:
-        """Add relationship element to XML structure."""
-
-        rel_id = f"rel-{uuid7(as_type='str')}"
-        rel_elem = SubElement(root, "spdx:Relationship")
-        rel_elem.set("rdf:about", f"#{rel_id}")
-
-        # Add from reference
-        from_elem = SubElement(rel_elem, "spdx:from")
-        from_elem.set("rdf:resource", f"#{from_ref}")
-
-        # Add relationship type
-        type_elem = SubElement(rel_elem, "spdx:relationshipType")
-        type_elem.text = relationship_type
-
-        # Add to references
-        for to_ref in to_refs:
-            to_elem = SubElement(rel_elem, "spdx:to")
-            to_elem.set("rdf:resource", f"#{to_ref}")
-
-    def _add_xml_vex_assessment(self, root: Element, assessment) -> None:
-        """Add VEX assessment relationship to XML structure."""
-
-        vuln_ref = self.vuln_to_ref.get(assessment.vuln_id)
-        if not vuln_ref:
-            return
-
-        # Get package refs for this assessment
-        pkg_refs = []
-        for pkg_id in assessment.packages:
-            pkg_ref = self.pkg_to_ref.get(pkg_id)
-            if pkg_ref:
-                pkg_refs.append(pkg_ref)
-
-        if not pkg_refs:
-            return
-
-        # Map VulnScout status to SPDX 3.0 VEX relationship types
-        status_map = {
-            "not_affected": ("spdx:security_VexNotAffectedVulnAssessmentRelationship", "doesNotAffect"),
-            "false_positive": ("spdx:security_VexNotAffectedVulnAssessmentRelationship", "doesNotAffect"),
-            "affected": ("spdx:security_VexAffectedVulnAssessmentRelationship", "affects"),
-            "exploitable": ("spdx:security_VexAffectedVulnAssessmentRelationship", "affects"),
-            "fixed": ("spdx:security_VexFixedVulnAssessmentRelationship", "fixedIn"),
-            "resolved": ("spdx:security_VexFixedVulnAssessmentRelationship", "fixedIn"),
-            "resolved_with_pedigree": ("spdx:security_VexFixedVulnAssessmentRelationship", "fixedIn")
-        }
-
-        vex_type, relationship_type = status_map.get(
-            assessment.status,
-            ("spdx:security_VexAffectedVulnAssessmentRelationship", "affects")
-        )
-
-        vex_id = f"vex-{uuid7(as_type='str')}"
-        vex_elem = SubElement(root, vex_type.split(":")[-1])
-        vex_elem.set("rdf:about", f"#{vex_id}")
-
-        # Add from reference (vulnerability)
-        from_elem = SubElement(vex_elem, "spdx:from")
-        from_elem.set("rdf:resource", f"#{vuln_ref}")
-
-        # Add relationship type
-        type_elem = SubElement(vex_elem, "spdx:relationshipType")
-        type_elem.text = relationship_type
-
-        # Add to references (packages)
-        for pkg_ref in pkg_refs:
-            to_elem = SubElement(vex_elem, "spdx:to")
-            to_elem.set("rdf:resource", f"#{pkg_ref}")
-
-        # Add justification if available
-        justification_map = {
-            "vulnerable_code_not_present": "vulnerableCodeNotPresent",
-            "component_not_present": "componentNotPresent",
-            "vulnerable_code_not_in_execute_path": "vulnerableCodeNotInExecutePath",
-            "vulnerable_code_cannot_be_controlled_by_adversary": "vulnerableCodeCannotBeControlledByAdversary",
-            "inline_mitigations_already_exist": "inlineMitigationsAlreadyExist"
-        }
-
-        if assessment.justification and assessment.justification in justification_map:
-            just_elem = SubElement(vex_elem, "spdx:security_justificationType")
-            just_elem.text = justification_map[assessment.justification]
-
-        if assessment.impact_statement:
-            impact_elem = SubElement(vex_elem, "spdx:security_impactStatement")
-            impact_elem.text = assessment.impact_statement
-
-        if assessment.status_notes:
-            notes_elem = SubElement(vex_elem, "spdx:security_statusNotes")
-            notes_elem.text = assessment.status_notes
-
-    def output_as_xml(self, author: str = "Savoir-faire Linux") -> str:
-        """Generate SPDX 3.0 XML output."""
-
-        # Create base document structure
-        root, document_id = self._create_xml_document_structure(author)
-
-        # Generate package elements
-        for pkg in self.packagesCtrl:
-            self._add_xml_package_element(root, pkg)
-
-        # Generate vulnerability elements and package-vulnerability relationships
-        for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
-            self._add_xml_vulnerability_element(root, vuln_id, vuln)
-
-            # Create relationships between packages and vulnerabilities
-            vuln_ref = self.vuln_to_ref[vuln_id]
-            affected_pkg_refs = []
-
-            for pkg_id in vuln.packages:
-                if pkg_id in self.pkg_to_ref:
-                    affected_pkg_refs.append(self.pkg_to_ref[pkg_id])
-
-            if affected_pkg_refs:
-                for pkg_ref in affected_pkg_refs:
-                    self._add_xml_relationship(
-                        root, pkg_ref, [vuln_ref], "hasAssociatedVulnerability"
-                    )
-
-        # Generate VEX assessments
-        for assessment_key, assessment in self.assessmentsCtrl.assessments.items():
-            self._add_xml_vex_assessment(root, assessment)
-
-        # Add document relationships (describes packages)
-        pkg_refs = list(self.pkg_to_ref.values())
-
-        if pkg_refs:
-            self._add_xml_relationship(
-                root, document_id, pkg_refs, "describes"
-            )
-
+        
+        # Convert each item in @graph to XML element
+        for item in json_doc.get("@graph", []):
+            xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
+            root.append(xml_element)
+        
         # Convert to string with pretty formatting
         rough_string = tostring(root, encoding='unicode')
         reparsed = parseString(rough_string)
