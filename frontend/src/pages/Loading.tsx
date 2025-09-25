@@ -7,7 +7,7 @@ type Props = {
 
 function Loading(
   {
-    topline = 'Project analysis is running...',
+    topline = 'Software BOMs analysis is running...',
     details = 'Step 0 : starting script'
   }: Readonly<Props>
 ) {
