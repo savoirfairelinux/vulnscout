@@ -45,6 +45,7 @@ OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
 
+
 def is_items_only_openvex(scanners: list[str]) -> bool:
     """Return True if only openvex scanners are found."""
     for scanner in scanners:
@@ -157,7 +158,6 @@ def read_inputs(controllers):
     timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
     spdx = SPDX(controllers)
-    spdx3 = SPDX3(controllers)
     fastspdx3 = FastSPDX3(controllers)
     fastspdx = FastSPDX(controllers)
     templates = Templates(controllers)
