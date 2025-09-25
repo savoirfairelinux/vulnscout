@@ -24,6 +24,7 @@ def init_files(tmp_path):
         "TIME_ESTIMATES_PATH": tmp_path / "time_estimates.json",
         "OUTPUT_CDX_PATH": tmp_path / "output.cdx.json",
         "OUTPUT_SPDX_PATH": tmp_path / "output.spdx.json",
+        "OUTPUT_SPDX3_PATH": tmp_path / "output.spdx3.json",
         "OUTPUT_PATH": tmp_path / "all-merged.json",
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
         "OUTPUT_VULN_PATH": tmp_path / "vulnerabilities-merged.json",
