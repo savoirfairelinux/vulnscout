@@ -21,9 +21,10 @@ type Props = {
     clearFields?: boolean;
     progressBar?: number;
     onFieldsChange?: (hasChanges: boolean) => void;
+    triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange}: Readonly<Props>) {
+function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange, triggerBanner}: Readonly<Props>) {
     const [estimateHelp, setEstimateHelp] = useState(false);
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
@@ -71,7 +72,11 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
             if(content.likely.total_seconds > content.pessimistic.total_seconds)
                 throw new Error('Likely duration must be lower than pessimistic duration');
         } catch (e) {
-            alert(`Failed to parse estimation: ${String(e)}`);
+            if (triggerBanner) {
+                triggerBanner(`Failed to parse estimation: ${String(e)}`, "error");
+            } else {
+                alert(`Failed to parse estimation: ${String(e)}`);
+            }
             return;
         }
 

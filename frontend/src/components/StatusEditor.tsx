@@ -15,9 +15,10 @@ type Props = {
     progressBar?: number;
     clearFields?: boolean;
     onFieldsChange?: (hasChanges: boolean) => void;
+    triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner}: Readonly<Props>) {
     const [status, setStatus] = useState("under_investigation");
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
@@ -40,7 +41,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         if (status == '' || justification == '')
             return;
         if (status == "not_affected" && justification == 'none') {
-            alert("You must provide a justification for this status");
+            if (triggerBanner) {
+                triggerBanner("You must provide a justification for this status", "error");
+            } else {
+                alert("You must provide a justification for this status");
+            }
             return;
         }
         onAddAssessment({
