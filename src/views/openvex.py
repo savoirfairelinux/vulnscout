@@ -49,10 +49,8 @@ class OpenVex:
     def load_from_dict(self, data: dict):
         if "statements" in data:
             for statement in data["statements"]:
-
                 if "vulnerability" not in statement or "name" not in statement["vulnerability"]:
                     continue
-
                 vuln = Vulnerability(statement["vulnerability"]["name"], ["openvex"], "unknown", "unknown")
                 if "description" in statement["vulnerability"]:
                     vuln.add_text(statement["vulnerability"]["description"], "description")
@@ -72,7 +70,6 @@ class OpenVex:
                 if "products" in statement:
                     for product in statement["products"]:
                         pkg = self.parse_package_section(product)
-
                         if pkg is None:
                             continue
                         self.packagesCtrl.add(pkg)
@@ -113,9 +110,14 @@ class OpenVex:
         }
         for (assess_id, assess) in self.assessmentsCtrl.assessments.items():
             stmt = assess.to_openvex_dict()
-
+            # Check if the dict is empty, if so skip it.
+            if stmt is None:
+                continue
             vuln = self.vulnerabilitiesCtrl.get(assess.vuln_id)
             if vuln is not None:
+                # Check if there is vulnerability in the dict and if it's "none". If so set a empty dict.
+                if "vulnerability" not in stmt or stmt["vulnerability"] is None:
+                    stmt["vulnerability"] = {}
                 if "description" in vuln.texts:
                     stmt["vulnerability"]["description"] = vuln.texts["description"]
                 elif "summary" in vuln.texts:

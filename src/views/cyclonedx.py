@@ -109,7 +109,7 @@ class CycloneDx:
             return cyclonedx.model.vulnerability.VulnerabilityScoreSource.CVSS_V2
         return cyclonedx.model.vulnerability.VulnerabilityScoreSource.get_from_vector(cvss.vector_string)
 
-    #Add function to delete the "justification:"null" from the cyclonedx files
+    # Add function to delete the "justification:"null" from the cyclonedx files
     def clean_sbom(self, cyclonedx):
         if isinstance(cyclonedx, dict):
             new_dict = {}
@@ -203,7 +203,7 @@ class CycloneDx:
 
             for affect in vulnerability.affects:
                 ref = affect.ref
-                #Check is the ref in file exist in the dictionnary, if not skip it
+                # Check is the ref in file exist in the dictionnary, if not skip it
                 if ref in self.ref_dict:
                     vuln.add_package(self.ref_dict[ref])
 
