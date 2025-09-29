@@ -109,9 +109,28 @@ class CycloneDx:
             return cyclonedx.model.vulnerability.VulnerabilityScoreSource.CVSS_V2
         return cyclonedx.model.vulnerability.VulnerabilityScoreSource.get_from_vector(cvss.vector_string)
 
+    #Add function to delete the "justification:"null" from the cyclonedx files
+    def clean_sbom(self, cyclonedx):
+        if isinstance(cyclonedx, dict):
+            new_dict = {}
+            for k, v in cyclonedx.items():
+                # Remove 'justification' if it's invalid
+                if k == "justification" and (v is None or str(v).lower() == "null"):
+                    continue  # drop the key entirely
+                if isinstance(v, (dict, list)):
+                    new_dict[k] = self.clean_sbom(v)
+                else:
+                    new_dict[k] = v
+            return new_dict
+        elif isinstance(cyclonedx, list):
+            return [self.clean_sbom(item) for item in cyclonedx if item is not None]
+        else:
+            return cyclonedx
+
     def load_from_dict(self, cyclonedx: dict):
         """Read data from CycloneDx json parsed format."""
         try:
+            cyclonedx = self.clean_sbom(cyclonedx)
             self.sbom = Bom.from_json(data=cyclonedx)  # type: ignore
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
@@ -183,8 +202,10 @@ class CycloneDx:
                 vuln.add_url(str(advisory.url))
 
             for affect in vulnerability.affects:
-                if self.ref_dict[affect.ref]:
-                    vuln.add_package(self.ref_dict[affect.ref])
+                ref = affect.ref
+                #Check is the ref in file exist in the dictionnary, if not skip it
+                if ref in self.ref_dict:
+                    vuln.add_package(self.ref_dict[ref])
 
             if vulnerability.bom_ref.value:
                 self.ref_dict[vulnerability.bom_ref.value] = vuln.id
