@@ -13,9 +13,10 @@ type Props = {
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    triggerBanner: (message: string, type: 'error' | 'success') => void;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [progressBar, setProgressBar] = useState<number|undefined>(undefined)
@@ -64,14 +65,16 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 }
             }
             catch (e) {
-                alert(`Failed to add assessment: ${e}`);
+                errors.push(`Exception: ${e}`);
             }
             index++
             setProgressBar(index / selectedVulns.length)
         }
 
         if (errors.length >= 1) {
-            alert(`Failed to add assessment: HTTP code ${errors.join(', ')}`);
+            triggerBanner(`Failed to add assessment: HTTP code ${errors.join(', ')}`, 'error');
+        } else if (assessments.length > 0) {
+            triggerBanner(`Successfully added assessments to ${assessments.length} vulnerabilities`, 'success');
         }
         assessments.forEach(appendAssessment)
         setProgressBar(undefined)
@@ -126,7 +129,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 }
             }
             catch (e) {
-                alert(`Failed to save time estimate: ${e}`);
+                errors.push(`Exception: ${e}`);
             }
 
             index++
@@ -134,7 +137,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         }
 
         if (errors.length >= 1) {
-            alert(`Failed to add assessment: HTTP code ${errors.join(', ')}`);
+            triggerBanner(`Failed to save time estimates: HTTP code ${errors.join(', ')}`, 'error');
+        } else if (patchs.length > 0) {
+            triggerBanner(`Successfully updated time estimates for ${patchs.length} vulnerabilities`, 'success');
         }
         patchs.forEach((vuln: Vulnerability) => patchVuln(vuln.id, vuln))
         setProgressBar(undefined)
@@ -145,19 +150,26 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         {selectedVulns.length >= 1 && <>
             {panelOpened > 0 && <div className="absolute top-0 left-0 right-0 bottom-0 z-30 bg-black/40"></div>}
 
-            <div className="relative mb-4 p-2 z-40 bg-slate-600/70 text-white w-full flex flex-row items-center gap-2">
-                <div>Selected vulnerabilities: {selectedVulns.length}</div>
-                <button className="bg-sky-900 p-1 px-2 mr-4" onClick={resetVulns}>Reset selection</button>
+            <div className="relative mb-4 z-40 w-full">
+                <div className="bg-slate-600/70 text-white w-full">
+                    <div className="p-2 flex flex-row items-center gap-2">
+                        <div>Selected vulnerabilities: {selectedVulns.length}</div>
+                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={resetVulns}>Reset selection</button>
 
-                <button className="bg-sky-900 p-1 px-2" onClick={() => setPanelOpened(panelOpened == 1 ? 0 : 1)}>Change status</button>
-                <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => setPanelOpened(panelOpened == 2 ? 0 : 2)}>Change estimated time</button>
+                        <button className="bg-sky-900 p-1 px-2" onClick={() => setPanelOpened(panelOpened == 1 ? 0 : 1)}>Change status</button>
+                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => setPanelOpened(panelOpened == 2 ? 0 : 2)}>Change estimated time</button>
+                    </div>
+                </div>
             </div>
 
             <div className={[
                 'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
                 panelOpened == 1 ? 'block' : 'hidden'
             ].join(' ')}>
-                <StatusEditor onAddAssessment={(data) => addAssessment(data)} progressBar={progressBar} />
+                <StatusEditor 
+                    onAddAssessment={(data) => addAssessment(data)} 
+                    progressBar={progressBar}
+                />
             </div>
 
             <div className={[

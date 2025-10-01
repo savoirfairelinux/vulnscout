@@ -1,34 +1,19 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTimesCircle, faCheckCircle, faTimes } from "@fortawesome/free-solid-svg-icons";
-import { useEffect } from "react";
 
 type MessageBannerProps = {
   type: "error" | "success";
   message: string;
   isVisible: boolean;
   onClose: () => void;
-  autoHide?: boolean;
-  autoHideDelay?: number;
 };
 
 function MessageBanner({ 
   type, 
   message, 
   isVisible, 
-  onClose, 
-  autoHide = true, 
-  autoHideDelay = 5000 
+  onClose
 }: MessageBannerProps) {
-
-  useEffect(() => {
-    if (isVisible && autoHide) {
-      const timer = setTimeout(() => {
-        onClose();
-      }, autoHideDelay);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [isVisible, autoHide, autoHideDelay, onClose]);
 
   if (!isVisible) return null;
 

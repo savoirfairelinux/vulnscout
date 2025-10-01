@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import MessageBanner from './MessageBanner';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -24,6 +25,19 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
+    const [bannerMessage, setBannerMessage] = useState<string>('');
+    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
+    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+
+    const internalTriggerBanner = (message: string, type: 'error' | 'success') => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setBannerVisible(true);
+    };
+
+    const closeBanner = () => {
+        setBannerVisible(false);
+    };
 
     // Check if fields have changes
     useEffect(() => {
@@ -44,7 +58,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             if (triggerBanner) {
                 triggerBanner("You must provide a justification for this status", "error");
             } else {
-                alert("You must provide a justification for this status");
+                internalTriggerBanner("You must provide a justification for this status", "error");
             }
             return;
         }
@@ -72,6 +86,17 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     }, [shouldClearFields]);
 
     return (<>
+        {!triggerBanner && bannerVisible && (
+            <div className="mb-4">
+                <MessageBanner
+                    type={bannerType}
+                    message={bannerMessage}
+                    isVisible={bannerVisible}
+                    onClose={closeBanner}
+                />
+            </div>
+        )}
+
         <h3 className="m-1">
             Status:
             <select
