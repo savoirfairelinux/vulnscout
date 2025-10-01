@@ -30,6 +30,7 @@ from datetime import date, datetime, timezone
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
 SPDX_FOLDER = "/scan/tmp/spdx"
+SPDX_MERGED_PATH = "/scan/tmp/merged.spdx.json"
 GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
 GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
 YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
@@ -200,10 +201,12 @@ def read_inputs(controllers):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 
-    for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+    # First try to read the merged SPDX file (created by spdx_merge.py)
+    merged_spdx_path = os.getenv('SPDX_MERGED_PATH', SPDX_MERGED_PATH)
+    if os.path.exists(merged_spdx_path):
         try:
-            verbose(f"merger_ci: Reading {file}")
-            with open(file, "r") as f:
+            verbose(f"merger_ci: Reading merged SPDX file {merged_spdx_path}")
+            with open(merged_spdx_path, "r") as f:
                 data = json.load(f)
 
                 if fastspdx3.could_parse_spdx(data):
@@ -211,15 +214,38 @@ def read_inputs(controllers):
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
                 else:
-                    spdx.load_from_file(file)
+                    spdx.load_from_file(merged_spdx_path)
                     spdx.parse_and_merge()
         except Exception as e:
             if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
-                print(f"Error parsing SPDX file: {file} {e}")
+                print(f"Error parsing merged SPDX file: {merged_spdx_path} {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e
             else:
-                print(f"Ignored: Error parsing SPDX file: {file} {e}")
+                print(f"Ignored: Error parsing merged SPDX file: {merged_spdx_path} {e}")
+    else:
+
+        verbose("merger_ci: Merged SPDX file not found, reading individual files")
+        for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+            try:
+                verbose(f"merger_ci: Reading {file}")
+                with open(file, "r") as f:
+                    data = json.load(f)
+
+                    if fastspdx3.could_parse_spdx(data):
+                        fastspdx3.parse_controllers_from_dict(data)
+                    elif use_fastspdx:
+                        fastspdx.parse_from_dict(data)
+                    else:
+                        spdx.load_from_file(file)
+                        spdx.parse_and_merge()
+            except Exception as e:
+                if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+                    print(f"Error parsing SPDX file: {file} {e}")
+                    print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
+                    raise e
+                else:
+                    print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
     try:
