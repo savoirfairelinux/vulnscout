@@ -14,9 +14,10 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     triggerBanner: (message: string, type: 'error' | 'success') => void;
+    hideBanner: () => void;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [progressBar, setProgressBar] = useState<number|undefined>(undefined)
@@ -154,10 +155,10 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 <div className="bg-slate-600/70 text-white w-full">
                     <div className="p-2 flex flex-row items-center gap-2">
                         <div>Selected vulnerabilities: {selectedVulns.length}</div>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={resetVulns}>Reset selection</button>
+                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); resetVulns(); }}>Reset selection</button>
 
-                        <button className="bg-sky-900 p-1 px-2" onClick={() => setPanelOpened(panelOpened == 1 ? 0 : 1)}>Change status</button>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => setPanelOpened(panelOpened == 2 ? 0 : 2)}>Change estimated time</button>
+                        <button className="bg-sky-900 p-1 px-2" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}>Change status</button>
+                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}>Change estimated time</button>
                     </div>
                 </div>
             </div>

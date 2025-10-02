@@ -301,6 +301,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             appendAssessment={appendAssessment}
             patchVuln={patchVuln}
             triggerBanner={triggerBanner}
+            hideBanner={closeBanner}
         />
 
         <TableGeneric
