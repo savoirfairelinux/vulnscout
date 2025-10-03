@@ -103,7 +103,7 @@ If you need to install `docker compose`, look at: https://docs.docker.com/compos
 
 === Run Vulnscout project example
 
-This project contains a default usable example of Vulnscout. 
+This project contains a default usable example of Vulnscout.
 To use it, you can simply run the default script with the command:
 
 [source,shell]
@@ -128,15 +128,36 @@ To be short, a simple `inherit vulnscout` in your image recipe will be enough to
 
 The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
+=== Use Vulnscout manually
+
+To use VulnScout manually, you can use the script `vulnscout.sh` provided in the repository.
+
+For example, to reconfigure the default example SPDX3, you can run:
+
+[source,shell]
+----
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
+----
+
+Then, if you want to use the CI mode, without the web interface, you can the command with the '--fail_condition' argument:
+
+[source,shell]
+----
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json \
+--fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
+----
+
 === Configuration tips for others projects
 
-You don’t need to use Yocto to benefit from VulnScout.  
+You don’t need to use Yocto to benefit from VulnScout.
 All you need is at least one Software Bill of Materials (SBOM) file in SPDX or CycloneDX format.
 
-Grype and OSV scanners will analyze the SBOM for known vulnerabilities.  
+Grype and OSV scanners will analyze the SBOM for known vulnerabilities.
 If your SBOMs already include vulnerabilities, those will also be merged into the final results.
 
-You can simply create a new sub-folder in .vulnscout and place a modified `yaml` using your configuration. 
+You can simply create a new sub-folder in .vulnscout and place a modified `yaml` using your configuration.
 
 To configure your `yaml` file, you can look at the example provided in `.vulnscout/example/docker-example.yml`.
 
