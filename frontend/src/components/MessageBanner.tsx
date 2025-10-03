@@ -32,7 +32,7 @@ function MessageBanner({
   const icon = bannerConfig[type].icon;
 
   return (
-    <div className={`${bannerClasses} p-4 mb-4 rounded-lg shadow-lg relative`}>
+    <div className={`${bannerClasses} p-4 rounded-lg shadow-lg relative mb-4`}>
       <div className="flex items-center">
         <div className="flex-shrink-0">
           <FontAwesomeIcon 

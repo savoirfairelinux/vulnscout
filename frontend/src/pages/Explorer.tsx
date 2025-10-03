@@ -146,7 +146,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />
             </div>
 
-            <div className="p-8 flex-1 overflow-auto">
+            <div className="px-8 pb-8 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
                     packages={pkgs}

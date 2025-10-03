@@ -274,7 +274,6 @@ describe('Vulnerability Modal', () => {
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();
-        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
 
@@ -294,14 +293,16 @@ describe('Vulnerability Modal', () => {
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
         expect(fetchMock).toHaveBeenCalledTimes(0);
-        expect(alertSpy).toHaveBeenCalledTimes(1);
+        
+        // Check for error banner instead of alert
+        const errorBanner = await screen.findByText(/the vector string is invalid/i);
+        expect(errorBanner).toBeInTheDocument();
+        
         expect(closeCb).not.toHaveBeenCalled();
-        alertSpy.mockRestore();
     });
 
     test('custom CVSS API error shows alert (error branch lines 80-93)', async () => {
         fetchMock.resetMocks();
-        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -329,16 +330,18 @@ describe('Vulnerability Modal', () => {
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        expect(alertSpy).toHaveBeenCalledTimes(1);
+        
+        // Check for error banner instead of alert
+        const errorBanner = await screen.findByText(/failed to save cvss/i);
+        expect(errorBanner).toBeInTheDocument();
+        
         expect(patchVuln).not.toHaveBeenCalled();
         expect(closeCb).not.toHaveBeenCalled();
         errorSpy.mockRestore();
-        alertSpy.mockRestore();
     });
 
     test('custom CVSS success updates vulnerability and closes (lines 83-89)', async () => {
         fetchMock.resetMocks();
-        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -350,6 +353,7 @@ describe('Vulnerability Modal', () => {
 
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
+                ok: true,
                 status: 200,
                 json: () => Promise.resolve({
                     severity: {
@@ -376,25 +380,26 @@ describe('Vulnerability Modal', () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(patchVuln).toHaveBeenCalledTimes(1);
-        expect(alertSpy).toHaveBeenCalledTimes(1);
-        alertSpy.mockRestore();
+        
+        // Check for success banner instead of alert
+        const successBanner = await screen.findByText(/successfully added custom cvss/i);
+        expect(successBanner).toBeInTheDocument();
     });
 
     test('save estimation failure triggers alert (lines 121-122)', async () => {
         fetchMock.resetMocks();
-        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
 
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 status: 500,
-                text: () => Promise.resolve('bad estimation'),
+                text: () => Promise.resolve('server unavailable')
             } as Response)
         );
 
         const patchVuln = jest.fn();
         const closeCb = jest.fn();
 
-        // fresh copy
+        // Use fresh copy so mutation in component doesn't leak to other tests
         const vulnCopy = { ...vulnerability };
 
         render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
@@ -411,9 +416,12 @@ describe('Vulnerability Modal', () => {
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        expect(alertSpy).toHaveBeenCalledTimes(1);
+        
+        // Check for error banner instead of alert
+        const errorBanner = await screen.findByText(/failed to save estimation/i);
+        expect(errorBanner).toBeInTheDocument();
+        
         expect(patchVuln).not.toHaveBeenCalled();
         expect(closeCb).not.toHaveBeenCalled();
-        alertSpy.mockRestore();
     });
 });

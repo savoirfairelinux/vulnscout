@@ -248,13 +248,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
-                        <div className="sticky top-0 z-10 p-4 bg-gray-700">
+                        <div className="sticky top-0 z-10 bg-gray-700">
                             <MessageBanner
                                 type={bannerType}
                                 message={bannerMessage}
                                 isVisible={showBanner}
                                 onClose={hideBanner}
-                                autoHide={false}
                             />
                         </div>
                     )}

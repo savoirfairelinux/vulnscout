@@ -101,14 +101,12 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
 
     return (<>
         {!triggerBanner && bannerVisible && (
-            <div className="mb-4">
-                <MessageBanner
-                    type={bannerType}
-                    message={bannerMessage}
-                    isVisible={bannerVisible}
-                    onClose={closeBanner}
-                />
-            </div>
+            <MessageBanner
+                type={bannerType}
+                message={bannerMessage}
+                isVisible={bannerVisible}
+                onClose={closeBanner}
+            />
         )}
 
         <h3 className="font-bold">Estimated efforts to fix</h3>

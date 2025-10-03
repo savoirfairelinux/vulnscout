@@ -87,14 +87,12 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
     return (<>
         {!triggerBanner && bannerVisible && (
-            <div className="mb-4">
-                <MessageBanner
-                    type={bannerType}
-                    message={bannerMessage}
-                    isVisible={bannerVisible}
-                    onClose={closeBanner}
-                />
-            </div>
+            <MessageBanner
+                type={bannerType}
+                message={bannerMessage}
+                isVisible={bannerVisible}
+                onClose={closeBanner}
+            />
         )}
 
         <h3 className="m-1">
