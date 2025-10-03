@@ -11,7 +11,7 @@ import Explorer from "./pages/Explorer";
 function App() {
   const [loading, setLoading] = useState(true);
   const [loadingText, setLoadingText] = useState({
-    topline: 'Software BOMs analysis is running...',
+    topline: 'Vulnerability analysis is running...',
     details: 'Step 0 : starting script'
   });
   const [darkMode, setDarkMode] = useState(true);
@@ -30,7 +30,7 @@ function App() {
           return;
         }
         setLoadingText({
-          topline: 'Software BOMs analysis is running...',
+          topline: 'Vulnerability analysis is running...',
           details: `Step ${data?.step ?? '0'}/${data?.maxsteps ?? '?'} : ${data?.message}`
         });
       })
