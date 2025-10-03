@@ -5,6 +5,7 @@ import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
+import MessageBanner from "./MessageBanner";
 import SeverityTag from "./SeverityTag";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
@@ -42,6 +43,21 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
     const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
+
+    // Message banner state
+    const [bannerMessage, setBannerMessage] = useState("");
+    const [bannerType, setBannerType] = useState<"error" | "success">("error");
+    const [showBanner, setShowBanner] = useState(false);
+
+    const showMessage = (message: string, type: "error" | "success") => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setShowBanner(true);
+    };
+
+    const hideBanner = () => {
+        setShowBanner(false);
+    };
 
     const handleClose = () => {
         if (hasUnsavedChanges) {
@@ -127,12 +143,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
                 patchVuln(vuln.id, vuln);
-                alert("Successfully added assessment.");
+                showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
                 setTimeout(() => setClearAssessmentFields(false), 100);
             }
         } else {
-            alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
+            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, "error");
         }
     };
 
@@ -140,7 +156,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         const content = appendCVSS(vuln.id, vector);
 
         if (content === null) {
-            alert("The vector string is invalid, please check the format.");
+            showMessage("The vector string is invalid, please check the format.", "error");
             return;
         }
 
@@ -165,11 +181,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
             patchVuln(vuln.id, vuln);
             setShowCustomCvss(false);
-            alert("successfully added Custom CVSS.");
+            showMessage("Successfully added Custom CVSS.", "success");
         } else {
             const data = await response.text();
             console.error("API error response:", response.status, data);
-            alert(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`);
+            showMessage(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`, "error");
         }
     };
 
@@ -198,10 +214,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
             patchVuln(vuln.id, vuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
-            alert("Successfully added estimation.");
+            showMessage("Successfully added estimation.", "success");
         } else {
             const data = await response.text();
-            alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
+            showMessage(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`, "error");
         }
     };
 
@@ -229,6 +245,18 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             <span className="sr-only">Close modal</span>
                         </button>
                     </div>
+
+                    {/* Message Banner - Sticky at top */}
+                    {showBanner && (
+                        <div className="sticky top-0 z-10 bg-gray-700">
+                            <MessageBanner
+                                type={bannerType}
+                                message={bannerMessage}
+                                isVisible={showBanner}
+                                onClose={hideBanner}
+                            />
+                        </div>
+                    )}
 
                     {/* Modal body */}
                     <div className="p-4 md:p-5 space-y-4 text-gray-300 text-justify" id="vulnerability_modal_body">
@@ -284,6 +312,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             onAddCvss={(vector) => {
                                                 addCvss(vector);
                                             }}
+                                            triggerBanner={showMessage}
                                         />
                                         </div>
                                     )}
@@ -327,6 +356,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             onSaveTimeEstimation={(data) => saveEstimation(data)}
                             clearFields={clearTimeFields}
                             onFieldsChange={setHasTimeChanges}
+                            triggerBanner={showMessage}
                             actualEstimate={{
                                 optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                 likely: vuln?.effort?.likely?.formatHumanShort(),
@@ -372,6 +402,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     onAddAssessment={(data) => addAssessment(data)} 
                                     clearFields={clearAssessmentFields}
                                     onFieldsChange={setHasAssessmentChanges} 
+                                    triggerBanner={showMessage}
                                 />
                             </li>
                         </ol>

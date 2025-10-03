@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion } from '@fortawesome/free-regular-svg-icons';
 import Iso8601Duration from '../handlers/iso8601duration';
+import MessageBanner from './MessageBanner';
 
 type PostTimeEstimate = {
     optimistic: Iso8601Duration,
@@ -21,13 +22,27 @@ type Props = {
     clearFields?: boolean;
     progressBar?: number;
     onFieldsChange?: (hasChanges: boolean) => void;
+    triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange}: Readonly<Props>) {
+function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange, triggerBanner}: Readonly<Props>) {
     const [estimateHelp, setEstimateHelp] = useState(false);
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
     const [newPessimistic, setNewPessimistic] = useState("");
+    const [bannerMessage, setBannerMessage] = useState<string>('');
+    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
+    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+
+    const internalTriggerBanner = (message: string, type: 'error' | 'success') => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setBannerVisible(true);
+    };
+
+    const closeBanner = () => {
+        setBannerVisible(false);
+    };
 
     const clearFields = () => {
         setNewOptimistic("");
@@ -71,7 +86,11 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
             if(content.likely.total_seconds > content.pessimistic.total_seconds)
                 throw new Error('Likely duration must be lower than pessimistic duration');
         } catch (e) {
-            alert(`Failed to parse estimation: ${String(e)}`);
+            if (triggerBanner) {
+                triggerBanner(`Failed to parse estimation: ${String(e)}`, "error");
+            } else {
+                internalTriggerBanner(`Failed to parse estimation: ${String(e)}`, "error");
+            }
             return;
         }
 
@@ -81,6 +100,15 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
     };
 
     return (<>
+        {!triggerBanner && bannerVisible && (
+            <MessageBanner
+                type={bannerType}
+                message={bannerMessage}
+                isVisible={bannerVisible}
+                onClose={closeBanner}
+            />
+        )}
+
         <h3 className="font-bold">Estimated efforts to fix</h3>
         <div className="flex flex-row space-x-4 max-w-[900px]">
             <div className="flex-1 m-1">

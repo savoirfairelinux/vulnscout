@@ -3,14 +3,15 @@ import { useState } from "react";
 type Props = {
   onCancel: () => void;
   onAddCvss: (vector: string) => void;
+  triggerBanner: (message: string, type: "error" | "success") => void;
 };
 
-function CustomCvss({ onCancel, onAddCvss }: Props) {
+function CustomCvss({ onCancel, onAddCvss, triggerBanner }: Props) {
   const [vectorString, setVectorString] = useState("");
 
   const handleAdd = () => {
     if (!vectorString.trim()) {
-      alert("Please provide a valid CVSS vector string");
+      triggerBanner("Please provide a valid CVSS vector string", "error");
       return;
     }
     onAddCvss(vectorString.trim());
