@@ -2,7 +2,6 @@
 Savoir-faire Linux
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
-:toc:
 :icons: font
 :icon-set: fa
 

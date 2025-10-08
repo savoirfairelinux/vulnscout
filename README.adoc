@@ -2,7 +2,6 @@
 Savoir-faire Linux
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
-:toc:
 :icons: font
 :icon-set: fa
 
@@ -11,7 +10,8 @@ image::./doc/images/vulnscout_logo.jpeg[alt=vulnscout logo]
 image::https://img.shields.io/badge/License-GPL%203.0-green.svg[License, link=https://opensource.org/license/gpl-3-0]
 
 ---
-== [blue]#icon:sign-in[]# Introduction
+
+== [grey]#icon:sign-in[]#  Introduction
 
 VulnScout is designed to analyse and identify vulnerabilities in their software components and dependencies using an *SBOM* (Software Bill Of Materials).
 
@@ -27,17 +27,15 @@ VulnScout also provides a web interface for visualisation and a command line to 
 * Generate detailed reports
 * Help track fixes with the dashboard
 
-== icon:download[] Installing VulnScout
+==  icon:cog[] Setting up VulnScout
 
-=== Requirements
+=== Requirements & Installation
 
 VulnScout is designed to run locally in a Docker container.
 It will require having `docker-compose` or `docker compose` available on your host.
 
 If you need to install `docker compose`, look at:
 https://docs.docker.com/compose/install/[docker-compose]
-
-=== Installation
 
 To install VulnScout, you only need to clone the repository:
 [source,bash]
@@ -46,7 +44,9 @@ git clone https://github.com/savoirfairelinux/vulnscout.git
 cd vulnscout
 ----
 
-=== Run VulnScout demo
+==  [black]#icon:linux[]# Using VulnScout
+
+===  Run VulnScout demo
 
 This project contains a default usable example of Vulnscout.
 To use it, you can simply run the default script with the command:
@@ -64,7 +64,7 @@ Or, if you prefer to run another example based on SPDX-3.0, you can use the foll
 ----
 These commands will use the docker-compose files located here: _/.vulnscout/example/_
 
-== [black]#icon:linux[]# Use VulnScount with Yocto
+===  Run VulnScount with Yocto
 
 We have a dedicated layer for Vulnscout integration in Yocto.
 
@@ -74,7 +74,7 @@ To be short, a simple `inherit vulnscout` in your image recipe will be enough to
 
 The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
-=== Use Vulnscout manually
+=== Run VulnScout manually
 
 To use VulnScout manually, you can use the script `vulnscout.sh` provided in the repository.
 
@@ -95,21 +95,8 @@ Then, if you want to use the CI mode, without the web interface, you can the com
 --fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ----
 
-=== Configuration tips for others projects
 
-You don’t need to use Yocto to benefit from VulnScout.
-All you need is at least one Software Bill of Materials (SBOM) file in SPDX or CycloneDX format.
-
-Grype and OSV scanners will analyze the SBOM for known vulnerabilities.
-If your SBOMs already include vulnerabilities, those will also be merged into the final results.
-
-You can simply create a new sub-folder in .vulnscout and place a modified `yaml` using your configuration.
-
-To be short, a simple `inherit vulnscout` in your image recipe will be enough to configure VulnScout for your project.
-
-The VulnScout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
-
-== icon:lock[] Manually start VulnScout
+===  Run VulnScout with docker
 
 You can start the VulnScout docker container with a `docker compose` or `docker-compose` command:
 
@@ -124,6 +111,22 @@ Then open your browser to view the results:
 ----
 http://localhost:7275
 ----
+
+==== Configuration tips for other projects
+
+To use VulnScout, you only need a Software Bill of Materials *(SBOM)* file in SPDX or CycloneDX format. +
+The Grype scanner will analyse the SBOM for vulnerabilities; if it already includes some, those will be merged into the final results. +
+To do so, create a new sub-folder in _.vulnscout_ and place a modified `yaml` using your configuration. +
+To configure your `yaml` file, you can look at the example provided here _.vulnscout/example/docker-example.yml_
+
+===== Tips for Editing your `yaml` file
+
+[TIP]
+====
+- .tar, .tar.gz, .tar.zst, and archives are supported as SPDX 2 input.
+- .spdx.json is supported as SPDX 3 input.
+- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
+====
 
 == [green]#icon:sitemap[]# Architecture
 
