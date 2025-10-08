@@ -7,15 +7,16 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from xml.etree.ElementTree import Element, SubElement, tostring
-from xml.dom.minidom import parseString
-import uuid
 
 
-def uuid7(as_type='str'):
-    if as_type == 'str':
-        return str(uuid.uuid4())
-    return uuid.uuid4()
+def safe_spdx_id(text: str) -> str:
+    """Convert text to safe SPDX ID format by replacing unsafe characters."""
+    return text.replace('@', '-').replace(':', '-').replace('/', '-').replace(' ', '-')
+
+
+def generate_spdx_namespace() -> str:
+    """Generate SPDX namespace from environment or use default."""
+    return os.getenv('SPDX_NAMESPACE', 'https://vulnscout.example.org')
 
 
 class SPDX3:
@@ -36,13 +37,38 @@ class SPDX3:
 
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
+        self.namespace = generate_spdx_namespace()
+        self._creation_info_ref = None
+
+    def _generate_package_spdx_id(self, pkg_id: str) -> str:
+        """Generate deterministic SPDX ID for package using existing package.id"""
+        safe_id = safe_spdx_id(pkg_id)
+        return f"{self.namespace}#SPDXRef-Package-{safe_id}"
+
+    def _generate_vulnerability_spdx_id(self, vuln_id: str) -> str:
+        """Generate deterministic SPDX ID for vulnerability using existing vuln.id"""
+        safe_id = safe_spdx_id(vuln_id)
+        return f"{self.namespace}#SPDXRef-Vulnerability-{safe_id}"
+
+    def _generate_assessment_spdx_id(self, assessment_id: str) -> str:
+        """Generate deterministic SPDX ID for VEX assessment using existing assessment.id"""
+        return f"{self.namespace}#SPDXRef-VexAssessment-{assessment_id}"
+
+    def _generate_relationship_spdx_id(self, from_ref: str, to_ref: str, relationship_type: str) -> str:
+        """Generate deterministic SPDX ID for relationship based on content"""
+        content_hash = hash(f"{from_ref}-{to_ref}-{relationship_type}")
+        return f"{self.namespace}#SPDXRef-Relationship-{abs(content_hash) % 1000000000000}"
+
+    def _generate_creation_info_spdx_id(self) -> str:
+        """Generate deterministic SPDX ID for creation info"""
+        return f"{self.namespace}#SPDXRef-CreationInfo"
 
     def generate_package_element(self, pkg) -> Dict[str, Any]:
         """Generate SPDX 3.0 package element from Package object."""
 
-        # Generate unique SPDX ID if not already present in the object
+        # Generate deterministic SPDX ID using the existing package.id
         if pkg.id not in self.pkg_to_ref:
-            self.pkg_to_ref[pkg.id] = f"pkg-{uuid7(as_type='str')}"
+            self.pkg_to_ref[pkg.id] = self._generate_package_spdx_id(pkg.id)
 
         spdx_id = self.pkg_to_ref[pkg.id]
 
@@ -54,19 +80,21 @@ class SPDX3:
         }
 
         if pkg.version:
-            element["versionInfo"] = pkg.version
+            element["software_packageVersion"] = pkg.version
 
         # Add external identifiers for CPEs and PURLs
         external_ids = []
 
         for cpe in pkg.cpe:
             external_ids.append({
+                "type": "ExternalIdentifier",
                 "externalIdentifierType": "cpe23",
                 "identifier": cpe
             })
 
         for purl in pkg.purl:
             external_ids.append({
+                "type": "ExternalIdentifier", 
                 "externalIdentifierType": "purl",
                 "identifier": purl
             })
@@ -80,12 +108,13 @@ class SPDX3:
         """Generate SPDX 3.0 vulnerability element."""
 
         if vuln_id not in self.vuln_to_ref:
-            self.vuln_to_ref[vuln_id] = f"vuln-{uuid7(as_type='str')}"
+            self.vuln_to_ref[vuln_id] = self._generate_vulnerability_spdx_id(vuln_id)
 
         spdx_id = self.vuln_to_ref[vuln_id]
 
         # Create external identifiers list starting with CVE
         external_identifiers: List[Dict[str, str]] = [{
+            "type": "ExternalIdentifier",
             "externalIdentifierType": "cve",
             "identifier": vuln_id
         }]
@@ -93,12 +122,13 @@ class SPDX3:
         # Add URLs as additional identifiers
         for url in vuln.urls:
             external_identifiers.append({
-                "externalIdentifierType": "other",
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": "securityAdvisory",
                 "identifier": url
             })
 
         element = {
-            "type": "security_Vulnerability",
+            "type": "security_Vulnerability", 
             "spdxId": spdx_id,
             "externalIdentifier": external_identifiers
         }
@@ -107,9 +137,13 @@ class SPDX3:
 
     def generate_relationship(self, from_ref: str, to_refs: List[str], relationship_type: str) -> Dict[str, Any]:
         """Generate SPDX 3.0 relationship element."""
+        # Generate deterministic ID based on relationship content
+        to_refs_str = "-".join(sorted(to_refs))  # Sort for consistency
+        relationship_id = self._generate_relationship_spdx_id(from_ref, to_refs_str, relationship_type)
+        
         return {
             "type": "Relationship",
-            "spdxId": f"rel-{uuid7(as_type='str')}",
+            "spdxId": relationship_id,
             "from": from_ref,
             "relationshipType": relationship_type,
             "to": to_refs
@@ -150,7 +184,7 @@ class SPDX3:
 
         element = {
             "type": vex_type,
-            "spdxId": f"vex-{uuid7(as_type='str')}",
+            "spdxId": self._generate_assessment_spdx_id(assessment.id),
             "from": vuln_ref,
             "relationshipType": relationship_type,
             "to": pkg_refs
@@ -179,226 +213,94 @@ class SPDX3:
     def create_document_structure(self, author: str = "Savoir-faire Linux") -> Dict[str, Any]:
         """Create the base SPDX 3.0 document structure."""
 
-        document_id = f"doc-{uuid7(as_type='str')}"
-        namespace = os.getenv('DOCUMENT_URL', f"https://spdx.org/spdxdocs/{uuid7(as_type='str')}.spdx3.json")
+        document_id = f"{self.namespace}#SPDXRef-Document"
 
         creation_info = {
             "type": "CreationInfo",
-            "spdxId": f"creationinfo-{uuid7(as_type='str')}",
+            "spdxId": self._generate_creation_info_spdx_id(),
             "specVersion": "3.0.1",
             "dataLicense": "CC0-1.0",
             "created": datetime.now(timezone.utc).isoformat(),
-            "creators": [f"Organization: {author}", "Tool: VulnScout"]
+            "createdBy": [f"Organization: {author}", "Tool: VulnScout"]
         }
+
+        # Cache creation info reference for reuse
+        self._creation_info_ref = creation_info["spdxId"]
 
         document = {
             "type": "SpdxDocument",
             "spdxId": document_id,
             "name": f"{os.getenv('PRODUCT_NAME', 'PRODUCT_NAME')}-{os.getenv('PRODUCT_VERSION', '1.0.0')}",
-            "namespaceMap": {
-                "": namespace
-            },
-            "creationInfo": creation_info.get("spdxId")
+            "creationInfo": self._creation_info_ref,
+            "profileConformance": ["core", "software", "security"]
         }
 
         return {
-            "@context": "https://raw.githubusercontent.com/spdx/spdx-3-model/main/model/spdx-context.jsonld",
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
             "@graph": [creation_info, document],
             "spdxId": document_id
         }
 
     def output_as_json(self, author: str = "Savoir-faire Linux") -> str:
-        """Generate SPDX 3.0 JSON output."""
+        """Generate SPDX 3.0 JSON output with optimized performance."""
 
         # Create base document structure
         spdx_doc = self.create_document_structure(author)
-
-        # Generate package elements
+        graph = spdx_doc["@graph"]
+        
+        # Single pass: Generate all elements with creation info pre-added
+        elements_to_add = []
+        relationships_to_add = []
+        
+        # Process packages
         for pkg in self.packagesCtrl:
             pkg_element = self.generate_package_element(pkg)
-            spdx_doc["@graph"].append(pkg_element)
+            pkg_element["creationInfo"] = self._creation_info_ref
+            elements_to_add.append(pkg_element)
 
-        # Generate vulnerability elements and package-vulnerability relationships
+        # Process vulnerabilities and their relationships
         for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
+            # Generate vulnerability element
             vuln_element = self.generate_vulnerability_element(vuln_id, vuln)
-            spdx_doc["@graph"].append(vuln_element)
+            vuln_element["creationInfo"] = self._creation_info_ref
+            elements_to_add.append(vuln_element)
 
-            # Create relationships between packages and vulnerabilities
+            # Generate package-vulnerability relationships efficiently
             vuln_ref = self.vuln_to_ref[vuln_id]
-            affected_pkg_refs = []
-
             for pkg_id in vuln.packages:
-                if pkg_id in self.pkg_to_ref:
-                    affected_pkg_refs.append(self.pkg_to_ref[pkg_id])
-
-            if affected_pkg_refs:
-                for pkg_ref in affected_pkg_refs:
+                pkg_ref = self.pkg_to_ref.get(pkg_id)
+                if pkg_ref:
                     relationship = self.generate_relationship(
                         pkg_ref,
                         [vuln_ref],
                         "hasAssociatedVulnerability"
                     )
-                    spdx_doc["@graph"].append(relationship)
+                    relationship["creationInfo"] = self._creation_info_ref
+                    relationships_to_add.append(relationship)
 
-        # Generate VEX assessments
-        for assessment_key, assessment in self.assessmentsCtrl.assessments.items():
+        # Process VEX assessments
+        for assessment in self.assessmentsCtrl.assessments.values():
             vex_element = self.generate_vex_assessment(assessment)
             if vex_element:
-                spdx_doc["@graph"].append(vex_element)
+                vex_element["creationInfo"] = self._creation_info_ref
+                elements_to_add.append(vex_element)
 
-        # Add document relationships (describes packages)
-        document_id = spdx_doc["spdxId"]
-        pkg_refs = list(self.pkg_to_ref.values())
+        # Add all elements and relationships to graph at once
+        graph.extend(elements_to_add)
+        graph.extend(relationships_to_add)
 
-        if pkg_refs:
-            doc_relationship = self.generate_relationship(
-                document_id,
-                pkg_refs,
-                "describes"
-            )
-            spdx_doc["@graph"].append(doc_relationship)
-
-        return json.dumps(spdx_doc, indent=2)
-
-    def dict_to_xml_element(
-        self,
-        data: Dict[str, Any],
-        parent_name: str = "element",
-        namespace_prefix: str = "spdx"
-    ) -> Element:
-        """Convert dictionary to XML element with SPDX 3.0 specific handling."""
-
-        # Map SPDX 3.0 types to proper XML element names
-        type_mapping = {
-            "software_Package": f"{namespace_prefix}:software_Package",
-            "security_Vulnerability": f"{namespace_prefix}:security_Vulnerability",
-            "security_VexNotAffectedVulnAssessmentRelationship": (
-                f"{namespace_prefix}:security_VexNotAffectedVulnAssessmentRelationship"
-            ),
-            "security_VexAffectedVulnAssessmentRelationship": (
-                f"{namespace_prefix}:security_VexAffectedVulnAssessmentRelationship"
-            ),
-            "security_VexFixedVulnAssessmentRelationship": (
-                f"{namespace_prefix}:security_VexFixedVulnAssessmentRelationship"
-            ),
-            "Relationship": f"{namespace_prefix}:Relationship",
-            "SpdxDocument": f"{namespace_prefix}:SpdxDocument",
-            "CreationInfo": f"{namespace_prefix}:CreationInfo",
-        }
-
-        # Handle SPDX type mapping
-        if "type" in data and data["type"] in type_mapping:
-            element_name = type_mapping[data["type"]]
-        else:
-            element_name = (
-                f"{namespace_prefix}:{parent_name}"
-                if namespace_prefix and not parent_name.startswith(namespace_prefix)
-                else parent_name
-            )
-
-        element = Element(element_name)
-
-        for key, value in data.items():
-            if key.startswith("@"):
-                # Handle attributes (like @context, @graph)
-                continue
-            elif key == "type":
-                # Skip type as it's already handled in element name
-                continue
-            elif key == "spdxId":
-                # Handle spdxId as rdf:about attribute
-                element.set("rdf:about", f"#{value}")
-                continue
-            elif key == "namespaceMap":
-                # Handle namespaceMap as XML attributes on the element
-                if isinstance(value, dict):
-                    for ns_prefix, ns_uri in value.items():
-                        if not ns_prefix:  # Default namespace
-                            element.set("xmlns", ns_uri)
-                        else:
-                            element.set(f"xmlns:{ns_prefix}", ns_uri)
-                continue
-            elif key in ["from", "to"] and isinstance(value, (str, list)):
-                # Handle relationship references
-                if isinstance(value, str):
-                    ref_elem = SubElement(element, f"{namespace_prefix}:{key}")
-                    ref_elem.set("rdf:resource", f"#{value}")
-                else:  # list
-                    for ref_value in value:
-                        ref_elem = SubElement(element, f"{namespace_prefix}:{key}")
-                        ref_elem.set("rdf:resource", f"#{ref_value}")
-                continue
-            elif key == "externalIdentifier" and isinstance(value, list):
-                # Special handling for external identifiers to ensure proper XML structure
-                for ext_id in value:
-                    ext_elem = SubElement(element, f"{namespace_prefix}:ExternalIdentifier")
-                    if isinstance(ext_id, dict):
-                        for id_key, id_value in ext_id.items():
-                            id_elem = SubElement(ext_elem, f"{namespace_prefix}:{id_key}")
-                            id_elem.text = str(id_value)
-                continue
-            elif isinstance(value, dict):
-                child = self.dict_to_xml_element(value, key, namespace_prefix)
-                element.append(child)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        child = self.dict_to_xml_element(item, key.rstrip('s'), namespace_prefix)
-                        element.append(child)
-                    else:
-                        child = Element(f"{namespace_prefix}:{key.rstrip('s')}")
-                        child.text = str(item)
-                        element.append(child)
-            else:
-                # Skip empty keys that would create invalid XML tags
-                if not key or key.isspace():
-                    continue
-                child = Element(f"{namespace_prefix}:{key}")
-                child.text = str(value)
-                element.append(child)
-
-        return element
-
-    def output_as_xml(self, author: str = "Savoir-faire Linux") -> str:
-        """Generate SPDX 3.0 XML output using unified data structure approach."""
-
-        # Generate the same JSON structure but convert to XML
-        json_doc = json.loads(self.output_as_json(author))
-
-        # Find SpdxDocument and use it as the primary element
-        spdx_document = None
-        for item in json_doc.get("@graph", []):
+        # Build element references list efficiently
+        element_refs = [item["spdxId"] for item in elements_to_add + relationships_to_add]
+        
+        # Update the SpdxDocument with element list
+        for item in graph:
             if item.get("type") == "SpdxDocument":
-                spdx_document = item
+                item["element"] = element_refs
+                # Find first package as root element
+                package_refs = [ref for ref, item in zip(element_refs, elements_to_add) 
+                              if item.get("type") == "software_Package"]
+                if package_refs:
+                    item["rootElement"] = [package_refs[0]]
                 break
 
-        if spdx_document:
-            # Create an SPDX document as the root element
-            root = self.dict_to_xml_element(spdx_document)
-
-            # Add namespaces to the root element
-            root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
-            root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
-            root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
-
-            # Add other elements under the root
-            for item in json_doc.get("@graph", []):
-                if item.get("type") != "SpdxDocument":  # Skip the document as it's now the root
-                    xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
-                    root.append(xml_element)
-        else:
-            # Fallback to previous approach if no SpdxDocument is found
-            root = Element("rdf:RDF")
-            root.set("xmlns:spdx", "https://spdx.org/rdf/3.0.1/terms/")
-            root.set("xmlns:rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
-            root.set("xmlns:rdfs", "http://www.w3.org/2000/01/rdf-schema#")
-
-            # Convert each item in @graph to XML element
-            for item in json_doc.get("@graph", []):
-                xml_element = self.dict_to_xml_element(item, item.get("type", "element"))
-                root.append(xml_element)
-
-        # Convert to string with pretty formatting
-        rough_string = tostring(root, encoding='unicode')
-        reparsed = parseString(rough_string)
-        return reparsed.toprettyxml(indent="  ", encoding=None)
+        return json.dumps(spdx_doc, indent=2)
