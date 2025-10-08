@@ -136,7 +136,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
             <NavigationBar tab={tab} changeTab={handleTabChange} darkMode={darkMode} setDarkMode={setDarkMode} />
-            
+
             <div className="px-8 pt-4">
                 <MessageBanner
                     type={bannerType}
@@ -146,7 +146,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />
             </div>
 
-            <div className="px-8 pb-8 flex-1 overflow-auto">
+            <div className="p-5 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
                     packages={pkgs}

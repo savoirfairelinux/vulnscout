@@ -98,106 +98,126 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         const columnHelper = createColumnHelper<Vulnerability>()
         return [
             {
-                id: 'select-checkbox',
-                header: ({ table }: {table: Table<Vulnerability>}) => (
-                    <div className="w-full text-center">
-                        <input
-                            type="checkbox"
-                            title={table.getIsAllRowsSelected() ? "Unselect all" : "Select all"}
-                            checked={table.getIsAllRowsSelected()}
-                            onChange={table.getToggleAllRowsSelectedHandler()}
-                        />
+            id: 'select-checkbox',
+                cell: ({ row }: { row: Row<Vulnerability> }) => (
+                    <div className="flex items-center justify-center h-full">
+                    <input
+                        type="checkbox"
+                        title={row.getIsSelected() ? "Unselect" : "Select"}
+                        checked={row.getIsSelected()}
+                        disabled={!row.getCanSelect()}
+                        onChange={row.getToggleSelectedHandler()}
+                    />
                     </div>
                 ),
-                cell: ({ row }: {row: Row<Vulnerability>}) => (
-                    <div className="w-full text-center">
-                        <input
-                            type="checkbox"
-                            title={row.getIsSelected() ? "Unselect" : "Select"}
-                            checked={row.getIsSelected()}
-                            disabled={!row.getCanSelect()}
-                            onChange={row.getToggleSelectedHandler()}
-                        />
+                header: ({ table }: { table: Table<Vulnerability> }) => (
+                    <div className="flex items-center justify-center h-full">
+                    <input
+                        type="checkbox"
+                        title={table.getIsAllRowsSelected() ? "Unselect all" : "Select all"}
+                        checked={table.getIsAllRowsSelected()}
+                        onChange={table.getToggleAllRowsSelectedHandler()}
+                    />
                     </div>
                 ),
-                footer: ({ table }: {table: Table<Vulnerability>}) => (
-                    <div className="w-full text-center">
-                        {table.getSelectedRowModel().rows.length || ''}
+                footer: ({ table }: { table: Table<Vulnerability> }) => (
+                    <div className="flex items-center justify-center h-full">
+                    {table.getSelectedRowModel().rows.length || ''}
                     </div>
                 ),
                 minSize: 10,
                 size: 10,
-                maxSize: 50
+                maxSize: 40
             },
             columnHelper.accessor('id', {
-                header: 'ID',
-                cell: info => info.getValue(),
+                header: () => <div className="flex items-center justify-center">ID</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
                 sortDescFirst: true,
-                footer: (info) => `Total: ${info.table.getRowCount()}`,
-                size: 125
+                footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
+                size: 145
             }),
             columnHelper.accessor('severity.severity', {
-                header: 'Severity',
-                cell: info => <SeverityTag severity={info.getValue()} />,
-                sortingFn: sortSeverityFn,
-                size: 100
+            header: () => (
+                <div className="flex items-center justify-center">
+                Severity
+                </div>
+            ),
+            cell: info => (
+                <div className="flex items-center justify-center h-full text-center">
+                <SeverityTag severity={info.getValue()} />
+                </div>
+            ),
+            sortingFn: sortSeverityFn,
+            size: 40,
             }),
             columnHelper.accessor('epss', {
-                header: 'Exploitability',
-                cell: info => {
-                    const epss = info.getValue()
-                    return epss.score && <>
-                        <b>{Math.round(epss.score * 100)}%</b>
-                        {epss.percentile && <i className="text-sm">(more than {Math.floor(epss.percentile * 100)}% of vulns)</i>}
-                    </>
-                },
-                sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0)
+            header: () => <div className="flex items-center justify-center">Exploitability</div>,
+            cell: info => {
+                const epss = info.getValue();
+                return (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                    {epss.score && <>
+                    <b>{Math.round(epss.score * 100)}%</b>
+                    {epss.percentile && <i className="text-sm">(more than {Math.floor(epss.percentile * 100)}% of vulns)</i>}
+                    </>}
+                </div>
+                );
+            },
+            sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0),
+            size: 125,
             }),
             columnHelper.accessor('packages', {
-                header: 'Packages affected',
-                cell: info => info.getValue().map(p => p.split('+git')[0]).join(', '),
-                enableSorting: false
+            header: () => <div className="flex items-center justify-center">Packages affected</div>,
+            cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
+            enableSorting: false,
+            size: 205
             }),
             columnHelper.accessor('severity', {
-                header: 'Attack Vector',
-                cell: info => [...(new Set(
-                    info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)
-                ))].join(', '),
-                enableSorting: true,
-                sortingFn: sortAttackVectorFn,
-                size: 100
+            header: () => <div className="flex items-center justify-center">Attack Vector</div>,
+            cell: info => <div className="flex items-center justify-center h-full text-center">
+                {[...(new Set(info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)))]?.join(', ')}
+            </div>,
+            enableSorting: true,
+            sortingFn: sortAttackVectorFn,
+            size: 100
             }),
             columnHelper.accessor('simplified_status', {
-                header: 'Status',
-                cell: info => <code>{info.renderValue()}</code>,
-                sortingFn: sortStatusFn,
-                size: 130
+            header: () => <div className="flex items-center justify-center">Status</div>,
+            cell: info => <div className="flex items-center justify-center h-full text-center"><code>{info.renderValue()}</code></div>,
+            sortingFn: sortStatusFn,
+            size: 130
             }),
             columnHelper.accessor('effort.likely', {
-                header: 'Estimated effort',
-                cell: info => info.getValue().formatHumanShort(),
-                enableSorting: true,
-                sortingFn: (rowA, rowB) => {
-                    return rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds
-                },
-                size: 100
+            header: () => <div className="flex items-center justify-center">Estimated effort</div>,
+            cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds,
+            size: 100
             }),
             columnHelper.accessor('found_by', {
-                header: 'Sources',
-                cell: info => info.renderValue()?.join(', '),
-                enableSorting: false
+            header: () => <div className="flex items-center justify-center">Sources</div>,
+            cell: info => (
+                <div className="flex items-center justify-center h-full text-center">
+                    {info.renderValue()?.join(', ')}
+                </div>
+            ),
+            enableSorting: false
             }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
-                cell: info => <button
-                    className="bg-slate-800 hover:bg-slate-700 px-2 p-1 rounded-lg"
-                    onClick={() => setModalVuln(info.getValue())}
-                >
-                        edit
-                </button>,
+                cell: info => (
+                    <div className="flex items-center justify-center h-full">
+                    <button
+                        className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+                        onClick={() => setModalVuln(info.getValue())}
+                    >
+                        Edit
+                    </button>
+                    </div>
+                ),
                 enableSorting: false,
-                minSize: 50,
-                size: 50
+                minSize: 20,
+                size: 20
             })
         ]
     }, []);
@@ -252,7 +272,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             />
         )}
 
-        <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
 
@@ -265,7 +285,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Severity"
-                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) => 
+                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) =>
                     SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(b.toLowerCase()) - SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(a.toLowerCase())
                 )}
                 selected={selectedSeverities}
@@ -311,7 +331,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columns={columns}
             tableHeight={
                 selectedVulns.length >= 1 ?
-                (bannerVisible ? 
+                (bannerVisible ?
                     'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - 64px)' :
                     'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)') :
                 (bannerVisible ?
