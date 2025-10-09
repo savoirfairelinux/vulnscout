@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [Backend, Frontend, Docker]
+        target: [Backend, Frontend, CI, Docker]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
@@ -32,6 +32,10 @@ jobs:
       - name: Run Frontend Tests in the container
         if: matrix.target == 'Frontend'
         run: cqfd -b test_frontend
+
+      - name: Run CI Tests in the container
+        if: matrix.target == 'CI'
+        run: cqfd -b test_ci
 
       - name: Docker Build
         if: matrix.target == 'Docker'
