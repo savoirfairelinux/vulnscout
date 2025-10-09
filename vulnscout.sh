@@ -307,6 +307,7 @@ start_vulnscout(){
     if [ "$docker_exit_code" -eq 2 ]; then
         echo "---------------- Vulnscout triggered fail condition ----------------"
         echo "--- Vulnscout exited with code 2 with fail condition: $VULNSCOUT_FAIL_CONDITION ---"
+        exit 2
     else
         echo "---------------- Vulnscout scanning success ----------------"
         if [ -n "$VULNSCOUT_FAIL_CONDITION" ]; then
