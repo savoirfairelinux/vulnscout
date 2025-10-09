@@ -2,8 +2,6 @@
 Savoir-faire Linux
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
-:icons: font
-:icon-set: fa
 
 image::./doc/images/vulnscout_logo.jpeg[alt=vulnscout logo]
 
@@ -11,7 +9,7 @@ image::https://img.shields.io/badge/License-GPL%203.0-green.svg[License, link=ht
 
 ---
 
-== [grey]#icon:sign-in[]#  Introduction
+== :small_blue_diamond:  Introduction
 
 VulnScout is designed to analyse and identify vulnerabilities in their software components and dependencies using an *SBOM* (Software Bill Of Materials).
 
@@ -27,7 +25,7 @@ VulnScout also provides a web interface for visualisation and a command line to 
 * Generate detailed reports
 * Help track fixes with the dashboard
 
-==  icon:cog[] Setting up VulnScout
+==  :wrench: Setting up VulnScout
 
 === Requirements & Installation
 
@@ -44,7 +42,7 @@ git clone https://github.com/savoirfairelinux/vulnscout.git
 cd vulnscout
 ----
 
-==  [black]#icon:linux[]# Using VulnScout
+==  :penguin: Using VulnScout
 
 ===  Run VulnScout demo
 
@@ -128,11 +126,11 @@ To configure your `yaml` file, you can look at the example provided here _.vulns
 - To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ====
 
-== [green]#icon:sitemap[]# Architecture
+== :mag_right: Architecture
 
 image::doc/images/architecture.png[An architecture diagram showing different components of the VulnScout app]
 
-=== icon:file-o[] Supported input files
+=== :inbox_tray: Supported input files
 
 * SPDX 2.3 (Packages)
 * SPDX 3.0 (Packages + vulnerabilities)
@@ -140,7 +138,7 @@ image::doc/images/architecture.png[An architecture diagram showing different com
 * Grype native JSON format (Packages + vulnerabilities)
 * Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
 
-=== icon:file[] Supported output files
+=== :outbox_tray: Supported output files
 
 * SPDX 2.3 (Packages)
 * SPDX 3.0 (Packages + vulnerabilities)
@@ -151,7 +149,7 @@ image::doc/images/architecture.png[An architecture diagram showing different com
 * Time estimates: csv
 * Vulnerabilities: csv, txt
 
-=== icon:database[] Vulnerability Data Sources
+=== :bar_chart: Vulnerability Data Sources
 
 .The tool pulls vulnerability and risk data from multiple trusted sources:
 
@@ -161,11 +159,11 @@ image::doc/images/architecture.png[An architecture diagram showing different com
 * ##OSV (Open Source Vulnerabilities) Coming soon##
 * Information embedded in input files
 
-=== icon:shield[] Custom CVSS Scoring
+=== :pencil: Custom CVSS Scoring
 
 Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organisation-specific vulnerability scoring.
 
-== icon:clipboard[] Licence
+== :clipboard: Licence
 
 `Copyright (C) 2017-2025 Savoir-faire Linux, Inc.` +
 VulnScout is released under the GPL-3.0 license.
