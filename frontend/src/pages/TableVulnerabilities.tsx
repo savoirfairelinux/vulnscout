@@ -11,6 +11,7 @@ import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import MessageBanner from "../components/MessageBanner";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -57,6 +58,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [hideFixed, setHideFixed] = useState<boolean>(false);
+    const [bannerMessage, setBannerMessage] = useState<string>('');
+    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
+    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -64,6 +68,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
     }, [filterLabel, filterValue]);
+
+    const triggerBanner = (message: string, type: 'error' | 'success') => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setBannerVisible(true);
+    };
+
+    const closeBanner = () => {
+        setBannerVisible(false);
+    };
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -229,6 +243,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     };
 
     return (<>
+        {bannerVisible && (
+            <MessageBanner
+                type={bannerType}
+                message={bannerMessage}
+                isVisible={bannerVisible}
+                onClose={closeBanner}
+            />
+        )}
+
         <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
@@ -277,6 +300,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             resetVulns={() => setSelectedRows({})}
             appendAssessment={appendAssessment}
             patchVuln={patchVuln}
+            triggerBanner={triggerBanner}
+            hideBanner={closeBanner}
         />
 
         <TableGeneric
@@ -286,8 +311,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columns={columns}
             tableHeight={
                 selectedVulns.length >= 1 ?
-                'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)' :
-                'calc(100vh - 44px - 64px - 48px - 16px - 8px)'
+                (bannerVisible ? 
+                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - 64px)' :
+                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)') :
+                (bannerVisible ?
+                    'calc(100vh - 44px - 64px - 48px - 16px - 8px - 64px)' :
+                    'calc(100vh - 44px - 64px - 48px - 16px - 8px)')
             }
             data={dataToDisplay}
             estimateRowHeight={66}
