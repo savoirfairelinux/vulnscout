@@ -7,7 +7,7 @@ import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
-     
+
     columns: any[];
     data: DataType[];
     search?: string;
@@ -54,7 +54,7 @@ function TableGeneric<DataType> ({
                 .split(/\s+/)
                 .map(term => `'${term}`)
                 .join(' ')
-            
+
             return fuse.search(processedSearch).map(result => result.item);
         }
         return data;
@@ -126,7 +126,7 @@ function TableGeneric<DataType> ({
             row.getToggleSelectedHandler()(event)
         }
     }
-    
+
     function getPageNumbers(current: number, total: number): (number | string)[] {
         const delta = 2
         const range: (number | string)[] = []
@@ -155,7 +155,7 @@ function TableGeneric<DataType> ({
     return (
         <div className="flex flex-col" style={{ height: tableHeight === 'auto' ? 'auto' : tableHeight }}>
             <div className={`relative ${tableHeight === 'auto' ? '' : 'overflow-auto'}`} ref={tableContainerRef}>
-                <table className="border-collapse border border-slate-500 w-full text-white grid">
+                <table className="rounded-md border-collapse border border-slate-500 w-full text-white grid">
                     <thead className="grid sticky top-0 z-20">
                         {table.getHeaderGroups().map(headerGroup => (
                             <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
@@ -309,7 +309,7 @@ function TableGeneric<DataType> ({
             </div>
 
         {hasPagination &&
-            <div className="flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
+            <div className="rounded-b-md flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
             <div className="flex items-center gap-2">
                 <span>
                 {pageIndex * itemsPerPage + 1}-
