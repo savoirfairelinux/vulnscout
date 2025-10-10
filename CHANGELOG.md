@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.8.1] - 2025-10-10
+
+### Added
+- vulnscout.sh: Add script for manual VS usage (CI Mode)
+- vulnscout_CI_test.sh: Add automatic test for CI mode
+
+### Changed
+- Set WebUI print only in interactive mode
+- Change frontend loading title and icons
+- README.adoc: Update of the README
+- Replace browser-native alerts with custom banners
+- Frontend: improve nav bar and metrics
+
+---
+
 ## [v0.8.0] - 2025-09-24
 
 ### Added
