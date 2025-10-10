@@ -1,7 +1,18 @@
 #!/bin/bash
 
-# Exit on any command failure
-set -e
+# VulnScout script intended to be used in projects.
+# Some features include running an interactive scan, generate report, CI/CD scan, etc.
+# Use `vulnscout.sh --help` for more information.
+# Exit 0: everything ok
+# Exit 1: execution error (missing conf, docker issue)
+# Exit 2: only in ci mode, used when report failed to met user conditions
+#
+# Note: Keep this file indented with tabs, not spaces, or you break the help message.
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
+set -euo pipefail # Enable error checking
 
 show_help() {
   echo "Usage: ./vulnscout.sh --name <project_name> [--option]"
