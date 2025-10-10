@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
+import MessageBanner from "../components/MessageBanner";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -26,6 +27,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
+    const [bannerMessage, setBannerMessage] = useState<string>('');
+    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
+    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+
+    const triggerBanner = (message: string, type: 'error' | 'success') => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setBannerVisible(true);
+    };
+
+    const closeBanner = () => {
+        setBannerVisible(false);
+    };
 
     const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
         const active_status = ['Exploitable', 'Community Analysis Pending'];
@@ -36,7 +50,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         })
         .catch((err) => {
             console.error(err);
-            alert("Failed to load patch data");
+            triggerBanner("Failed to load patch data", "error");
         });
     }, []);
 
@@ -54,7 +68,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         })
         .catch((err) => {
             console.error(err);
-            alert("Failed to load patch data");
+            triggerBanner("Failed to load patch data", "error");
         })
     }, [loadPatchData]);
 
@@ -66,7 +80,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         ]).then(([pkgs, vulns, assess]) => {
             if (pkgs.status === 'rejected' || vulns.status === 'rejected' || assess.status === 'rejected') {
                 console.error(pkgs, vulns);
-                alert("Failed to load data");
+                triggerBanner("Failed to load data", "error");
                 return;
             }
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulns.value, assess.value);
@@ -123,7 +137,16 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
             <NavigationBar tab={tab} changeTab={handleTabChange} darkMode={darkMode} setDarkMode={setDarkMode} />
 
-            <div className="p-8 flex-1 overflow-auto">
+            <div className="px-8 pt-4">
+                <MessageBanner
+                    type={bannerType}
+                    message={bannerMessage}
+                    isVisible={bannerVisible}
+                    onClose={closeBanner}
+                />
+            </div>
+
+            <div className="p-5 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
                     packages={pkgs}

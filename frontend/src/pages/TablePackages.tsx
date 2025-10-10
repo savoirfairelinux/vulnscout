@@ -84,7 +84,7 @@ function TablePackages({ packages }: Readonly<Props>) {
         }
         return result;
     }, [packages]);
-    
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
@@ -96,29 +96,38 @@ function TablePackages({ packages }: Readonly<Props>) {
         const columnHelper = createColumnHelper<Package>()
         return [
             columnHelper.accessor('name', {
-                header: 'Name',
-                cell: info => info.getValue(),
-                footer: (info) => `Total: ${info.table.getRowCount()}`
-             }),
+                header: () => <div className="flex items-center justify-center">Name</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>
+            }),
             columnHelper.accessor('version', {
-                header: 'Version',
-                cell: info => info.getValue()
+                header: () => <div className="flex items-center justify-center">Version</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
             }),
             columnHelper.accessor('licences', {
-                header: 'Licences',
-                cell: info => info.getValue()
+                header: () => <div className="flex items-center justify-center">Licences</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
             }),
-            columnHelper.accessor(row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }), {
-                header: 'Vulnerabilities',
-                cell: info => <>
-                    <span className="min-w-8 mr-2 inline-block">{addVulnCounts(info.getValue().counts, [])}</span>
-                    {showSeverity && <SeverityTag severity={highestSeverity(info.getValue().severity, []).label} />}
-                </>,
+            columnHelper.accessor(
+            row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
+            {
+                id: 'vulnerabilities',
+                header: () => <div className="flex items-center justify-center">Vulnerabilities</div>,
+                cell: info => {
+                const value = info.getValue();
+                return (
+                    <div className="flex items-center justify-center gap-1 h-full text-center">
+                    <span>{addVulnCounts(value.counts, [])}</span>
+                    {showSeverity && <SeverityTag severity={highestSeverity(value.severity, []).label} />}
+                    </div>
+                );
+                },
                 sortingFn: (a, b) => sortVunerabilitiesFn(a, b, [])
-            }),
+            }
+            ),
             columnHelper.accessor('source', {
-                header: 'Sources',
-                cell: info => info.getValue()?.join(', '),
+                header: () => <div className="flex items-center justify-center">Sources</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()?.join(', ')}</div>,
                 enableSorting: false
             })
         ]
@@ -152,12 +161,12 @@ function TablePackages({ packages }: Readonly<Props>) {
             return true;
         });
     }, [packages, selectedSources, selectedLicences]);
-    
+
     return (<>
-        <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
-            
+
             <FilterOption
                 label="Source"
                 options={sources_list}
