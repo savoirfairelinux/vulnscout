@@ -97,38 +97,132 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             const [timeScale, setTimeScale] = useState<string>("6_months")
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
 
-  const vulnColumns = useMemo(
-    () => [
-      { accessorKey: "rank", header: "#", size: 40, cell: (info: any) => info.getValue(), enableSorting: false },
-      { accessorKey: "cve", header: "CVE", size: 150, cell: (info: any) => info.getValue(), enableSorting: false },
-      { accessorKey: "package", header: "Package", size: 200, cell: (info: any) => info.getValue(), enableSorting: false },
-      { accessorKey: "severity", header: "Severity", size: 120, cell: (info: any) => <SeverityTag severity={info.getValue()} />, enableSorting: false },
-      {
-        accessorKey: "edit",
-        header: "Actions",
-        size: 80,
-        cell: (info: any) => {
-          const vuln = info.row.original.original;
-          return (
+const vulnColumns = useMemo(
+  () => [
+    {
+      accessorKey: "rank",
+      header: () => <div className="flex items-center justify-center h-full">#</div>,
+      cell: (info: any) => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+      size: 30,
+      enableSorting: false,
+    },
+    {
+      accessorKey: "cve",
+      header: () => (
+        <div className="flex items-center justify-center h-full">CVE</div>
+      ),
+      cell: (info: any) => (
+        <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
+      ),
+      size: 200,
+      enableSorting: false,
+    },
+    {
+      accessorKey: "package",
+      header: () => (
+        <div className="flex items-center justify-center h-full">Package</div>
+      ),
+      cell: (info: any) => (
+        <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
+      ),
+      size: 200,
+      enableSorting: false,
+    },
+    {
+      accessorKey: "severity",
+      header: () => <div className="flex items-center justify-center h-full">Severity</div>,
+      cell: (info: any) => (
+        <div className="flex items-center justify-center h-full text-center">
+          <SeverityTag severity={info.getValue()} />
+        </div>
+      ),
+      size: 100,
+      enableSorting: false,
+    },
+    {
+      accessorKey: "edit",
+      header: () => <div className="flex items-center justify-center h-full">Actions</div>,
+      cell: (info: any) => {
+        const vuln = info.row.original.original;
+        return (
+          <div className="flex items-center justify-center h-full text-center">
             <button
               className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
               onClick={() => setModalVuln(vuln)}
             >
               Edit
             </button>
-          );
-        },
-        enableSorting: false
+          </div>
+        );
       },
-    ],
-    []
-  );
+      size: 50,
+      enableSorting: false,
+    },
+  ],
+  []
+);
 
-  const packageColumns = [
-  { accessorKey: "id", header: "#", size: 50, cell: (info: any) => info.getValue(), enableSorting: false },
-  { accessorKey: "name", header: "Name", cell: (info: any) => info.getValue(), enableSorting: false },
-  { accessorKey: "version", header: "Version", cell: (info: any) => info.getValue(), enableSorting: false },
-  { accessorKey: "count", header: "Vulnerabilities", cell: (info: any) => info.getValue(), enableSorting: false },
+const packageColumns = [
+  {
+    accessorKey: "id",
+    header: () => (
+      <div className="flex items-center justify-center h-full">
+        #
+      </div>
+    ),
+    cell: (info: any) => (
+      <div className="flex items-center justify-center py-1 h-full text-center">
+        {info.getValue()}
+      </div>
+    ),
+    size: 30,
+    enableSorting: false,
+  },
+  {
+    accessorKey: "name",
+    size: 350,
+    header: () => (
+      <div className="flex items-center justify-center h-full">
+        Name
+      </div>
+    ),
+    cell: (info: any) => (
+      <div className="flex items-center justify-center h-full text-center">
+        {info.getValue()}
+      </div>
+    ),
+    enableSorting: false,
+  },
+  {
+    accessorKey: "version",
+    size: 100,
+    header: () => (
+      <div className="flex items-center justify-center h-full">
+        Version
+      </div>
+    ),
+    cell: (info: any) => (
+      <div className="flex items-center justify-center h-full text-center">
+        {info.getValue()}
+      </div>
+    ),
+    enableSorting: false,
+  },
+  {
+    accessorKey: "count",
+    size: 100,
+    header: () => (
+      <div className="flex items-center justify-center h-full">
+        Vulnerabilities
+      </div>
+    ),
+    cell: (info: any) => (
+      <div className="flex items-center justify-center h-full text-center">
+        {info.getValue()}
+      </div>
+    ),
+    enableSorting: false,
+  },
 ];
 
             const time_scales = useMemo(() => {
@@ -152,7 +246,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                 return refs;
             }, [timeScale]);
 
-            const dataSetVulnBySeverity = useMemo(() => {                
+            const dataSetVulnBySeverity = useMemo(() => {
                 return {
                     labels: ['Unknown', 'Low', 'Medium', 'High', 'Critical'],
                     datasets: [{
@@ -246,7 +340,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     hoverOffset: 4
                 }]
             }
-            
+
   const topVulnerablePackages = useMemo(() => {
     const counts: Record<string, { count: number; version?: string }> = {};
     vulnerabilities.forEach((vuln) => {
@@ -297,7 +391,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
         rank: idx + 1,
         }));
     }, [vulnerabilities]);
-  
+
               const dataSetVulnBySource = useMemo(() => {
                 return {
                     labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
@@ -340,11 +434,11 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     const index = elements[0].index;
                     const severityOrder = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
                     const targetSeverity = severityOrder[index];
-                    
-                    const matchingSeverity = vulnerabilities.find(v => 
+
+                    const matchingSeverity = vulnerabilities.find(v =>
                         v.severity.severity.toUpperCase() === targetSeverity
                     )?.severity.severity;
-                    
+
                     if (matchingSeverity) {
                         goToVulnsTabWithFilter("Severity", matchingSeverity);
                     }
@@ -367,116 +461,171 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
                     const index = elements[0].index;
                     const statusOrder = ['not affected', 'fixed', 'Community Analysis Pending', 'Exploitable'];
                     const targetStatus = statusOrder[index];
-                    
-                    const matchingStatus = vulnerabilities.find(v => 
+
+                    const matchingStatus = vulnerabilities.find(v =>
                         v.simplified_status === targetStatus
                     )?.simplified_status;
-                    
+
                     if (matchingStatus) {
                         goToVulnsTabWithFilter("Status", matchingStatus);
                     }
                 }
             }
 
-            return (
-    <div className="w-full">
-                <div className="w-full flex flex-wrap">
-                  
-                    <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Severity</div>
-                        <div className="bg-zinc-700 p-4 w-full aspect-square">
-                            <Pie data={dataSetVulnBySeverity} options={vulnBySeverityOptions} />
-                        </div>
-                    </div>
+      return (
+        <div className="w-full">
 
-                    <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Status</div>
-                        <div className="bg-zinc-700 p-4 w-full aspect-square">
-                            <Pie data={dataSetVulnByStatus} options={vulnByStatusOptions} />
-                        </div>
-                    </div>
+          {/* === TOP CHART GRID === */}
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
-                    <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-1 flex flex-row flex-wrap items-center justify-center">
-                            <div className="text-xl p-1 text-white">Exploitable vulnerabilities</div>
-                            <select className="bg-zinc-800 ml-2 p-1 text-white" value={timeScale} onChange={(event) => setTimeScale(event.target.value)}>
-                                <option value="12_months">1 year</option>
-                                <option value="6_months">6 months</option>
-                                <option value="12_weeks">12 weeks</option>
-                                <option value="6_weeks">6 weeks</option>
-                                <option value="31_days">1 month</option>
-                                <option value="7_days">1 week</option>
-                                <option value="24_hours">24 hours</option>
-                            </select>
-                        </div>
-                        <div className="bg-zinc-700 p-4 w-full aspect-square">
-                            <Line data={vulnEvolutionTime} options={LineOptions} />
-                        </div>
-                    </div>
-
-                    <div className="w-1/3 lg:w-1/4 p-4">
-                        <div className="bg-zinc-700 p-2 text-center text-xl text-white">Vulnerabilities by Source</div>
-                        <div className="bg-zinc-700 p-4 w-full aspect-square">
-                            <Bar data={dataSetVulnBySource} options={BarOptions} />
-                        </div>
-                    </div>
-      </div>
-
-      <div className="w-full flex flex-wrap">
-        <div className="w-1/2 lg:w-1/2 p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-2xl font-bold">Most critical unfixed vulnerabilities</h3>
-            <button
-              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-              onClick={() => setTab('vulnerabilities')}
-            >
-              See all
-            </button>
-          </div>
-          <div>
-            <TableGeneric
-              columns={vulnColumns}
-              data={TopVulns}
-              hoverField="texts"
-              hasPagination={false}
-              tableHeight="auto"
-            />
-          </div>
-                    </div>
-
-        <div className="w-1/2 lg:w-1/2 p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-2xl font-bold">Most vulnerable packages</h3>
-            <button
-              className="bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-              onClick={() => setTab("packages")}
-            >
-              See all
-            </button>
-          </div>
-          <div>
-            <TableGeneric
-              columns={packageColumns}
-              data={topVulnerablePackages}
-              hasPagination={false}
-              tableHeight="auto"
-            />
-          </div>
-        </div>
+            {/* Vulnerabilities by Severity */}
+            <div className="p-4">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+                Vulnerabilities by Severity
+              </div>
+              <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
+                <div className="h-full">
+                  <Pie
+                    data={dataSetVulnBySeverity}
+                    options={{ ...vulnBySeverityOptions, maintainAspectRatio: false }}
+                  />
                 </div>
+              </div>
+            </div>
 
-      {modalVuln && (
-        <VulnModal
-          vuln={modalVuln}
-          onClose={() => setModalVuln(undefined)}
-          appendAssessment={appendAssessment}
-          appendCVSS={appendCVSS}
-          patchVuln={patchVuln}
-        />
-      )}
-    </div>
-            );
-            
+            {/* Vulnerabilities by Status */}
+            <div className="p-4">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+                Vulnerabilities by Status
+              </div>
+              <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
+                <div className="h-full">
+                  <Pie
+                    data={dataSetVulnByStatus}
+                    options={{ ...vulnByStatusOptions, maintainAspectRatio: false }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Exploitable Vulnerabilities */}
+            <div className="p-4">
+              <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
+                <div className="text-xl text-white whitespace-nowrap">
+                  Exploitable vulnerabilities
+                </div>
+                <select
+                  className="bg-zinc-800 p-1 text-white rounded w-36"
+                  value={timeScale}
+                  onChange={(event) => setTimeScale(event.target.value)}
+                >
+                  <option value="12_months">1 year</option>
+                  <option value="6_months">6 months</option>
+                  <option value="12_weeks">12 weeks</option>
+                  <option value="6_weeks">6 weeks</option>
+                  <option value="31_days">1 month</option>
+                  <option value="7_days">1 week</option>
+                  <option value="24_hours">24 hours</option>
+                </select>
+              </div>
+              <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
+                <div className="h-full">
+                  <Line
+                    data={vulnEvolutionTime}
+                    options={{ ...LineOptions, maintainAspectRatio: false }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Vulnerabilities by Source */}
+            <div className="p-4">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+                Vulnerabilities by Source
+              </div>
+              <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
+                <div className="h-full">
+                  <Bar
+                    data={dataSetVulnBySource}
+                    options={{ ...BarOptions, maintainAspectRatio: false }}
+                  />
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+        {/* === TABLES SECTION === */}
+        <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Most Critical Unfixed Vulnerabilities */}
+          <div className="p-4">
+            {/* Table Header */}
+            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
+              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
+                Most critical unfixed vulnerabilities
+              </h3>
+              <button
+                className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                onClick={() => setTab('vulnerabilities')}
+              >
+                See all
+              </button>
+            </div>
+
+            {/* Table Body */}
+            <div className="bg-zinc-700 p-4 rounded-b-md">
+              <TableGeneric
+                columns={vulnColumns}
+                data={TopVulns}
+                hoverField="texts"
+                hasPagination={false}
+                tableHeight="auto"
+              />
+            </div>
+          </div>
+
+          {/* Most Vulnerable Packages */}
+          <div className="p-4">
+            {/* Table Header */}
+            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
+              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
+                Most vulnerable packages
+              </h3>
+              <button
+                className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                onClick={() => setTab('packages')}
+              >
+                See all
+              </button>
+            </div>
+
+            {/* Table Body */}
+            <div className="bg-zinc-700 p-4 rounded-b-md">
+              <TableGeneric
+                columns={packageColumns}
+                data={topVulnerablePackages}
+                hasPagination={false}
+                tableHeight="auto"
+              />
+            </div>
+          </div>
+
+        </div>
+
+        {/* === MODAL === */}
+        {modalVuln && (
+          <VulnModal
+            vuln={modalVuln}
+            onClose={() => setModalVuln(undefined)}
+            appendAssessment={appendAssessment}
+            appendCVSS={appendCVSS}
+            patchVuln={patchVuln}
+          />
+        )}
+        </div>
+      );
+
         }
 
         export default Metrics;

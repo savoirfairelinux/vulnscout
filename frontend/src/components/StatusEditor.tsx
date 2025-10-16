@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import MessageBanner from './MessageBanner';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -14,20 +15,51 @@ type Props = {
     onAddAssessment: (data: PostAssessment) => void;
     progressBar?: number;
     clearFields?: boolean;
+    onFieldsChange?: (hasChanges: boolean) => void;
+    triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner}: Readonly<Props>) {
     const [status, setStatus] = useState("under_investigation");
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
+    const [bannerMessage, setBannerMessage] = useState<string>('');
+    const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
+    const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+
+    const internalTriggerBanner = (message: string, type: 'error' | 'success') => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setBannerVisible(true);
+    };
+
+    const closeBanner = () => {
+        setBannerVisible(false);
+    };
+
+    // Check if fields have changes
+    useEffect(() => {
+        const hasChanges = (
+            status !== "under_investigation" ||
+            justification !== "none" ||
+            statusNotes !== "" ||
+            workaround !== "" ||
+            impact !== ""
+        );
+        onFieldsChange?.(hasChanges);
+    }, [status, justification, statusNotes, workaround, impact, onFieldsChange]);
 
     function addAssessment () {
         if (status == '' || justification == '')
             return;
         if (status == "not_affected" && justification == 'none') {
-            alert("You must provide a justification for this status");
+            if (triggerBanner) {
+                triggerBanner("You must provide a justification for this status", "error");
+            } else {
+                internalTriggerBanner("You must provide a justification for this status", "error");
+            }
             return;
         }
         onAddAssessment({
@@ -54,6 +86,15 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     }, [shouldClearFields]);
 
     return (<>
+        {!triggerBanner && bannerVisible && (
+            <MessageBanner
+                type={bannerType}
+                message={bannerMessage}
+                isVisible={bannerVisible}
+                onClose={closeBanner}
+            />
+        )}
+
         <h3 className="m-1">
             Status:
             <select

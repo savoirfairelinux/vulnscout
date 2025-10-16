@@ -5,13 +5,17 @@ import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
+import MessageBanner from "./MessageBanner";
 import SeverityTag from "./SeverityTag";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
-import { useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBox } from "@fortawesome/free-solid-svg-icons";
+import ConfirmationModal from "./ConfirmationModal";
+import { useState, useEffect } from "react";
 
 type Props = {
     vuln: Vulnerability;
@@ -34,6 +38,91 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
+    const [showConfirmClose, setShowConfirmClose] = useState(false);
+
+    const [hasTimeChanges, setHasTimeChanges] = useState(false);
+    const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
+    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
+
+    // Message banner state
+    const [bannerMessage, setBannerMessage] = useState("");
+    const [bannerType, setBannerType] = useState<"error" | "success">("error");
+    const [showBanner, setShowBanner] = useState(false);
+
+    const showMessage = (message: string, type: "error" | "success") => {
+        setBannerMessage(message);
+        setBannerType(type);
+        setShowBanner(true);
+    };
+
+    const hideBanner = () => {
+        setShowBanner(false);
+    };
+
+    const handleClose = () => {
+        if (hasUnsavedChanges) {
+            setShowConfirmClose(true);
+        } else {
+            onClose();
+        }
+    };
+
+    const handleConfirmClose = () => {
+        setShowConfirmClose(false);
+        onClose();
+    };
+
+    const handleCancelClose = () => {
+        setShowConfirmClose(false);
+    };
+
+    // Handle ESC key press
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                if (hasUnsavedChanges) {
+                    setShowConfirmClose(true);
+                } else {
+                    onClose();
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [hasUnsavedChanges, onClose]);
+
+    const groupAssessments = (assessments: Assessment[]) => {
+        const groups: { [key: string]: Assessment[] } = {};
+        
+        assessments.forEach(assess => {
+            // Create a key based on timestamp (date only), status, and assessment content
+            const date = new Date(assess.timestamp);
+            const dateKey = date.toDateString(); // This gives us just the date part
+            const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
+            const groupKey = `${dateKey}::${contentKey}`;
+            
+            if (!groups[groupKey]) {
+                groups[groupKey] = [];
+            }
+            groups[groupKey].push(assess);
+        });
+        
+        // Convert groups to array and sort by most recent timestamp
+        return Object.entries(groups)
+            .map(([key, assessments]) => ({
+                key,
+                assessments,
+                timestamp: assessments[0].timestamp, // Use first assessment's timestamp for sorting
+                packages: [...new Set(assessments.flatMap(a => a.packages))].sort() // Collect unique packages
+            }))
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    };
+
+    const groupedAssessments = groupAssessments(vuln.assessments);
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
@@ -54,12 +143,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
                 patchVuln(vuln.id, vuln);
-                alert("Successfully added assessment.");
+                showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
                 setTimeout(() => setClearAssessmentFields(false), 100);
             }
         } else {
-            alert(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`);
+            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, "error");
         }
     };
 
@@ -67,7 +156,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         const content = appendCVSS(vuln.id, vector);
 
         if (content === null) {
-            alert("The vector string is invalid, please check the format.");
+            showMessage("The vector string is invalid, please check the format.", "error");
             return;
         }
 
@@ -92,11 +181,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
             patchVuln(vuln.id, vuln);
             setShowCustomCvss(false);
-            alert("successfully added Custom CVSS.");
+            showMessage("Successfully added Custom CVSS.", "success");
         } else {
             const data = await response.text();
             console.error("API error response:", response.status, data);
-            alert(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`);
+            showMessage(`Failed to save CVSS: HTTP code ${Number(response?.status)} | ${escape(data)}`, "error");
         }
     };
 
@@ -125,10 +214,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
             patchVuln(vuln.id, vuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
-            alert("Successfully added estimation.");
+            showMessage("Successfully added estimation.", "success");
         } else {
             const data = await response.text();
-            alert(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`);
+            showMessage(`Failed to save estimation: HTTP code ${Number(response?.status)} | ${escape(data)}`, "error");
         }
     };
 
@@ -146,7 +235,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             {vuln.id}
                         </h3>
                         <button
-                            onClick={onClose}
+                            onClick={handleClose}
                             type="button"
                             className="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center dark:hover:bg-gray-600 dark:hover:text-white"
                         >
@@ -156,6 +245,18 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             <span className="sr-only">Close modal</span>
                         </button>
                     </div>
+
+                    {/* Message Banner - Sticky at top */}
+                    {showBanner && (
+                        <div className="sticky top-0 z-10 bg-gray-700">
+                            <MessageBanner
+                                type={bannerType}
+                                message={bannerMessage}
+                                isVisible={showBanner}
+                                onClose={hideBanner}
+                            />
+                        </div>
+                    )}
 
                     {/* Modal body */}
                     <div className="p-4 md:p-5 space-y-4 text-gray-300 text-justify" id="vulnerability_modal_body">
@@ -211,6 +312,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             onAddCvss={(vector) => {
                                                 addCvss(vector);
                                             }}
+                                            triggerBanner={showMessage}
                                         />
                                         </div>
                                     )}
@@ -253,6 +355,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             progressBar={undefined}
                             onSaveTimeEstimation={(data) => saveEstimation(data)}
                             clearFields={clearTimeFields}
+                            onFieldsChange={setHasTimeChanges}
+                            triggerBanner={showMessage}
                             actualEstimate={{
                                 optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                 likely: vuln?.effort?.likely?.formatHumanShort(),
@@ -263,25 +367,29 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
 
-                            {vuln.assessments.map(assess => {
-                                const dt = new Date(assess.timestamp);
+                            {groupedAssessments.map(group => {
+                                const dt = new Date(group.timestamp);
+                                const firstAssess = group.assessments[0]; // Use first assessment for content
                                 return (
-                                    <li key={encodeURIComponent(assess.id)} className="mb-10 ms-4">
+                                    <li key={encodeURIComponent(group.key)} className="mb-10 ms-4">
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                        <div className="text-sm mb-2">
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                {assess.packages}
-                                            </span>
+                                        <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                            {group.packages.map(pkg => (
+                                                <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                    <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                    {pkg}
+                                                </span>
+                                            ))}
                                         </div>
                                         <h3 className="text-lg font-semibold text-white mb-2">
-                                            {assess.simplified_status}{assess.justification && <> - {assess.justification}</>}
+                                            {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
                                         </h3>
                                         <p className="text-base font-normal text-gray-300">
-                                            {assess.impact_statement && <>{assess.impact_statement}<br/></>}
-                                            {!assess.impact_statement && assess.status == 'not_affected' && <>no impact statement<br/></>}
-                                            {assess.status_notes ?? 'no status notes'}<br/>
-                                            {assess.workaround ?? 'no workaround available'}
+                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
+                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
+                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
+                                            {firstAssess.workaround ?? 'no workaround available'}
                                         </p>
                                     </li>
                                 );
@@ -290,7 +398,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             <li className="ms-4 text-white">
                                 <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                 <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor onAddAssessment={(data) => addAssessment(data)} clearFields={clearAssessmentFields} />
+                                <StatusEditor 
+                                    onAddAssessment={(data) => addAssessment(data)} 
+                                    clearFields={clearAssessmentFields}
+                                    onFieldsChange={setHasAssessmentChanges} 
+                                    triggerBanner={showMessage}
+                                />
                             </li>
                         </ol>
                     </div>
@@ -298,7 +411,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     {/* Modal footer */}
                     <div className="flex items-center p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
                         <button
-                            onClick={onClose}
+                            onClick={handleClose}
                             type="button"
                             className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800"
                         >
@@ -308,6 +421,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                 </div>
             </div>
+
+            <ConfirmationModal
+                isOpen={showConfirmClose}
+                title="Unsaved Changes"
+                message="Are you sure you want to close without saving? All unsaved changes will be lost."
+                confirmText="Yes, close"
+                cancelText="No, stay"
+                showTitleIcon={true}
+                onConfirm={handleConfirmClose}
+                onCancel={handleCancelClose}
+            />
         </div>
     );
 }

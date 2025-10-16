@@ -1,11 +1,17 @@
-= Development Guide for vulnscout
+= Developper's Guide
+Savoir-faire Linux
+:url-repo: https://github.com/savoirfairelinux/vulnscout
+:source-highlighter: highlight.js
+:icons: font
+:icon-set: fa
 
-This document provides guidelines for developers working on the vulnscout project, including setup, testing, and code quality practices.
 
-== Requirements
+== icon:terminal[] Developing VulnScout
 
-NVM 22 is required to develop on vulnscout without any issues. 
-Installation guide for NVM : https://github.com/nvm-sh/nvm
+=== Requirements
+
+NVM 22 is required to develop on VulnScout without any issues.
+Installation guide for NVM : https://github.com/nvm-sh/nvm[nvm]
 
 [source,bash]
 ----
@@ -13,23 +19,21 @@ nvm install 22
 nvm use 22
 ----
 
-== Modify the frontend
+=== Modify the frontend
 
-To modify the frontend, you will need to run vulnscout in development mode.
+By default, the _/frontend_ directory is not mounted in a volume with the container. To visualise frontend modifications, you will need to run VulnScout in development mode.
 To do so, you can run the following command:
 
 [source,bash]
 ----
-./start-example.sh --npm-dev
+./start-example.sh --dev
 ----
 
-== Testing the project
+== icon:check[] Testing the project
 
-You can either use CQFD to run testing tools in a container or install the tools on your machine.
-CQFD is better for testing quickly but if you plan to modify the code and commit,
-you would probably prefer local installation which integrate with pre-commit.
+We use CQFD to run testing tools in a container.
 
-=== Option 1: Quick Setup with CQFD (No local installation)
+=== Quick Setup with CQFD
 
 ==== Step 1: Setup CQFD and Docker
 
@@ -56,9 +60,9 @@ sudo make install
 
 For more information, visit the CQFD GitHub repository: https://github.com/savoirfairelinux/cqfd
 
-==== Step 2: Initialize CQFD for this project
+==== Step 2: Initialise CQFD for this project
 
-Once installed, initialize the container image:
+Once installed, initialise the container image:
 
 [source,bash]
 ----
@@ -84,59 +88,7 @@ cqfd -b test_backend
 cqfd -b test_frontend
 ----
 
-=== Option 2: Local Development Setup (Recommended for Contributors)
-
-==== Step 1: Install Dependencies
-
-Ensure the following tools are installed on your system:
-
-- `make`
-- `Docker`
-- `Python 3`
-- `Node.js` and `npm`
-
-==== Step 2: Install backend development dependencies
-
-[source,bash]
-----
-pip install -r requirements/dev.txt
-----
-
-==== Step 3: Set up pre-commit for automatic code linting
-
-[source,bash]
-----
-pip install pre-commit
-pre-commit install
-----
-
-==== Step 4: Install frontend development dependencies
-
-[source,bash]
-----
-cd frontend
-nvm use 20
-npm install --include=dev
-----
-
-==== Step 5: Testing (Unit + Integration)
-
-Run the full test suite (backend + frontend):
-
-[source,bash]
-----
-make -C tests
-----
-
-Run tests separately:
-
-[source,bash]
-----
-make -C tests test_backend
-make -C tests test_frontend
-----
-
-== Testing the Docker image
+=== Testing the Docker image
 
 You can test the Docker image using the provided `tests` Makefile.
 To build and test the Docker image, run:
@@ -147,31 +99,7 @@ export BUILD_TAG="$(pwgen -n 12 -1)"
 make -C tests docker_build docker_test docker_clean
 ----
 
-== Publishing a new version
-
-We use [Semantic Versioning 2.0.0](https://semver.org/) prefixed with `v`, e.g., `v1.2.3` or `v1.2.3+build.4`.
-
-- Determine the next version number.
-- Create a release tag:
-
-[source,bash]
-----
-ci/release_tag.sh v1.0.0-rc.1
-----
-
-- The script will update relevant files. Review changes carefully.
-   Press `Ctrl+C` to cancel if anything is incorrect.
-
-- After validation, the script will propose a `git review`.
-   Confirm by typing `yes`, or cancel with `Ctrl+C`.
-
-- Enter a tag message when prompted.
-   - Leave it blank to use the default message `Release v*.*.*`
-   - Cancel with `Ctrl+C` to skip tag creation (e.g., if review is still pending)
-
-- The script will push the tag and trigger a CI pipeline to build and publish the Docker image.
-
-== Code quality and linting
+== icon:code[] Code quality and linting
 
 === Python backend (Flask)
 
@@ -189,10 +117,10 @@ ci/release_tag.sh v1.0.0-rc.1
 - Linter: `npm run lint` (ESLint)
 - Coverage report: `npm run coverage`
 
-NOTE: Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit.  
+NOTE: Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit.
 With CQFD, use `cqfd -b test` to run the full suite.
 
-== Pre-commit hook
+=== Pre-commit hook
 
 We use `pre-commit` to automatically run `flake8` before every commit.
 

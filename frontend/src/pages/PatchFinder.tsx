@@ -55,8 +55,8 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
 
 
     return (<>
-        <div className="mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
-            <div className="ml-2">Search</div>
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+            <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[400px]" placeholder="Search by version or vulnerability ID" />
 
             <FilterOption
@@ -80,8 +80,8 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
             <i>You can leave and come back at this page, DB will continue update in background. To speed up the process, ensure you have cache configured in vulnscout configuration.</i>
         </div>}
 
-        <div className="my-4 p-4 bg-slate-700 flex flex-row flex-wrap">
-            {showLegend && <div className="flex-none w-full px-8 bg-slate-600">
+        <div className="rounded-md my-4 p-4 bg-slate-700 flex flex-row flex-wrap">
+            {showLegend && <div className="rounded-md flex-none w-full px-8 bg-slate-600">
                 <h2 className="pt-4 font-bold font-mono text-center text-white">Legend</h2>
                 <VersionsLine reduce_size={true} versions={[
                     {title: 'current version', details: 'current'},
