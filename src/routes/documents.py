@@ -65,7 +65,7 @@ def init_app(app):
             docs = templ.list_documents()
 
             docs.append({"id": "SPDX 2.3", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
-            docs.append({"id": "SPDX 3.0", "extension": "json | xml", "is_template": False, "category": ["sbom"]})
+            docs.append({"id": "SPDX 3.0", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.4", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.5", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.6", "extension": "json", "is_template": False, "category": ["sbom"]})
@@ -190,14 +190,6 @@ def handle_sbom_exports(doc_name, ctrls, expected_mime, metadata):
                     return content, 200, {
                         "Content-Type": expected_mime,
                         "Content-Disposition": f"attachment; filename={new_name}.json"
-                    }
-            if expected_mime == "text/xml":
-                content = spdx3.output_as_xml(metadata["author"])
-                if content is not None:
-                    new_name = doc_name.lower().replace(' ', '_v').replace('.', '_')
-                    return content, 200, {
-                        "Content-Type": expected_mime,
-                        "Content-Disposition": f"attachment; filename={new_name}.xml"
                     }
 
     if doc_name == "OpenVex" and expected_mime == "application/json":
