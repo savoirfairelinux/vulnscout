@@ -103,9 +103,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 className="p-1 px-2 bg-gray-800 mr-4"
                 name="new_assessment_status"
             >
-                <option value="under_investigation">Community Analysis Pending</option>
-                <option value="affected">Affected / Exploitable</option>
-                <option value="fixed">Fixed / Patched</option>
+                <option value="under_investigation">Community analysis pending</option>
+                <option value="affected">Affected / exploitable</option>
+                <option value="fixed">Fixed / patched</option>
                 <option value="not_affected">Not applicable</option>
                 <option value="false_positive">False positive</option>
             </select>

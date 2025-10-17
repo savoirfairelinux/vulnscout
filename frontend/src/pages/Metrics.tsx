@@ -271,12 +271,12 @@ const packageColumns = [
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
-                    labels: ['Not Affected', 'Fixed', 'Community Analysis Pending', 'Exploitable'],
+                    labels: ['Not affected', 'Fixed', 'Community analysis pending', 'Exploitable'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
                             const status = vuln.simplified_status;
-                            const index = status == 'not affected' ? 0 : status == 'fixed' ? 1 : status == 'Community Analysis Pending' ? 2 : 3;
+                            const index = status == 'Not affected' ? 0 : status == 'Fixed' ? 1 : status == 'Community analysis pending' ? 2 : 3;
                             acc[index]++;
                             return acc;
                         }, [0, 0, 0, 0]),
@@ -319,7 +319,7 @@ const packageColumns = [
                                 date_index++;
                             }
 
-                            const should_be_active = (assess.simplified_status != 'not affected' && assess.simplified_status != 'fixed');
+                            const should_be_active = (assess.simplified_status != 'Not affected' && assess.simplified_status != 'Fixed');
                             if (is_active != should_be_active) {
                                 if (should_be_active && dt.getTime() >= time_scales[date_index]?.getTime()) {
                                     // if vulnerability was active at least one time in the month, then classify as active for while month
@@ -459,7 +459,7 @@ const packageColumns = [
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const statusOrder = ['not affected', 'fixed', 'Community Analysis Pending', 'Exploitable'];
+                    const statusOrder = ['Not affected', 'Fixed', 'Community analysis pending', 'Exploitable'];
                     const targetStatus = statusOrder[index];
 
                     const matchingStatus = vulnerabilities.find(v =>

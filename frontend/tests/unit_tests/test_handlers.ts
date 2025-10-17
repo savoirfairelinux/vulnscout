@@ -158,20 +158,20 @@ describe('Packages', () => {
         expect(vulnerabilities.length).toEqual(2);
         expect(thisFetch).toHaveBeenCalledTimes(1);
 
-        vulnerabilities[0].simplified_status = 'fixed';
-        vulnerabilities[1].simplified_status = 'active';
+        vulnerabilities[0].simplified_status = 'Fixed';
+        vulnerabilities[1].simplified_status = 'Exploitable';
 
         const enrichedPackages = Packages.enrich_with_vulns(packages, vulnerabilities);
         expect(enrichedPackages.length).toEqual(2);
 
-        expect(enrichedPackages[0].vulnerabilities["fixed"]).toEqual(1);
-        expect(enrichedPackages[0].vulnerabilities["active"]).toEqual(1);
-        expect(enrichedPackages[0].maxSeverity["fixed"].label).toEqual('high');
-        expect(enrichedPackages[0].maxSeverity["active"].label).toEqual('low');
+        expect(enrichedPackages[0].vulnerabilities["Fixed"]).toEqual(1);
+        expect(enrichedPackages[0].vulnerabilities["Exploitable"]).toEqual(1);
+        expect(enrichedPackages[0].maxSeverity["Fixed"].label).toEqual('high');
+        expect(enrichedPackages[0].maxSeverity["Exploitable"].label).toEqual('low');
         expect(enrichedPackages[0].source).toEqual(['hardcoded', 'cve-finder']);
 
-        expect(enrichedPackages[1].vulnerabilities["active"]).toEqual(1);
-        expect(enrichedPackages[1].maxSeverity["active"].label).toEqual('low');
+        expect(enrichedPackages[1].vulnerabilities["Exploitable"]).toEqual(1);
+        expect(enrichedPackages[1].maxSeverity["Exploitable"].label).toEqual('low');
         expect(enrichedPackages[1].source).toEqual(['cve-finder']);
     });
 });
@@ -221,7 +221,7 @@ describe('Vulnerabilities', () => {
         expect(enrichedvuln.length).toEqual(2);
 
         expect(enrichedvuln[0].status).toEqual('fixed');
-        expect(enrichedvuln[0].simplified_status).toEqual('fixed');
+        expect(enrichedvuln[0].simplified_status).toEqual('Fixed');
         expect(enrichedvuln[0].assessments.length).toEqual(1);
 
         expect(enrichedvuln[1].status).toEqual('affected');
