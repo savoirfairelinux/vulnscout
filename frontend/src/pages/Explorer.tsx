@@ -42,7 +42,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     };
 
     const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
-        const active_status = ['Exploitable', 'Community Analysis Pending'];
+        const active_status = ['Exploitable', 'Community analysis pending'];
         PatchFinderLogic
         .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
         .then((patchData) => {

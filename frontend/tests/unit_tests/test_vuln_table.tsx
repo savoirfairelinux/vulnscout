@@ -618,7 +618,7 @@ describe('Vulnerability Table', () => {
             {
                 ...vulnerabilities[0],
                 id: 'CVE-2020-9999',
-                simplified_status: 'fixed'
+                simplified_status: 'Fixed'
             }
         ];
 
@@ -751,7 +751,7 @@ describe('Vulnerability Table', () => {
             {
                 ...vulnerabilities[0],
                 id: 'CVE-2020-9999',
-                simplified_status: 'fixed'
+                simplified_status: 'Fixed'
             }
         ];
 
@@ -772,7 +772,7 @@ describe('Vulnerability Table', () => {
         // Now manually select 'fixed' in status filter
         const statusBtn = await screen.getByRole('button', { name: /status/i });
         await user.click(statusBtn);
-        const fixedCheckbox = await screen.getByRole('checkbox', { name: 'fixed' });
+        const fixedCheckbox = await screen.getByRole('checkbox', { name: 'Fixed' });
         await user.click(fixedCheckbox);
 
         // ASSERT - Hide fixed toggle should be disabled when fixed is manually selected
