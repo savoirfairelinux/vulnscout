@@ -29,8 +29,8 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
-    const indexA = ['unknown', 'Community Analysis Pending', 'Exploitable', 'not affected', 'fixed'].indexOf(rowA.original.simplified_status)
-    const indexB = ['unknown', 'Community Analysis Pending', 'Exploitable', 'not affected', 'fixed'].indexOf(rowB.original.simplified_status)
+    const indexA = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
+    const indexB = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
     return indexA - indexB
 }
 
@@ -248,7 +248,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setHideFixed(enabled);
         if (enabled) {
             const allStatuses = Array.from(new Set(vulnerabilities.map(v => v.simplified_status)));
-            const statusesExceptFixed = allStatuses.filter(status => status !== 'fixed');
+            const statusesExceptFixed = allStatuses.filter(status => status !== 'Fixed');
             setSelectedStatuses(statusesExceptFixed);
         } else {
             setSelectedStatuses([]);
@@ -257,7 +257,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const handleStatusChange = (newStatuses: string[]) => {
         setSelectedStatuses(newStatuses);
-        if (newStatuses.includes('fixed') && hideFixed) {
+        if (newStatuses.includes('Fixed') && hideFixed) {
             setHideFixed(false);
         }
     };
