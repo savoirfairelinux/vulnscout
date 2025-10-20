@@ -366,6 +366,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
+                            <li className="ms-4 text-white pb-8">
+                                <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
+                                <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
+                                <StatusEditor 
+                                    onAddAssessment={(data) => addAssessment(data)} 
+                                    clearFields={clearAssessmentFields}
+                                    onFieldsChange={setHasAssessmentChanges} 
+                                    triggerBanner={showMessage}
+                                />
+                            </li>
 
                             {groupedAssessments.map(group => {
                                 const dt = new Date(group.timestamp);
@@ -394,17 +404,6 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     </li>
                                 );
                             })}
-
-                            <li className="ms-4 text-white">
-                                <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
-                                <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor 
-                                    onAddAssessment={(data) => addAssessment(data)} 
-                                    clearFields={clearAssessmentFields}
-                                    onFieldsChange={setHasAssessmentChanges} 
-                                    triggerBanner={showMessage}
-                                />
-                            </li>
                         </ol>
                     </div>
 
