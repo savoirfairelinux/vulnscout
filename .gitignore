@@ -88,4 +88,5 @@ venv.bak/
 .vulnscout/example/output/
 .vulnscout/example-spdx3/output/
 .vulnscout/cache/
+!.vulnscout/cache/nvd.db.*.xz
 frontend/package-lock.json
