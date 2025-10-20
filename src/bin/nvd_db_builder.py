@@ -9,16 +9,19 @@ import glob
 import lzma
 import shutil
 
+
 def decompress_nvd_db(nvd_db_path):
     db_dir, db_name = os.path.dirname(nvd_db_path), os.path.basename(nvd_db_path)
-    matches = sorted(glob.glob(f"{db_dir}/{db_name}.*.xz"), key=os.path.getmtime, reverse=True) # Get the most recent xz file
-    
-    # With no marches, we exit the function and build the DB from scratch in the next step
+
+    # Get the most recent xz file
+    matches = sorted(glob.glob(f"{db_dir}/{db_name}.*.xz"), key=os.path.getmtime, reverse=True)
+
+    # With no matches, we exit the function and build the DB from scratch in the next step
     if not matches:
         return
-    
-    src = matches[0] # Take the most recent file
-    
+
+    src = matches[0]  # Take the most recent file
+
     try:
         with lzma.open(src, 'rb') as f_in, open(nvd_db_path, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
@@ -28,12 +31,13 @@ def decompress_nvd_db(nvd_db_path):
             os.remove(nvd_db_path)
         raise
 
+
 def fetch_db_updates():
     nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
-    
+
     # Check for and decompress any compressed database files first
     decompress_nvd_db(nvd_db_path)
-    
+
     # Contrinue with syncing, either from scratch or from the decompressed DB last entry
     nvd_db = NVD_DB(nvd_db_path)
     nvd_api_key = os.getenv("NVD_API_KEY")
