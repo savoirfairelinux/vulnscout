@@ -18,7 +18,7 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    filterLabel?: "Source" | "Severity" | "Status";
+    filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
 };
 
@@ -56,6 +56,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
+    const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [hideFixed, setHideFixed] = useState<boolean>(false);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -67,6 +68,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Source") setSelectedSources([filterValue]);
         if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
+        if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
@@ -227,9 +229,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
+            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages.includes(pkg))) return false;
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -240,6 +243,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedSources([]);
         setSelectedSeverities([]);
         setSelectedStatuses([]);
+        setSelectedPackages([]);
         setSelectedRows({});
         setHideFixed(false);
     }
