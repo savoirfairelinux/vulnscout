@@ -8,52 +8,88 @@ import os
 import glob
 import lzma
 import shutil
+import logging
 
 
-def decompress_nvd_db(nvd_db_path):
+def setup_logging():
+    log_file = os.getenv("NVD_LOGFILE", "/cache/vulnscout/nvd.log")
+    verbose_logging = os.getenv("NVD_VERBOSE_LOGGING", "false").lower() == "true"
+
+    log_dir = os.path.dirname(log_file)
+    if not os.path.exists(log_dir):
+        print("[Patch-Finder] Warning: Log directory does not exist, falling back to console logging.")
+        handlers = [logging.StreamHandler()]
+    else:
+        handlers = [logging.FileHandler(log_file)]
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=handlers
+    )
+
+    return verbose_logging
+
+
+def log_and_print(message, verbose_logging=True, force_print=False):
+    logging.info(message)
+    if verbose_logging or force_print:
+        print(f"[Patch-Finder] {message}", flush=True)
+
+
+def decompress_nvd_db(nvd_db_path, verbose_logging=True):
     db_dir, db_name = os.path.dirname(nvd_db_path), os.path.basename(nvd_db_path)
-
-    # Get the most recent xz file
     matches = sorted(glob.glob(f"{db_dir}/{db_name}.*.xz"), key=os.path.getmtime, reverse=True)
-
-    # With no matches, we exit the function and build the DB from scratch in the next step
     if not matches:
+        log_and_print("No compressed database files found", verbose_logging)
         return
-
-    src = matches[0]  # Take the most recent file
-
+    src = matches[0]
+    log_and_print(f"Decompressing database from {src}", verbose_logging)
     try:
-        with lzma.open(src, 'rb') as f_in, open(nvd_db_path, 'wb') as f_out:
+        with lzma.open(src, "rb") as f_in, open(nvd_db_path, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
         os.remove(src)
-    except:
+        log_and_print(f"Successfully decompressed database to {nvd_db_path}", verbose_logging)
+    except Exception as e:
+        log_and_print(f"Error decompressing database: {e}", verbose_logging, force_print=True)
         if os.path.exists(nvd_db_path):
             os.remove(nvd_db_path)
         raise
 
 
 def fetch_db_updates():
+    verbose_logging = setup_logging()
     nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
-
-    # Check for and decompress any compressed database files first
-    decompress_nvd_db(nvd_db_path)
-
-    # Contrinue with syncing, either from scratch or from the decompressed DB last entry
+    log_and_print("Starting NVD database update", verbose_logging)
+    if not verbose_logging:
+        log_and_print("NVD DB is syncing, it may take a few minutes", verbose_logging=False, force_print=True)
+    decompress_nvd_db(nvd_db_path, verbose_logging)
+    log_and_print("Initializing NVD database connection", verbose_logging)
     nvd_db = NVD_DB(nvd_db_path)
     nvd_api_key = os.getenv("NVD_API_KEY")
     if not nvd_api_key:
-        print("NVD API key not found, this may slow down db update. See NVD_API_KEY configuration")
+        log_and_print("NVD API key not found, this may slow down db update. See NVD_API_KEY configuration", verbose_logging)
     else:
+        log_and_print("NVD API key found, using authenticated requests", verbose_logging)
         nvd_db.nvd_api_key = nvd_api_key
     nvd_db.set_writing_flag(True)
     for step, total in nvd_db.build_initial_db():
-        print(f"NVD update: {step} / {total} [{round((step / total) * 100)}%]", flush=True)
+        percent = round((step / total) * 100) if total else 100
+        message = f"NVD update: {step} / {total} [{percent}%]"
+        log_and_print(message, verbose_logging)
     for txt in nvd_db.update_db():
-        print(f"NVD update: {txt}", flush=True)
+        message = f"NVD update: {txt}"
+        log_and_print(message, verbose_logging)
     nvd_db.in_sync = True
     nvd_db.set_writing_flag(False)
+    log_and_print("NVD DB sync completed successfully", verbose_logging, force_print=True)
 
 
 if __name__ == "__main__":
-    fetch_db_updates()
-    print("DB is now synced")
+    try:
+        fetch_db_updates()
+    except Exception as e:
+        verbose_logging = os.getenv("NVD_VERBOSE_LOGGING", "false").lower() == "true"
+        error_msg = f"Error during NVD database update: {e}"
+        log_and_print(error_msg, verbose_logging, force_print=True)
+        raise
