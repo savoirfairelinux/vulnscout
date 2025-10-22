@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import sqlite3
-import                        http.client
+import http.client
 import json
 import urllib.parse
 import os
@@ -40,9 +40,9 @@ def setup_logging():
     return verbose_logging
 
 
-def log_and_print(message, verbose_logging=True):
+def log_and_print(message, verbose_logging=True, force_print=False):
     logging.info(message)
-    if verbose_logging:
+    if verbose_logging or force_print:
         print(f"[Patch-Finder] {message}", flush=True)
 
 
@@ -149,7 +149,8 @@ class NVD_DB:
                 resp_json = json.loads(resp.read().decode())
             except json.decoder.JSONDecodeError:
                 log_and_print(
-                    f"NVD API responded with invalid JSON. Adding an free NVD API key can help to avoid this error. (status: {resp_status})",
+                    f"NVD API responded with invalid JSON. Adding an free NVD API key can help to avoid this error. "
+                    f"(status: {resp_status})",
                     self.verbose_logging
                 )
                 resp_json = {}

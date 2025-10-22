@@ -68,7 +68,10 @@ def fetch_db_updates():
     nvd_db = NVD_DB(nvd_db_path)
     nvd_api_key = os.getenv("NVD_API_KEY")
     if not nvd_api_key:
-        log_and_print("NVD API key not found, this may slow down db update. See NVD_API_KEY configuration", verbose_logging)
+        log_and_print(
+            "NVD API key not found, this may slow down db update. See NVD_API_KEY configuration",
+            verbose_logging
+        )
     else:
         log_and_print("NVD API key found, using authenticated requests", verbose_logging)
         nvd_db.nvd_api_key = nvd_api_key
