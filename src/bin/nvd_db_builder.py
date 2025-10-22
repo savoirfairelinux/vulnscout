@@ -4,37 +4,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..controllers.nvd_db import NVD_DB
+from ..helpers.nvd_logging import setup_logging, log_and_print
 import os
 import glob
 import lzma
 import shutil
-import logging
-
-
-def setup_logging():
-    log_file = os.getenv("NVD_LOGFILE", "/cache/vulnscout/nvd.log")
-    verbose_logging = os.getenv("NVD_VERBOSE_LOGGING", "false").lower() == "true"
-
-    log_dir = os.path.dirname(log_file)
-    if not os.path.exists(log_dir):
-        print("[Patch-Finder] Warning: Log directory does not exist, falling back to console logging.")
-        handlers = [logging.StreamHandler()]
-    else:
-        handlers = [logging.FileHandler(log_file)]
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=handlers
-    )
-
-    return verbose_logging
-
-
-def log_and_print(message, verbose_logging=True, force_print=False):
-    logging.info(message)
-    if verbose_logging or force_print:
-        print(f"[Patch-Finder] {message}", flush=True)
 
 
 def decompress_nvd_db(nvd_db_path, verbose_logging=True):

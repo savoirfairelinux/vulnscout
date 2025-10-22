@@ -11,6 +11,7 @@ import os
 import logging
 from datetime import datetime, timezone, timedelta
 from ..helpers.fixs_scrapper import FixsScrapper
+from ..helpers.nvd_logging import setup_logging, log_and_print
 from typing import Optional, Generator, Tuple
 import time
 import sys
@@ -18,32 +19,6 @@ import sys
 sys.tracebacklimit = 0  # disable traceback
 
 DB_MODEL_VERSION = "nvd2.0-vulnscout1.1"
-
-
-def setup_logging():
-    log_file = os.getenv("NVD_LOGFILE", "/cache/vulnscout/nvd.log")
-    verbose_logging = os.getenv("NVD_VERBOSE_LOGGING", "false").lower() == "true"
-
-    log_dir = os.path.dirname(log_file)
-    if not os.path.exists(log_dir):
-        print("[Patch-Finder] Warning: Log directory does not exist, falling back to console logging.")
-        handlers = [logging.StreamHandler()]
-    else:
-        handlers = [logging.FileHandler(log_file)]
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=handlers
-    )
-
-    return verbose_logging
-
-
-def log_and_print(message, verbose_logging=True, force_print=False):
-    logging.info(message)
-    if verbose_logging or force_print:
-        print(f"[Patch-Finder] {message}", flush=True)
 
 
 class NVD_DB:
