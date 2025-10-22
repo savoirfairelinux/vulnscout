@@ -51,20 +51,40 @@
                 }
             },
             scales: {
-                y: {
-                    beginAtZero: true
+              x: {
+                ticks: {
+                  color: 'white'
                 }
+              },
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  color: 'white'
+                }
+              }
             }
         }
 
         const BarOptions = {
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
-        };
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                      x: {
+                        ticks: {
+                          color: 'white'
+                        }
+                      },
+                      y: {
+                        ticks: {
+                          color: 'white'
+                        }
+                      }
+                    }
+                };
 
 
         function zeroise_date (date: Date, unit: string) {
@@ -393,25 +413,20 @@ const packageColumns = [
     }, [vulnerabilities]);
 
               const dataSetVulnBySource = useMemo(() => {
+                const uniqueSources = Array.from(
+                    new Set(vulnerabilities.flatMap(vuln => vuln.found_by))
+                ).sort((a, b) =>
+                    vulnerabilities.filter(vuln => vuln.found_by.includes(b)).length -
+                    vulnerabilities.filter(vuln => vuln.found_by.includes(a)).length
+                );
                 return {
-                    labels: ['Unknown', 'Grype', 'Yocto', 'OSV'],
+                    labels: uniqueSources,
                     datasets: [{
                         label: '# of Vulnerabilities',
-                        data: vulnerabilities.reduce((acc, vuln) => {
-                            let added = false;
-                            if (vuln.found_by.includes('grype')) { acc[1]++; added = true; }
-                            if (vuln.found_by.includes('yocto')) { acc[2]++; added = true; }
-                            if (vuln.found_by.includes('osv')) { acc[3]++; added = true; }
-                            if (!added) acc[0]++;
-                            return acc;
-                        }, [0, 0, 0, 0]),
-                        backgroundColor: [
-                            'rgba(180, 180, 180)',
-                            'rgba(0, 150, 150)',
-                            '#F8DE22',
-                            '#F94C10',
-                            '#FC2947',
-                        ],
+                        data: uniqueSources.map(source =>
+                            vulnerabilities.filter(vuln => vuln.found_by.includes(source)).length
+                        ),
+                        backgroundColor: 'rgba(0, 150, 150, 0.7)',
                         hoverOffset: 4
                     }]
                 }
