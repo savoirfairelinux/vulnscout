@@ -7,8 +7,6 @@ import sqlite3
 import http.client
 import json
 import urllib.parse
-import os
-import logging
 from datetime import datetime, timezone, timedelta
 from ..helpers.fixs_scrapper import FixsScrapper
 from ..helpers.nvd_logging import setup_logging, log_and_print
