@@ -248,6 +248,7 @@ function extract_tar_file() {
 
 #######################################
 # List files in a folder and theses sub-folder and copy all .spdx.json it found into $2.
+# Also copy .spdx files and convert them to .spdx.json
 # Globals:
 #   SPDX_FILE_COUNTER
 # Arguments:
@@ -271,8 +272,17 @@ function copy_spdx_files() {
         if [[ -d "$file" ]]; then
             copy_spdx_files "$file" "$destination"
         else
+            local filename
+            filename=$(basename "$file")
+
             if [[ "$file" == *.spdx.json ]]; then
-                cp "$file" "$destination/${SPDX_FILE_COUNTER}_$(basename "$file")"
+                cp "$file" "$destination/${SPDX_FILE_COUNTER}_$filename"
+                ((SPDX_FILE_COUNTER++))
+            fi
+            if [[ "$file" == *.spdx ]] && [[ "$file" != *.spdx.json ]]; then
+                echo "Converting SPDX tag value file $file to JSON"
+                local new_file_name="${filename}.json"
+                pyspdxtools --infile "$file" --outfile "$destination/${SPDX_FILE_COUNTER}_$new_file_name"
                 ((SPDX_FILE_COUNTER++))
             fi
         fi
