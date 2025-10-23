@@ -25,7 +25,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
-    const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | undefined>(undefined);
+    const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
@@ -42,7 +42,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     };
 
     const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
-        const active_status = ['Exploitable', 'Community Analysis Pending'];
+        const active_status = ['Exploitable', 'Community analysis pending'];
         PatchFinderLogic
         .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
         .then((patchData) => {
@@ -116,10 +116,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         }));
     }
 
-    function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status", value: string) {
+    function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {
         setFilterLabel(filterType);
         setFilterValue(value);
         setTab('vulnerabilities');
+    }
+
+    function showVulnsForPackage(packageId: string) {
+        goToVulnsTabWithFilter("Package", packageId);
     }
 
     const [tab, setTab] = useState("metrics");
@@ -157,7 +161,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     setTab={setTab}
                     appendCVSS={appendCVSS}
                 />}
-                {tab == 'packages' && <TablePackages packages={pkgs} />}
+                {tab == 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}

@@ -85,7 +85,7 @@ describe('asAssessment optional fields', () => {
       last_update: '2024-02-04T00:00:00'
     };
     const assessed = asAssessment(data as any) as any;
-    expect(assessed.simplified_status).toEqual('fixed');
+    expect(assessed.simplified_status).toEqual('Fixed');
     expect(assessed.status_notes).toEqual('note');
     expect(assessed.justification).toEqual('justification text');
     expect(assessed.impact_statement).toEqual('impact');
