@@ -9,6 +9,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 
 type Props = {
     packages: Package[];
+    onShowVulns?: (packageId: string) => void;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -39,7 +40,7 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages({ packages }: Readonly<Props>) {
+function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -129,9 +130,25 @@ function TablePackages({ packages }: Readonly<Props>) {
                 header: () => <div className="flex items-center justify-center">Sources</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()?.join(', ')}</div>,
                 enableSorting: false
+            }),
+            columnHelper.accessor(row => row, {
+                header: 'Actions',
+                cell: info => (
+                    <div className="flex items-center justify-center h-full">
+                        <button
+                            className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+                            onClick={() => onShowVulns?.(info.getValue().id)}
+                            >
+                            Vulns
+                        </button>
+                    </div>
+                ),
+                enableSorting: false,
+                minSize: 10,
+                size: 10
             })
         ]
-    }, [showSeverity]);
+    }, [showSeverity, onShowVulns]);
 
     const filteredPackages = useMemo(() => {
         return packages.filter((el) => {

@@ -1,13 +1,13 @@
 const STATUS_VEX_TO_GRAPH: { [key: string]: string } = {
-    "under_investigation": "Community Analysis Pending",
-    "in_triage": "Community Analysis Pending",
-    "false_positive": "not affected",
-    "not_affected": "not affected",
+    "under_investigation": "Community analysis pending",
+    "in_triage": "Community analysis pending",
+    "false_positive": "Not affected",
+    "not_affected": "Not affected",
     "exploitable": "Exploitable",
     "affected": "Exploitable",
-    "resolved": "fixed",
-    "fixed": "fixed",
-    "resolved_with_pedigree": "fixed"
+    "resolved": "Fixed",
+    "fixed": "Fixed",
+    "resolved_with_pedigree": "Fixed"
 };
 
 type Assessment = {
