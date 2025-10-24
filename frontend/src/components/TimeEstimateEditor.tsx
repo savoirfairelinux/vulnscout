@@ -23,9 +23,10 @@ type Props = {
     progressBar?: number;
     onFieldsChange?: (hasChanges: boolean) => void;
     triggerBanner?: (message: string, type: "error" | "success") => void;
+    hideInputs?: boolean;
 }
 
-function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange, triggerBanner}: Readonly<Props>) {
+function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFields, progressBar, actualEstimate, onFieldsChange, triggerBanner, hideInputs}: Readonly<Props>) {
     const [estimateHelp, setEstimateHelp] = useState(false);
     const [newOptimistic, setNewOptimistic] = useState("");
     const [newLikely, setNewLikely] = useState("");
@@ -109,46 +110,52 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
             />
         )}
 
-        <h3 className="font-bold">Estimated efforts to fix</h3>
+        <div className="flex items-center gap-2">
+            <h3 className="font-bold">Estimated efforts to fix</h3>
+            <button type='button' className='hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
+                <FontAwesomeIcon icon={faCircleQuestion} size='lg' className='pr-2' />
+            </button>
+        </div>
+
         <div className="flex flex-row space-x-4 max-w-[900px]">
             <div className="flex-1 m-1">
                 <h4 className="font-bold">Optimistic</h4>
                 <p>{actualEstimate.optimistic ?? "N/A"}</p>
-                <input
-                    value={newOptimistic}
-                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewOptimistic(event.target.value)}
-                    type="text"
-                    className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
-                    placeholder="shortest estimate [eg: 5h]"
-                />
+                {!hideInputs && (
+                    <input
+                        value={newOptimistic}
+                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewOptimistic(event.target.value)}
+                        type="text"
+                        className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
+                        placeholder="shortest estimate [eg: 5h]"
+                    />
+                )}
             </div>
             <div className="flex-1 m-1">
                 <h4 className="font-bold">Most Likely</h4>
                 <p>{actualEstimate.likely ?? "N/A"}</p>
-                <input
-                    value={newLikely}
-                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewLikely(event.target.value)}
-                    type="text"
-                    className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
-                    placeholder="balanced estimate [eg: 2d 4h, or 2.5d]"
-                />
+                {!hideInputs && (
+                    <input
+                        value={newLikely}
+                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewLikely(event.target.value)}
+                        type="text"
+                        className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
+                        placeholder="balanced estimate [eg: 2d 4h, or 2.5d]"
+                    />
+                )}
             </div>
             <div className="flex-1 m-1">
                 <h4 className="font-bold">Pessimistic</h4>
                 <p>{actualEstimate.pessimistic ?? "N/A"}</p>
-                <input
-                    value={newPessimistic}
-                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewPessimistic(event.target.value)}
-                    type="text"
-                    className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
-                    placeholder="longest estimate [eg: 1w]"
-                />
-            </div>
-            <div>
-                <button type='button' className='pt-8 pl-2 hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
-                    <FontAwesomeIcon icon={faCircleQuestion} size='xl' className='pr-2' />
-                    Show help
-                </button>
+                {!hideInputs && (
+                    <input
+                        value={newPessimistic}
+                        onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewPessimistic(event.target.value)}
+                        type="text"
+                        className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
+                        placeholder="longest estimate [eg: 1w]"
+                    />
+                )}
             </div>
         </div>
         {estimateHelp && <div className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
@@ -161,11 +168,13 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
             Finaly, you can enter ISO 8601 duration format (eg: P1DT12H, P2W, P3M, PT5H).
         </div>}
 
-        <button
-            onClick={saveEstimation}
-            type="button"
-            className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-        >Save estimation</button>
+        {!hideInputs && (
+            <button
+                onClick={saveEstimation}
+                type="button"
+                className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+            >Save estimation</button>
+        )}
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
              <progress max={1} value={progressBar} className="w-full h-2"></progress>
