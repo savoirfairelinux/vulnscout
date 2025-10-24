@@ -61,6 +61,7 @@ const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simpl
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
+    const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
@@ -256,11 +257,25 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 cell: info => (
                     <div className="flex items-center justify-center h-full">
                     <button
+                        className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg mr-2"
+                        onClick={() => {
+                            setModalVuln(info.getValue());
+                            setIsEditing(false);
+                        }}
+                    >
+                        View
+                    </button>
+
+                    <button
                         className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-                        onClick={() => setModalVuln(info.getValue())}
+                        onClick={() => {
+                            setModalVuln(info.getValue());
+                            setIsEditing(true);
+                        }}
                     >
                         Edit
                     </button>
+
                     </div>
                 ),
                 enableSorting: false,
@@ -396,7 +411,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
-            onClose={() => setModalVuln(undefined)}
+            isEditing={isEditing}
+            onClose={() => {
+                setModalVuln(undefined);
+                setIsEditing(false);
+            }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
