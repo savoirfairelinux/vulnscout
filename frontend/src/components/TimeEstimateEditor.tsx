@@ -111,14 +111,13 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
         )}
 
         <div className="flex items-center gap-2">
-            <h3 className="font-bold">Estimated efforts to fix</h3>
-            <button type='button' className='hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
+            <h3 className="font-bold">Estimated efforts to fix</h3><button type='button' className='hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
                 <FontAwesomeIcon icon={faCircleQuestion} size='lg' className='pr-2' />
             </button>
         </div>
 
         <div className="flex flex-row space-x-4 max-w-[900px]">
-            <div className="flex-1 m-1">
+            <div className="flex-1">
                 <h4 className="font-bold">Optimistic</h4>
                 <p>{actualEstimate.optimistic ?? "N/A"}</p>
                 {!hideInputs && (
@@ -131,7 +130,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
                     />
                 )}
             </div>
-            <div className="flex-1 m-1">
+            <div className="flex-1">
                 <h4 className="font-bold">Most Likely</h4>
                 <p>{actualEstimate.likely ?? "N/A"}</p>
                 {!hideInputs && (
@@ -144,7 +143,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
                     />
                 )}
             </div>
-            <div className="flex-1 m-1">
+            <div className="flex-1">
                 <h4 className="font-bold">Pessimistic</h4>
                 <p>{actualEstimate.pessimistic ?? "N/A"}</p>
                 {!hideInputs && (
