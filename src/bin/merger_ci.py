@@ -14,6 +14,7 @@ from ..views.openvex import OpenVex
 from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
+from ..views.spdx3 import SPDX3
 from ..views.fast_spdx import FastSPDX
 from ..views.fast_spdx3 import FastSPDX3
 from ..views.templates import Templates
@@ -43,6 +44,7 @@ OUTPUT_VULN_PATH = "/scan/tmp/vulnerabilities-merged.json"
 OUTPUT_ASSESSEMENT_PATH = "/scan/tmp/assessments-merged.json"
 OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
+OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
 
 
 def is_items_only_openvex(scanners: list[str]) -> bool:
@@ -285,6 +287,7 @@ def read_inputs(controllers):
 def output_results(controllers, files):
     """Output the results to files."""
     spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
+    spdx3 = SPDX3(controllers)
     output = {
         "packages": controllers["packages"].to_dict(),
         "vulnerabilities": controllers["vulnerabilities"].to_dict(),
@@ -311,6 +314,10 @@ def output_results(controllers, files):
     verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
     with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
         f.write(spdx.output_as_json())
+
+    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX3_PATH', OUTPUT_SPDX3_PATH)}")
+    with open(os.getenv("OUTPUT_SPDX3_PATH", OUTPUT_SPDX3_PATH), "w") as f:
+        f.write(spdx3.output_as_json())
 
     verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
     with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
