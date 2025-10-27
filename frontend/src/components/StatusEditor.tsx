@@ -62,12 +62,20 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        if (status == "false_positive" && impact == '') {
+            if (triggerBanner) {
+                triggerBanner("You must provide an impact statement for false positive status", "error");
+            } else {
+                internalTriggerBanner("You must provide an impact statement for false positive status", "error");
+            }
+            return;
+        }
         onAddAssessment({
             status,
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: status == "not_affected" ? impact : undefined
+            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined
         });
     }
 
