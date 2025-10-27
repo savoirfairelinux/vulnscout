@@ -8,10 +8,12 @@ import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
+import DropdownMenu from "../components/DropdownMenu";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
+import { faEye, faPencilAlt } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -254,33 +256,39 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
-                cell: info => (
-                    <div className="flex items-center justify-center h-full">
-                    <button
-                        className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg mr-2"
-                        onClick={() => {
-                            setModalVuln(info.getValue());
-                            setIsEditing(false);
-                        }}
-                    >
-                        View
-                    </button>
+                cell: info => {
+                    const vuln = info.getValue();
+                    const dropdownItems = [
+                        {
+                            label: 'View',
+                            icon: faEye,
+                            onClick: () => {
+                                setModalVuln(vuln);
+                                setIsEditing(false);
+                            }
+                        },
+                        {
+                            label: 'Edit',
+                            icon: faPencilAlt,
+                            onClick: () => {
+                                setModalVuln(vuln);
+                                setIsEditing(true);
+                            }
+                        }
+                    ];
 
-                    <button
-                        className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-                        onClick={() => {
-                            setModalVuln(info.getValue());
-                            setIsEditing(true);
-                        }}
-                    >
-                        Edit
-                    </button>
-
-                    </div>
-                ),
+                    return (
+                        <div 
+                            className="flex items-center justify-center h-full"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <DropdownMenu items={dropdownItems} />
+                        </div>
+                    );
+                },
                 enableSorting: false,
                 minSize: 20,
-                size: 20
+                size: 50
             })
         ]
     }, []);

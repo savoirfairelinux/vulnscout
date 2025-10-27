@@ -693,11 +693,16 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const editButtons = await screen.getAllByRole('button', { name: /edit/i });
-        expect(editButtons.length).toBeGreaterThan(0);
+        // Find the Actions menu button (⋮)
+        const actionsMenuButtons = await screen.getAllByRole('button', { name: /actions menu/i });
+        expect(actionsMenuButtons.length).toBeGreaterThan(0);
 
-        // ACT
-        await user.click(editButtons[0]);
+        // Open the dropdown menu for the first row
+        await user.click(actionsMenuButtons[0]);
+
+        // Find and click the Edit option in the dropdown
+        const editOption = await screen.findByRole('button', { name: /^edit$/i });
+        await user.click(editOption);
 
         // ASSERT - Modal should open (we can check for modal title with specific id)
         await waitFor(() => {

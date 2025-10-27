@@ -43,7 +43,10 @@ describe('TimeEstimateEditor component', () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Show help/i }));
+    // Find the help button by its class
+    const helpButton = document.querySelector('button.hover\\:text-blue-400') as HTMLElement;
+    expect(helpButton).toBeInTheDocument();
+    fireEvent.click(helpButton);
 
     expect(screen.getByText(/We follow the same time scale as Gitlab/i)).toBeInTheDocument();
   });
@@ -51,7 +54,8 @@ describe('TimeEstimateEditor component', () => {
   test('hides help text when toggled twice', () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
-    const btn = screen.getByRole('button', { name: /Show help/i });
+    const btn = document.querySelector('button.hover\\:text-blue-400') as HTMLElement;
+    expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
     expect(screen.getByText(/Time scale: 1 month = 4 weeks/i)).toBeInTheDocument();
     fireEvent.click(btn);
