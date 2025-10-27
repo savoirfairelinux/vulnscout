@@ -27,7 +27,7 @@ class Package:
         cpe, purl and licences are optional lists of identifiers.
         """
         self.name = name
-        self.version = version.split("+git")[0]
+        self.version = str(version).strip().split("+git")[0]
         cpes = cpe or []
         purls = purl or []
         lics = licences or ""

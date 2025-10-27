@@ -16,7 +16,7 @@ def fetch_epss_updates():
         epss_db.update_epss()
         print("EPSS DB update complete!", flush=True)
     else:
-        print("EPSS DB is up to date, skipping synccing", flush=True)
+        print("EPSS DB is up to date, skipping syncing", flush=True)
 
 
 if __name__ == "__main__":
