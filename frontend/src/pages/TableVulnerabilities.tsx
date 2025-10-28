@@ -22,6 +22,15 @@ type Props = {
     filterValue?: string;
 };
 
+const dt_options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    timeZoneName: 'shortOffset'
+};
+
 const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     const vulnsA = rowA.original.severity.severity.toUpperCase()
     const vulnsB = rowB.original.severity.severity.toUpperCase()
@@ -168,7 +177,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 125,
             }),
             columnHelper.accessor('packages', {
-            header: () => <div className="flex items-center justify-center">Packages affected</div>,
+            header: () => <div className="flex items-center justify-center">Packages Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
             size: 205
@@ -189,11 +198,49 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 130
             }),
             columnHelper.accessor('effort.likely', {
-            header: () => <div className="flex items-center justify-center">Estimated effort</div>,
+            header: () => <div className="flex items-center justify-center">Estimated Effort</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
             enableSorting: true,
             sortingFn: (rowA, rowB) => rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds,
             size: 100
+            }),
+            columnHelper.accessor('assessments', {
+            header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            cell: info => {
+                const assessments = info.getValue();
+                if (!assessments || assessments.length === 0) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">No assessment</div>;
+                }
+                
+                // Find the most recent update time across all assessments
+                const mostRecentTime = assessments.reduce((latest, assessment) => {
+                    const assessmentTime = new Date(assessment.last_update || assessment.timestamp);
+                    return assessmentTime > latest ? assessmentTime : latest;
+                }, new Date(0));
+                
+                // Format the date using the same format as VulnModal
+                const formattedDate = mostRecentTime.getTime() > 0 ? 
+                    mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
+                
+                return (
+                    <div className="flex items-center justify-center h-full text-center text-sm">
+                        {formattedDate}
+                    </div>
+                );
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const getLatestAssessmentTime = (assessments: Assessment[]) => {
+                    if (!assessments || assessments.length === 0) return 0;
+                    return assessments.reduce((latest, assessment) => {
+                        const assessmentTime = new Date(assessment.last_update || assessment.timestamp).getTime();
+                        return assessmentTime > latest ? assessmentTime : latest;
+                    }, 0);
+                };
+                
+                return getLatestAssessmentTime(rowA.original.assessments) - getLatestAssessmentTime(rowB.original.assessments);
+            },
+            size: 140
             }),
             columnHelper.accessor('found_by', {
             header: () => <div className="flex items-center justify-center">Sources</div>,
