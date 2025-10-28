@@ -153,14 +153,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 40,
             }),
             columnHelper.accessor('epss', {
-            header: () => <div className="flex items-center justify-center">Exploitability</div>,
+            header: () => <div className="flex items-center justify-center">EPSS Score</div>,
             cell: info => {
                 const epss = info.getValue();
                 return (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                    {epss.score && <>
-                    <b>{Math.round(epss.score * 100)}%</b>
-                    {epss.percentile && <i className="text-sm">(more than {Math.floor(epss.percentile * 100)}% of vulns)</i>}
+                    {epss.score !== undefined && epss.score !== 0 &&  <>
+                    {(epss.score * 100).toFixed(2)}%
                     </>}
                 </div>
                 );

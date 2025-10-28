@@ -150,7 +150,7 @@ describe('Vulnerability Table', () => {
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
-        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
+        const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
         const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
         const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -173,7 +173,7 @@ describe('Vulnerability Table', () => {
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
-        const epss_col = await screen.getByRole('cell', {name: /3[56][ ]?\%/});
+        const epss_col = await screen.getByRole('cell', {name: /35\.68%/});
         const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
         const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
@@ -256,7 +256,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
+        const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
 
         await user.click(exploit_header); // un-ordoned -> more important first
         await waitFor(() => {
