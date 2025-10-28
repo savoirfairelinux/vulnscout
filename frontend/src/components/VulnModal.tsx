@@ -291,10 +291,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     <span className="font-bold mr-1">Severity:</span>
                                     <SeverityTag severity={vuln.severity.severity} className="text-white" />
                                 </li>
-                                {vuln.epss?.score && <li key="epss">
-                                    <span className="font-bold mr-1">Exploitability (EPSS):</span>
-                                    <b>{Number(vuln.epss.score * 100).toFixed(2)} %</b>
-                                    {vuln.epss.percentile && <i className="text-sm">(more than {Math.floor(vuln.epss.percentile * 100)}% of vulns)</i>}
+                                {vuln.epss?.score !== undefined && vuln.epss.score !== 0 && <li key="epss">
+                                    <span className="font-bold mr-1">EPSS Score: </span>
+                                    {(vuln.epss.score * 100).toFixed(2)}%
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
