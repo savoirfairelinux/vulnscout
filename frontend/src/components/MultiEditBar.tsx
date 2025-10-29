@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
@@ -26,6 +26,22 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         if (panelOpened) setPanelOpened(0)
         if (progressBar !== undefined) setProgressBar(undefined)
     }
+
+    // Get the status only if ALL selected vulnerabilities have the exact same status
+    const uniformStatus = useMemo((): string | undefined => {
+        if (selectedVulns.length === 0) return undefined;
+        
+        const selectedVulnerabilities = vulnerabilities.filter(vuln => selectedVulns.includes(vuln.id));
+        if (selectedVulnerabilities.length === 0) return undefined;
+        
+        const firstStatus = selectedVulnerabilities[0].status;
+        const allHaveSameStatus = selectedVulnerabilities.every(vuln => vuln.status === firstStatus);
+        
+        // Debug logging
+        
+        // Only return the status if ALL vulnerabilities have the same status
+        return allHaveSameStatus ? firstStatus : undefined;
+    }, [selectedVulns, vulnerabilities]);
 
     function pkg_for_vulns () {
         const pkg_vulns: {[key: string]: string[]} = {}
@@ -170,6 +186,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 <StatusEditor 
                     onAddAssessment={(data) => addAssessment(data)} 
                     progressBar={progressBar}
+                    defaultStatus={uniformStatus}
                 />
             </div>
 
