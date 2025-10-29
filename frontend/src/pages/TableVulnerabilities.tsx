@@ -145,7 +145,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
                 sortDescFirst: true,
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
-                size: 145
+                size: 170
             }),
             columnHelper.accessor('severity.severity', {
             header: () => (
@@ -174,13 +174,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 );
             },
             sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0),
-            size: 125,
+            size: 50,
             }),
             columnHelper.accessor('packages', {
             header: () => <div className="flex items-center justify-center">Packages Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
-            size: 205
+            size: 255
             }),
             columnHelper.accessor('severity', {
             header: () => <div className="flex items-center justify-center">Attack Vector</div>,

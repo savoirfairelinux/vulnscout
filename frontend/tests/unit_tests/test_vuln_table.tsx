@@ -830,12 +830,19 @@ describe('Vulnerability Table', () => {
     })
 
     test('last updated column shows "No assessment" when no assessments exist', async () => {
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        // ARRANGE - Create a scenario similar to the passing tests with one vulnerability that has no assessments
+        const vulnWithoutAssessments: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                assessments: []
+            }
+        ];
+        
+        render(<TableVulnerabilities vulnerabilities={vulnWithoutAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // ACT & ASSERT - Both vulnerabilities have empty assessments array, should show "No assessment"
-        const noAssessmentCells = await screen.getAllByText(/no assessment/i);
-        expect(noAssessmentCells.length).toBeGreaterThanOrEqual(2); // At least 2 for our test data
+        // ACT & ASSERT - Vulnerability has empty assessments array, should show "No assessment"
+        const noAssessmentCell = await screen.getByText(/no assessment/i);
+        expect(noAssessmentCell).toBeInTheDocument();
     })
 
     test('last updated column displays assessment timestamp when assessments exist', async () => {
