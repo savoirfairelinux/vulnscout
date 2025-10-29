@@ -153,8 +153,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     });
                 }, 5500); // >2s that we used in css animation
                 
+                // Add the assessment immediately to the local vuln object for instant UI update
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
+                vuln.status = casted.status;
+                vuln.simplified_status = casted.simplified_status;
+                
+                // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
                 showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
@@ -189,10 +194,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
             const data = await response.json();
 
             if (Array.isArray(data?.severity?.cvss)) {
+                // Update the local vuln object immediately for instant UI update
                 vuln.severity.cvss = data.severity.cvss;
+                
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
             }
 
-            patchVuln(vuln.id, vuln);
             setShowCustomCvss(false);
             showMessage("Successfully added Custom CVSS.", "success");
         } else {
@@ -217,6 +225,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
         })
         if (response.status == 200) {
             const data = await response.json()
+            
+            // Update the local vuln object immediately for instant UI update
             if (typeof data?.effort?.optimistic === "string")
                 vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
             if (typeof data?.effort?.likely === "string")
@@ -224,6 +234,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (typeof data?.effort?.pessimistic === "string")
                 vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
+            // Also patch the vulnerability for real-time refresh in other views
             patchVuln(vuln.id, vuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
@@ -280,10 +291,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     <span className="font-bold mr-1">Severity:</span>
                                     <SeverityTag severity={vuln.severity.severity} className="text-white" />
                                 </li>
-                                {vuln.epss?.score && <li key="epss">
-                                    <span className="font-bold mr-1">Exploitability (EPSS):</span>
-                                    <b>{Number(vuln.epss.score * 100).toFixed(2)} %</b>
-                                    {vuln.epss.percentile && <i className="text-sm">(more than {Math.floor(vuln.epss.percentile * 100)}% of vulns)</i>}
+                                {vuln.epss?.score !== undefined && vuln.epss.score !== 0 && <li key="epss">
+                                    <span className="font-bold mr-1">EPSS Score: </span>
+                                    {(vuln.epss.score * 100).toFixed(2)}%
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
