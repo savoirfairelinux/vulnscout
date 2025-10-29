@@ -40,6 +40,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setBannerVisible(false);
     };
 
+    // Update status when defaultStatus prop changes
+    useEffect(() => {
+        setStatus(defaultStatus);
+    }, [defaultStatus]);
+
     // Check if fields have changes
     useEffect(() => {
         const hasChanges = (
