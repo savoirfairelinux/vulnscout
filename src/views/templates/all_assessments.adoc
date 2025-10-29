@@ -72,19 +72,24 @@ All vulnerabilities are classed by the date of last change.
 Impacts following packages: {{' & '.join(vuln.packages)}} +
 Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 
-**History of assessments:**
-{% for assess in vuln.assessments %}
-* [{{assess.timestamp | print_iso8601}}] {{assess.status}} {{assess.justification or ""}}
-{%- if assess.status_notes != '' %}
-** Notes: {{assess.status_notes}}
+{% if vuln.texts -%}
+**Description:**
+{% for title, content in vuln.texts.items() %}
+{{ content }}
+{% endfor %}
 {%- endif %}
-{%- if assess.impact_statement != '' %}
-** Impact statement: {{assess.impact_statement}}
+
+**Assessment:**
+* [{{vuln.last_assessment.timestamp | print_iso8601}}] {{vuln.last_assessment.status}} {{vuln.last_assessment.justification or ""}}
+{%- if vuln.last_assessment.status_notes != '' %}
+** Notes: {{vuln.last_assessment.status_notes}}
 {%- endif %}
-{%- if assess.workaround != '' %}
-** Workaround: {{assess.workaround}}
+{%- if vuln.last_assessment.impact_statement != '' %}
+** Impact statement: {{vuln.last_assessment.impact_statement}}
 {%- endif %}
-{%- endfor %}
+{%- if vuln.last_assessment.workaround != '' %}
+** Workaround: {{vuln.last_assessment.workaround}}
+{%- endif %}
 
 '''
 
@@ -101,19 +106,24 @@ Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 Impacts following packages: {{' & '.join(vuln.packages)}} +
 Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 
-**History of assessments:**
-{% for assess in vuln.assessments %}
-* [{{assess.timestamp | print_iso8601}}] {{assess.status}} {{assess.justification or ""}}
-{%- if assess.status_notes != '' %}
-** Notes: {{assess.status_notes}}
+{% if vuln.texts -%}
+**Description:**
+{% for title, content in vuln.texts.items() %}
+{{ content }}
+{% endfor %}
 {%- endif %}
-{%- if assess.impact_statement != '' %}
-** Impact statement: {{assess.impact_statement}}
+
+** Assessment:**
+* [{{vuln.last_assessment.timestamp | print_iso8601}}] {{vuln.last_assessment.status}} {{vuln.last_assessment.justification or ""}}
+{%- if vuln.last_assessment.status_notes != '' %}
+** Notes: {{vuln.last_assessment.status_notes}}
 {%- endif %}
-{%- if assess.workaround != '' %}
-** Workaround: {{assess.workaround}}
+{%- if vuln.last_assessment.impact_statement != '' %}
+** Impact statement: {{vuln.last_assessment.impact_statement}}
 {%- endif %}
-{%- endfor %}
+{%- if vuln.last_assessment.workaround != '' %}
+** Workaround: {{vuln.last_assessment.workaround}}
+{%- endif %}
 
 '''
 
