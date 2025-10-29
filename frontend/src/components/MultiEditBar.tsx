@@ -39,14 +39,21 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     const addAssessment = async (content: PostAssessment) => {
         const pkg_vulns = pkg_for_vulns();
-        const vulns = vuln_ids_to_vulns();
         const assessments: Assessment[] = [];
         const errors = []
         let index = 0
         setProgressBar(0)
 
         for (const vuln_id of selectedVulns) {
-            const vuln = vulns[vuln_id];
+            // Get up-to-date vulnerability data for each iteration to ensure real-time updates
+            const vuln = vulnerabilities.find(v => v.id === vuln_id);
+            if (!vuln) {
+                errors.push(`Vulnerability ${vuln_id} not found`);
+                index++
+                setProgressBar(index / selectedVulns.length)
+                continue;
+            }
+            
             content.vuln_id = vuln_id;
             content.packages = pkg_vulns[vuln_id] ?? [];
             try {
@@ -64,15 +71,11 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     if (!Array.isArray(casted) && typeof casted === "object") {
                         assessments.push(casted);
                         
-                        // Update the vulnerability with new assessment and status
-                        const updatedVuln = {
-                            ...vuln,
-                            status: casted.status,
-                            simplified_status: casted.simplified_status,
-                            assessments: [...vuln.assessments, casted]
-                        };
-                        
-                        patchVuln(vuln_id, updatedVuln);
+                        // Update the vulnerability directly, then patch
+                        vuln.assessments.push(casted);
+                        vuln.status = casted.status;
+                        vuln.simplified_status = casted.simplified_status;
+                        patchVuln(vuln_id, vuln);
                     }
                 } else {
                     errors.push(Number(response?.status))
@@ -95,18 +98,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         setPanelOpened(0)
     };
 
-    function vuln_ids_to_vulns () {
-        const vulns: {[key: string]: Vulnerability} = {}
-        for (const vuln of vulnerabilities) {
-            if (selectedVulns.includes(vuln.id)) {
-                vulns[vuln.id] = vuln
-            }
-        }
-        return vulns
-    }
-
     const saveTimeEstimation = async (content: PostTimeEstimate) => {
-        const vulns = vuln_ids_to_vulns();
         const patchs: Vulnerability[] = [];
         const errors = []
         let index = 0
@@ -114,7 +106,15 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
         for (const vuln_id of selectedVulns) {
             try {
-                const vuln = vulns[vuln_id];
+                // Get fresh vulnerability data for each iteration to ensure real-time updates
+                const vuln = vulnerabilities.find(v => v.id === vuln_id);
+                if (!vuln) {
+                    errors.push(`Vulnerability ${vuln_id} not found`);
+                    index++
+                    setProgressBar(index / selectedVulns.length)
+                    continue;
+                }
+                
                 const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
                     method: 'PATCH',
                     mode: 'cors',
@@ -131,17 +131,16 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 if (response.status == 200) {
                     const data = await response.json()
                     
-                    const updatedVuln = {
-                        ...vuln,
-                        effort: {
-                            optimistic: typeof data?.effort?.optimistic === "string" ? new Iso8601Duration(data.effort.optimistic) : vuln.effort.optimistic,
-                            likely: typeof data?.effort?.likely === "string" ? new Iso8601Duration(data.effort.likely) : vuln.effort.likely,
-                            pessimistic: typeof data?.effort?.pessimistic === "string" ? new Iso8601Duration(data.effort.pessimistic) : vuln.effort.pessimistic
-                        }
-                    };
+                    // Update the vulnerability directly like in VulnModal, then patch
+                    if (typeof data?.effort?.optimistic === "string")
+                        vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
+                    if (typeof data?.effort?.likely === "string")
+                        vuln.effort.likely = new Iso8601Duration(data.effort.likely);
+                    if (typeof data?.effort?.pessimistic === "string")
+                        vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
-                    patchs.push(updatedVuln);
-                    patchVuln(vuln.id, updatedVuln);
+                    patchs.push(vuln);
+                    patchVuln(vuln.id, vuln);
                 } else {
                     errors.push(Number(response?.status))
                 }
