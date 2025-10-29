@@ -39,6 +39,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
     const [showConfirmClose, setShowConfirmClose] = useState(false);
+    const [newAssessmentIds, setNewAssessmentIds] = useState<Set<string>>(new Set());
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -140,6 +141,18 @@ const dt_options: Intl.DateTimeFormatOptions = {
         if (data?.status === 'success') {
             const casted = asAssessment(data?.assessment);
             if (!Array.isArray(casted) && typeof casted === "object") {
+                // Track this as a newly added assessment
+                setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                
+                // Remove the glow effect after animation completes
+                setTimeout(() => {
+                    setNewAssessmentIds(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(casted.id);
+                        return newSet;
+                    });
+                }, 5500); // >2s that we used in css animation
+                
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
                 patchVuln(vuln.id, vuln);
@@ -366,12 +379,24 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         <h3 className="font-bold">Assessments</h3>
                         <ol className="relative border-s border-gray-800">
+                            <li className="ms-4 text-white pb-8">
+                                <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
+                                <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
+                                <StatusEditor 
+                                    onAddAssessment={(data) => addAssessment(data)} 
+                                    clearFields={clearAssessmentFields}
+                                    onFieldsChange={setHasAssessmentChanges} 
+                                    triggerBanner={showMessage}
+                                />
+                            </li>
 
                             {groupedAssessments.map(group => {
                                 const dt = new Date(group.timestamp);
                                 const firstAssess = group.assessments[0]; // Use first assessment for content
+                                const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
+                                
                                 return (
-                                    <li key={encodeURIComponent(group.key)} className="mb-10 ms-4">
+                                    <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                         <div className="text-sm mb-2 flex flex-wrap gap-1">
@@ -385,7 +410,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                         <h3 className="text-lg font-semibold text-white mb-2">
                                             {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
                                         </h3>
-                                        <p className="text-base font-normal text-gray-300">
+                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
                                             {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
                                             {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
                                             {firstAssess.status_notes ?? 'no status notes'}<br/>
@@ -394,17 +419,6 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     </li>
                                 );
                             })}
-
-                            <li className="ms-4 text-white">
-                                <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
-                                <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor 
-                                    onAddAssessment={(data) => addAssessment(data)} 
-                                    clearFields={clearAssessmentFields}
-                                    onFieldsChange={setHasAssessmentChanges} 
-                                    triggerBanner={showMessage}
-                                />
-                            </li>
                         </ol>
                     </div>
 

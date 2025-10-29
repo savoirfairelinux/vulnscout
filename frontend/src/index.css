@@ -9,6 +9,27 @@
     }
 }
 
+@keyframes newElementGlow {
+    0% {
+        background-color: rgba(74, 90, 116, 1);
+        box-shadow: 0 0 30px rgba(74, 90, 116, 0.9);
+    }
+    50% {
+        background-color: rgba(74, 90, 116, 0.7);
+        box-shadow: 0 0 45px rgba(74, 90, 116, 0.7);
+    }
+    100% {
+        background-color: rgba(44, 52, 65, 0);
+        box-shadow: none;
+    }
+}
+
+.new-element-glow {
+    animation: newElementGlow 5s ease-out forwards;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
 .row-with-hover-effect + .show-on-row-hover {
     visibility: hidden;
     opacity: 0;

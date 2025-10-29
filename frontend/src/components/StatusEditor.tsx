@@ -62,12 +62,20 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        if (status == "false_positive" && impact == '') {
+            if (triggerBanner) {
+                triggerBanner("You must provide an impact statement for false positive status", "error");
+            } else {
+                internalTriggerBanner("You must provide an impact statement for false positive status", "error");
+            }
+            return;
+        }
         onAddAssessment({
             status,
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: status == "not_affected" ? impact : undefined
+            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined
         });
     }
 
@@ -103,9 +111,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 className="p-1 px-2 bg-gray-800 mr-4"
                 name="new_assessment_status"
             >
-                <option value="under_investigation">Community Analysis Pending</option>
-                <option value="affected">Affected / Exploitable</option>
-                <option value="fixed">Fixed / Patched</option>
+                <option value="under_investigation">Community analysis pending</option>
+                <option value="affected">Affected / exploitable</option>
+                <option value="fixed">Fixed / patched</option>
                 <option value="not_affected">Not applicable</option>
                 <option value="false_positive">False positive</option>
             </select>
@@ -128,29 +136,29 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             </>}
         </h3>
         {(status == "not_affected" || status == "false_positive") && <>
-            <input
+            <textarea
                 value={impact}
-                onInput={(event: React.ChangeEvent<HTMLInputElement>) => setImpact(event.target.value)}
+                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
                 name="new_assessment_impact"
-                className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
-                type="text"
+                className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 resize-vertical whitespace-pre-wrap"
+                rows={3}
                 placeholder="why this vulnerability is not exploitable ?"
             /><br/>
         </>}
-        <input
+        <textarea
             value={statusNotes}
-            onInput={(event: React.ChangeEvent<HTMLInputElement>) => setStatusNotes(event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
             name="new_assessment_status_notes"
-            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400"
-            type="text"
+            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 resize-vertical whitespace-pre-wrap"
+            rows={3}
             placeholder="Free text notes about your review, details, actions taken, ..."
         /><br/>
-        <input
+        <textarea
             value={workaround}
-            onInput={(event: React.ChangeEvent<HTMLInputElement>) => setWorkaround(event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
             name="new_assessment_workaround"
-            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white"
-            type="text"
+            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white resize-vertical whitespace-pre-wrap"
+            rows={3}
             placeholder="Describe workaround here if available"
         /><br/>
         <button
