@@ -153,16 +153,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     });
                 }, 5500); // >2s that we used in css animation
                 
-                // Update the vulnerability with new assessment and status
-                const updatedVuln = {
-                    ...vuln,
-                    status: casted.status,
-                    simplified_status: casted.simplified_status,
-                    assessments: [...vuln.assessments, casted]
-                };
-                
+                // Add the assessment immediately to the local vuln object for instant UI update
                 appendAssessment(casted);
-                patchVuln(vuln.id, updatedVuln);
+                vuln.assessments.push(casted);
+                vuln.status = casted.status;
+                vuln.simplified_status = casted.simplified_status;
+                
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
                 showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
                 setTimeout(() => setClearAssessmentFields(false), 100);
@@ -196,14 +194,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
             const data = await response.json();
 
             if (Array.isArray(data?.severity?.cvss)) {
-                const updatedVuln = {
-                    ...vuln,
-                    severity: {
-                        ...vuln.severity,
-                        cvss: data.severity.cvss
-                    }
-                };
-                patchVuln(vuln.id, updatedVuln);
+                // Update the local vuln object immediately for instant UI update
+                vuln.severity.cvss = data.severity.cvss;
+                
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
             }
 
             setShowCustomCvss(false);
@@ -231,16 +226,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
         if (response.status == 200) {
             const data = await response.json()
             
-            const updatedVuln = {
-                ...vuln,
-                effort: {
-                    optimistic: typeof data?.effort?.optimistic === "string" ? new Iso8601Duration(data.effort.optimistic) : vuln.effort.optimistic,
-                    likely: typeof data?.effort?.likely === "string" ? new Iso8601Duration(data.effort.likely) : vuln.effort.likely,
-                    pessimistic: typeof data?.effort?.pessimistic === "string" ? new Iso8601Duration(data.effort.pessimistic) : vuln.effort.pessimistic
-                }
-            };
+            // Update the local vuln object immediately for instant UI update
+            if (typeof data?.effort?.optimistic === "string")
+                vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
+            if (typeof data?.effort?.likely === "string")
+                vuln.effort.likely = new Iso8601Duration(data.effort.likely);
+            if (typeof data?.effort?.pessimistic === "string")
+                vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
-            patchVuln(vuln.id, updatedVuln);
+            // Also patch the vulnerability for real-time refresh in other views
+            patchVuln(vuln.id, vuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
             showMessage("Successfully added estimation.", "success");
