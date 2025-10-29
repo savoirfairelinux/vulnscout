@@ -409,7 +409,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                         <h3 className="text-lg font-semibold text-white mb-2">
                                             {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
                                         </h3>
-                                        <p className="text-base font-normal text-gray-300">
+                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
                                             {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
                                             {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
                                             {firstAssess.status_notes ?? 'no status notes'}<br/>
