@@ -53,7 +53,12 @@ function main() {
     fi
 
     python3 -m src.bin.epss_db_builder &
-    python3 -m src.bin.nvd_db_builder &
+
+    if [[ "$INTERACTIVE_MODE" == "true" ]]; then
+        python3 -m src.bin.nvd_db_builder &
+    else
+        set_status "0" "NVD sync skipped in CI Mode"
+    fi
 
     if [[ "${DEBUG_SKIP_SCAN-}" != "true" ]]; then
         full_scan_steps
