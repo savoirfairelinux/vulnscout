@@ -125,6 +125,18 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
+    // Get the default status for new assessments
+    // Use the most recent assessment's status, or "under_investigation" if no assessments exist
+    const getDefaultStatus = () => {
+        if (groupedAssessments.length > 0) {
+            // Get the most recent assessment's status (groupedAssessments are already sorted by most recent first)
+            return groupedAssessments[0].assessments[0].status;
+        }
+        return "under_investigation";
+    };
+
+    const defaultStatus = getDefaultStatus();
+
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -387,6 +399,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     clearFields={clearAssessmentFields}
                                     onFieldsChange={setHasAssessmentChanges} 
                                     triggerBanner={showMessage}
+                                    defaultStatus={defaultStatus}
                                 />
                             </li>
 
