@@ -39,16 +39,18 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     const addAssessment = async (content: PostAssessment) => {
         const pkg_vulns = pkg_for_vulns();
+        const vulns = vuln_ids_to_vulns();
         const assessments: Assessment[] = [];
         const errors = []
         let index = 0
         setProgressBar(0)
 
-        for (const vuln of selectedVulns) {
-            content.vuln_id = vuln;
-            content.packages = pkg_vulns[vuln] ?? [];
+        for (const vuln_id of selectedVulns) {
+            const vuln = vulns[vuln_id];
+            content.vuln_id = vuln_id;
+            content.packages = pkg_vulns[vuln_id] ?? [];
             try {
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln)}/assessments`, {
+                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln_id)}/assessments`, {
                     method: 'POST',
                     mode: 'cors',
                     headers: {
@@ -59,8 +61,19 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 const data = await response.json().catch(() => {})
                 if (data?.status === 'success') {
                     const casted = asAssessment(data?.assessment);
-                    if (!Array.isArray(casted) && typeof casted === "object")
-                        assessments.push(casted)
+                    if (!Array.isArray(casted) && typeof casted === "object") {
+                        assessments.push(casted);
+                        
+                        // Update the vulnerability with new assessment and status
+                        const updatedVuln = {
+                            ...vuln,
+                            status: casted.status,
+                            simplified_status: casted.simplified_status,
+                            assessments: [...vuln.assessments, casted]
+                        };
+                        
+                        patchVuln(vuln_id, updatedVuln);
+                    }
                 } else {
                     errors.push(Number(response?.status))
                 }
@@ -117,14 +130,18 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
                 if (response.status == 200) {
                     const data = await response.json()
-                    if (typeof data?.effort?.optimistic === "string")
-                        vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
-                    if (typeof data?.effort?.likely === "string")
-                        vuln.effort.likely = new Iso8601Duration(data.effort.likely);
-                    if (typeof data?.effort?.pessimistic === "string")
-                        vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+                    
+                    const updatedVuln = {
+                        ...vuln,
+                        effort: {
+                            optimistic: typeof data?.effort?.optimistic === "string" ? new Iso8601Duration(data.effort.optimistic) : vuln.effort.optimistic,
+                            likely: typeof data?.effort?.likely === "string" ? new Iso8601Duration(data.effort.likely) : vuln.effort.likely,
+                            pessimistic: typeof data?.effort?.pessimistic === "string" ? new Iso8601Duration(data.effort.pessimistic) : vuln.effort.pessimistic
+                        }
+                    };
 
-                    patchs.push(vuln);
+                    patchs.push(updatedVuln);
+                    patchVuln(vuln.id, updatedVuln);
                 } else {
                     errors.push(Number(response?.status))
                 }
@@ -142,7 +159,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         } else if (patchs.length > 0) {
             triggerBanner(`Successfully updated time estimates for ${patchs.length} vulnerabilities`, 'success');
         }
-        patchs.forEach((vuln: Vulnerability) => patchVuln(vuln.id, vuln))
         setProgressBar(undefined)
         setPanelOpened(0)
     }

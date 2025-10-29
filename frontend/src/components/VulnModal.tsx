@@ -153,9 +153,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     });
                 }, 5500); // >2s that we used in css animation
                 
+                // Update the vulnerability with new assessment and status
+                const updatedVuln = {
+                    ...vuln,
+                    status: casted.status,
+                    simplified_status: casted.simplified_status,
+                    assessments: [...vuln.assessments, casted]
+                };
+                
                 appendAssessment(casted);
-                vuln.assessments.push(casted);
-                patchVuln(vuln.id, vuln);
+                patchVuln(vuln.id, updatedVuln);
                 showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
                 setTimeout(() => setClearAssessmentFields(false), 100);
@@ -189,10 +196,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
             const data = await response.json();
 
             if (Array.isArray(data?.severity?.cvss)) {
-                vuln.severity.cvss = data.severity.cvss;
+                const updatedVuln = {
+                    ...vuln,
+                    severity: {
+                        ...vuln.severity,
+                        cvss: data.severity.cvss
+                    }
+                };
+                patchVuln(vuln.id, updatedVuln);
             }
 
-            patchVuln(vuln.id, vuln);
             setShowCustomCvss(false);
             showMessage("Successfully added Custom CVSS.", "success");
         } else {
@@ -217,14 +230,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
         })
         if (response.status == 200) {
             const data = await response.json()
-            if (typeof data?.effort?.optimistic === "string")
-                vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
-            if (typeof data?.effort?.likely === "string")
-                vuln.effort.likely = new Iso8601Duration(data.effort.likely);
-            if (typeof data?.effort?.pessimistic === "string")
-                vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+            
+            const updatedVuln = {
+                ...vuln,
+                effort: {
+                    optimistic: typeof data?.effort?.optimistic === "string" ? new Iso8601Duration(data.effort.optimistic) : vuln.effort.optimistic,
+                    likely: typeof data?.effort?.likely === "string" ? new Iso8601Duration(data.effort.likely) : vuln.effort.likely,
+                    pessimistic: typeof data?.effort?.pessimistic === "string" ? new Iso8601Duration(data.effort.pessimistic) : vuln.effort.pessimistic
+                }
+            };
 
-            patchVuln(vuln.id, vuln);
+            patchVuln(vuln.id, updatedVuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
             showMessage("Successfully added estimation.", "success");
