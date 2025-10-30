@@ -347,4 +347,18 @@ describe('EditAssessment Component', () => {
         // Should render without throwing errors
         expect(screen.getByText('Edit Assessment')).toBeInTheDocument();
     });
+
+    test('hides banner when triggerBanner prop is provided', () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                triggerBanner={mockTriggerBanner}
+            />
+        );
+
+        // Internal banner should not be visible when external trigger is provided
+        expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument();
+    });
 });

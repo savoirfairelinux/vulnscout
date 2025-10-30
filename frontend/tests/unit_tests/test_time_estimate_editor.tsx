@@ -1,4 +1,3 @@
-
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
@@ -132,6 +131,19 @@ describe('TimeEstimateEditor component', () => {
     const errorBanner = await screen.findByText(/Invalid ISO 8601 duration/i);
     expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  test('can close the error banner', async () => {
+    const onSave = jest.fn();
+    render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
+    setInputs({ opt: '0h', lik: '1h', pess: '2h' });
+    fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
+    const errorBanner = await screen.findByText(/Invalid optimistic duration/i);
+    expect(errorBanner).toBeInTheDocument();
+    // Find and click the close button
+    const closeButton = screen.getByRole('button', { name: /dismiss/i });
+    fireEvent.click(closeButton);
+    expect(screen.queryByText(/Invalid optimistic duration/i)).not.toBeInTheDocument();
   });
 
 });
