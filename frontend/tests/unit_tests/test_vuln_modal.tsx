@@ -1295,4 +1295,11 @@ describe('Vulnerability Modal', () => {
         // Since the returned assessment ID doesn't match, it should show success anyway
         await screen.findByText('Assessment updated successfully!');
     });
+
+    test('renders modal with view mode by default', () => {
+        render(<VulnModal vuln={vulnerability} isEditing={false} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        
+        expect(screen.getByText('CVE-2010-1234')).toBeInTheDocument();
+        expect(screen.queryByText('Edit Assessment')).not.toBeInTheDocument();
+    });
 });
