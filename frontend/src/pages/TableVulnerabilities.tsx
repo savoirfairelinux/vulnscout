@@ -8,12 +8,10 @@ import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
-import DropdownMenu from "../components/DropdownMenu";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
-import { faEye, faPencilAlt } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -145,7 +143,18 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             columnHelper.accessor('id', {
                 header: () => <div className="flex items-center justify-center">ID</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                cell: info => (
+                    <div 
+                        className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        onClick={() => {
+                            setModalVuln(info.row.original);
+                            setIsEditing(false);
+                        }}
+                        title="Click to view details"
+                    >
+                        {info.getValue()}
+                    </div>
+                ),
                 sortDescFirst: true,
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
@@ -256,39 +265,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
-                cell: info => {
-                    const vuln = info.getValue();
-                    const dropdownItems = [
-                        {
-                            label: 'View',
-                            icon: faEye,
-                            onClick: () => {
-                                setModalVuln(vuln);
-                                setIsEditing(false);
-                            }
-                        },
-                        {
-                            label: 'Edit',
-                            icon: faPencilAlt,
-                            onClick: () => {
-                                setModalVuln(vuln);
-                                setIsEditing(true);
-                            }
-                        }
-                    ];
+                cell: info => (
+                    <div className="flex items-center justify-center h-full">
+                    <button
+                        className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+                        onClick={() => {
+                            setModalVuln(info.getValue());
+                            setIsEditing(true);
+                        }}
+                    >
+                        Edit
+                    </button>
 
-                    return (
-                        <div 
-                            className="flex items-center justify-center h-full"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <DropdownMenu items={dropdownItems} />
-                        </div>
-                    );
-                },
+                    </div>
+                ),
                 enableSorting: false,
                 minSize: 20,
-                size: 50
+                size: 20
             })
         ]
     }, []);

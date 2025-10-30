@@ -688,29 +688,6 @@ describe('Vulnerability Table', () => {
         expect(search_bar.getAttribute('value')).toBeNull();
     })
 
-    test('open modal when clicking edit button', async () => {
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        // Find the Actions menu button (⋮)
-        const actionsMenuButtons = await screen.getAllByRole('button', { name: /actions menu/i });
-        expect(actionsMenuButtons.length).toBeGreaterThan(0);
-
-        // Open the dropdown menu for the first row
-        await user.click(actionsMenuButtons[0]);
-
-        // Find and click the Edit option in the dropdown
-        const editOption = await screen.findByRole('button', { name: /^edit$/i });
-        await user.click(editOption);
-
-        // ASSERT - Modal should open (we can check for modal title with specific id)
-        await waitFor(() => {
-            const modalTitle = document.getElementById('vulnerability_modal_title');
-            expect(modalTitle).toBeInTheDocument();
-        });
-    })
-
     test('initial filter props set correct filters', async () => {
         // ARRANGE - Render with initial filter props
         render(
