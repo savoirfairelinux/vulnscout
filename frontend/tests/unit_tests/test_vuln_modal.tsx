@@ -561,6 +561,317 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).not.toHaveBeenCalled();
     });
 
+        describe('Navigation buttons', () => {
+        const vulnerability2: Vulnerability = {
+            id: 'CVE-2010-5678',
+            aliases: ['CVE-2008-9999'],
+            related_vulnerabilities: ['OSV-xyz-5678'],
+            namespace: 'nvd:cve',
+            found_by: ['scanner'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-5678',
+            packages: ['package2@2.0.0'],
+            urls: ['https://security-tracker.debian.org/tracker/CVE-2010-5678'],
+            texts: [
+                {
+                    title: 'description',
+                    content: 'Another vulnerability description'
+                }
+            ],
+            severity: {
+                severity: 'high',
+                min_score: 7,
+                max_score: 8,
+                cvss: []
+            },
+            epss: {
+                score: 0.123456,
+                percentile: 0.5
+            },
+            effort: {
+                optimistic: new Iso8601Duration('PT2H'),
+                likely: new Iso8601Duration('PT8H'),
+                pessimistic: new Iso8601Duration('P1D')
+            },
+            fix: {
+                state: 'unknown'
+            },
+            status: 'affected',
+            simplified_status: 'active',
+            assessments: []
+        };
+
+        const vulnerabilities = [vulnerability, vulnerability2];
+
+        test('should not render navigation buttons when vulnerabilities array is not provided', () => {
+            render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            // Navigation buttons should not be present
+            expect(screen.queryByLabelText('Previous vulnerability')).not.toBeInTheDocument();
+            expect(screen.queryByLabelText('Next vulnerability')).not.toBeInTheDocument();
+            expect(document.getElementById('navigation-info')).not.toBeInTheDocument();
+        });
+
+        test('should not render navigation buttons when currentIndex is not provided', () => {
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+            />);
+
+            // Navigation buttons should not be present
+            expect(screen.queryByLabelText('Previous vulnerability')).not.toBeInTheDocument();
+            expect(screen.queryByLabelText('Next vulnerability')).not.toBeInTheDocument();
+            expect(document.getElementById('navigation-info')).not.toBeInTheDocument();
+        });
+
+        test('should render navigation buttons when vulnerabilities and currentIndex are provided', () => {
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={() => {}}
+            />);
+
+            // Navigation buttons should be present
+            expect(screen.getByLabelText('Previous vulnerability')).toBeInTheDocument();
+            expect(screen.getByLabelText('Next vulnerability')).toBeInTheDocument();
+            
+            // Navigation info should be present
+            expect(document.getElementById('navigation-info')).toHaveTextContent('Vulnerability 1 of 2');
+        });
+
+        test('should disable previous button on first vulnerability', () => {
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={() => {}}
+            />);
+
+            const prevButton = screen.getByLabelText('Previous vulnerability');
+            const nextButton = screen.getByLabelText('Next vulnerability');
+
+            expect(prevButton).toBeDisabled();
+            expect(nextButton).toBeEnabled();
+        });
+
+        test('should disable next button on last vulnerability', () => {
+            render(<VulnModal 
+                vuln={vulnerability2} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={1}
+                onNavigate={() => {}}
+            />);
+
+            const prevButton = screen.getByLabelText('Previous vulnerability');
+            const nextButton = screen.getByLabelText('Next vulnerability');
+
+            expect(prevButton).toBeEnabled();
+            expect(nextButton).toBeDisabled();
+        });
+
+        test('should enable both buttons when in middle of vulnerabilities list', () => {
+            const threeVulns = [vulnerability, vulnerability2, { ...vulnerability, id: 'CVE-2010-9999' }];
+            
+            render(<VulnModal 
+                vuln={vulnerability2} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={threeVulns}
+                currentIndex={1}
+                onNavigate={() => {}}
+            />);
+
+            const prevButton = screen.getByLabelText('Previous vulnerability');
+            const nextButton = screen.getByLabelText('Next vulnerability');
+
+            expect(prevButton).toBeEnabled();
+            expect(nextButton).toBeEnabled();
+            
+            expect(document.getElementById('navigation-info')).toHaveTextContent('Vulnerability 2 of 3');
+        });
+
+        test('should call onNavigate with correct index when next button is clicked', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={onNavigate}
+            />);
+
+            const nextButton = screen.getByLabelText('Next vulnerability');
+            await user.click(nextButton);
+
+            expect(onNavigate).toHaveBeenCalledWith(1);
+        });
+
+        test('should call onNavigate with correct index when previous button is clicked', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability2} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={1}
+                onNavigate={onNavigate}
+            />);
+
+            const prevButton = screen.getByLabelText('Previous vulnerability');
+            await user.click(prevButton);
+
+            expect(onNavigate).toHaveBeenCalledWith(0);
+        });
+
+        test('should show confirmation modal when navigating with unsaved changes', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={onNavigate}
+                isEditing={true}
+            />);
+
+            // Make changes to trigger unsaved state
+            const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+            await user.type(optimistic, '5h');
+
+            // Try to navigate
+            const nextButton = screen.getByLabelText('Next vulnerability');
+            await user.click(nextButton);
+
+            // Should show confirmation modal instead of navigating immediately
+            expect(onNavigate).not.toHaveBeenCalled();
+            expect(screen.getAllByText(/unsaved changes/i)[0]).toBeInTheDocument(); // Use first match (title)
+            expect(screen.getByText(/are you sure you want to navigate/i)).toBeInTheDocument();
+        });
+
+        test('should navigate after confirming unsaved changes', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={onNavigate}
+                isEditing={true}
+            />);
+
+            // Make changes to trigger unsaved state
+            const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+            await user.type(optimistic, '5h');
+
+            // Try to navigate
+            const nextButton = screen.getByLabelText('Next vulnerability');
+            await user.click(nextButton);
+
+            // Confirm navigation in modal
+            const confirmButton = await screen.getByText(/yes, navigate/i);
+            await user.click(confirmButton);
+
+            expect(onNavigate).toHaveBeenCalledWith(1);
+        });
+
+        test('should cancel navigation when canceling confirmation modal', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={onNavigate}
+                isEditing={true}
+            />);
+
+            // Make changes to trigger unsaved state
+            const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
+            await user.type(optimistic, '5h');
+
+            // Try to navigate
+            const nextButton = screen.getByLabelText('Next vulnerability');
+            await user.click(nextButton);
+
+            // Cancel navigation in modal
+            const cancelButton = await screen.getByText(/no, stay/i);
+            await user.click(cancelButton);
+
+            expect(onNavigate).not.toHaveBeenCalled();
+            // Modal should be dismissed
+            expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+        });
+
+        test('should render navigation buttons but not navigate when onNavigate prop is not provided', async () => {
+            const user = userEvent.setup();
+            
+            render(<VulnModal 
+                vuln={vulnerability} 
+                onClose={() => {}} 
+                appendAssessment={() => {}} 
+                appendCVSS={() => null} 
+                patchVuln={() => {}} 
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+            />);
+
+            // Buttons should be present even without onNavigate
+            const prevButton = screen.getByLabelText('Previous vulnerability');
+            const nextButton = screen.getByLabelText('Next vulnerability');
+            
+            expect(prevButton).toBeInTheDocument();
+            expect(nextButton).toBeInTheDocument();
+            
+            // Clicking buttons should not cause any errors (they should just do nothing)
+            await user.click(nextButton);
+            await user.click(prevButton);
+            
+            // No error should occur - navigation just doesn't happen
+        });
+    });
+
     test('renders vulnerability without EPSS score', async () => {
         const vulnWithoutEpss = {
             ...vulnerability,
