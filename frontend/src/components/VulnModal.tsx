@@ -511,74 +511,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             {vuln.texts.map((text) => {
                                 const title = text.title.split('');
                                 return (
-                                    <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
-                                        <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
-                                        <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                        <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                            {group.packages.map(pkg => (
-                                                <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                    <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                    {pkg}
-                                                </span>
-                                            ))}
-                                        </div>
-                                        <h3 className="text-lg font-semibold text-white mb-2">
-                                            {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
-                                        </h3>
-                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
-                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
-                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
-                                            {firstAssess.workaround ?? 'no workaround available'}
-                                        </p>
-                                        <div className="flex items-start justify-between">
-                                            <div className="flex-1">
-                                                <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
-                                                    {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
-                                                    {isEditing && (
-                                                        <div className="flex items-center ml-3 gap-2">
-                                                            <button
-                                                                onClick={() => handleEditAssessment(firstAssess.id)}
-                                                                className="text-blue-400 hover:text-blue-300 transition-colors"
-                                                                title="Edit assessment"
-                                                            >
-                                                                <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleDeleteAssessment(firstAssess)}
-                                                                className="text-red-400 hover:text-red-300 transition-colors"
-                                                                title="Delete assessment"
-                                                            >
-                                                                <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </h3>
-                                                {!isBeingEdited && (
-                                                    <p className="text-base font-normal text-gray-300">
-                                                        {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
-                                                        {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
-                                                        {firstAssess.status_notes ?? 'no status notes'}<br/>
-                                                        {firstAssess.workaround ?? 'no workaround available'}
-                                                    </p>
-                                                )}
-                                            </div>
-                                        </div>
-                                        {isBeingEdited && (
-                                            <div className="mt-3">
-                                                <EditAssessment
-                                                    assessment={firstAssess}
-                                                    onSaveAssessment={saveEditedAssessment}
-                                                    onCancel={handleCancelEdit}
-                                                    triggerBanner={showMessage}
-                                                />
-                                            </div>
-                                        )}
-                                    </li>
-                                );
                                 <div key={encodeURIComponent(text.title)}>
                                     <h3 className="font-bold mb-2">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
-                                    <p className="leading-relaxed bg-gray-800 pt-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
+                                    <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                                 </div>)
                             })}
                         </div>
@@ -620,6 +555,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             clearFields={clearAssessmentFields}
                                             onFieldsChange={setHasAssessmentChanges} 
                                             triggerBanner={showMessage}
+                                            defaultStatus={defaultStatus}
                                         />
                                     </li>
                                 )}
@@ -666,7 +602,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                         )}
                                                     </h3>
                                                     {!isBeingEdited && (
-                                                        <p className="text-base font-normal text-gray-300">
+                                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
                                                             {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
                                                             {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
                                                             {firstAssess.status_notes ?? 'no status notes'}<br/>

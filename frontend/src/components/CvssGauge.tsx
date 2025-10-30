@@ -22,7 +22,7 @@ function CvssGauge ({ data }: Readonly<Props>) {
         score_color = 'bg-red-900';
 
     return (
-    <div className="bg-gray-800 w-[150px] aspect-[2.5] overflow-hidden">
+    <div className="bg-gray-800 w-[216px] aspect-[2] overflow-hidden">
         <div className="relative flex items-center justify-center bg-gray-800">
             {/* Outer ring with ranges (rotate angles modifiable to get custom range) */}
             <div className="absolute top-0 aspect-square w-full rounded-full rotate-[calc(0deg-45deg)] bg-gradient-to-tr from-transparent from-50% to-green-600 to-50% transition-transform duration-500"></div>
@@ -47,8 +47,8 @@ function CvssGauge ({ data }: Readonly<Props>) {
                     </div>
                 </div>
             </div>
-            <div className="absolute bottom-1 w-full truncate text-center text-2xl">{data.base_score}</div>
-            <div className="absolute bottom-0 w-full truncate text-center text-xs">{data.author}</div>
+            <div className="absolute bottom-2 w-full truncate text-center translate-y-6 text-3xl">{data.base_score}</div>
+            <div className="absolute bottom-2 w-full truncate text-center translate-y-12 text-sm">{data.author}</div>
         </div>
     </div>
     );
