@@ -61,6 +61,7 @@ const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simpl
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
+    const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
@@ -142,7 +143,18 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             columnHelper.accessor('id', {
                 header: () => <div className="flex items-center justify-center">ID</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                cell: info => (
+                    <div 
+                        className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        onClick={() => {
+                            setModalVuln(info.row.original);
+                            setIsEditing(false);
+                        }}
+                        title="Click to view details"
+                    >
+                        {info.getValue()}
+                    </div>
+                ),
                 sortDescFirst: true,
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
@@ -257,10 +269,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div className="flex items-center justify-center h-full">
                     <button
                         className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-                        onClick={() => setModalVuln(info.getValue())}
+                        onClick={() => {
+                            setModalVuln(info.getValue());
+                            setIsEditing(true);
+                        }}
                     >
                         Edit
                     </button>
+
                     </div>
                 ),
                 enableSorting: false,
@@ -396,7 +412,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
-            onClose={() => setModalVuln(undefined)}
+            isEditing={isEditing}
+            onClose={() => {
+                setModalVuln(undefined);
+                setIsEditing(false);
+            }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
