@@ -1,8 +1,7 @@
-
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-// @ts-expect-error TS6133
+// @ts-expect-error Ts6133
 import React from 'react';
 
 import PopupExportOptions from '../../src/components/PopupExportOptions';
@@ -97,6 +96,17 @@ describe('PopupExportOptions component', () => {
 
        const link = await screen.getByRole('link', { name: /generate/i }) as HTMLAnchorElement;
        expect(link.href).not.toMatch(/author=/);
+   });
+
+   test('calls onClose when close button is clicked', async () => {
+       const mockOnClose = jest.fn();
+       render(<PopupExportOptions docName="report.txt" extension="adoc" onClose={mockOnClose} />);
+       
+       const user = userEvent.setup();
+       const closeButton = screen.getByRole('button', { name: /close export options/i });
+       await user.click(closeButton);
+       
+       expect(mockOnClose).toHaveBeenCalled();
    });
 
 });
