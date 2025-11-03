@@ -192,8 +192,15 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     
                     if (assessmentIndex !== -1) {
                         // Update the assessment object with the response data
-                        const updatedAssessment = asAssessment(responseData.assessment);
+                        let updatedAssessment = asAssessment(responseData.assessment);
                         if (!Array.isArray(updatedAssessment) && typeof updatedAssessment === "object") {
+                            // Convert empty strings to undefined for non-relevant statuses
+                            const isRelevantStatus = updatedAssessment.status === "not_affected" || updatedAssessment.status === "false_positive";
+                            if (!isRelevantStatus) {
+                                updatedAssessment.justification = undefined;
+                                updatedAssessment.impact_statement = undefined;
+                            }
+                            
                             // Replace the assessment in the array
                             vuln.assessments[assessmentIndex] = updatedAssessment;
                             
