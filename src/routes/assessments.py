@@ -122,13 +122,18 @@ def init_app(app):
             existing_assessment.set_status_notes(payload_data["status_notes"], False)
 
         if "justification" in payload_data and isinstance(payload_data["justification"], str):
-            if not existing_assessment.set_justification(payload_data["justification"]):
+            if payload_data["justification"] == "":
+                existing_assessment.justification = ""
+            elif not existing_assessment.set_justification(payload_data["justification"]):
                 return {"error": "Invalid justification"}, 400
         elif existing_assessment.is_justification_required():
             return {"error": "Justification required"}, 400
 
         if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
-            existing_assessment.set_not_affected_reason(payload_data["impact_statement"], False)
+            if payload_data["impact_statement"] == "":
+                existing_assessment.impact_statement = ""
+            else:
+                existing_assessment.set_not_affected_reason(payload_data["impact_statement"], False)
 
         if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
             if "workaround_timestamp" in payload_data and isinstance(payload_data["workaround_timestamp"], str):
