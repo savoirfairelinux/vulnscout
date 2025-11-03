@@ -661,31 +661,28 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                         {/* Modal footer */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
                         <div className="flex items-center space-x-2">
-                            {vulnerabilities && currentIndex !== undefined && (
-                                <>
-                                    <button
-                                        onClick={() => navigateTo(currentIndex - 1)}
-                                        disabled={!canNavigatePrevious}
-                                        type="button"
-                                        aria-label="Previous vulnerability"
-                                        className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
-                                    >
-                                        <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
-                                    </button>
-                                    <button
-                                        onClick={() => navigateTo(currentIndex + 1)}
-                                        disabled={!canNavigateNext}
-                                        type="button"
-                                        aria-label="Next vulnerability"
-                                        className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
-                                    >
-                                        <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
-                                    </button>
-                                    <span className="text-sm text-gray-400 px-3" id="navigation-info">
-                                        {navigationInfo}
-                                    </span>
-
-                                </>
+                            <button
+                                onClick={() => vulnerabilities && currentIndex !== undefined ? navigateTo(currentIndex - 1) : undefined}
+                                disabled={!canNavigatePrevious}
+                                type="button"
+                                aria-label="Previous vulnerability"
+                                className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                            >
+                                <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
+                            </button>
+                            <button
+                                onClick={() => vulnerabilities && currentIndex !== undefined ? navigateTo(currentIndex + 1) : undefined}
+                                disabled={!canNavigateNext}
+                                type="button"
+                                aria-label="Next vulnerability"
+                                className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                            >
+                                <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
+                            </button>
+                            {navigationInfo && (
+                                <span className="text-sm text-gray-400 px-3" id="navigation-info">
+                                    {navigationInfo}
+                                </span>
                             )}
                         </div>
                         <button
