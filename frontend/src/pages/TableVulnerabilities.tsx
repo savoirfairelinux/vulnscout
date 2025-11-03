@@ -155,7 +155,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div 
                         className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
                         onClick={() => {
-                            setModalVuln(info.row.original);
+                            const vuln = info.row.original;
+                            const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                            setModalVuln(vuln);
+                            setModalVulnIndex(index >= 0 ? index : undefined);
                             setIsEditing(false);
                         }}
                         title="Click to view details"
@@ -293,7 +296,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick]);
+    }, [handleEditClick, searchFilteredData]);
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
