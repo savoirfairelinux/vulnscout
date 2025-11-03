@@ -144,6 +144,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     );
                     vuln.assessments = updatedAssessments;
                     
+                    if (updatedAssessments.length > 0) {
+                        const sortedAssessments = [...updatedAssessments].sort(
+                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                        );
+                        vuln.status = sortedAssessments[0].status;
+                        vuln.simplified_status = sortedAssessments[0].simplified_status;
+                    }
+                    
                     // Update the vuln object in the parent component
                     patchVuln(vuln.id, vuln);
                     
@@ -203,6 +211,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             
                             // Replace the assessment in the array
                             vuln.assessments[assessmentIndex] = updatedAssessment;
+                            
+                            // Update vulnerability status to match the edited assessment
+                            vuln.status = updatedAssessment.status;
+                            vuln.simplified_status = updatedAssessment.simplified_status;
                             
                             // Update the vuln object in the parent component
                             patchVuln(vuln.id, vuln);

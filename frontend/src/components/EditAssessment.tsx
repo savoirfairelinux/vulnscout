@@ -71,16 +71,15 @@ function EditAssessment({
             return;
         }
         
-        // Determine if we should include justification and impact_statement
-        const isRelevantStatus = status == "not_affected" || status == "false_positive";
+        const includeJustificationAndImpact = status == "not_affected";
         
         onSaveAssessment({
             id: assessment.id,
             status,
-            justification: isRelevantStatus ? justification : "",
+            justification: includeJustificationAndImpact ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: isRelevantStatus ? impact : ""
+            impact_statement: includeJustificationAndImpact ? impact : undefined
         });
     }
 
