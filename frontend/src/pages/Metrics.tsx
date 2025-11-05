@@ -562,8 +562,11 @@ const packageColumns = [
             {/* Exploitable Vulnerabilities */}
             <div className="p-4">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
-                <div className="text-xl text-white whitespace-nowrap">
-                  Exploitable vulnerabilities
+                <div 
+                  className="text-xl text-white whitespace-nowrap" 
+                  title="Active vulnerabilities is the sum of exploitable and community analysis pending vulnerabilities."
+                >
+                  Active vulnerabilities
                 </div>
                 <select
                   className="bg-zinc-800 p-1 text-white rounded w-36"
