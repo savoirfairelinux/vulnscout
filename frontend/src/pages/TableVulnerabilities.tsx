@@ -153,7 +153,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
                     <div 
-                        className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                         onClick={() => {
                             const vuln = info.row.original;
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
