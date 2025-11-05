@@ -141,33 +141,33 @@ function EditAssessment({
             </h3>
             
             {(status == "not_affected" || status == "false_positive") && <>
-                <input
-                    value={impact}
-                    onInput={(event: React.ChangeEvent<HTMLInputElement>) => setImpact(event.target.value)}
-                    name="edit_assessment_impact"
-                    className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded"
-                    type="text"
-                    placeholder="why this vulnerability is not exploitable ?"
-                /><br/>
+                    <textarea
+                        value={impact}
+                        onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
+                        name="edit_assessment_impact"
+                        className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded resize-vertical whitespace-pre-wrap"
+                        rows={3}
+                        placeholder="why this vulnerability is not exploitable ?"
+                    /><br/>
             </>}
             
-            <input
-                value={statusNotes}
-                onInput={(event: React.ChangeEvent<HTMLInputElement>) => setStatusNotes(event.target.value)}
-                name="edit_assessment_status_notes"
-                className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded"
-                type="text"
-                placeholder="Free text notes about your review, details, actions taken, ..."
-            /><br/>
+                <textarea
+                    value={statusNotes}
+                    onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
+                    name="edit_assessment_status_notes"
+                    className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded resize-vertical whitespace-pre-wrap"
+                    rows={3}
+                    placeholder="Free text notes about your review, details, actions taken, ..."
+                /><br/>
             
-            <input
-                value={workaround}
-                onInput={(event: React.ChangeEvent<HTMLInputElement>) => setWorkaround(event.target.value)}
-                name="edit_assessment_workaround"
-                className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded"
-                type="text"
-                placeholder="Describe workaround here if available"
-            /><br/>
+                <textarea
+                    value={workaround}
+                    onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
+                    name="edit_assessment_workaround"
+                    className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded resize-vertical whitespace-pre-wrap"
+                    rows={3}
+                    placeholder="Describe workaround here if available"
+                /><br/>
             
             <div className="flex gap-2 mt-3">
                 <button
