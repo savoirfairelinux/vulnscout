@@ -223,7 +223,7 @@ function TableGeneric<DataType> ({
                                             return (
                                             <td
                                                 key={cell.id}
-                                                className="p-4 border border-slate-500 flex-auto"
+                                                className={cell.column.id === 'id' ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                                 style={{
                                                     width: cell.column.getSize(),
                                                 }}
@@ -266,7 +266,7 @@ function TableGeneric<DataType> ({
                                         return (
                                         <td
                                             key={cell.id}
-                                            className="p-4 border border-slate-500 flex-auto"
+                                            className={cell.column.id === 'id' ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                             style={{
                                                 width: cell.column.getSize(),
                                             }}
