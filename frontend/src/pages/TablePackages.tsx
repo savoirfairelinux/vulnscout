@@ -139,7 +139,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                             className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
                             onClick={() => onShowVulns?.(info.getValue().id)}
                             >
-                            Vulns
+                            Show Vulnerabilities
                         </button>
                     </div>
                 ),
