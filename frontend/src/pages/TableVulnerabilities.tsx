@@ -12,6 +12,8 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faTimes } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -153,7 +155,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
                     <div 
-                        className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                         onClick={() => {
                             const vuln = info.row.original;
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -384,6 +386,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setSelected={handleStatusChange}
             />
 
+            {/* Package indicator (no dropdown, just display) */}
+            {selectedPackages.length > 0 && (
+                <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
+                    <span className="font-semibold">Package:</span>
+                    <span>{selectedPackages.join(', ')}</span>
+                    <button
+                        className="ml-1 text-white hover:text-red-400"
+                        title="Clear package filter"
+                        onClick={() => setSelectedPackages([])}
+                    >
+                        <FontAwesomeIcon icon={faTimes} />
+                    </button>
+                </div>
+            )}
+
             <ToggleSwitch
                 enabled={hideFixed}
                 setEnabled={handleHideFixedToggle}
@@ -397,7 +414,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 Reset Filters
             </button>
         </div>
-
 
         <MultiEditBar
             vulnerabilities={vulnerabilities}
