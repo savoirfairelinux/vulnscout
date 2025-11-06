@@ -35,6 +35,7 @@ sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vul
 
 # Check if nvd.db exists and compress it
 find .vulnscout/cache -maxdepth 1 -type f -name "nvd.db.*.xz" -exec rm -f {} +
+mkdir -p .vulnscout/cache
 nvd_db_path=".vulnscout/cache/nvd.db"
 cqfd init
 cqfd -b build_nvd
@@ -48,7 +49,7 @@ if [ -f "$nvd_db_path" ]; then
     echo "nvd.db compressed to ${nvd_db_path}.${version}.xz"
     
     # Add the compressed file to git
-    git add "${nvd_db_path}.${version}.xz"
+    git add -f "${nvd_db_path}.${version}.xz"
 else
     echo "nvd.db not found at $nvd_db_path, skipping compression"
 fi
