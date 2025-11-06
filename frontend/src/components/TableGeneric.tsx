@@ -2,7 +2,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable,
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
@@ -18,6 +18,7 @@ type Props<DataType> = {
     selected?: RowSelectionState;
     updateSelected?: OnChangeFn<RowSelectionState>;
     hasPagination?: boolean;
+    onFilteredDataChange?: (filteredData: DataType[]) => void;
 };
 /* tslint:enable:no-explicit-any */
 
@@ -31,7 +32,8 @@ function TableGeneric<DataType> ({
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
     selected = undefined,
     updateSelected = () => {},
-    hasPagination = true
+    hasPagination = true,
+    onFilteredDataChange
 }: Readonly<Props<DataType>>) {
     const [pageIndex, setPageIndex] = useState(0)
     const [itemsPerPage, setItemsPerPage] = useState(50)
@@ -60,6 +62,12 @@ function TableGeneric<DataType> ({
         return data;
     }, [search, fuse, data]);
 
+    // Notify parent component when filtered data changes
+    useEffect(() => {
+        if (onFilteredDataChange) {
+            onFilteredDataChange(filteredData);
+        }
+    }, [filteredData, onFilteredDataChange]);
 
     const paginatedData = useMemo(() => {
         const start = pageIndex * itemsPerPage
@@ -215,7 +223,7 @@ function TableGeneric<DataType> ({
                                             return (
                                             <td
                                                 key={cell.id}
-                                                className="p-4 border border-slate-500 flex-auto"
+                                                className={cell.column.id === 'id' ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                                 style={{
                                                     width: cell.column.getSize(),
                                                 }}
@@ -258,7 +266,7 @@ function TableGeneric<DataType> ({
                                         return (
                                         <td
                                             key={cell.id}
-                                            className="p-4 border border-slate-500 flex-auto"
+                                            className={cell.column.id === 'id' ? 'border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
                                             style={{
                                                 width: cell.column.getSize(),
                                             }}

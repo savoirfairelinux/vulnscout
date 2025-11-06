@@ -215,3 +215,102 @@ def test_post_scan_patch_finder(client):
     affected_gcc = data["gcc"]["CVE-2021-37322 (nvd-cpe-match)"]["affected"]
     assert fixs_binutils == [">=? 2.32"]
     assert affected_gcc == ["< 10.1"]
+
+
+def test_update_assessment(client):
+    # First create an assessment
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['abc@1.2.3'],
+        'status': 'exploitable',
+        'status_notes': 'Initial assessment',
+        'workaround': 'No workaround available'
+    })
+    assert response.status_code == 200
+    
+    created_data = json.loads(response.data)
+    assert created_data["status"] == "success"
+    assessment_id = created_data["assessment"]["id"]
+    
+    # Now update the assessment
+    response = client.put(f"/api/assessments/{assessment_id}", json={
+        'status': 'fixed',
+        'status_notes': 'Updated assessment - vulnerability has been fixed',
+        'workaround': 'Update to latest version'
+    })
+    assert response.status_code == 200
+    
+    updated_data = json.loads(response.data)
+    assert updated_data["status"] == "success"
+    assert updated_data["assessment"]["status"] == "fixed"
+    assert updated_data["assessment"]["status_notes"] == "Updated assessment - vulnerability has been fixed"
+    assert updated_data["assessment"]["workaround"] == "Update to latest version"
+    assert updated_data["assessment"]["id"] == assessment_id
+
+
+def test_update_assessment_not_found(client):
+    response = client.put("/api/assessments/non-existent-id", json={
+        'status': 'fixed',
+        'status_notes': 'This should fail'
+    })
+    assert response.status_code == 404
+    
+    data = json.loads(response.data)
+    assert data["error"] == "Assessment not found"
+
+
+def test_update_assessment_invalid_status(client):
+    # First create an assessment
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['abc@1.2.3'],
+        'status': 'exploitable'
+    })
+    assert response.status_code == 200
+    
+    created_data = json.loads(response.data)
+    assessment_id = created_data["assessment"]["id"]
+    
+    # Try to update with invalid status
+    response = client.put(f"/api/assessments/{assessment_id}", json={
+        'status': 'invalid_status'
+    })
+    assert response.status_code == 400
+    
+    data = json.loads(response.data)
+    assert data["error"] == "Invalid status"
+
+
+def test_delete_assessment(client):
+    # First create an assessment
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['abc@1.2.3'],
+        'status': 'exploitable',
+        'status_notes': 'Assessment to be deleted'
+    })
+    assert response.status_code == 200
+    
+    created_data = json.loads(response.data)
+    assessment_id = created_data["assessment"]["id"]
+    
+    # Verify the assessment exists
+    response = client.get(f"/api/assessments/{assessment_id}")
+    assert response.status_code == 200
+    
+    # Delete the assessment
+    response = client.delete(f"/api/assessments/{assessment_id}")
+    assert response.status_code == 200
+    
+    deleted_data = json.loads(response.data)
+    assert deleted_data["status"] == "success"
+    assert deleted_data["message"] == "Assessment deleted successfully"
+    
+    # Verify the assessment no longer exists
+    response = client.get(f"/api/assessments/{assessment_id}")
+    assert response.status_code == 404
+
+
+def test_delete_assessment_not_found(client):
+    response = client.delete("/api/assessments/non-existent-id")
+    assert response.status_code == 404
+    
+    data = json.loads(response.data)
+    assert data["error"] == "Assessment not found"

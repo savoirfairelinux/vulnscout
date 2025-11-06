@@ -13,16 +13,22 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
+import EditAssessment from "./EditAssessment";
+import type { EditAssessmentData } from "./EditAssessment";
 import { useState, useEffect } from "react";
 
 type Props = {
     vuln: Vulnerability;
+    isEditing?: boolean;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    vulnerabilities?: Vulnerability[];
+    currentIndex?: number;
+    onNavigate?: (index: number) => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -34,12 +40,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, onClose, appendAssessment, appendCVSS, patchVuln } = props;
+    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate } = props;
+    const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
     const [showConfirmClose, setShowConfirmClose] = useState(false);
     const [newAssessmentIds, setNewAssessmentIds] = useState<Set<string>>(new Set());
+    const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
+    const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -62,6 +73,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleClose = () => {
         if (hasUnsavedChanges) {
+            setPendingNavigation(null);
             setShowConfirmClose(true);
         } else {
             onClose();
@@ -70,11 +82,162 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
-        onClose();
+        if (pendingNavigation !== null && onNavigate) {
+            onNavigate(pendingNavigation);
+            setPendingNavigation(null);
+        } else {
+            onClose();
+        }
     };
 
     const handleCancelClose = () => {
         setShowConfirmClose(false);
+        setPendingNavigation(null);
+    };
+
+    const navigateTo = (targetIndex: number) => {
+        if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
+        if (hasUnsavedChanges) {
+            setPendingNavigation(targetIndex);
+            setShowConfirmClose(true);
+        } else {
+            onNavigate(targetIndex);
+        }
+    };
+
+    const canNavigatePrevious = vulnerabilities && currentIndex !== undefined && currentIndex > 0;
+    const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
+
+    // Navigation info
+    const navigationInfo = vulnerabilities && currentIndex !== undefined 
+        ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
+        : null;
+
+    const handleEditAssessment = (assessmentId: string) => {
+        setEditingAssessmentId(assessmentId);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingAssessmentId(null);
+    };
+
+    const handleDeleteAssessment = (assessment: Assessment) => {
+        setAssessmentToDelete(assessment);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (assessmentToDelete) {
+            try {
+                const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentToDelete.id)}`, {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    // Remove assessment from vuln.assessments array
+                    const updatedAssessments = vuln.assessments.filter(
+                        assessment => assessment.id !== assessmentToDelete.id
+                    );
+                    vuln.assessments = updatedAssessments;
+                    
+                    if (updatedAssessments.length > 0) {
+                        const sortedAssessments = [...updatedAssessments].sort(
+                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                        );
+                        vuln.status = sortedAssessments[0].status;
+                        vuln.simplified_status = sortedAssessments[0].simplified_status;
+                    }
+                    
+                    // Update the vuln object in the parent component
+                    patchVuln(vuln.id, vuln);
+                    
+                    showMessage("Assessment deleted successfully!", "success");
+                } else {
+                    const errorData = await response.text();
+                    showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+                }
+            } catch (error) {
+                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
+            }
+        }
+        setShowDeleteConfirm(false);
+        setAssessmentToDelete(null);
+    };
+
+    const handleCancelDelete = () => {
+        setShowDeleteConfirm(false);
+        setAssessmentToDelete(null);
+    };
+
+    const saveEditedAssessment = async (data: EditAssessmentData) => {
+        try {
+            const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(data.id)}`, {
+                method: 'PUT',
+                mode: 'cors',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround
+                })
+            });
+
+            if (response.ok) {
+                const responseData = await response.json();
+                if (responseData?.status === 'success' && responseData?.assessment) {
+                    // Find and update the assessment in vuln.assessments array
+                    const assessmentIndex = vuln.assessments.findIndex(
+                        assessment => assessment.id === data.id
+                    );
+                    
+                    if (assessmentIndex !== -1) {
+                        // Update the assessment object with the response data
+                        let updatedAssessment = asAssessment(responseData.assessment);
+                        if (!Array.isArray(updatedAssessment) && typeof updatedAssessment === "object") {
+                            // Convert empty strings to undefined for non-relevant statuses
+                            const isRelevantStatus = updatedAssessment.status === "not_affected" || updatedAssessment.status === "false_positive";
+                            if (!isRelevantStatus) {
+                                updatedAssessment.justification = undefined;
+                                updatedAssessment.impact_statement = undefined;
+                            }
+                            
+                            // Replace the assessment in the array
+                            vuln.assessments[assessmentIndex] = updatedAssessment;
+                            
+                            // Update vulnerability status to match the edited assessment
+                            vuln.status = updatedAssessment.status;
+                            vuln.simplified_status = updatedAssessment.simplified_status;
+                            
+                            // Update the vuln object in the parent component
+                            patchVuln(vuln.id, vuln);
+                            
+                            showMessage("Assessment updated successfully!", "success");
+                        } else {
+                            showMessage("Error: Invalid assessment data received", "error");
+                        }
+                    } else {
+                        showMessage("Error: Assessment not found in local data", "error");
+                    }
+                } else {
+                    showMessage("Error: Invalid response from server", "error");
+                }
+            } else {
+                const errorData = await response.text();
+                showMessage(`Failed to update assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+            }
+        } catch (error) {
+            showMessage(`Failed to update assessment: ${escape(String(error))}`, "error");
+        }
+        
+        setEditingAssessmentId(null);
     };
 
     // Handle ESC key press
@@ -83,6 +246,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 if (hasUnsavedChanges) {
+                    setPendingNavigation(null);
                     setShowConfirmClose(true);
                 } else {
                     onClose();
@@ -125,6 +289,18 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
+    // Get the default status for new assessments
+    // Use the most recent assessment's status, or "under_investigation" if no assessments exist
+    const getDefaultStatus = () => {
+        if (groupedAssessments.length > 0) {
+            // Get the most recent assessment's status (groupedAssessments are already sorted by most recent first)
+            return groupedAssessments[0].assessments[0].status;
+        }
+        return "under_investigation";
+    };
+
+    const defaultStatus = getDefaultStatus();
+
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id
         content.packages = vuln.packages
@@ -153,8 +329,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     });
                 }, 5500); // >2s that we used in css animation
                 
+                // Add the assessment immediately to the local vuln object for instant UI update
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
+                vuln.status = casted.status;
+                vuln.simplified_status = casted.simplified_status;
+                
+                // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
                 showMessage("Successfully added assessment.", "success");
                 setClearAssessmentFields(true);
@@ -189,10 +370,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
             const data = await response.json();
 
             if (Array.isArray(data?.severity?.cvss)) {
+                // Update the local vuln object immediately for instant UI update
                 vuln.severity.cvss = data.severity.cvss;
+                
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
             }
 
-            patchVuln(vuln.id, vuln);
             setShowCustomCvss(false);
             showMessage("Successfully added Custom CVSS.", "success");
         } else {
@@ -217,6 +401,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
         })
         if (response.status == 200) {
             const data = await response.json()
+            
+            // Update the local vuln object immediately for instant UI update
             if (typeof data?.effort?.optimistic === "string")
                 vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
             if (typeof data?.effort?.likely === "string")
@@ -224,6 +410,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (typeof data?.effort?.pessimistic === "string")
                 vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
 
+            // Also patch the vulnerability for real-time refresh in other views
             patchVuln(vuln.id, vuln);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
@@ -247,16 +434,31 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         <h3 id="vulnerability_modal_title" className="text-xl font-semibold text-gray-900 dark:text-white">
                             {vuln.id}
                         </h3>
-                        <button
-                            onClick={handleClose}
-                            type="button"
-                            className="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center dark:hover:bg-gray-600 dark:hover:text-white"
-                        >
-                            <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
-                                <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
-                            </svg>
-                            <span className="sr-only">Close modal</span>
-                        </button>
+                        <div className="flex items-center space-x-2">
+                            <button
+                                onClick={() => setIsEditing(!isEditing)}
+                                type="button"
+                                className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                                    isEditing 
+                                        ? "bg-blue-700 hover:bg-blue-800 text-white" 
+                                        : "bg-blue-600 hover:bg-blue-700 text-white"
+                                }`}
+                                title={isEditing ? "Exit editing mode" : "Enter editing mode"}
+                            >
+                                <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
+                                {isEditing ? "Exit editing" : "Edit"}
+                            </button>
+                            <button
+                                onClick={handleClose}
+                                type="button"
+                                className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
+                            >
+                                <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
+                                </svg>
+                                <span className="sr-only">Close modal</span>
+                            </button>
+                        </div>
                     </div>
 
                     {/* Message Banner - Sticky at top */}
@@ -274,16 +476,15 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     {/* Modal body */}
                     <div className="p-4 md:p-5 space-y-4 text-gray-300 text-justify" id="vulnerability_modal_body">
 
-                        <div className="flex flex-row">
+                        <div className="flex flex-row mb-6 ">
                             <ul className="grow leading-6">
                                 <li key="severity">
                                     <span className="font-bold mr-1">Severity:</span>
                                     <SeverityTag severity={vuln.severity.severity} className="text-white" />
                                 </li>
-                                {vuln.epss?.score && <li key="epss">
-                                    <span className="font-bold mr-1">Exploitability (EPSS):</span>
-                                    <b>{Number(vuln.epss.score * 100).toFixed(2)} %</b>
-                                    {vuln.epss.percentile && <i className="text-sm">(more than {Math.floor(vuln.epss.percentile * 100)}% of vulns)</i>}
+                                {vuln.epss?.score !== undefined && vuln.epss.score !== 0 && <li key="epss">
+                                    <span className="font-bold mr-1">EPSS Score: </span>
+                                    {(vuln.epss.score * 100).toFixed(2)}%
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
@@ -307,29 +508,35 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 </li>
                             </ul>
 
-                            <div className="ml-4">
+                            <div className="ml-2">
                                 <div className="flex justify-between items-center mb-2">
-                                    <h3 className="text-lg font-bold text-white">CVSS</h3>
-                                    <div className="relative">
-                                    <button
-                                        onClick={() => setShowCustomCvss(!showCustomCvss)}
-                                        className="ml-2 px-3 py-1 text-sm rounded-lg bg-sky-600 hover:bg-sky-700 text-white"
-                                    >
-                                        Add Custom
-                                    </button>
+                                    <h3 className="text-lg font-bold text-white flex items-center">
+                                        CVSS
+                                        {isEditing && (
+                                            <div className="relative ml-3">
+                                                <button
+                                                    onClick={() => setShowCustomCvss(!showCustomCvss)}
+                                                    className="text-blue-400 hover:text-blue-300 transition-colors"
+                                                    title="Add custom CVSS vector"
+                                                    aria-label="Add custom CVSS vector"
+                                                >
+                                                    <FontAwesomeIcon icon={faPlus} className="w-4 h-4" />
+                                                </button>
 
-                                    {showCustomCvss && (
-                                        <div className="absolute right-0 mt-2 z-50 w-64">
-                                        <CustomCvss
-                                            onCancel={() => setShowCustomCvss(false)}
-                                            onAddCvss={(vector) => {
-                                                addCvss(vector);
-                                            }}
-                                            triggerBanner={showMessage}
-                                        />
-                                        </div>
-                                    )}
-                                    </div>
+                                                {showCustomCvss && (
+                                                    <div className="absolute right-0 mt-2 z-50 w-64">
+                                                        <CustomCvss
+                                                            onCancel={() => setShowCustomCvss(false)}
+                                                            onAddCvss={(vector) => {
+                                                                addCvss(vector);
+                                                            }}
+                                                            triggerBanner={showMessage}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </h3>
                                 </div>
 
                                 <div className="flex flex-wrap gap-2">
@@ -349,81 +556,158 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         </div>
 
-                        {vuln.texts.map((text) => {
-                            const title = text.title.split('');
-                            return (<div key={encodeURIComponent(text.title)}>
-                                <h3 className="font-bold">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
-                                <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
-                            </div>)
-                        })}
-
-                        <h3 className="font-bold">Links</h3>
-                        <ul>
-                            {[...new Set([vuln.datasource, ...vuln.urls])].map(url => (
-                                <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
-                            ))}
-                        </ul>
-
-                        <TimeEstimateEditor
-                            progressBar={undefined}
-                            onSaveTimeEstimation={(data) => saveEstimation(data)}
-                            clearFields={clearTimeFields}
-                            onFieldsChange={setHasTimeChanges}
-                            triggerBanner={showMessage}
-                            actualEstimate={{
-                                optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
-                                likely: vuln?.effort?.likely?.formatHumanShort(),
-                                pessimistic: vuln?.effort?.pessimistic?.formatHumanShort(),
-                            }}
-                        />
-
-                        <h3 className="font-bold">Assessments</h3>
-                        <ol className="relative border-s border-gray-800">
-                            <li className="ms-4 text-white pb-8">
-                                <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
-                                <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                <StatusEditor 
-                                    onAddAssessment={(data) => addAssessment(data)} 
-                                    clearFields={clearAssessmentFields}
-                                    onFieldsChange={setHasAssessmentChanges} 
-                                    triggerBanner={showMessage}
-                                />
-                            </li>
-
-                            {groupedAssessments.map(group => {
-                                const dt = new Date(group.timestamp);
-                                const firstAssess = group.assessments[0]; // Use first assessment for content
-                                const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
-                                
+                        <div className="mb-6">
+                            {vuln.texts.map((text) => {
+                                const title = text.title.split('');
                                 return (
-                                    <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
-                                        <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
-                                        <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
-                                        <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                            {group.packages.map(pkg => (
-                                                <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                    <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                    {pkg}
-                                                </span>
-                                            ))}
-                                        </div>
-                                        <h3 className="text-lg font-semibold text-white mb-2">
-                                            {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
-                                        </h3>
-                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
-                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
-                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
-                                            {firstAssess.workaround ?? 'no workaround available'}
-                                        </p>
-                                    </li>
-                                );
+                                <div key={encodeURIComponent(text.title)}>
+                                    <h3 className="font-bold mb-2">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
+                                    <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
+                                </div>)
                             })}
-                        </ol>
-                    </div>
+                        </div>
 
-                    {/* Modal footer */}
-                    <div className="flex items-center p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                        <div className="mb-6 mt-6">
+                            <h3 className="font-bold mb-2">Links</h3>
+                            <ul>
+                                {[...new Set([vuln.datasource, ...vuln.urls])].map(url => (
+                                    <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <div className="mb-6 mt-6">
+                            <TimeEstimateEditor
+                                progressBar={undefined}
+                                onSaveTimeEstimation={(data) => saveEstimation(data)}
+                                clearFields={clearTimeFields}
+                                onFieldsChange={setHasTimeChanges}
+                                triggerBanner={showMessage}
+                                hideInputs={!isEditing}
+                                actualEstimate={{
+                                    optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
+                                    likely: vuln?.effort?.likely?.formatHumanShort(),
+                                    pessimistic: vuln?.effort?.pessimistic?.formatHumanShort(),
+                                }}
+                            />
+                        </div>
+
+                        <div className="mt-6">
+                            <h3 className="font-bold mb-2">Assessments</h3>
+                            <ol className="relative border-s border-gray-800">
+                                {isEditing && (
+                                    <li className="ms-4 text-white pb-8">
+                                        <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
+                                        <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
+                                        <StatusEditor 
+                                            onAddAssessment={(data) => addAssessment(data)} 
+                                            clearFields={clearAssessmentFields}
+                                            onFieldsChange={setHasAssessmentChanges} 
+                                            triggerBanner={showMessage}
+                                            defaultStatus={defaultStatus}
+                                        />
+                                    </li>
+                                )}
+
+                                {groupedAssessments.map(group => {
+                                    const dt = new Date(group.timestamp);
+                                    const firstAssess = group.assessments[0]; // Use first assessment for content
+                                    const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
+                                    const isBeingEdited = editingAssessmentId === firstAssess.id;
+                                    
+                                    return (
+                                        <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
+                                            <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
+                                            <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
+                                            <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                                {group.packages.map(pkg => (
+                                                    <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                        <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                        {pkg}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="flex items-start justify-between">
+                                                <div className="flex-1">
+                                                    <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
+                                                        {firstAssess.simplified_status}{firstAssess.justification && <> - {firstAssess.justification}</>}
+                                                        {isEditing && (
+                                                            <div className="flex items-center ml-3 gap-2">
+                                                                <button
+                                                                    onClick={() => handleEditAssessment(firstAssess.id)}
+                                                                    className="text-blue-400 hover:text-blue-300 transition-colors"
+                                                                    title="Edit assessment"
+                                                                >
+                                                                    <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleDeleteAssessment(firstAssess)}
+                                                                    className="text-red-400 hover:text-red-300 transition-colors"
+                                                                    title="Delete assessment"
+                                                                >
+                                                                    <FontAwesomeIcon icon={faTrash} className="w-4 h-4" />
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </h3>
+                                                    {!isBeingEdited && (
+                                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                            {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
+                                                            {!firstAssess.impact_statement && firstAssess.status == 'not_affected' && <>no impact statement<br/></>}
+                                                            {firstAssess.status_notes ?? 'no status notes'}<br/>
+                                                            {firstAssess.workaround ?? 'no workaround available'}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {isBeingEdited && (
+                                                <div className="mt-3">
+                                                    <EditAssessment
+                                                        assessment={firstAssess}
+                                                        onSaveAssessment={saveEditedAssessment}
+                                                        onCancel={handleCancelEdit}
+                                                        triggerBanner={showMessage}
+                                                    />
+                                                </div>
+                                            )}
+                                        </li>
+                                    );
+                                })}
+                            </ol>
+                        </div>
+                    </div>
+                    
+                                        {/* Modal footer */}
+                    <div className="flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                        {vulnerabilities && currentIndex !== undefined ? (
+                            <div className="flex items-center space-x-2">
+                                <button
+                                    onClick={() => navigateTo(currentIndex - 1)}
+                                    disabled={!canNavigatePrevious}
+                                    type="button"
+                                    aria-label="Previous vulnerability"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
+                                </button>
+                                <button
+                                    onClick={() => navigateTo(currentIndex + 1)}
+                                    disabled={!canNavigateNext}
+                                    type="button"
+                                    aria-label="Next vulnerability"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
+                                </button>
+                                {navigationInfo && (
+                                    <span className="text-sm text-gray-400 px-3" id="navigation-info">
+                                        {navigationInfo}
+                                    </span>
+                                )}
+                            </div>
+                        ) : (
+                            <div></div>
+                        )}
                         <button
                             onClick={handleClose}
                             type="button"
@@ -432,19 +716,34 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             Close
                         </button>
                     </div>
-
+                    
                 </div>
             </div>
 
             <ConfirmationModal
                 isOpen={showConfirmClose}
                 title="Unsaved Changes"
-                message="Are you sure you want to close without saving? All unsaved changes will be lost."
-                confirmText="Yes, close"
-                cancelText="No, stay"
+                message={
+                    pendingNavigation !== null 
+                        ? "Are you sure you want to navigate without saving? All unsaved changes will be lost."
+                        : "Are you sure you want to close without saving? All unsaved changes will be lost."
+                }
+                confirmText={pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
+                cancelText={pendingNavigation !== null ? "No, stay" : "No, stay"}
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}
+            />
+
+            <ConfirmationModal
+                isOpen={showDeleteConfirm}
+                title="Delete Assessment"
+                message={`Are you sure you want to delete this assessment? This action cannot be undone.`}
+                confirmText="Yes, delete"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={handleConfirmDelete}
+                onCancel={handleCancelDelete}
             />
         </div>
     );

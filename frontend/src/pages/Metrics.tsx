@@ -116,6 +116,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
 
             const [timeScale, setTimeScale] = useState<string>("6_months")
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+            const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
 
 const vulnColumns = useMemo(
   () => [
@@ -168,7 +169,35 @@ const vulnColumns = useMemo(
           <div className="flex items-center justify-center h-full text-center">
             <button
               className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-              onClick={() => setModalVuln(vuln)}
+              onClick={() => {
+                // Get the current TopVulns list and find the index
+                const currentTopVulns = [...vulnerabilities]
+                  .map((v, index) => {
+                    const maxCvss = v.severity.cvss?.length
+                      ? Math.max(...v.severity.cvss.map((cvss) => cvss.base_score || 0))
+                      : 0;
+                    return {
+                      id: index + 1,
+                      rank: 0,
+                      cve: v.id,
+                      package: v.packages.join(", "),
+                      severity: v.severity.severity,
+                      maxCvss,
+                      texts: v.texts,
+                      original: v,
+                    };
+                  })
+                  .sort((a, b) => b.maxCvss - a.maxCvss)
+                  .slice(0, 5)
+                  .map((v, idx) => ({
+                    ...v,
+                    rank: idx + 1,
+                  }));
+                  
+                const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
+                setModalVuln(vuln);
+                setModalVulnIndex(index >= 0 ? index : undefined);
+              }}
             >
               Edit
             </button>
@@ -179,7 +208,7 @@ const vulnColumns = useMemo(
       enableSorting: false,
     },
   ],
-  []
+  [vulnerabilities]
 );
 
 const packageColumns = [
@@ -412,6 +441,13 @@ const packageColumns = [
         }));
     }, [vulnerabilities]);
 
+    const handleModalNavigation = (newIndex: number) => {
+        if (newIndex >= 0 && newIndex < TopVulns.length) {
+            setModalVuln(TopVulns[newIndex].original);
+            setModalVulnIndex(newIndex);
+        }
+    };
+
               const dataSetVulnBySource = useMemo(() => {
                 const uniqueSources = Array.from(
                     new Set(vulnerabilities.flatMap(vuln => vuln.found_by))
@@ -526,8 +562,11 @@ const packageColumns = [
             {/* Exploitable Vulnerabilities */}
             <div className="p-4">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
-                <div className="text-xl text-white whitespace-nowrap">
-                  Exploitable vulnerabilities
+                <div 
+                  className="text-xl text-white whitespace-nowrap" 
+                  title="Active vulnerabilities is the sum of exploitable and community analysis pending vulnerabilities."
+                >
+                  Active vulnerabilities
                 </div>
                 <select
                   className="bg-zinc-800 p-1 text-white rounded w-36"
@@ -632,10 +671,16 @@ const packageColumns = [
         {modalVuln && (
           <VulnModal
             vuln={modalVuln}
-            onClose={() => setModalVuln(undefined)}
+            onClose={() => {
+              setModalVuln(undefined);
+              setModalVulnIndex(undefined);
+            }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
+            vulnerabilities={TopVulns.map(item => item.original)}
+            currentIndex={modalVulnIndex}
+            onNavigate={handleModalNavigation}
           />
         )}
         </div>

@@ -95,25 +95,47 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
 
     function appendAssessment(added: Assessment) {
-        setVulns(Vulnerabilities.append_assessment(vulns, added));
+        const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
+        setVulns(updatedVulns);
+        
+        // Update packages with the new vulnerability data
+        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+        
+        // Update patch data if db is ready (status changes might affect patch relevance)
+        if (patchDbReady) {
+            loadPatchData(updatedVulns);
+        }
     }
 
     function appendCVSS(vulnId: string, vector: string) {
         const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
         if (cvss !== null) {
-            setVulns(Vulnerabilities.append_cvss(vulns, vulnId, cvss));
+            const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
+            setVulns(updatedVulns);
+            
+            // Update packages with the new vulnerability data
+            setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
             return cvss;
         }
         return null;
     }
 
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
-        setVulns(vulns.map(vuln => {
+        const updatedVulns = vulns.map(vuln => {
             if (vuln.id === vulnId) {
                 return replace_vuln;
             }
             return vuln;
-        }));
+        });
+        setVulns(updatedVulns);
+        
+        // Update packages with the new vulnerability data
+        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+        
+        // Update patch data if db is ready (status changes might affect patch relevance)
+        if (patchDbReady) {
+            loadPatchData(updatedVulns);
+        }
     }
 
     function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {

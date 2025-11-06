@@ -150,7 +150,7 @@ describe('Vulnerability Table', () => {
         // ACT
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
-        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
+        const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
         const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
         const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -164,6 +164,10 @@ describe('Vulnerability Table', () => {
         expect(atk_vector_header).toBeInTheDocument();
         expect(status_header).toBeInTheDocument();
         expect(source_header).toBeInTheDocument();
+        
+        // Check for Last Updated header
+        const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
+        expect(last_updated_header).toBeInTheDocument();
     })
 
     test('render with vulnerabilities', async () => {
@@ -173,7 +177,7 @@ describe('Vulnerability Table', () => {
         // ACT
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
-        const epss_col = await screen.getByRole('cell', {name: /3[56][ ]?\%/});
+        const epss_col = await screen.getByRole('cell', {name: /35\.68%/});
         const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
         const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
@@ -256,7 +260,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const exploit_header = await screen.getByRole('columnheader', {name: /exploitability/i});
+        const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
 
         await user.click(exploit_header); // un-ordoned -> more important first
         await waitFor(() => {
@@ -684,24 +688,6 @@ describe('Vulnerability Table', () => {
         expect(search_bar.getAttribute('value')).toBeNull();
     })
 
-    test('open modal when clicking edit button', async () => {
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        const editButtons = await screen.getAllByRole('button', { name: /edit/i });
-        expect(editButtons.length).toBeGreaterThan(0);
-
-        // ACT
-        await user.click(editButtons[0]);
-
-        // ASSERT - Modal should open (we can check for modal title with specific id)
-        await waitFor(() => {
-            const modalTitle = document.getElementById('vulnerability_modal_title');
-            expect(modalTitle).toBeInTheDocument();
-        });
-    })
-
     test('initial filter props set correct filters', async () => {
         // ARRANGE - Render with initial filter props
         render(
@@ -823,5 +809,242 @@ describe('Vulnerability Table', () => {
         const finalHtml = document.body.innerHTML;
         const finalOrder = finalHtml.indexOf('aaabbbccc') < finalHtml.indexOf('xxxyyyzzz');
         expect(finalOrder).toBe(initialOrder);
+    })
+
+    test('last updated column shows "No assessment" when no assessments exist', async () => {
+        // ARRANGE - Create a scenario similar to the passing tests with one vulnerability that has no assessments
+        const vulnWithoutAssessments: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                assessments: []
+            }
+        ];
+        
+        render(<TableVulnerabilities vulnerabilities={vulnWithoutAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT & ASSERT - Vulnerability has empty assessments array, should show "No assessment"
+        const noAssessmentCell = await screen.getByText(/no assessment/i);
+        expect(noAssessmentCell).toBeInTheDocument();
+    })
+
+    test('last updated column displays assessment timestamp when assessments exist', async () => {
+        const vulnWithAssessments: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                assessments: [
+                    {
+                        id: '1',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'not_affected',
+                        simplified_status: 'Not affected',
+                        timestamp: '2024-01-15T10:30:00Z',
+                        responses: []
+                    }
+                ]
+            },
+            {
+                ...vulnerabilities[1],
+                assessments: []
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT & ASSERT
+        // First vulnerability should show formatted date
+        const formattedDate = await screen.getByText(/january 15, 2024/i);
+        expect(formattedDate).toBeInTheDocument();
+
+        // Second vulnerability should still show "No assessment"
+        const noAssessment = await screen.getByText(/no assessment/i);
+        expect(noAssessment).toBeInTheDocument();
+    })
+
+    test('last updated column uses last_update field when available', async () => {
+        const vulnWithUpdatedAssessments: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                assessments: [
+                    {
+                        id: '1',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'not_affected',
+                        simplified_status: 'Not affected',
+                        timestamp: '2024-01-15T10:30:00Z',
+                        last_update: '2024-02-20T14:45:00Z', // More recent than timestamp
+                        responses: []
+                    }
+                ]
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithUpdatedAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT & ASSERT - Should show the more recent last_update date
+        const formattedDate = await screen.getByText(/february 20, 2024/i);
+        expect(formattedDate).toBeInTheDocument();
+    })
+
+    test('last updated column shows most recent assessment across multiple assessments', async () => {
+        const vulnWithMultipleAssessments: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                assessments: [
+                    {
+                        id: '1',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'not_affected',
+                        simplified_status: 'Not affected',
+                        timestamp: '2024-01-15T10:30:00Z',
+                        responses: []
+                    },
+                    {
+                        id: '2',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'affected',
+                        simplified_status: 'Exploitable',
+                        timestamp: '2024-03-10T16:20:00Z', // Most recent
+                        responses: []
+                    },
+                    {
+                        id: '3',
+                        vuln_id: 'CVE-2010-1234',
+                        packages: ['aaabbbccc@1.0.0'],
+                        status: 'under_investigation',
+                        simplified_status: 'Community analysis pending',
+                        timestamp: '2024-02-05T12:15:00Z',
+                        responses: []
+                    }
+                ]
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithMultipleAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT & ASSERT - Should show the most recent assessment date (March 10)
+        const formattedDate = await screen.getByText(/march 10, 2024/i);
+        expect(formattedDate).toBeInTheDocument();
+    })
+
+    test('sorting by last updated column', async () => {
+        const vulnWithDifferentDates: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-2020-1111', // Earlier assessment
+                assessments: [
+                    {
+                        id: '1',
+                        vuln_id: 'CVE-2020-1111',
+                        packages: ['package1@1.0.0'],
+                        status: 'not_affected',
+                        simplified_status: 'Not affected',
+                        timestamp: '2024-01-15T10:30:00Z',
+                        responses: []
+                    }
+                ]
+            },
+            {
+                ...vulnerabilities[1],
+                id: 'CVE-2020-2222', // Later assessment
+                assessments: [
+                    {
+                        id: '2',
+                        vuln_id: 'CVE-2020-2222',
+                        packages: ['package2@1.0.0'],
+                        status: 'affected',
+                        simplified_status: 'Exploitable',
+                        timestamp: '2024-03-20T15:45:00Z',
+                        responses: []
+                    }
+                ]
+            },
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-2020-3333', // No assessment
+                assessments: []
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithDifferentDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+
+        // ACT - Sort by last updated (first click: descending - newest first, then older, then no assessments)
+        await user.click(lastUpdatedHeader);
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            // CVE-2020-2222 should come first (newest), then CVE-2020-1111, then CVE-2020-3333 (no assessment)
+            expect(html.indexOf('CVE-2020-2222')).toBeLessThan(html.indexOf('CVE-2020-1111'));
+            expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-3333'));
+        });
+
+        // ACT - Sort by last updated (second click: ascending - no assessments first, then oldest to newest)
+        await user.click(lastUpdatedHeader);
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            // No assessment (CVE-2020-3333) should come first, then CVE-2020-1111, then CVE-2020-2222
+            expect(html.indexOf('CVE-2020-3333')).toBeLessThan(html.indexOf('CVE-2020-1111'));
+            expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
+        });
+    })
+
+    test('last updated column handles mixed timestamp and last_update fields correctly for sorting', async () => {
+        const vulnWithMixedDates: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-2020-1111',
+                assessments: [
+                    {
+                        id: '1',
+                        vuln_id: 'CVE-2020-1111',
+                        packages: ['package1@1.0.0'],
+                        status: 'not_affected',
+                        simplified_status: 'Not affected',
+                        timestamp: '2024-01-15T10:30:00Z',
+                        last_update: '2024-03-25T12:00:00Z', // Most recent overall
+                        responses: []
+                    }
+                ]
+            },
+            {
+                ...vulnerabilities[1],
+                id: 'CVE-2020-2222',
+                assessments: [
+                    {
+                        id: '2',
+                        vuln_id: 'CVE-2020-2222',
+                        packages: ['package2@1.0.0'],
+                        status: 'affected',
+                        simplified_status: 'Exploitable',
+                        timestamp: '2024-03-20T15:45:00Z', // Only timestamp, no last_update
+                        responses: []
+                    }
+                ]
+            }
+        ];
+
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnWithMixedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+
+        // ACT - Sort descending (newest first) - should only need one click 
+        await user.click(lastUpdatedHeader);
+        
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            // CVE-2020-1111 should come first because last_update (March 25) is more recent than CVE-2020-2222's timestamp (March 20)
+            expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
+        });
     })
 });

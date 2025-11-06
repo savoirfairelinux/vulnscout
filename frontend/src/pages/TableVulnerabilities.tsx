@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -12,6 +12,8 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faTimes } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -20,6 +22,15 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
+};
+
+const dt_options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    timeZoneName: 'shortOffset'
 };
 
 const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -52,6 +63,8 @@ const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simpl
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
+    const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+    const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
@@ -62,6 +75,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -95,6 +109,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         });
         return acc;
     }, []), [vulnerabilities])
+
+    const handleEditClick = useCallback((vuln: Vulnerability) => {
+        const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+        setModalVuln(vuln);
+        setModalVulnIndex(index >= 0 ? index : undefined);
+    }, [searchFilteredData]);
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Vulnerability>()
@@ -133,10 +153,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             columnHelper.accessor('id', {
                 header: () => <div className="flex items-center justify-center">ID</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                cell: info => (
+                    <div 
+                        className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                        onClick={() => {
+                            const vuln = info.row.original;
+                            const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                            setModalVuln(vuln);
+                            setModalVulnIndex(index >= 0 ? index : undefined);
+                            setIsEditing(false);
+                        }}
+                        title="Click to view details"
+                    >
+                        {info.getValue()}
+                    </div>
+                ),
                 sortDescFirst: true,
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
-                size: 145
+                size: 170
             }),
             columnHelper.accessor('severity.severity', {
             header: () => (
@@ -153,26 +187,25 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 40,
             }),
             columnHelper.accessor('epss', {
-            header: () => <div className="flex items-center justify-center">Exploitability</div>,
+            header: () => <div className="flex items-center justify-center">EPSS Score</div>,
             cell: info => {
                 const epss = info.getValue();
                 return (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                    {epss.score && <>
-                    <b>{Math.round(epss.score * 100)}%</b>
-                    {epss.percentile && <i className="text-sm">(more than {Math.floor(epss.percentile * 100)}% of vulns)</i>}
+                    {epss.score !== undefined && epss.score !== 0 &&  <>
+                    {(epss.score * 100).toFixed(2)}%
                     </>}
                 </div>
                 );
             },
             sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0),
-            size: 125,
+            size: 50,
             }),
             columnHelper.accessor('packages', {
-            header: () => <div className="flex items-center justify-center">Packages affected</div>,
+            header: () => <div className="flex items-center justify-center">Packages Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
-            size: 205
+            size: 255
             }),
             columnHelper.accessor('severity', {
             header: () => <div className="flex items-center justify-center">Attack Vector</div>,
@@ -190,11 +223,49 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 130
             }),
             columnHelper.accessor('effort.likely', {
-            header: () => <div className="flex items-center justify-center">Estimated effort</div>,
+            header: () => <div className="flex items-center justify-center">Estimated Effort</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
             enableSorting: true,
             sortingFn: (rowA, rowB) => rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds,
             size: 100
+            }),
+            columnHelper.accessor('assessments', {
+            header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            cell: info => {
+                const assessments = info.getValue();
+                if (!assessments || assessments.length === 0) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">No assessment</div>;
+                }
+                
+                // Find the most recent update time across all assessments
+                const mostRecentTime = assessments.reduce((latest, assessment) => {
+                    const assessmentTime = new Date(assessment.last_update || assessment.timestamp);
+                    return assessmentTime > latest ? assessmentTime : latest;
+                }, new Date(0));
+                
+                // Format the date using the same format as VulnModal
+                const formattedDate = mostRecentTime.getTime() > 0 ? 
+                    mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
+                
+                return (
+                    <div className="flex items-center justify-center h-full text-center text-sm">
+                        {formattedDate}
+                    </div>
+                );
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const getLatestAssessmentTime = (assessments: Assessment[]) => {
+                    if (!assessments || assessments.length === 0) return 0;
+                    return assessments.reduce((latest, assessment) => {
+                        const assessmentTime = new Date(assessment.last_update || assessment.timestamp).getTime();
+                        return assessmentTime > latest ? assessmentTime : latest;
+                    }, 0);
+                };
+                
+                return getLatestAssessmentTime(rowA.original.assessments) - getLatestAssessmentTime(rowB.original.assessments);
+            },
+            size: 140
             }),
             columnHelper.accessor('found_by', {
             header: () => <div className="flex items-center justify-center">Sources</div>,
@@ -211,10 +282,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div className="flex items-center justify-center h-full">
                     <button
                         className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-                        onClick={() => setModalVuln(info.getValue())}
+                        onClick={() => {
+                          const vuln = info.getValue();
+                          handleEditClick(vuln);
+                          setIsEditing(true);
+                      }}
                     >
                         Edit
                     </button>
+
                     </div>
                 ),
                 enableSorting: false,
@@ -222,7 +298,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, []);
+    }, [handleEditClick, searchFilteredData]);
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
@@ -237,6 +313,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
+
+    const handleModalNavigation = (newIndex: number) => {
+        if (newIndex >= 0 && newIndex < searchFilteredData.length) {
+            setModalVuln(searchFilteredData[newIndex]);
+            setModalVulnIndex(newIndex);
+        }
+    };
 
     function resetFilters() {
         setSearch('');
@@ -303,6 +386,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setSelected={handleStatusChange}
             />
 
+            {/* Package indicator (no dropdown, just display) */}
+            {selectedPackages.length > 0 && (
+                <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
+                    <span className="font-semibold">Package:</span>
+                    <span>{selectedPackages.join(', ')}</span>
+                    <button
+                        className="ml-1 text-white hover:text-red-400"
+                        title="Clear package filter"
+                        onClick={() => setSelectedPackages([])}
+                    >
+                        <FontAwesomeIcon icon={faTimes} />
+                    </button>
+                </div>
+            )}
+
             <ToggleSwitch
                 enabled={hideFixed}
                 setEnabled={handleHideFixedToggle}
@@ -316,7 +414,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 Reset Filters
             </button>
         </div>
-
 
         <MultiEditBar
             vulnerabilities={vulnerabilities}
@@ -346,14 +443,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}
+            onFilteredDataChange={setSearchFilteredData}
         />
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
-            onClose={() => setModalVuln(undefined)}
+            isEditing={isEditing}
+            onClose={() => {
+                setModalVuln(undefined);
+                setModalVulnIndex(undefined);
+                setIsEditing(false);
+            }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
+            vulnerabilities={searchFilteredData}
+            currentIndex={modalVulnIndex}
+            onNavigate={handleModalNavigation}
         ></VulnModal>}
     </>)
 }
