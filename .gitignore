@@ -89,3 +89,4 @@ venv.bak/
 .vulnscout/example-spdx3/output/
 .vulnscout/cache/
 frontend/package-lock.json
+.vulnscout-npm.pid
