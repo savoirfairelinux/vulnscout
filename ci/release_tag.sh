@@ -34,7 +34,10 @@ sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers
 sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
 
 # Check if nvd.db exists and compress it
+find .vulnscout/cache -maxdepth 1 -type f -name "nvd.db.*.xz" -exec rm -f {} +
 nvd_db_path=".vulnscout/cache/nvd.db"
+cqfd init
+cqfd -b build_nvd
 if [ -f "$nvd_db_path" ]; then
     echo "Found nvd.db, compressing with xz..."
 
