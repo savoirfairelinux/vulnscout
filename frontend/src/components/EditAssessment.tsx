@@ -70,13 +70,16 @@ function EditAssessment({
             }
             return;
         }
+        
+        const includeJustificationAndImpact = status == "not_affected";
+        
         onSaveAssessment({
             id: assessment.id,
             status,
-            justification: status == "not_affected" ? justification : undefined,
+            justification: includeJustificationAndImpact ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: status == "not_affected" ? impact : undefined
+            impact_statement: includeJustificationAndImpact ? impact : undefined
         });
     }
 

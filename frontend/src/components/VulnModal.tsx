@@ -13,7 +13,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faPenToSquare, faTrash, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -26,6 +26,9 @@ type Props = {
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    vulnerabilities?: Vulnerability[];
+    currentIndex?: number;
+    onNavigate?: (index: number) => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -37,13 +40,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln } = props;
+    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
     const [clearAssessmentFields, setClearAssessmentFields] = useState(false);
     const [showConfirmClose, setShowConfirmClose] = useState(false);
     const [newAssessmentIds, setNewAssessmentIds] = useState<Set<string>>(new Set());
+    const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
@@ -69,6 +73,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleClose = () => {
         if (hasUnsavedChanges) {
+            setPendingNavigation(null);
             setShowConfirmClose(true);
         } else {
             onClose();
@@ -77,12 +82,36 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
-        onClose();
+        if (pendingNavigation !== null && onNavigate) {
+            onNavigate(pendingNavigation);
+            setPendingNavigation(null);
+        } else {
+            onClose();
+        }
     };
 
     const handleCancelClose = () => {
         setShowConfirmClose(false);
+        setPendingNavigation(null);
     };
+
+    const navigateTo = (targetIndex: number) => {
+        if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
+        if (hasUnsavedChanges) {
+            setPendingNavigation(targetIndex);
+            setShowConfirmClose(true);
+        } else {
+            onNavigate(targetIndex);
+        }
+    };
+
+    const canNavigatePrevious = vulnerabilities && currentIndex !== undefined && currentIndex > 0;
+    const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
+
+    // Navigation info
+    const navigationInfo = vulnerabilities && currentIndex !== undefined 
+        ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
+        : null;
 
     const handleEditAssessment = (assessmentId: string) => {
         setEditingAssessmentId(assessmentId);
@@ -114,6 +143,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         assessment => assessment.id !== assessmentToDelete.id
                     );
                     vuln.assessments = updatedAssessments;
+                    
+                    if (updatedAssessments.length > 0) {
+                        const sortedAssessments = [...updatedAssessments].sort(
+                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                        );
+                        vuln.status = sortedAssessments[0].status;
+                        vuln.simplified_status = sortedAssessments[0].simplified_status;
+                    }
                     
                     // Update the vuln object in the parent component
                     patchVuln(vuln.id, vuln);
@@ -163,10 +200,21 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     
                     if (assessmentIndex !== -1) {
                         // Update the assessment object with the response data
-                        const updatedAssessment = asAssessment(responseData.assessment);
+                        let updatedAssessment = asAssessment(responseData.assessment);
                         if (!Array.isArray(updatedAssessment) && typeof updatedAssessment === "object") {
+                            // Convert empty strings to undefined for non-relevant statuses
+                            const isRelevantStatus = updatedAssessment.status === "not_affected" || updatedAssessment.status === "false_positive";
+                            if (!isRelevantStatus) {
+                                updatedAssessment.justification = undefined;
+                                updatedAssessment.impact_statement = undefined;
+                            }
+                            
                             // Replace the assessment in the array
                             vuln.assessments[assessmentIndex] = updatedAssessment;
+                            
+                            // Update vulnerability status to match the edited assessment
+                            vuln.status = updatedAssessment.status;
+                            vuln.simplified_status = updatedAssessment.simplified_status;
                             
                             // Update the vuln object in the parent component
                             patchVuln(vuln.id, vuln);
@@ -198,6 +246,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 if (hasUnsavedChanges) {
+                    setPendingNavigation(null);
                     setShowConfirmClose(true);
                 } else {
                     onClose();
@@ -628,15 +677,59 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         </div>
                     </div>
                     
+                                        {/* Modal footer */}
+                    <div className="flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                        {vulnerabilities && currentIndex !== undefined ? (
+                            <div className="flex items-center space-x-2">
+                                <button
+                                    onClick={() => navigateTo(currentIndex - 1)}
+                                    disabled={!canNavigatePrevious}
+                                    type="button"
+                                    aria-label="Previous vulnerability"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
+                                </button>
+                                <button
+                                    onClick={() => navigateTo(currentIndex + 1)}
+                                    disabled={!canNavigateNext}
+                                    type="button"
+                                    aria-label="Next vulnerability"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
+                                </button>
+                                {navigationInfo && (
+                                    <span className="text-sm text-gray-400 px-3" id="navigation-info">
+                                        {navigationInfo}
+                                    </span>
+                                )}
+                            </div>
+                        ) : (
+                            <div></div>
+                        )}
+                        <button
+                            onClick={handleClose}
+                            type="button"
+                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800"
+                        >
+                            Close
+                        </button>
+                    </div>
+                    
                 </div>
             </div>
 
             <ConfirmationModal
                 isOpen={showConfirmClose}
                 title="Unsaved Changes"
-                message="Are you sure you want to close without saving? All unsaved changes will be lost."
-                confirmText="Yes, close"
-                cancelText="No, stay"
+                message={
+                    pendingNavigation !== null 
+                        ? "Are you sure you want to navigate without saving? All unsaved changes will be lost."
+                        : "Are you sure you want to close without saving? All unsaved changes will be lost."
+                }
+                confirmText={pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
+                cancelText={pendingNavigation !== null ? "No, stay" : "No, stay"}
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}

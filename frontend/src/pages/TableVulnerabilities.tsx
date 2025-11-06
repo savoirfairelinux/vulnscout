@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -61,6 +61,7 @@ const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simpl
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
+    const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
@@ -72,6 +73,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -105,6 +107,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         });
         return acc;
     }, []), [vulnerabilities])
+
+    const handleEditClick = useCallback((vuln: Vulnerability) => {
+        const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+        setModalVuln(vuln);
+        setModalVulnIndex(index >= 0 ? index : undefined);
+    }, [searchFilteredData]);
 
     const columns = useMemo(() => {
         const columnHelper = createColumnHelper<Vulnerability>()
@@ -147,7 +155,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div 
                         className="flex items-center justify-center h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
                         onClick={() => {
-                            setModalVuln(info.row.original);
+                            const vuln = info.row.original;
+                            const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                            setModalVuln(vuln);
+                            setModalVulnIndex(index >= 0 ? index : undefined);
                             setIsEditing(false);
                         }}
                         title="Click to view details"
@@ -270,9 +281,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <button
                         className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
                         onClick={() => {
-                            setModalVuln(info.getValue());
-                            setIsEditing(true);
-                        }}
+                          const vuln = info.getValue();
+                          handleEditClick(vuln);
+                          setIsEditing(true);
+                      }}
                     >
                         Edit
                     </button>
@@ -284,7 +296,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, []);
+    }, [handleEditClick, searchFilteredData]);
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
@@ -299,6 +311,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
+
+    const handleModalNavigation = (newIndex: number) => {
+        if (newIndex >= 0 && newIndex < searchFilteredData.length) {
+            setModalVuln(searchFilteredData[newIndex]);
+            setModalVulnIndex(newIndex);
+        }
+    };
 
     function resetFilters() {
         setSearch('');
@@ -408,6 +427,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}
+            onFilteredDataChange={setSearchFilteredData}
         />
 
         {modalVuln != undefined && <VulnModal
@@ -415,11 +435,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             isEditing={isEditing}
             onClose={() => {
                 setModalVuln(undefined);
+                setModalVulnIndex(undefined);
                 setIsEditing(false);
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
+            vulnerabilities={searchFilteredData}
+            currentIndex={modalVulnIndex}
+            onNavigate={handleModalNavigation}
         ></VulnModal>}
     </>)
 }
