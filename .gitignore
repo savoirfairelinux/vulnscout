@@ -90,3 +90,4 @@ venv.bak/
 .vulnscout/cache/
 !.vulnscout/cache/nvd.db.*.xz
 frontend/package-lock.json
+.vulnscout-npm.pid
