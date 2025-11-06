@@ -6,17 +6,6 @@ import React from 'react';
 import TimeEstimateEditor from '../../src/components/TimeEstimateEditor';
 
 describe('TimeEstimateEditor component', () => {
-  let originalAlert: any;
-
-  beforeAll(() => {
-    originalAlert = global.alert;
-    // @ts-ignore
-    global.alert = jest.fn();
-  });
-
-  afterAll(() => {
-    global.alert = originalAlert;
-  });
 
   const optimisticPh = /shortest estimate \[eg: 5h]/i;
   const likelyPh = /balanced estimate \[eg: 2d 4h, or 2.5d]/i;
@@ -69,57 +58,75 @@ describe('TimeEstimateEditor component', () => {
     expect(screen.queryByText(/Time scale: 1 month = 4 weeks/i)).not.toBeInTheDocument();
   });
 
-  test('rejects non positive optimistic duration', () => {
+  test('rejects non positive optimistic duration', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: '0h', lik: '1h', pess: '2h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Invalid optimistic duration'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Invalid optimistic duration/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('rejects non positive likely duration', () => {
+  test('rejects non positive likely duration', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: '1h', lik: '0h', pess: '2h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Invalid likely duration'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Invalid likely duration/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('rejects non positive pessimistic duration', () => {
+  test('rejects non positive pessimistic duration', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: '1h', lik: '2h', pess: '0h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Invalid pessimistic duration'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Invalid pessimistic duration/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('rejects when optimistic > likely', () => {
+  test('rejects when optimistic > likely', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: '3h', lik: '2h', pess: '4h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Optimistic duration must be lower'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Optimistic duration must be lower/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('rejects when likely > pessimistic', () => {
+  test('rejects when likely > pessimistic', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: '1h', lik: '3h', pess: '2h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Likely duration must be lower'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Likely duration must be lower/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('invalid ISO 8601 string triggers parse error', () => {
+  test('invalid ISO 8601 string triggers parse error', async () => {
     const onSave = jest.fn();
     render(<TimeEstimateEditor actualEstimate={{}} onSaveTimeEstimation={onSave} />);
     setInputs({ opt: 'PXYZ', lik: '1h', pess: '2h' });
     fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
-    expect(global.alert).toHaveBeenCalledWith(expect.stringContaining('Invalid ISO 8601 duration'));
+    
+    // Check for error banner instead of alert
+    const errorBanner = await screen.findByText(/Invalid ISO 8601 duration/i);
+    expect(errorBanner).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });
 

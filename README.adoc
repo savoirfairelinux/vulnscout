@@ -1,109 +1,52 @@
 = VulnScout
 Savoir-faire Linux
-v0.7.0, {docdate}: developement builds
 :url-repo: https://github.com/savoirfairelinux/vulnscout
 :source-highlighter: highlight.js
-:toc:
 
 image::./doc/images/vulnscout_logo.jpeg[alt=vulnscout logo]
 
 image::https://img.shields.io/badge/License-GPL%203.0-green.svg[License, link=https://opensource.org/license/gpl-3-0]
 
-== Introduction
+---
 
-=== What is VulnScout?
+== :small_blue_diamond:  Introduction
 
-VulnScout is a tool designed to help developers and security analysts identify vulnerabilities in their software components and dependencies using an SBOM (Software Bill of Materials). Rather than analyzing code or binaries directly, VulnScout examines metadata that lists all components and dependencies in your codebase. It supports popular input formats such as SPDX, CycloneDX, Grype JSON, and Yocto JSON.
+VulnScout is designed to analyse and identify vulnerabilities in their software components and dependencies using an *SBOM* (Software Bill Of Materials).
 
-It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype to figure out which parts of your codebase might be affected by security issues (CVE). You can use it locally through a web interface that provides visualization tools or command line that generates enriched output files.
+It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype to figure out which parts of a codebase might be affected by security issues (CVE).
 
-=== What can VulnScout do?
+VulnScout also provides a web interface for visualisation and a command line to generate enriched output files.
 
-* Analyze SBOMs: Parses and merges SBOMs from multiple formats (SPDX, CycloneDX, Grype JSON and Yocto cve_check output).
-* Detect vulnerabilities: Associates packages with known CVEs from multiple sources (e.g., NVD, EPSS, Grype and OSV).
-* Enrich SBOM files: Combines vulnerability data found in the input files with data pulled from external sources.
-* Generate detailed reports: Provides scan summaries in multiple formats, including an interactive web dashboard and text file.
-* Help track fixes: The web dashboard allows you to assign and track which vulnerabilities are fixed and which are still open and provides various metrics to help decision-making (score, exploitability, risk exposure...).
-* Help track licenses: The web dashboard provides insights into the licenses of the components in your codebase and helps ensure compliance.
+=== VulnsScout Features
 
-=== Architecture
+* Analyse SBOMs
+* Detect vulnerabilities
+* Enrich SBOM files
+* Generate detailed reports
+* Help track fixes with the dashboard
 
-image::doc/images/architecture.png[An architecture diagram showing different components of the VulnScout app]
+==  :wrench: Setting up VulnScout
 
-=== Terminology
-
-This document use a lot of format names, accronyms and abbreviations which is evident for people working on them, but not for everyone. Here is a definition of the most used ones:
-
-[unordered]
-CVE:: Common Vulnerabilities and Exposures. Most (but not all) vulnerabilities discovered by a security researcher are assigned a CVE number. This number is unique and is used to reference the vulnerability in various databases.
-SBOM:: Software Bill of Materials. A list of all the components used in a software project. This list can be used to track dependencies, licenses, and vulnerabilities.
-SPDX:: Software Package Data Exchange. A standard format for SBOMs developed by the Linux Foundation. Mostly found as JSON or XML files.
-CDX:: Cyclone DX. A standard format for SBOMs developed as an OWASP project. Mostly found as JSON or XML files.
-Yocto:: A build system for embedded Linux systems. It is used to build custom Linux distributions for embedded systems.
-
-== Features
-
-You can use VulnScout to scan your project, make report about your dependencies and vulnerabilities, and to manage them.
-
-=== Export Document
-
-VulnScout can consolidate all its inputs, data created in the web dashboard, and information aggregated from different sources / scanners into a variety of output formats. These outputs include SPDX and CycloneDX documents.
-
-* SPDX 2.3: json, xml
-* CycloneDX 1.4 / 1.5 / 1.6: json
-* OpenVex: json
-
-Additionally, VulnScout can generate time estimates and detailed reports about vulnerabilities and assessments created or managed by the user. This feature helps teams track remediation progress, understand risk exposure, and document security decisions in a standardized way.
-
-* All reports: Asciidoc, HTML, PDF
-* Summary: Asciidoc, HTML, PDF
-* Time estimates: csv
-* Vulnerabilities: csv, txt
-
-.Custom Reports
-VulnScout supports custom report templates. You can place your own templates in `.vulnscout/templates` to tailor reports to your specific needs.
-
-=== Supported input formats
-
-* SPDX 2.3 (Packages)
-* SPDX 3.0 (Packages + vulnerabilities)
-* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
-* Grype native JSON format (Packages + vulnerabilities)
-* Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
-
-=== Supported output formats
-
-* SPDX 2.3 (Packages)
-* SPDX 3.0 (Packages + vulnerabilities)
-* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
-* openVex (vulnerabilities + Assessments)
-
-=== Vulnerability Data Sources
-
-The tool pulls vulnerability and risk data from multiple trusted sources:
-
-* NVD (National Vulnerability Database)
-* All datasource supported by Grype
-* EPSS (Exploit Prediction Scoring System)
-* ##OSV## (Open Source Vulnerabilities) Comming soon
-* Information embedded in inputs files
-
-=== Custom CVSS Scoring
-
-Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organization-specific vulnerability scoring.
-
-You can use a CVSS calculator to generate a vector string based on your own risk and severity factors, then store it alongside the standard CVSS score provided by the NVD.
-
-== Getting Started with VulnScout
+=== Requirements & Installation
 
 VulnScout is designed to run locally in a Docker container.
 It will require having `docker-compose` or `docker compose` available on your host.
 
-If you need to install `docker compose`, look at: https://docs.docker.com/compose/install/
+If you need to install `docker compose`, look at:
+https://docs.docker.com/compose/install/[docker-compose]
 
-=== Run Vulnscout project example
+To install VulnScout, you only need to clone the repository:
+[source,bash]
+----
+git clone https://github.com/savoirfairelinux/vulnscout.git
+cd vulnscout
+----
 
-This project contains a default usable example of Vulnscout. 
+==  :penguin: Using VulnScout
+
+===  Run VulnScout demo
+
+This project contains a default usable example of Vulnscout.
 To use it, you can simply run the default script with the command:
 
 [source,shell]
@@ -117,8 +60,9 @@ Or, if you prefer to run another example based on SPDX-3.0, you can use the foll
 ----
 ./start-example.sh --spdx3
 ----
+These commands will use the docker-compose files located here: _/.vulnscout/example/_
 
-==== Use Vulnscount with Yocto
+===  Run VulnScount with Yocto
 
 We have a dedicated layer for Vulnscout integration in Yocto.
 
@@ -128,32 +72,35 @@ To be short, a simple `inherit vulnscout` in your image recipe will be enough to
 
 The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
-=== Configuration tips for others projects
+=== Run VulnScout manually
 
-You don’t need to use Yocto to benefit from VulnScout.  
-All you need is at least one Software Bill of Materials (SBOM) file in SPDX or CycloneDX format.
+To use VulnScout manually, you can use the script `vulnscout.sh` provided in the repository.
 
-Grype and OSV scanners will analyze the SBOM for known vulnerabilities.  
-If your SBOMs already include vulnerabilities, those will also be merged into the final results.
-
-You can simply create a new sub-folder in .vulnscout and place a modified `yaml` using your configuration. 
-
-To configure your `yaml` file, you can look at the example provided in `.vulnscout/example/docker-example.yml`.
-
-==== Tips for Editing your `yaml` File
-
-[TIP]
-====
-- `.tar`, `.tar.gz`, and `.tar.zst` archives are supported as SBOM inputs.
-- To ignore parsing errors for malformed SBOMs, set:
-  `IGNORE_PARSING_ERRORS=true`
-====
-
-Once it is done, you can run the new custom configuration with a `docker compose` command:
+For example, to reconfigure the default example SPDX3, you can run:
 
 [source,shell]
 ----
-docker compose -f /path/to/yaml up
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
+----
+
+Then, if you want to use the CI mode, without the web interface, you can the command with the '--fail_condition' argument:
+
+[source,shell]
+----
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json \
+--fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
+----
+
+
+===  Run VulnScout with docker
+
+You can start the VulnScout docker container with a `docker compose` or `docker-compose` command:
+
+[source,bash]
+----
+docker compose -f </path/to/yaml> up
 ----
 
 Then open your browser to view the results:
@@ -163,8 +110,62 @@ Then open your browser to view the results:
 http://localhost:7275
 ----
 
-==== License
+==== Configuration tips for other projects
 
-`Copyright (C) 2017-2025 Savoir-faire Linux, Inc.`
+To use VulnScout, you only need a Software Bill of Materials *(SBOM)* file in SPDX or CycloneDX format. +
+The Grype scanner will analyse the SBOM for vulnerabilities; if it already includes some, those will be merged into the final results. +
+To do so, create a new sub-folder in _.vulnscout_ and place a modified `yaml` using your configuration. +
+To configure your `yaml` file, you can look at the example provided here _.vulnscout/example/docker-example.yml_
 
-Vulnscout is released under the GPL-3.0 license.
+===== Tips for Editing your `yaml` file
+
+[TIP]
+====
+- .tar, .tar.gz, .tar.zst, and archives are supported as SPDX 2 input.
+- .spdx.json is supported as SPDX 3 input.
+- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
+====
+
+== :mag_right: Architecture
+
+image::doc/images/architecture.png[An architecture diagram showing different components of the VulnScout app]
+
+=== :inbox_tray: Supported input files
+
+* SPDX 2.3 (Packages)
+* SPDX 3.0 (Packages + vulnerabilities)
+* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
+* Grype native JSON format (Packages + vulnerabilities)
+* Yocto JSON output of `cve-check` module (Packages + vulnerabilities)
+
+=== :outbox_tray: Supported output files
+
+* SPDX 2.3 (Packages)
+* SPDX 3.0 (Packages + vulnerabilities)
+* Cyclone DX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
+* openVex (vulnerabilities + assessments)
+* All reports: Asciidoc, HTML, PDF
+* Summary: Asciidoc, HTML, PDF
+* Time estimates: csv
+* Vulnerabilities: csv, txt
+
+=== :bar_chart: Vulnerability Data Sources
+
+.The tool pulls vulnerability and risk data from multiple trusted sources:
+
+* NVD (National Vulnerability Database)
+* All data sources supported by Grype
+* EPSS (Exploit Prediction Scoring System)
+* ##OSV (Open Source Vulnerabilities) Coming soon##
+* Information embedded in input files
+
+=== :pencil: Custom CVSS Scoring
+
+Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organisation-specific vulnerability scoring.
+
+== :clipboard: Licence
+
+`Copyright (C) 2017-2025 Savoir-faire Linux, Inc.` +
+VulnScout is released under the GPL-3.0 license.
+
+image::./doc/images/SFL.jpeg[fit]

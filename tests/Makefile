@@ -1,8 +1,9 @@
 MAKEFILE_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
 SRC_DIR := $(MAKEFILE_DIR)../src
 FRONTEND_DIR := $(MAKEFILE_DIR)../frontend
+CI_DIR := $(MAKEFILE_DIR)/CI_tests
 
-test: test_backend test_frontend
+test: test_backend test_frontend test_ci
 
 test_backend:
 	flake8 $(SRC_DIR)
@@ -19,6 +20,10 @@ test_frontend:
 		echo "Running frontend tests with full coverage reporters"; \
 		npm test -- --coverage; \
 	fi
+
+test_ci:
+	cd $(CI_DIR) && \
+	bash ./vulnscout_CI_test.sh
 
 docker_build:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
