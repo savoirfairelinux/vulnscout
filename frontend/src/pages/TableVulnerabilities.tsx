@@ -76,6 +76,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
+    const [visibleColumns, setVisibleColumns] = useState<string[]>([
+        'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated'
+    ]);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -116,7 +119,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setModalVulnIndex(index >= 0 ? index : undefined);
     }, [searchFilteredData]);
 
-    const columns = useMemo(() => {
+    const columnDisplayNames = useMemo(() => ({
+        'select-checkbox': 'Select',
+        'id': 'ID',
+        'severity.severity': 'Severity',
+        'epss': 'EPSS Score',
+        'packages': 'Packages Affected',
+        'severity': 'Attack Vector',
+        'simplified_status': 'Status',
+        'effort.likely': 'Estimated Effort',
+        'assessments': 'Last Updated',
+        'found_by': 'Sources',
+        'actions': 'Actions'
+    }), []);
+
+    const allColumns = useMemo(() => {
         const columnHelper = createColumnHelper<Vulnerability>()
         return [
             {
@@ -152,6 +169,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 maxSize: 40
             },
             columnHelper.accessor('id', {
+                id: 'id',
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
                     <div 
@@ -173,6 +191,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 170
             }),
             columnHelper.accessor('severity.severity', {
+            id: 'severity.severity',
             header: () => (
                 <div className="flex items-center justify-center">
                 Severity
@@ -187,6 +206,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 40,
             }),
             columnHelper.accessor('epss', {
+            id: 'epss',
             header: () => <div className="flex items-center justify-center">EPSS Score</div>,
             cell: info => {
                 const epss = info.getValue();
@@ -202,12 +222,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 50,
             }),
             columnHelper.accessor('packages', {
+            id: 'packages',
             header: () => <div className="flex items-center justify-center">Packages Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
             size: 255
             }),
             columnHelper.accessor('severity', {
+            id: 'severity',
             header: () => <div className="flex items-center justify-center">Attack Vector</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">
                 {[...(new Set(info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)))]?.join(', ')}
@@ -217,12 +239,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 100
             }),
             columnHelper.accessor('simplified_status', {
+            id: 'simplified_status',
             header: () => <div className="flex items-center justify-center">Status</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center"><code>{info.renderValue()}</code></div>,
             sortingFn: sortStatusFn,
             size: 130
             }),
             columnHelper.accessor('effort.likely', {
+            id: 'effort.likely',
             header: () => <div className="flex items-center justify-center">Estimated Effort</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
             enableSorting: true,
@@ -230,6 +254,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 100
             }),
             columnHelper.accessor('assessments', {
+            id: 'assessments',
             header: () => <div className="flex items-center justify-center">Last Updated</div>,
             cell: info => {
                 const assessments = info.getValue();
@@ -268,6 +293,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             size: 140
             }),
             columnHelper.accessor('found_by', {
+            id: 'found_by',
             header: () => <div className="flex items-center justify-center">Sources</div>,
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
@@ -277,6 +303,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             enableSorting: false
             }),
             columnHelper.accessor(row => row, {
+                id: 'actions',
                 header: 'Actions',
                 cell: info => (
                     <div className="flex items-center justify-center h-full">
@@ -299,6 +326,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             })
         ]
     }, [handleEditClick, searchFilteredData]);
+
+    const columns = useMemo(() => {
+        return allColumns.filter(col => {
+            const colId = col.id as string;
+            if (colId === 'select-checkbox' || colId === 'actions') return true;
+            const displayName = columnDisplayNames[colId as keyof typeof columnDisplayNames];
+            return displayName && visibleColumns.includes(displayName);
+        });
+    }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
@@ -329,6 +365,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedPackages([]);
         setSelectedRows({});
         setHideFixed(false);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated']);
     }
 
     const handleHideFixedToggle = (enabled: boolean) => {
@@ -362,6 +399,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+
+            <FilterOption
+                label="Columns"
+                options={[
+                    'ID',
+                    'Severity',
+                    'EPSS Score',
+                    'Packages Affected',
+                    'Attack Vector',
+                    'Status',
+                    'Estimated Effort',
+                    'Last Updated',
+                    'Sources'
+                ]}
+                selected={visibleColumns}
+                setSelected={setVisibleColumns}
+            />
 
             <FilterOption
                 label="Source"
