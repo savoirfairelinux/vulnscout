@@ -147,51 +147,83 @@ describe('Vulnerability Table', () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // ACT
+        const user = userEvent.setup();
+
+        // ACT - Check for default visible columns
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
         const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
-        const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
-        const source_header = await screen.getByRole('columnheader', {name: /source/i});
+        const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
 
-        // ASSERT
+        // ASSERT - Default visible columns
         expect(id_header).toBeInTheDocument();
         expect(severity_header).toBeInTheDocument();
         expect(exploit_header).toBeInTheDocument();
         expect(packages_header).toBeInTheDocument();
-        expect(atk_vector_header).toBeInTheDocument();
         expect(status_header).toBeInTheDocument();
-        expect(source_header).toBeInTheDocument();
-        
-        // Check for Last Updated header
-        const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
         expect(last_updated_header).toBeInTheDocument();
+
+        // Now enable hidden columns to test they can be shown
+        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        await user.click(columnsBtn);
+
+        const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
+        const sourcesCheckbox = await screen.getByRole('checkbox', { name: 'Sources' });
+        
+        await user.click(attackVectorCheckbox);
+        await user.click(sourcesCheckbox);
+
+        // ACT - Check for now-visible columns
+        const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
+        const source_header = await screen.getByRole('columnheader', {name: /source/i});
+
+        // ASSERT - Previously hidden columns are now visible
+        expect(atk_vector_header).toBeInTheDocument();
+        expect(source_header).toBeInTheDocument();
     })
 
     test('render with vulnerabilities', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // ACT
+        const user = userEvent.setup();
+
+        // ACT - Check default visible columns
         const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
         const epss_col = await screen.getByRole('cell', {name: /35\.68%/});
-        const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
-        const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
         const status_col = await screen.getByRole('cell', {name: /Community Analysis Pending/i});
-        const source_col = await screen.getByRole('cell', {name: /hardcoded/});
 
-        // ASSERT
+        // ASSERT - Default visible columns
         expect(id_col).toBeInTheDocument();
         expect(severity_col).toBeInTheDocument();
         expect(epss_col).toBeInTheDocument();
-        expect(effort_col).toBeInTheDocument();
         expect(packages_col).toBeInTheDocument();
-        expect(atk_vector_col).toBeInTheDocument();
         expect(status_col).toBeInTheDocument();
+
+        // Now enable hidden columns to test their content
+        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        await user.click(columnsBtn);
+
+        const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
+        const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
+        const sourcesCheckbox = await screen.getByRole('checkbox', { name: 'Sources' });
+        
+        await user.click(effortCheckbox);
+        await user.click(attackVectorCheckbox);
+        await user.click(sourcesCheckbox);
+
+        // ACT - Check content of now-visible columns
+        const effort_col = await screen.getByRole('cell', {name: /1d 2h/i});
+        const atk_vector_col = await screen.getByRole('cell', {name: /network/i});
+        const source_col = await screen.getByRole('cell', {name: /hardcoded/});
+
+        // ASSERT - Previously hidden columns now show correct content
+        expect(effort_col).toBeInTheDocument();
+        expect(atk_vector_col).toBeInTheDocument();
         expect(source_col).toBeInTheDocument();
     })
 
@@ -240,6 +272,14 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
+        
+        // First, enable the Attack Vector column
+        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        await user.click(columnsBtn);
+        const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
+        await user.click(attackVectorCheckbox);
+
+        // Now get the header and test sorting
         const atk_vector_header = await screen.getByRole('columnheader', {name: /attack vector/i});
 
         await user.click(atk_vector_header); // un-ordoned -> network first
@@ -280,6 +320,14 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
+        
+        // First, enable the Estimated Effort column
+        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        await user.click(columnsBtn);
+        const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
+        await user.click(effortCheckbox);
+
+        // Now get the header and test sorting
         const effort_header = await screen.getByRole('columnheader', {name: /effort/i});
 
         await user.click(effort_header); // un-ordoned -> more long first
