@@ -4,6 +4,7 @@
 
 from flask import request
 import json
+from datetime import datetime, timezone
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
@@ -96,6 +97,73 @@ def init_app(app):
 
         save_assessments_to_files(ctrls)
         return {"status": "success", "assessment": assessment.to_dict()}, 200
+
+    @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
+    def update_assessment(assessment_id: str):
+        payload_data = request.get_json()
+        if not payload_data:
+            return {"error": "Invalid request data"}, 400
+
+        ctrls = get_all_datas()
+        if ctrls["assessments"] is None:
+            return {"error": "Internal error"}, 500
+
+        # Get the existing assessment
+        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
+        if existing_assessment is None:
+            return {"error": "Assessment not found"}, 404
+
+        # Update the assessment fields
+        if "status" in payload_data and isinstance(payload_data["status"], str):
+            if not existing_assessment.set_status(payload_data["status"]):
+                return {"error": "Invalid status"}, 400
+
+        if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
+            existing_assessment.set_status_notes(payload_data["status_notes"], False)
+
+        if "justification" in payload_data and isinstance(payload_data["justification"], str):
+            if payload_data["justification"] == "":
+                existing_assessment.justification = ""
+            elif not existing_assessment.set_justification(payload_data["justification"]):
+                return {"error": "Invalid justification"}, 400
+        elif existing_assessment.is_justification_required():
+            return {"error": "Justification required"}, 400
+
+        if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
+            if payload_data["impact_statement"] == "":
+                existing_assessment.impact_statement = ""
+            else:
+                existing_assessment.set_not_affected_reason(payload_data["impact_statement"], False)
+
+        if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
+            if "workaround_timestamp" in payload_data and isinstance(payload_data["workaround_timestamp"], str):
+                existing_assessment.set_workaround(payload_data["workaround"], payload_data["workaround_timestamp"])
+            else:
+                existing_assessment.set_workaround(payload_data["workaround"])
+
+        # Update last_update timestamp
+        existing_assessment.last_update = datetime.now(timezone.utc).isoformat()
+
+        save_assessments_to_files(ctrls)
+        return {"status": "success", "assessment": existing_assessment.to_dict()}, 200
+
+    @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
+    def delete_assessment(assessment_id: str):
+        ctrls = get_all_datas()
+        if ctrls["assessments"] is None:
+            return {"error": "Internal error"}, 500
+
+        # Check if assessment exists
+        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
+        if existing_assessment is None:
+            return {"error": "Assessment not found"}, 404
+
+        # Remove the assessment
+        if ctrls["assessments"].remove(assessment_id):
+            save_assessments_to_files(ctrls)
+            return {"status": "success", "message": "Assessment deleted successfully"}, 200
+        else:
+            return {"error": "Failed to delete assessment"}, 500
 
     def save_assessments_to_files(ctrls):
         with open(app.config["ASSESSMENTS_FILE"], "w") as f:

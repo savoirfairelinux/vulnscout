@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import MessageBanner from './MessageBanner';
 
 type PostAssessment = {
@@ -17,10 +17,11 @@ type Props = {
     clearFields?: boolean;
     onFieldsChange?: (hasChanges: boolean) => void;
     triggerBanner?: (message: string, type: "error" | "success") => void;
+    defaultStatus?: string;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner}: Readonly<Props>) {
-    const [status, setStatus] = useState("under_investigation");
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation"}: Readonly<Props>) {
+    const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
@@ -39,17 +40,22 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setBannerVisible(false);
     };
 
+    // Update status when defaultStatus prop changes
+    useEffect(() => {
+        setStatus(defaultStatus);
+    }, [defaultStatus]);
+
     // Check if fields have changes
     useEffect(() => {
         const hasChanges = (
-            status !== "under_investigation" ||
+            status !== defaultStatus ||
             justification !== "none" ||
             statusNotes !== "" ||
             workaround !== "" ||
             impact !== ""
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, onFieldsChange]);
+    }, [status, justification, statusNotes, workaround, impact, onFieldsChange, defaultStatus]);
 
     function addAssessment () {
         if (status == '' || justification == '')
@@ -79,19 +85,19 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         });
     }
 
-    function clearInputs() {
-        setStatus("under_investigation");
+    const clearInputs = useCallback(() => {
+        setStatus(defaultStatus);
         setJustification("none");
         setStatusNotes("");
         setWorkaround("");
         setImpact("");
-    }
+    }, [defaultStatus]);
 
     useEffect(() => {
         if (shouldClearFields) {
             clearInputs();
         }
-    }, [shouldClearFields]);
+    }, [shouldClearFields, clearInputs]);
 
     return (<>
         {!triggerBanner && bannerVisible && (
