@@ -1,4 +1,4 @@
-        import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
@@ -117,6 +117,7 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             const [timeScale, setTimeScale] = useState<string>("6_months")
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
             const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+            const [isEditing, setIsEditing] = useState<boolean>(false);
 
 const vulnColumns = useMemo(
   () => [
@@ -197,6 +198,7 @@ const vulnColumns = useMemo(
                 const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
                 setModalVuln(vuln);
                 setModalVulnIndex(index >= 0 ? index : undefined);
+                setIsEditing(true);
               }}
             >
               Edit
@@ -418,6 +420,7 @@ const packageColumns = [
 
   const TopVulns = useMemo(() => {
     return [...vulnerabilities]
+      .filter((vuln) => vuln.simplified_status !== 'Fixed' && vuln.simplified_status !== 'Not affected')
       .map((vuln, index) => {
         const maxCvss = vuln.severity.cvss?.length
           ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
@@ -671,9 +674,11 @@ const packageColumns = [
         {modalVuln && (
           <VulnModal
             vuln={modalVuln}
+            isEditing={isEditing}
             onClose={() => {
               setModalVuln(undefined);
               setModalVulnIndex(undefined);
+              setIsEditing(false);
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
