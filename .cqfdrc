@@ -19,3 +19,7 @@ command="make -C tests test_frontend"
 [test_ci]
 command="make -C tests test_ci"
 docker_run_args="-v /run/docker.sock:/run/docker.sock"
+
+[build_nvd]
+command="python3 -m src.bin.nvd_db_builder"
+docker_run_args="-v .vulnscout/cache:/cache/vulnscout:Z -e NVD_VERBOSE_LOGGING=true"
