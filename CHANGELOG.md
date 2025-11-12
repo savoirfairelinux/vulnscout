@@ -7,6 +7,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ---
 
 ## [Unreleased]
+---
+
+## [0.9.0] - 2025-11-12
+
+### Added
+- Add ability to see vulnerabilities for specific packages
+- Generate and export SPDX3 outputs
+- Add last assessment and priority to vulnerabilities template
+- Adding buttons to move between vulnerabilities
+- Add silent execution mode to start-example.sh
+- Add Package indicator to the Vulns table
+- Add support for tag-value SPDX files
+- Add a Columns selector in Table Vulnerabilities
+- Add last updated and change labels in Vulnerabilities
+- Add newline to VEX assessments
+
+### Changed
+- Move "new assessment" above history in VulnModal
+- Add animation for newly added assessment
+- Status string capitalization
+- Changed source graph to display dinamic sources
+- Change All Assessments template
+- Change exploitability label in frontend
+- "Status" field in New Assessment picks last status
+- Change Vulnerability workflow to View and Edit modes
+- Modify vulnerabilities Report
+- Change vulnerabilities report fields
+- Update frontend data in real-time after edition
+- Update edit mode syncing
+- Change button from Vulns to Show Vulnerabilities
+- Only show unfixed vulns in Most critical vulns
+
+### Fixed
+- Fix cve_check CVE version issue
+- Fix missing field in OpenVEX False Positive
+- Fix Vulns workflow UI issues
+
+### Removed
+- Remove NVD sync from CI mode
 
 ---
 
