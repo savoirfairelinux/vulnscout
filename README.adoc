@@ -17,7 +17,7 @@ It pulls known vulnerabilities from public sources like the NVD, EPSS, and Grype
 
 VulnScout also provides a web interface for visualisation and a command line to generate enriched output files.
 
-=== VulnsScout Features
+=== VulnScout Features
 
 * Analyse SBOMs
 * Detect vulnerabilities
@@ -46,7 +46,7 @@ cd vulnscout
 
 ===  Run VulnScout demo
 
-This project contains a default usable example of Vulnscout.
+This project contains a default usable example of VulnScout.
 To use it, you can simply run the default script with the command:
 
 [source,shell]
@@ -62,9 +62,9 @@ Or, if you prefer to run another example based on SPDX-3.0, you can use the foll
 ----
 These commands will use the docker-compose files located here: _/.vulnscout/example/_
 
-===  Run VulnScount with Yocto
+===  Run VulnScout with Yocto
 
-We have a dedicated layer for Vulnscout integration in Yocto.
+We have a dedicated layer for VulnScout integration in Yocto.
 
 You can find the layer here: https://github.com/savoirfairelinux/meta-vulnscout
 
@@ -84,7 +84,7 @@ For example, to reconfigure the default example SPDX3, you can run:
 --cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
 ----
 
-Then, if you want to use the CI mode, without the web interface, you can the command with the '--fail_condition' argument:
+Then, if you want to use the CI mode, without the web interface, you can the command with the `--fail_condition` argument:
 
 [source,shell]
 ----
@@ -162,7 +162,7 @@ image::doc/images/architecture.png[An architecture diagram showing different com
 
 === :pencil: Custom CVSS Scoring
 
-Vulnscount allows you to add a custom CVSS vector string to a vulnerability, enabling organisation-specific vulnerability scoring.
+VulnScout allows you to add a custom CVSS vector string to a vulnerability, enabling organisation-specific vulnerability scoring.
 
 == :clipboard: Licence
 
