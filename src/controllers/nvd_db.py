@@ -9,6 +9,7 @@ import json
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from ..helpers.fixs_scrapper import FixsScrapper
+from ..helpers.nvd_logging import setup_logging, log_and_print
 from typing import Optional, Generator, Tuple
 import time
 import sys
@@ -25,6 +26,7 @@ class NVD_DB:
     """
 
     def __init__(self, db_path: str, nvd_api_key: Optional[str] = None):
+        self.verbose_logging = setup_logging()
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
 
@@ -60,7 +62,7 @@ class NVD_DB:
             self.conn.commit()
         elif res[0] != DB_MODEL_VERSION:
             # incompatible database version
-            print("DB version mismatch, please update or reset the DB")
+            log_and_print("DB version mismatch, please update or reset the DB", self.verbose_logging, force_print=True)
             raise Exception(f"DB version mismatch, expected {DB_MODEL_VERSION}, got {res[0]}")
         else:
             # database was existing before and with correct version, restore metadata
@@ -78,11 +80,9 @@ class NVD_DB:
             except Exception:
                 self.last_index = 0
 
-            print(
-                "Restored DB from cache, last_index =",
-                self.last_index,
-                ", last_modified =",
-                self.last_modified
+            log_and_print(
+                f"Restored DB from cache, last_index = {self.last_index}, last_modified = {self.last_modified}",
+                self.verbose_logging
             )
 
     def set_writing_flag(self, flag: bool):
@@ -121,8 +121,11 @@ class NVD_DB:
             try:
                 resp_json = json.loads(resp.read().decode())
             except json.decoder.JSONDecodeError:
-                print("NVD API responded with invalid JSON. Adding an free NVD API key "
-                      + f"can help to avoid this error. (status: {resp_status})", flush=True)
+                log_and_print(
+                    f"NVD API responded with invalid JSON. Adding an free NVD API key can help to avoid this error. "
+                    f"(status: {resp_status})",
+                    self.verbose_logging
+                )
                 resp_json = {}
 
             self.client.close()
@@ -130,7 +133,7 @@ class NVD_DB:
             return resp_status, resp_json
 
         except Exception as e:
-            print(f"Error calling NVD API: {e}", flush=True)
+            log_and_print(f"Error calling NVD API: {e}", self.verbose_logging, force_print=True)
             self.client.close()
             raise e
 
@@ -236,7 +239,7 @@ class NVD_DB:
             self.conn.commit()
             return True
         except Exception as e:
-            print(f"Error writing to DB: {e}")
+            log_and_print(f"Error writing to DB: {e}", self.verbose_logging, force_print=True)
             raise e
         return False
 

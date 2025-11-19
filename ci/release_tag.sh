@@ -33,6 +33,27 @@ sed -Ei "3s/^v[0-9]+(\.[0-9]+){0,2}/v${semversion}/" WRITING_CI_CONDITIONS.adoc
 sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers.image.version=\"${version}\"/i" Dockerfile
 sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
 
+# Check if nvd.db exists and compress it
+find .vulnscout/cache -maxdepth 1 -type f -name "nvd.db.*.xz" -exec rm -f {} +
+mkdir -p .vulnscout/cache
+nvd_db_path=".vulnscout/cache/nvd.db"
+cqfd init
+cqfd -b build_nvd
+if [ -f "$nvd_db_path" ]; then
+    echo "Found nvd.db, compressing with xz..."
+
+    # xz compresses file in place, so we need to copy it then compress
+    cp "$nvd_db_path" "${nvd_db_path}.tmp"
+    xz "${nvd_db_path}.tmp"
+    mv "${nvd_db_path}.tmp.xz" "${nvd_db_path}.${version}.xz"
+    echo "nvd.db compressed to ${nvd_db_path}.${version}.xz"
+    
+    # Add the compressed file to git
+    git add -f "${nvd_db_path}.${version}.xz"
+else
+    echo "nvd.db not found at $nvd_db_path, skipping compression"
+fi
+
 # Commit the changes
 git add frontend/package.json
 git add README.adoc
