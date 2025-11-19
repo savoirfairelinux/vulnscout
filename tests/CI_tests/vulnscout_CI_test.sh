@@ -1,7 +1,7 @@
 #!/bin/bash
 BASE_DIR=$PWD/../../
 VULNSCOUT_DIR=.vulnscout/test_ci/output
-OUPUT_CI_FILES=("time_estimates.csv" "time_estimates.json" "openvex.json" "sbom.cdx.json" "sbom.spdx.json" "summary.adoc")
+OUPUT_CI_FILES=("time_estimates.csv" "time_estimates.json" "openvex.json" "sbom.cdx.json" "sbom.spdx.json" "summary.adoc" "sbom.spdx3.json")
 OUPUT_CI_FILES_SORT=($(printf '%s\n' "${OUPUT_CI_FILES[@]}" | sort))
 
 cd $BASE_DIR
