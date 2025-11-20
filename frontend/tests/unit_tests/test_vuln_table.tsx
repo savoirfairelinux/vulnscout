@@ -254,16 +254,16 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
 
-        await user.click(severity_header); // un-ordoned -> alphabetical order
-        await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
-        });
-
-        await user.click(severity_header); // alphabetical order -> reverse alphabetical order
+        await user.click(severity_header); // un-ordered -> descending order (high to low)
         await waitFor(() => {
             const html = document.body.innerHTML;
             expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('aaabbbccc'));
+        });
+
+        await user.click(severity_header); // descending order -> ascending order (low to high)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('xxxyyyzzz'));
         });
     })
 

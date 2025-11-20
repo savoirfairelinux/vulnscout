@@ -1,4 +1,4 @@
-import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn } from '@tanstack/react-table'
+import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
@@ -37,6 +37,7 @@ function TableGeneric<DataType> ({
 }: Readonly<Props<DataType>>) {
     const [pageIndex, setPageIndex] = useState(0)
     const [itemsPerPage, setItemsPerPage] = useState(50)
+    const [sorting, setSorting] = useState<SortingState>([])
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -69,10 +70,39 @@ function TableGeneric<DataType> ({
         }
     }, [filteredData, onFilteredDataChange]);
 
+    const sortedData = useMemo(() => {
+        if (sorting.length === 0) return filteredData;
+        const sorted = [...filteredData];
+        const { id, desc } = sorting[0];
+        const column = columns.find(col => col.id === id);
+        if (!column) return sorted;
+        sorted.sort((a, b) => {
+            if (column.sortingFn) {
+                const result = column.sortingFn({ original: a } as any, { original: b } as any, id);
+                return desc ? -result : result;
+            }
+            let aVal: any, bVal: any;
+            if (typeof column.accessorFn === 'function') {
+                aVal = column.accessorFn(a, 0);
+                bVal = column.accessorFn(b, 0);
+            } else if (column.accessorKey) {
+                const keys = String(column.accessorKey).split('.');
+                aVal = keys.reduce((obj, key) => obj?.[key], a as any);
+                bVal = keys.reduce((obj, key) => obj?.[key], b as any);
+            } else return 0;
+            if (aVal === bVal) return 0;
+            if (aVal == null) return 1;
+            if (bVal == null) return -1;
+            const result = aVal > bVal ? 1 : -1;
+            return desc ? -result : result;
+        });
+        return sorted;
+    }, [filteredData, sorting, columns]);
+
     const paginatedData = useMemo(() => {
         const start = pageIndex * itemsPerPage
-        return filteredData.slice(start, start + itemsPerPage)
-    }, [filteredData, pageIndex, itemsPerPage])
+        return sortedData.slice(start, start + itemsPerPage)
+    }, [sortedData, pageIndex, itemsPerPage])
 
     const paginationSizes = useMemo(() => {
         const total = filteredData.length;
@@ -105,7 +135,8 @@ function TableGeneric<DataType> ({
         // @ts-expect-error: Row ID might not always be present in the data
         getRowId: row => row?.id,
         onRowSelectionChange: updateSelected,
-        state: { rowSelection: selected ?? {} }
+        onSortingChange: setSorting,
+        state: { rowSelection: selected ?? {}, sorting }
     });
 
     const { rows } = table.getRowModel()

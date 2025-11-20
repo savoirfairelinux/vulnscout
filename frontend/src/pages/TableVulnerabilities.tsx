@@ -206,6 +206,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 </div>
             ),
             sortingFn: sortSeverityFn,
+            sortDescFirst: true,
             size: 40,
             }),
             columnHelper.accessor('epss', {
