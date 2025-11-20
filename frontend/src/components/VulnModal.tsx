@@ -489,7 +489,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
-                                    {vuln.found_by.join(', ')}
+                                    {vuln.found_by.map(source => source === 'openvex' ? 'User Data' : source).join(', ')}
                                 </li>
                                 <li key="status">
                                     <span className="font-bold mr-1">Status:</span>

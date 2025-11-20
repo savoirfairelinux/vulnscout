@@ -109,6 +109,10 @@ import { useMemo, useState } from "react";
             return date;
         }
 
+        function formatSourceName(source: string): string {
+            return source === 'openvex' ? 'User Data' : source;
+        }
+
 
 
 function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
@@ -459,7 +463,7 @@ const packageColumns = [
                     vulnerabilities.filter(vuln => vuln.found_by.includes(a)).length
                 );
                 return {
-                    labels: uniqueSources,
+                    labels: uniqueSources.map(formatSourceName),
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: uniqueSources.map(source =>
