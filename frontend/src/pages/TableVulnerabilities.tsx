@@ -79,6 +79,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated'
     ]);
+    const [previousFilteredCount, setPreviousFilteredCount] = useState<number>(0);
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -115,6 +116,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+        setPreviousFilteredCount(searchFilteredData.length);
         setModalVuln(vuln);
         setModalVulnIndex(index >= 0 ? index : undefined);
     }, [searchFilteredData]);
@@ -177,6 +179,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         onClick={() => {
                             const vuln = info.row.original;
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                            setPreviousFilteredCount(searchFilteredData.length);
                             setModalVuln(vuln);
                             setModalVulnIndex(index >= 0 ? index : undefined);
                             setIsEditing(false);
@@ -351,9 +354,41 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [selectedRows])
 
     const handleModalNavigation = (newIndex: number) => {
-        if (newIndex >= 0 && newIndex < searchFilteredData.length) {
-            setModalVuln(searchFilteredData[newIndex]);
-            setModalVulnIndex(newIndex);
+        // Adjust index based on filter changes after CVE status update
+        // Algorithm: 
+        // if new_filtered_count < previous_filtered_count:
+        //     if navigating next: index stays same
+        //     if navigating previous: index = index - 1
+        // else:
+        //     if navigating next: index = index + 1
+        //     if navigating previous: index = index - 1
+        
+        let adjustedIndex = newIndex;
+        
+        if (modalVulnIndex !== undefined && previousFilteredCount > 0) {
+            const isNavigatingNext = newIndex > modalVulnIndex;
+            const isNavigatingPrevious = newIndex < modalVulnIndex;
+            const newFilteredCount = searchFilteredData.length;
+            
+            if (newFilteredCount < previousFilteredCount) {
+                if (isNavigatingNext) {
+                    adjustedIndex = modalVulnIndex;
+                } else if (isNavigatingPrevious) {
+                    adjustedIndex = modalVulnIndex - 1;
+                }
+            } else {
+                if (isNavigatingNext) {
+                    adjustedIndex = modalVulnIndex + 1;
+                } else if (isNavigatingPrevious) {
+                    adjustedIndex = modalVulnIndex - 1;
+                }
+            }
+        }
+        
+        if (adjustedIndex >= 0 && adjustedIndex < searchFilteredData.length) {
+            setPreviousFilteredCount(searchFilteredData.length);
+            setModalVuln(searchFilteredData[adjustedIndex]);
+            setModalVulnIndex(adjustedIndex);
         }
     };
 
