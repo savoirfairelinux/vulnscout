@@ -96,6 +96,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     };
 
     const navigateTo = (targetIndex: number) => {
+        hideBanner();
         if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
         if (hasUnsavedChanges) {
             setPendingNavigation(targetIndex);
