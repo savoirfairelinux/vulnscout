@@ -387,7 +387,7 @@ const packageColumns = [
                         was_active.forEach((v, i) => acc[i] += v ? 1 : 0);
                         return acc;
                     }, new Array(nb_points).fill(0)),
-                    backgroundColor: new Array(nb_points).fill(0).map((_, ind) => `hsl(${Math.round((60 / nb_points) * (ind+1))} 100% 50%)`),
+                    backgroundColor: 'rgba(0, 150, 150, 0.7)',
                     hoverOffset: 4
                 }]
             }
