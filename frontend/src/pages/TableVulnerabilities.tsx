@@ -113,6 +113,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return acc;
     }, []), [vulnerabilities])
 
+    const sources_display_list = useMemo(() => 
+        sources_list.map(source => source === 'openvex' ? 'User Data' : source),
+    [sources_list])
+
+    const formatSourceName = (source: string) => source === 'openvex' ? 'User Data' : source;
+    const getOriginalSourceName = (displayName: string) => displayName === 'User Data' ? 'openvex' : displayName;
+
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
         setModalVuln(vuln);
@@ -298,7 +305,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             header: () => <div className="flex items-center justify-center">Sources</div>,
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                    {info.renderValue()?.join(', ')}
+                    {info.renderValue()?.map((source: string) => source === 'openvex' ? 'User Data' : source).join(', ')}
                 </div>
             ),
             enableSorting: false
@@ -420,9 +427,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Source"
-                options={sources_list}
-                selected={selectedSources}
-                setSelected={setSelectedSources}
+                options={sources_display_list}
+                selected={selectedSources.map(formatSourceName)}
+                setSelected={(displayNames) => setSelectedSources(displayNames.map(getOriginalSourceName))}
             />
 
             <FilterOption
