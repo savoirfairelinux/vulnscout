@@ -20,13 +20,13 @@ type Props = {
     triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function EditAssessment({ 
-    assessment, 
-    onSaveAssessment, 
-    onCancel, 
-    clearFields: shouldClearFields, 
-    onFieldsChange, 
-    triggerBanner 
+function EditAssessment({
+    assessment,
+    onSaveAssessment,
+    onCancel,
+    clearFields: shouldClearFields,
+    onFieldsChange,
+    triggerBanner
 }: Readonly<Props>) {
     const [status, setStatus] = useState(assessment.status || "under_investigation");
     const [justification, setJustification] = useState(assessment.justification || "none");
@@ -70,9 +70,9 @@ function EditAssessment({
             }
             return;
         }
-        
+
         const includeJustificationAndImpact = status == "not_affected";
-        
+
         onSaveAssessment({
             id: assessment.id,
             status,
@@ -109,7 +109,7 @@ function EditAssessment({
             )}
 
             <h4 className="text-lg font-semibold text-white mb-3">Edit Assessment</h4>
-            
+
             <h3 className="m-1 text-white">
                 Status:
                 <select
@@ -118,7 +118,7 @@ function EditAssessment({
                     className="p-1 px-2 bg-gray-700 text-white mr-4 ml-2 rounded"
                     name="edit_assessment_status"
                 >
-                    <option value="under_investigation">Community analysis pending</option>
+                    <option value="under_investigation">Pending Assessment</option>
                     <option value="affected">Affected / exploitable</option>
                     <option value="fixed">Fixed / patched</option>
                     <option value="not_affected">Not applicable</option>
@@ -142,7 +142,7 @@ function EditAssessment({
                     </select>
                 </>}
             </h3>
-            
+
             {(status == "not_affected" || status == "false_positive") && <>
                     <textarea
                         value={impact}
@@ -153,7 +153,7 @@ function EditAssessment({
                         placeholder="why this vulnerability is not exploitable ?"
                     /><br/>
             </>}
-            
+
                 <textarea
                     value={statusNotes}
                     onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
@@ -162,7 +162,7 @@ function EditAssessment({
                     rows={3}
                     placeholder="Free text notes about your review, details, actions taken, ..."
                 /><br/>
-            
+
                 <textarea
                     value={workaround}
                     onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
@@ -171,7 +171,7 @@ function EditAssessment({
                     rows={3}
                     placeholder="Describe workaround here if available"
                 /><br/>
-            
+
             <div className="flex gap-2 mt-3">
                 <button
                     onClick={saveAssessment}
