@@ -110,7 +110,14 @@ import { useMemo, useState } from "react";
         }
 
         function formatSourceName(source: string): string {
-            return source === 'openvex' ? 'User Data' : source;
+            const map: Record<string, string> = {
+                openvex: 'Local User Data',
+                yocto: 'Yocto',
+                grype: 'Grype',
+                cyclonedx: 'CycloneDx'
+            };
+
+            return map[source] || source;
         }
 
 
@@ -198,7 +205,7 @@ const vulnColumns = useMemo(
                     ...v,
                     rank: idx + 1,
                   }));
-                  
+
                 const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
                 setModalVuln(vuln);
                 setModalVulnIndex(index >= 0 ? index : undefined);
@@ -599,10 +606,10 @@ const packageColumns = [
               </div>
             </div>
 
-            {/* Vulnerabilities by Source */}
+            {/* Vulnerabilities by Database */}
             <div className="p-4">
               <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
-                Vulnerabilities by Source
+                Vulnerabilities by Database
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
                 <div className="h-full">
