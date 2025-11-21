@@ -129,7 +129,7 @@ To configure your `yaml` file, you can look at the example provided here _.vulns
 
 == :mag_right: Architecture
 
-image::doc/images/architecture.png[An architecture diagram showing different components of the VulnScout app]
+image::doc/images/architecture_with_logo.png[An architecture diagram showing different components of the VulnScout app]
 
 === :inbox_tray: Supported input files
 
