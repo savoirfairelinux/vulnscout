@@ -113,12 +113,43 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return acc;
     }, []), [vulnerabilities])
 
-    const sources_display_list = useMemo(() => 
-        sources_list.map(source => source === 'openvex' ? 'User Data' : source),
-    [sources_list])
+    const sources_display_list = useMemo(
+        () =>
+            sources_list.map(source =>
+                source === 'openvex'
+                    ? 'Local User Data'
+                    : source === 'yocto'
+                    ? 'Yocto'
+                    : source === 'grype'
+                    ? 'Grype'
+                    : source === 'cyclonedx'
+                    ? 'CycloneDx'
+                    : source
+            ),
+        [sources_list]
+    );
 
-    const formatSourceName = (source: string) => source === 'openvex' ? 'User Data' : source;
-    const getOriginalSourceName = (displayName: string) => displayName === 'User Data' ? 'openvex' : displayName;
+    const formatSourceName = (source: string) =>
+        source === 'openvex'
+            ? 'Local User Data'
+            : source === 'yocto'
+            ? 'Yocto'
+            : source === 'grype'
+            ? 'Grype'
+            : source === 'cyclonedx'
+            ? 'CycloneDx'
+            : source;
+
+    const getOriginalSourceName = (displayName: string) =>
+        displayName === 'Local User Data'
+            ? 'openvex'
+            : displayName === 'Yocto'
+            ? 'yocto'
+            : displayName === 'Grype'
+            ? 'grype'
+            : displayName === 'CycloneDx'
+            ? 'cyclonedx'
+            : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -179,7 +210,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 id: 'id',
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
-                    <div 
+                    <div
                         className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                         onClick={() => {
                             const vuln = info.row.original;
@@ -269,17 +300,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 if (!assessments || assessments.length === 0) {
                     return <div className="flex items-center justify-center h-full text-center text-gray-400">No assessment</div>;
                 }
-                
+
                 // Find the most recent update time across all assessments
                 const mostRecentTime = assessments.reduce((latest, assessment) => {
                     const assessmentTime = new Date(assessment.last_update || assessment.timestamp);
                     return assessmentTime > latest ? assessmentTime : latest;
                 }, new Date(0));
-                
+
                 // Format the date using the same format as VulnModal
-                const formattedDate = mostRecentTime.getTime() > 0 ? 
+                const formattedDate = mostRecentTime.getTime() > 0 ?
                     mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
-                
+
                 return (
                     <div className="flex items-center justify-center h-full text-center text-sm">
                         {formattedDate}
@@ -295,7 +326,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         return assessmentTime > latest ? assessmentTime : latest;
                     }, 0);
                 };
-                
+
                 return getLatestAssessmentTime(rowA.original.assessments) - getLatestAssessmentTime(rowB.original.assessments);
             },
             size: 140
@@ -305,7 +336,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             header: () => <div className="flex items-center justify-center">Sources</div>,
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                    {info.renderValue()?.map((source: string) => source === 'openvex' ? 'User Data' : source).join(', ')}
+                    {info.renderValue()
+                        ?.map((source: string) =>
+                            source === 'openvex'
+                                ? 'Local User Data'
+                                : source === 'yocto'
+                                ? 'Yocto'
+                                : source === 'grype'
+                                ? 'Grype'
+                                : source === 'cyclonedx'
+                                ? 'CycloneDx'
+                                : source
+                        )
+                        .join(', ')}
                 </div>
             ),
             enableSorting: false
