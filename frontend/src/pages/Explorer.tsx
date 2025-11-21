@@ -42,7 +42,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     };
 
     const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
-        const active_status = ['Exploitable', 'Community analysis pending'];
+        const active_status = ['Exploitable', 'Pending Assessment'];
         PatchFinderLogic
         .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
         .then((patchData) => {
@@ -97,10 +97,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     function appendAssessment(added: Assessment) {
         const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
         setVulns(updatedVulns);
-        
+
         // Update packages with the new vulnerability data
         setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-        
+
         // Update patch data if db is ready (status changes might affect patch relevance)
         if (patchDbReady) {
             loadPatchData(updatedVulns);
@@ -112,7 +112,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         if (cvss !== null) {
             const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
             setVulns(updatedVulns);
-            
+
             // Update packages with the new vulnerability data
             setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
             return cvss;
@@ -128,10 +128,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             return vuln;
         });
         setVulns(updatedVulns);
-        
+
         // Update packages with the new vulnerability data
         setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-        
+
         // Update patch data if db is ready (status changes might affect patch relevance)
         if (patchDbReady) {
             loadPatchData(updatedVulns);
