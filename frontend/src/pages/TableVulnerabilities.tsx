@@ -40,8 +40,8 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
-    const indexA = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
-    const indexB = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
+    const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
+    const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
     return indexA - indexB
 }
 

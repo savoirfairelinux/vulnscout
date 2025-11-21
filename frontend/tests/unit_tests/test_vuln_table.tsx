@@ -130,7 +130,7 @@ describe('Vulnerability Table', () => {
                 state: 'unknown'
             },
             status: 'under_investigation',
-            simplified_status: 'Community Analysis Pending',
+            simplified_status: 'Pending Assessment',
             assessments: []
         }
     ];
@@ -171,7 +171,7 @@ describe('Vulnerability Table', () => {
 
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
         const sourcesCheckbox = await screen.getByRole('checkbox', { name: 'Sources' });
-        
+
         await user.click(attackVectorCheckbox);
         await user.click(sourcesCheckbox);
 
@@ -195,7 +195,7 @@ describe('Vulnerability Table', () => {
         const severity_col = await screen.getByRole('cell', {name: /low/});
         const epss_col = await screen.getByRole('cell', {name: /35\.68%/});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
-        const status_col = await screen.getByRole('cell', {name: /Community Analysis Pending/i});
+        const status_col = await screen.getByRole('cell', {name: /Pending Assessment/i});
 
         // ASSERT - Default visible columns
         expect(id_col).toBeInTheDocument();
@@ -211,7 +211,7 @@ describe('Vulnerability Table', () => {
         const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
         const sourcesCheckbox = await screen.getByRole('checkbox', { name: 'Sources' });
-        
+
         await user.click(effortCheckbox);
         await user.click(attackVectorCheckbox);
         await user.click(sourcesCheckbox);
@@ -272,7 +272,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // First, enable the Attack Vector column
         const columnsBtn = await screen.getByRole('button', { name: /columns/i });
         await user.click(columnsBtn);
@@ -320,7 +320,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // First, enable the Estimated Effort column
         const columnsBtn = await screen.getByRole('button', { name: /columns/i });
         await user.click(columnsBtn);
@@ -449,7 +449,7 @@ describe('Vulnerability Table', () => {
         const exploitableRow = await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 1000 });
 
-        const pendingCheckbox = await screen.getByRole('checkbox', { name: /Community Analysis Pending/i });
+        const pendingCheckbox = await screen.getByRole('checkbox', { name: /Pending Assessment/i });
         await user.click(pendingCheckbox);
 
         // ASSERT
@@ -458,7 +458,7 @@ describe('Vulnerability Table', () => {
         expect(vuln_xyz).toBeInTheDocument();
     })
 
-    test('filter out Community Analysis Pending', async () => {
+    test('filter out Pending Assessment', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
@@ -693,7 +693,7 @@ describe('Vulnerability Table', () => {
         // ASSERT - Fixed vulnerability should be hidden
         await deletion;
         expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
-        
+
         // Other vulnerabilities should still be visible
         const otherVuln = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(otherVuln).toBeInTheDocument();
@@ -704,7 +704,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // Set up some filters first
         const sourceBtn = await screen.getByRole('button', { name: /source/i });
         await user.click(sourceBtn);
@@ -739,11 +739,11 @@ describe('Vulnerability Table', () => {
     test('initial filter props set correct filters', async () => {
         // ARRANGE - Render with initial filter props
         render(
-            <TableVulnerabilities 
-                vulnerabilities={vulnerabilities} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 filterLabel="Source"
                 filterValue="hardcoded"
             />
@@ -768,7 +768,7 @@ describe('Vulnerability Table', () => {
         // Select multiple sources
         const hardcodedCheckbox = await screen.getByRole('checkbox', { name: 'hardcoded' });
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
-        
+
         await user.click(hardcodedCheckbox);
         await user.click(cveFinderCheckbox);
 
@@ -793,7 +793,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // First enable hide fixed
         const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
         await user.click(hideFixedToggle);
@@ -811,7 +811,7 @@ describe('Vulnerability Table', () => {
 
         // ASSERT - Hide fixed toggle should be disabled when fixed is manually selected
         expect(hideFixedToggle).toHaveAttribute('aria-pressed', 'false');
-        
+
         // Fixed vulnerability should now be visible
         await waitFor(() => {
             const fixedVuln = screen.getByRole('cell', {name: /CVE-2020-9999/});
@@ -842,7 +842,7 @@ describe('Vulnerability Table', () => {
 
         const user = userEvent.setup();
         const packagesHeader = await screen.getByRole('columnheader', {name: /packages/i});
-        
+
         // Store initial order
         const initialHtml = document.body.innerHTML;
         const initialOrder = initialHtml.indexOf('aaabbbccc') < initialHtml.indexOf('xxxyyyzzz');
@@ -867,7 +867,7 @@ describe('Vulnerability Table', () => {
                 assessments: []
             }
         ];
-        
+
         render(<TableVulnerabilities vulnerabilities={vulnWithoutAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT & ASSERT - Vulnerability has empty assessments array, should show "No assessment"
@@ -965,7 +965,7 @@ describe('Vulnerability Table', () => {
                         vuln_id: 'CVE-2010-1234',
                         packages: ['aaabbbccc@1.0.0'],
                         status: 'under_investigation',
-                        simplified_status: 'Community analysis pending',
+                        simplified_status: 'Pending Assessment',
                         timestamp: '2024-02-05T12:15:00Z',
                         responses: []
                     }
@@ -1086,9 +1086,9 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
 
-        // ACT - Sort descending (newest first) - should only need one click 
+        // ACT - Sort descending (newest first) - should only need one click
         await user.click(lastUpdatedHeader);
-        
+
         await waitFor(() => {
             const html = document.body.innerHTML;
             // CVE-2020-1111 should come first because last_update (March 25) is more recent than CVE-2020-2222's timestamp (March 20)
