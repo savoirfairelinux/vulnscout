@@ -44,7 +44,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedLicences, setSelectedLicences] = useState<string[]>([]);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -62,34 +61,9 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
-    const licences_list = useMemo(() => {
-        const licenceSet = new Set<string>();
-        let hasCustomLicence = false;
-
-        packages.forEach(pkg => {
-            const licence = pkg.licences;
-            if (licence) {
-                licence.split(/\s+(?:AND|OR)\s+/).forEach(l => {
-                    if (/DocumentRef|LicenseRef/i.test(l)) {
-                        hasCustomLicence = true;
-                    } else {
-                        licenceSet.add(l);
-                    }
-                });
-            }
-        });
-
-        const result = Array.from(licenceSet).sort((a, b) => a.localeCompare(b));
-        if (hasCustomLicence) {
-            result.push("Custom Licence");
-        }
-        return result;
-    }, [packages]);
-
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
-        setSelectedLicences([]);
         setShowSeverity(false);
     }
 
@@ -103,10 +77,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             }),
             columnHelper.accessor('version', {
                 header: () => <div className="flex items-center justify-center">Version</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
-            }),
-            columnHelper.accessor('licences', {
-                header: () => <div className="flex items-center justify-center">Licences</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
             }),
             columnHelper.accessor(
@@ -156,28 +126,9 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 return false;
             }
 
-            if (selectedLicences.length) {
-                const licenceParts = el.licences
-                    ? el.licences.split(/\s+(?:AND|OR)\s+/)
-                    : [];
-
-                const hasCustom = licenceParts.some(l => /DocumentRef|LicenseRef/i.test(l));
-
-                const matches = selectedLicences.some(sel => {
-                    if (sel === "Custom Licence") {
-                        return hasCustom;
-                    }
-                    return licenceParts.includes(sel);
-                });
-
-                if (!matches) {
-                    return false;
-                }
-            }
-
             return true;
         });
-    }, [packages, selectedSources, selectedLicences]);
+    }, [packages, selectedSources]);
 
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -189,14 +140,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 options={sources_list}
                 selected={selectedSources}
                 setSelected={setSelectedSources}
-            />
-
-            <FilterOption
-                label="Licences"
-                options={licences_list}
-                selected={selectedLicences}
-                setSelected={setSelectedLicences}
-                parentRef={tableRef}
             />
 
             <div className="ml-4">

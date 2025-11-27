@@ -338,7 +338,6 @@ describe('Render patch found', () => {
             vulnerabilities: {},
             maxSeverity: {},
             source: [],
-            licences: "NOASSERTION"
         }
     ]
 
