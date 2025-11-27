@@ -64,6 +64,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+    const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
@@ -155,6 +156,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
         setModalVuln(vuln);
         setModalVulnIndex(index >= 0 ? index : undefined);
+        setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
     }, [searchFilteredData]);
 
     const columnDisplayNames = useMemo(() => ({
@@ -217,6 +219,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
                             setModalVuln(vuln);
                             setModalVulnIndex(index >= 0 ? index : undefined);
+                            setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
                             setIsEditing(false);
                         }}
                         title="Click to view details"
@@ -402,8 +405,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [selectedRows])
 
     const handleModalNavigation = (newIndex: number) => {
-        if (newIndex >= 0 && newIndex < searchFilteredData.length) {
-            setModalVuln(searchFilteredData[newIndex]);
+        if (newIndex >= 0 && newIndex < modalVulnSnapshot.length) {
+            setModalVuln(modalVulnSnapshot[newIndex]);
             setModalVulnIndex(newIndex);
         }
     };
@@ -557,12 +560,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             onClose={() => {
                 setModalVuln(undefined);
                 setModalVulnIndex(undefined);
+                setModalVulnSnapshot([]);
                 setIsEditing(false);
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
-            vulnerabilities={searchFilteredData}
+            vulnerabilities={modalVulnSnapshot}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
         ></VulnModal>}
