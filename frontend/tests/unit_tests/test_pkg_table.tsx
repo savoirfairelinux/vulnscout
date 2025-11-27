@@ -39,8 +39,7 @@ describe('Packages Table', () => {
                 "active": {label: 'low', index: 2},
                 "fixed": {label: 'medium', index: 3}
             },
-            source: ['hardcoded'],
-            licences: 'MIT AND Apache-2.0'
+            source: ['hardcoded']
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -50,22 +49,20 @@ describe('Packages Table', () => {
             purl: ['pkg:vendor/xxxyyyzzz@2.0.0'],
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
-            source: ['cve-finder'],
-            licences: 'GPL-3.0'
+            source: ['cve-finder']
         },
         {
-            id: 'customlicense@1.5.0',
-            name: 'customlicense',
+            id: 'dddeeefff@1.5.0',
+            name: 'dddeeefff',
             version: '1.5.0',
-            cpe: ['cpe:2.3:a:vendor:customlicense:1.5.0:*:*:*:*:*:*:*:*'],
-            purl: ['pkg:vendor/customlicense@1.5.0'],
+            cpe: ['cpe:2.3:a:vendor:dddeeefff:1.5.0:*:*:*:*:*:*:*:*'],
+            purl: ['pkg:vendor/dddeeefff@1.5.0'],
             vulnerabilities: {"active": 1, "fixed": 2},
             maxSeverity: {
                 "active": {label: 'medium', index: 3},
                 "fixed": {label: 'low', index: 2}
             },
-            source: ['cve-finder', 'hardcoded'],
-            licences: 'DocumentRef-custom-license LicenseRef-proprietary'
+            source: ['cve-finder', 'hardcoded']
         }
     ];
 
@@ -80,14 +77,12 @@ describe('Packages Table', () => {
         // ACT
         const name_header = await screen.getByRole('columnheader', {name: /name/i});
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
-        const licences_header = await screen.getByRole('columnheader', {name: /licences/i});
         const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
         const sources_header = await screen.getByRole('columnheader', {name: /sources/i});
 
         // ASSERT
         expect(name_header).toBeTruthy();
         expect(version_header).toBeTruthy();
-        expect(licences_header).toBeTruthy();
         expect(vuln_count_header).toBeTruthy();
         expect(sources_header).toBeTruthy();
     })
@@ -99,14 +94,12 @@ describe('Packages Table', () => {
         // ACT
         const name_col = await screen.getByRole('cell', {name: /aaabbbccc/});
         const version_col = await screen.getByRole('cell', {name: /1.0.0/});
-        const licences_col = await screen.getByRole('cell', {name: /MIT AND Apache-2.0/});
         const vuln_count_col = await screen.getByRole('cell', {name: /^8$/});
         const source_col = await screen.getByRole('cell', {name: /^hardcoded$/});
 
         // ASSERT
         expect(name_col).toBeTruthy();
         expect(version_col).toBeTruthy();
-        expect(licences_col).toBeTruthy();
         expect(vuln_count_col).toBeTruthy();
         expect(source_col).toBeTruthy();
     })
@@ -235,53 +228,4 @@ describe('Packages Table', () => {
         expect(pkg_xyz2).toBeTruthy();
     })
 
-    test('filter by licences', async () => {
-        // ARRANGE
-        render(<TablePackages packages={packages} />);
-
-        const user = userEvent.setup();
-
-        // Open the "Licences" filter dropdown
-        const licences_btn = await screen.getByRole('button', { name: /licences/i });
-        await user.click(licences_btn);
-
-        // ACT: select "MIT"
-        const mitCheckbox = await screen.getByRole('checkbox', { name: /^MIT$/i });
-        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /xxxyyyzzz/ }), { timeout: 2000 });
-        await user.click(mitCheckbox);
-        await deletion;
-
-        const pkg_abc = await screen.getByRole('cell', { name: /aaabbbccc/ });
-        expect(pkg_abc).toBeTruthy();
-
-        // REVERT CHANGE: uncheck "MIT"
-        await user.click(mitCheckbox);
-
-        const pkg_abc2 = await screen.getByRole('cell', { name: /aaabbbccc/ });
-        const pkg_xyz = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
-
-        expect(pkg_abc2).toBeTruthy();
-        expect(pkg_xyz).toBeTruthy();
-    })
-
-    test('filter by custom licence', async () => {
-        // ARRANGE
-        render(<TablePackages packages={packages} />);
-
-        const user = userEvent.setup();
-
-        // Open the "Licences" filter dropdown
-        const licences_btn = await screen.getByRole('button', { name: /licences/i });
-        await user.click(licences_btn);
-
-        // ACT: select "Custom Licence"
-        const customCheckbox = await screen.getByRole('checkbox', { name: /Custom Licence/i });
-        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
-        await user.click(customCheckbox);
-        await deletion;
-
-        const pkg_custom = await screen.getByRole('cell', { name: /customlicense/ });
-        expect(pkg_custom).toBeTruthy();
-        expect(screen.queryByRole('cell', { name: /xxxyyyzzz/ })).toBeNull();
-    })
 });
