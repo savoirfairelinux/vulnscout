@@ -531,12 +531,17 @@ describe('Vulnerability Table', () => {
         fetchMock.mockResponse(
             JSON.stringify({
                 status: 'success',
-                assessment: {
-                    id: '000',
-                    vuln_id: 'CVE-0000-00000',
-                    status: 'affected',
-                    timestamp: "2024-01-01T00:00:00Z"
-                }
+                count: 2,
+                error_count: 0,
+                assessments: [
+                    {
+                        id: '000',
+                        vuln_id: 'CVE-0000-00000',
+                        status: 'not_affected',
+                        simplified_status: 'not_affected',
+                        timestamp: "2024-01-01T00:00:00Z"
+                    }
+                ]
             }),
             { status: 200 }
         );
@@ -581,20 +586,25 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     })
 
     test('select and change time estimate', async () => {
         fetchMock.mockResponse(
             JSON.stringify({
-                id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                effort: {
-                    optimistic: 'PT5H',
-                    likely: 'P2DT4H',
-                    pessimistic: 'P2W3D'
-                },
-                responses: []
+                status: 'success',
+                count: 2,
+                error_count: 0,
+                vulnerabilities: [
+                    {
+                        id: 'CVE-2010-1234',
+                        effort: {
+                            optimistic: 'PT5H',
+                            likely: 'P2DT4H',
+                            pessimistic: 'P2W3D'
+                        }
+                    }
+                ]
             }),
             { status: 200 }
         );
@@ -624,7 +634,7 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     })
 
     test('show description when hovering vulnerability', async () => {
