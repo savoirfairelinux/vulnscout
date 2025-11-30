@@ -422,7 +422,6 @@ const packageColumns = [
         name,
         version: version ?? "-",
         count,
-        licences: "",
         vulnerabilities: { exploitable: count },
         maxSeverity: { label: "UNKNOWN", index: 0 },
         source: [],
