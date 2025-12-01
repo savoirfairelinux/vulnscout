@@ -40,8 +40,8 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
-    const indexA = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
-    const indexB = ['unknown', 'Community analysis pending', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
+    const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
+    const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
     return indexA - indexB
 }
 
@@ -64,6 +64,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+    const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
@@ -113,10 +114,49 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return acc;
     }, []), [vulnerabilities])
 
+    const sources_display_list = useMemo(
+        () =>
+            sources_list.map(source =>
+                source === 'openvex'
+                    ? 'Local User Data'
+                    : source === 'yocto'
+                    ? 'Yocto'
+                    : source === 'grype'
+                    ? 'Grype'
+                    : source === 'cyclonedx'
+                    ? 'CycloneDx'
+                    : source
+            ),
+        [sources_list]
+    );
+
+    const formatSourceName = (source: string) =>
+        source === 'openvex'
+            ? 'Local User Data'
+            : source === 'yocto'
+            ? 'Yocto'
+            : source === 'grype'
+            ? 'Grype'
+            : source === 'cyclonedx'
+            ? 'CycloneDx'
+            : source;
+
+    const getOriginalSourceName = (displayName: string) =>
+        displayName === 'Local User Data'
+            ? 'openvex'
+            : displayName === 'Yocto'
+            ? 'yocto'
+            : displayName === 'Grype'
+            ? 'grype'
+            : displayName === 'CycloneDx'
+            ? 'cyclonedx'
+            : displayName;
+
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
         setModalVuln(vuln);
         setModalVulnIndex(index >= 0 ? index : undefined);
+        setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
     }, [searchFilteredData]);
 
     const columnDisplayNames = useMemo(() => ({
@@ -172,13 +212,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 id: 'id',
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
-                    <div 
+                    <div
                         className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                         onClick={() => {
                             const vuln = info.row.original;
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
                             setModalVuln(vuln);
                             setModalVulnIndex(index >= 0 ? index : undefined);
+                            setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
                             setIsEditing(false);
                         }}
                         title="Click to view details"
@@ -203,6 +244,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 </div>
             ),
             sortingFn: sortSeverityFn,
+            sortDescFirst: true,
             size: 40,
             }),
             columnHelper.accessor('epss', {
@@ -261,17 +303,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 if (!assessments || assessments.length === 0) {
                     return <div className="flex items-center justify-center h-full text-center text-gray-400">No assessment</div>;
                 }
-                
+
                 // Find the most recent update time across all assessments
                 const mostRecentTime = assessments.reduce((latest, assessment) => {
                     const assessmentTime = new Date(assessment.last_update || assessment.timestamp);
                     return assessmentTime > latest ? assessmentTime : latest;
                 }, new Date(0));
-                
+
                 // Format the date using the same format as VulnModal
-                const formattedDate = mostRecentTime.getTime() > 0 ? 
+                const formattedDate = mostRecentTime.getTime() > 0 ?
                     mostRecentTime.toLocaleString(undefined, dt_options) : 'No assessment';
-                
+
                 return (
                     <div className="flex items-center justify-center h-full text-center text-sm">
                         {formattedDate}
@@ -287,7 +329,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         return assessmentTime > latest ? assessmentTime : latest;
                     }, 0);
                 };
-                
+
                 return getLatestAssessmentTime(rowA.original.assessments) - getLatestAssessmentTime(rowB.original.assessments);
             },
             size: 140
@@ -297,7 +339,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             header: () => <div className="flex items-center justify-center">Sources</div>,
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                    {info.renderValue()?.join(', ')}
+                    {info.renderValue()
+                        ?.map((source: string) =>
+                            source === 'openvex'
+                                ? 'Local User Data'
+                                : source === 'yocto'
+                                ? 'Yocto'
+                                : source === 'grype'
+                                ? 'Grype'
+                                : source === 'cyclonedx'
+                                ? 'CycloneDx'
+                                : source
+                        )
+                        .join(', ')}
                 </div>
             ),
             enableSorting: false
@@ -351,8 +405,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [selectedRows])
 
     const handleModalNavigation = (newIndex: number) => {
-        if (newIndex >= 0 && newIndex < searchFilteredData.length) {
-            setModalVuln(searchFilteredData[newIndex]);
+        if (newIndex >= 0 && newIndex < modalVulnSnapshot.length) {
+            setModalVuln(modalVulnSnapshot[newIndex]);
             setModalVulnIndex(newIndex);
         }
     };
@@ -419,9 +473,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Source"
-                options={sources_list}
-                selected={selectedSources}
-                setSelected={setSelectedSources}
+                options={sources_display_list}
+                selected={selectedSources.map(formatSourceName)}
+                setSelected={(displayNames) => setSelectedSources(displayNames.map(getOriginalSourceName))}
             />
 
             <FilterOption
@@ -506,12 +560,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             onClose={() => {
                 setModalVuln(undefined);
                 setModalVulnIndex(undefined);
+                setModalVulnSnapshot([]);
                 setIsEditing(false);
             }}
             appendAssessment={appendAssessment}
             appendCVSS={appendCVSS}
             patchVuln={patchVuln}
-            vulnerabilities={searchFilteredData}
+            vulnerabilities={modalVulnSnapshot}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
         ></VulnModal>}

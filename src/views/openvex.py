@@ -64,7 +64,7 @@ class OpenVex:
                 if "scanners" in statement:
                     for scanner in statement["scanners"]:
                         if "openvex" not in scanner:
-                            vuln.add_found_by(f"openvex({scanner})")
+                            vuln.add_found_by(scanner)
 
                 assess = VulnAssessment(vuln.id)
                 if "products" in statement:
@@ -126,7 +126,7 @@ class OpenVex:
                 if vuln.datasource.startswith("http"):
                     stmt["vulnerability"]["@id"] = vuln.datasource
                 if not strict_export:
-                    stmt["scanners"] = list(filter(lambda x: not x.startswith("openvex"), vuln.found_by))
+                    stmt["scanners"] = list(filter(lambda x: x != "openvex", vuln.found_by))
 
             pkg_list = []
             for pkg_id in assess.packages:

@@ -9,7 +9,6 @@ type Package = {
     vulnerabilities: VulnCounts;
     maxSeverity: Severities;
     source: string[];
-    licences: string;
 };
 
 export type { Package, VulnCounts, Severities };
@@ -29,7 +28,6 @@ const asPackage = (data: any): Package | [] => {
         vulnerabilities: {},
         maxSeverity: {},
         source: [],
-        licences: "NOASSERTION",
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -37,9 +35,6 @@ const asPackage = (data: any): Package | [] => {
     }
     if (Array.isArray(data?.purl)) {
         for (const purl of data.purl) if (typeof purl === "string") pkg.purl.push(purl);
-    }
-    if (data?.licences && data.licences.length > 0) {
-        pkg.licences = data.licences;
     }
     return pkg
 };

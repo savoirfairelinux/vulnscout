@@ -96,6 +96,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     };
 
     const navigateTo = (targetIndex: number) => {
+        hideBanner();
         if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
         if (hasUnsavedChanges) {
             setPendingNavigation(targetIndex);
@@ -109,7 +110,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
 
     // Navigation info
-    const navigationInfo = vulnerabilities && currentIndex !== undefined 
+    const navigationInfo = vulnerabilities && currentIndex !== undefined
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
@@ -143,7 +144,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         assessment => assessment.id !== assessmentToDelete.id
                     );
                     vuln.assessments = updatedAssessments;
-                    
+
                     if (updatedAssessments.length > 0) {
                         const sortedAssessments = [...updatedAssessments].sort(
                             (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -151,10 +152,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         vuln.status = sortedAssessments[0].status;
                         vuln.simplified_status = sortedAssessments[0].simplified_status;
                     }
-                    
+
                     // Update the vuln object in the parent component
                     patchVuln(vuln.id, vuln);
-                    
+
                     showMessage("Assessment deleted successfully!", "success");
                 } else {
                     const errorData = await response.text();
@@ -197,7 +198,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     const assessmentIndex = vuln.assessments.findIndex(
                         assessment => assessment.id === data.id
                     );
-                    
+
                     if (assessmentIndex !== -1) {
                         // Update the assessment object with the response data
                         let updatedAssessment = asAssessment(responseData.assessment);
@@ -208,17 +209,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 updatedAssessment.justification = undefined;
                                 updatedAssessment.impact_statement = undefined;
                             }
-                            
+
                             // Replace the assessment in the array
                             vuln.assessments[assessmentIndex] = updatedAssessment;
-                            
+
                             // Update vulnerability status to match the edited assessment
                             vuln.status = updatedAssessment.status;
                             vuln.simplified_status = updatedAssessment.simplified_status;
-                            
+
                             // Update the vuln object in the parent component
                             patchVuln(vuln.id, vuln);
-                            
+
                             showMessage("Assessment updated successfully!", "success");
                         } else {
                             showMessage("Error: Invalid assessment data received", "error");
@@ -236,7 +237,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         } catch (error) {
             showMessage(`Failed to update assessment: ${escape(String(error))}`, "error");
         }
-        
+
         setEditingAssessmentId(null);
     };
 
@@ -262,20 +263,20 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const groupAssessments = (assessments: Assessment[]) => {
         const groups: { [key: string]: Assessment[] } = {};
-        
+
         assessments.forEach(assess => {
             // Create a key based on timestamp (date only), status, and assessment content
             const date = new Date(assess.timestamp);
             const dateKey = date.toDateString(); // This gives us just the date part
             const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
             const groupKey = `${dateKey}::${contentKey}`;
-            
+
             if (!groups[groupKey]) {
                 groups[groupKey] = [];
             }
             groups[groupKey].push(assess);
         });
-        
+
         // Convert groups to array and sort by most recent timestamp
         return Object.entries(groups)
             .map(([key, assessments]) => ({
@@ -319,7 +320,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (!Array.isArray(casted) && typeof casted === "object") {
                 // Track this as a newly added assessment
                 setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                
+
                 // Remove the glow effect after animation completes
                 setTimeout(() => {
                     setNewAssessmentIds(prev => {
@@ -328,13 +329,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         return newSet;
                     });
                 }, 5500); // >2s that we used in css animation
-                
+
                 // Add the assessment immediately to the local vuln object for instant UI update
                 appendAssessment(casted);
                 vuln.assessments.push(casted);
                 vuln.status = casted.status;
                 vuln.simplified_status = casted.simplified_status;
-                
+
                 // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
                 showMessage("Successfully added assessment.", "success");
@@ -372,7 +373,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             if (Array.isArray(data?.severity?.cvss)) {
                 // Update the local vuln object immediately for instant UI update
                 vuln.severity.cvss = data.severity.cvss;
-                
+
                 // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
             }
@@ -401,7 +402,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         })
         if (response.status == 200) {
             const data = await response.json()
-            
+
             // Update the local vuln object immediately for instant UI update
             if (typeof data?.effort?.optimistic === "string")
                 vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
@@ -439,8 +440,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
                                 className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                                    isEditing 
-                                        ? "bg-blue-700 hover:bg-blue-800 text-white" 
+                                    isEditing
+                                        ? "bg-blue-700 hover:bg-blue-800 text-white"
                                         : "bg-blue-600 hover:bg-blue-700 text-white"
                                 }`}
                                 title={isEditing ? "Exit editing mode" : "Enter editing mode"}
@@ -488,7 +489,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
-                                    {vuln.found_by.join(', ')}
+                                    {vuln.found_by
+                                        .map(source => {
+                                            if (source === 'openvex') return 'Local User Data';
+                                            if (source === 'yocto') return 'Yocto';
+                                            if (source === 'grype') return 'Grype';
+                                            if (source === 'cyclonedx') return 'CycloneDx';
+                                            return source;
+                                        })
+                                        .join(', ')
+                                    }
                                 </li>
                                 <li key="status">
                                     <span className="font-bold mr-1">Status:</span>
@@ -599,10 +609,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     <li className="ms-4 text-white pb-8">
                                         <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
                                         <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                        <StatusEditor 
-                                            onAddAssessment={(data) => addAssessment(data)} 
+                                        <StatusEditor
+                                            onAddAssessment={(data) => addAssessment(data)}
                                             clearFields={clearAssessmentFields}
-                                            onFieldsChange={setHasAssessmentChanges} 
+                                            onFieldsChange={setHasAssessmentChanges}
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
                                         />
@@ -614,7 +624,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     const firstAssess = group.assessments[0]; // Use first assessment for content
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
-                                    
+
                                     return (
                                         <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
@@ -676,7 +686,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             </ol>
                         </div>
                     </div>
-                    
+
                                         {/* Modal footer */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
                         {vulnerabilities && currentIndex !== undefined ? (
@@ -716,7 +726,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             Close
                         </button>
                     </div>
-                    
+
                 </div>
             </div>
 
@@ -724,7 +734,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 isOpen={showConfirmClose}
                 title="Unsaved Changes"
                 message={
-                    pendingNavigation !== null 
+                    pendingNavigation !== null
                         ? "Are you sure you want to navigate without saving? All unsaved changes will be lost."
                         : "Are you sure you want to close without saving? All unsaved changes will be lost."
                 }

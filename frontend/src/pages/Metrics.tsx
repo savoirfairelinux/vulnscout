@@ -109,6 +109,17 @@ import { useMemo, useState } from "react";
             return date;
         }
 
+        function formatSourceName(source: string): string {
+            const map: Record<string, string> = {
+                openvex: 'Local User Data',
+                yocto: 'Yocto',
+                grype: 'Grype',
+                cyclonedx: 'CycloneDx'
+            };
+
+            return map[source] || source;
+        }
+
 
 
 function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
@@ -194,7 +205,7 @@ const vulnColumns = useMemo(
                     ...v,
                     rank: idx + 1,
                   }));
-                  
+
                 const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
                 setModalVuln(vuln);
                 setModalVulnIndex(index >= 0 ? index : undefined);
@@ -322,12 +333,12 @@ const packageColumns = [
 
             const dataSetVulnByStatus = useMemo(() => {
                 return {
-                    labels: ['Not affected', 'Fixed', 'Community analysis pending', 'Exploitable'],
+                    labels: ['Not affected', 'Fixed', 'Pending Assessment', 'Exploitable'],
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
                             const status = vuln.simplified_status;
-                            const index = status == 'Not affected' ? 0 : status == 'Fixed' ? 1 : status == 'Community analysis pending' ? 2 : 3;
+                            const index = status == 'Not affected' ? 0 : status == 'Fixed' ? 1 : status == 'Pending Assessment' ? 2 : 3;
                             acc[index]++;
                             return acc;
                         }, [0, 0, 0, 0]),
@@ -387,7 +398,7 @@ const packageColumns = [
                         was_active.forEach((v, i) => acc[i] += v ? 1 : 0);
                         return acc;
                     }, new Array(nb_points).fill(0)),
-                    backgroundColor: new Array(nb_points).fill(0).map((_, ind) => `hsl(${Math.round((60 / nb_points) * (ind+1))} 100% 50%)`),
+                    backgroundColor: 'rgba(0, 150, 150, 0.7)',
                     hoverOffset: 4
                 }]
             }
@@ -411,7 +422,6 @@ const packageColumns = [
         name,
         version: version ?? "-",
         count,
-        licences: "",
         vulnerabilities: { exploitable: count },
         maxSeverity: { label: "UNKNOWN", index: 0 },
         source: [],
@@ -459,7 +469,7 @@ const packageColumns = [
                     vulnerabilities.filter(vuln => vuln.found_by.includes(a)).length
                 );
                 return {
-                    labels: uniqueSources,
+                    labels: uniqueSources.map(formatSourceName),
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: uniqueSources.map(source =>
@@ -513,7 +523,7 @@ const packageColumns = [
                 onClick: (_e: ChartEvent, elements: any[]) => {
                     if (!elements.length) return;
                     const index = elements[0].index;
-                    const statusOrder = ['Not affected', 'Fixed', 'Community analysis pending', 'Exploitable'];
+                    const statusOrder = ['Not affected', 'Fixed', 'Pending Assessment', 'Exploitable'];
                     const targetStatus = statusOrder[index];
 
                     const matchingStatus = vulnerabilities.find(v =>
@@ -565,9 +575,9 @@ const packageColumns = [
             {/* Exploitable Vulnerabilities */}
             <div className="p-4">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
-                <div 
-                  className="text-xl text-white whitespace-nowrap" 
-                  title="Active vulnerabilities is the sum of exploitable and community analysis pending vulnerabilities."
+                <div
+                  className="text-xl text-white whitespace-nowrap"
+                  title="Active vulnerabilities is the sum of exploitable and Pending Assessment vulnerabilities."
                 >
                   Active vulnerabilities
                 </div>
@@ -595,10 +605,10 @@ const packageColumns = [
               </div>
             </div>
 
-            {/* Vulnerabilities by Source */}
+            {/* Vulnerabilities by Database */}
             <div className="p-4">
               <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
-                Vulnerabilities by Source
+                Vulnerabilities by Database
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
                 <div className="h-full">

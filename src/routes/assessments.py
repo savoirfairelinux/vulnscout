@@ -98,6 +98,47 @@ def init_app(app):
         save_assessments_to_files(ctrls)
         return {"status": "success", "assessment": assessment.to_dict()}, 200
 
+    @app.route("/api/assessments/batch", methods=["POST"])
+    def add_assessments_batch():
+        payload_data = request.get_json()
+        if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
+            return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
+
+        ctrls = get_all_datas()
+        if ctrls["assessments"] is None:
+            return {"error": "Internal error"}, 500
+
+        results = []
+        errors = []
+
+        for item in payload_data["assessments"]:
+            if not isinstance(item, dict) or "vuln_id" not in item:
+                errors.append({"error": "Invalid assessment data", "item": item})
+                continue
+
+            assessment, status = payload_to_assessment(item)
+            if status != 200:
+                errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
+                continue
+
+            ctrls["assessments"].add(assessment)
+            results.append(assessment.to_dict())
+
+        if results:
+            save_assessments_to_files(ctrls)
+
+        response = {
+            "status": "success" if results else "error",
+            "assessments": results,
+            "count": len(results)
+        }
+
+        if errors:
+            response["errors"] = errors
+            response["error_count"] = len(errors)
+
+        return response, 200 if results else 400
+
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
     def update_assessment(assessment_id: str):
         payload_data = request.get_json()
@@ -117,6 +158,9 @@ def init_app(app):
         if "status" in payload_data and isinstance(payload_data["status"], str):
             if not existing_assessment.set_status(payload_data["status"]):
                 return {"error": "Invalid status"}, 400
+            if existing_assessment.status not in ["not_affected", "false_positive"]:
+                existing_assessment.justification = ""
+                existing_assessment.impact_statement = ""
 
         if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
             existing_assessment.set_status_notes(payload_data["status_notes"], False)

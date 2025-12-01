@@ -68,6 +68,16 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
     }, [newOptimistic, newLikely, newPessimistic, onFieldsChange]);
 
     const saveEstimation = async () => {
+        if (!newOptimistic || !newLikely || !newPessimistic) {
+            const errorMessage = "All time estimate fields must be filled.";
+            if (triggerBanner) {
+                triggerBanner(errorMessage, "error");
+            } else {
+                internalTriggerBanner(errorMessage, "error");
+            }
+            return;
+        }
+
         let content: PostTimeEstimate|undefined = undefined;
         try {
             content = {
