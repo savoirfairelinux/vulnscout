@@ -20,11 +20,11 @@ type Props = {
 function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
-    const [progressBar, setProgressBar] = useState<number|undefined>(undefined)
+    const [isLoading, setIsLoading] = useState<boolean>(false)
 
     if (selectedVulns.length == 0) {
         if (panelOpened) setPanelOpened(0)
-        if (progressBar !== undefined) setProgressBar(undefined)
+        if (isLoading) setIsLoading(false)
     }
 
     // Get the status only if ALL selected vulnerabilities have the exact same status
@@ -55,132 +55,131 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     const addAssessment = async (content: PostAssessment) => {
         const pkg_vulns = pkg_for_vulns();
-        const assessments: Assessment[] = [];
-        const errors = []
-        let index = 0
-        setProgressBar(0)
+        setIsLoading(true);
 
-        for (const vuln_id of selectedVulns) {
-            // Get up-to-date vulnerability data for each iteration to ensure real-time updates
-            const vuln = vulnerabilities.find(v => v.id === vuln_id);
-            if (!vuln) {
-                errors.push(`Vulnerability ${vuln_id} not found`);
-                index++
-                setProgressBar(index / selectedVulns.length)
-                continue;
-            }
+        // Prepare batch request payload
+        const assessmentRequests = selectedVulns.map(vuln_id => ({
+            vuln_id,
+            packages: pkg_vulns[vuln_id] ?? [],
+            status: content.status,
+            status_notes: content.status_notes,
+            justification: content.justification,
+            impact_statement: content.impact_statement,
+            workaround: content.workaround
+        }));
+
+        try {
+            const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/batch', {
+                method: 'POST',
+                mode: 'cors',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ assessments: assessmentRequests })
+            });
+
+            const data = await response.json().catch(() => ({}));
             
-            content.vuln_id = vuln_id;
-            content.packages = pkg_vulns[vuln_id] ?? [];
-            try {
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln_id)}/assessments`, {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(content)
-                })
-                const data = await response.json().catch(() => {})
-                if (data?.status === 'success') {
-                    const casted = asAssessment(data?.assessment);
+            if (data?.status === 'success' && Array.isArray(data?.assessments)) {
+                // Process successful assessments
+                for (const assessmentData of data.assessments) {
+                    const casted = asAssessment(assessmentData);
                     if (!Array.isArray(casted) && typeof casted === "object") {
-                        assessments.push(casted);
+                        appendAssessment(casted);
                         
-                        // Update the vulnerability directly, then patch
-                        vuln.assessments.push(casted);
-                        vuln.status = casted.status;
-                        vuln.simplified_status = casted.simplified_status;
-                        patchVuln(vuln_id, vuln);
+                        // Update the vulnerability
+                        const vuln = vulnerabilities.find(v => v.id === casted.vuln_id);
+                        if (vuln) {
+                            vuln.assessments.push(casted);
+                            vuln.status = casted.status;
+                            vuln.simplified_status = casted.simplified_status;
+                            patchVuln(casted.vuln_id, vuln);
+                        }
                     }
-                } else {
-                    errors.push(Number(response?.status))
                 }
+
+                const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
+                triggerBanner(`Successfully added assessments to ${data.count} vulnerabilities${errorMsg}`, 'success');
+            } else {
+                const errorMsg = data?.errors?.length 
+                    ? `Errors: ${data.errors.map((e: {error?: string}) => e.error).join(', ')}`
+                    : `HTTP ${response.status}`;
+                triggerBanner(`Failed to add assessments: ${errorMsg}`, 'error');
             }
-            catch (e) {
-                errors.push(`Exception: ${e}`);
-            }
-            index++
-            setProgressBar(index / selectedVulns.length)
+        } catch (e) {
+            triggerBanner(`Failed to add assessments: ${e}`, 'error');
         }
 
-        if (errors.length >= 1) {
-            triggerBanner(`Failed to add assessment: HTTP code ${errors.join(', ')}`, 'error');
-        } else if (assessments.length > 0) {
-            triggerBanner(`Successfully added assessments to ${assessments.length} vulnerabilities`, 'success');
-        }
-        assessments.forEach(appendAssessment)
-        setProgressBar(undefined)
-        setPanelOpened(0)
+        setIsLoading(false);
+        setPanelOpened(0);
     };
 
     const saveTimeEstimation = async (content: PostTimeEstimate) => {
-        const patchs: Vulnerability[] = [];
-        const errors = []
-        let index = 0
-        setProgressBar(0)
+        setIsLoading(true);
 
-        for (const vuln_id of selectedVulns) {
-            try {
-                // Get fresh vulnerability data for each iteration to ensure real-time updates
-                const vuln = vulnerabilities.find(v => v.id === vuln_id);
-                if (!vuln) {
-                    errors.push(`Vulnerability ${vuln_id} not found`);
-                    index++
-                    setProgressBar(index / selectedVulns.length)
-                    continue;
-                }
-                
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
-                    method: 'PATCH',
-                    mode: 'cors',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({effort: {
-                        optimistic: content.optimistic.formatAsIso8601(),
-                        likely: content.likely.formatAsIso8601(),
-                        pessimistic: content.pessimistic.formatAsIso8601()
-                    }})
-                })
-
-                if (response.status == 200) {
-                    const data = await response.json()
-                    
-                    // Update the vulnerability directly like in VulnModal, then patch
-                    if (typeof data?.effort?.optimistic === "string")
-                        vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
-                    if (typeof data?.effort?.likely === "string")
-                        vuln.effort.likely = new Iso8601Duration(data.effort.likely);
-                    if (typeof data?.effort?.pessimistic === "string")
-                        vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
-
-                    patchs.push(vuln);
-                    patchVuln(vuln.id, vuln);
-                } else {
-                    errors.push(Number(response?.status))
-                }
+        // Prepare batch request payload
+        const vulnerabilityUpdates = selectedVulns.map(vuln_id => ({
+            id: vuln_id,
+            effort: {
+                optimistic: content.optimistic.formatAsIso8601(),
+                likely: content.likely.formatAsIso8601(),
+                pessimistic: content.pessimistic.formatAsIso8601()
             }
-            catch (e) {
-                errors.push(`Exception: ${e}`);
-            }
+        }));
 
-            index++
-            setProgressBar(index / selectedVulns.length)
+        try {
+            const response = await fetch(import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch', {
+                method: 'PATCH',
+                mode: 'cors',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ vulnerabilities: vulnerabilityUpdates })
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (data?.status === 'success' && Array.isArray(data?.vulnerabilities)) {
+                // Process successful updates
+                for (const vulnData of data.vulnerabilities) {
+                    const vuln = vulnerabilities.find(v => v.id === vulnData.id);
+                    if (vuln) {
+                        if (typeof vulnData?.effort?.optimistic === "string")
+                            vuln.effort.optimistic = new Iso8601Duration(vulnData.effort.optimistic);
+                        if (typeof vulnData?.effort?.likely === "string")
+                            vuln.effort.likely = new Iso8601Duration(vulnData.effort.likely);
+                        if (typeof vulnData?.effort?.pessimistic === "string")
+                            vuln.effort.pessimistic = new Iso8601Duration(vulnData.effort.pessimistic);
+                        
+                        patchVuln(vuln.id, vuln);
+                    }
+                }
+
+                const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
+                triggerBanner(`Successfully updated time estimates for ${data.count} vulnerabilities${errorMsg}`, 'success');
+            } else {
+                const errorMsg = data?.errors?.length 
+                    ? `Errors: ${data.errors.map((e: {error?: string}) => e.error).join(', ')}`
+                    : `HTTP ${response.status}`;
+                triggerBanner(`Failed to save time estimates: ${errorMsg}`, 'error');
+            }
+        } catch (e) {
+            triggerBanner(`Failed to save time estimates: ${e}`, 'error');
         }
 
-        if (errors.length >= 1) {
-            triggerBanner(`Failed to save time estimates: HTTP code ${errors.join(', ')}`, 'error');
-        } else if (patchs.length > 0) {
-            triggerBanner(`Successfully updated time estimates for ${patchs.length} vulnerabilities`, 'success');
-        }
-        setProgressBar(undefined)
-        setPanelOpened(0)
+        setIsLoading(false);
+        setPanelOpened(0);
     }
 
     return (<>
         {selectedVulns.length >= 1 && <>
             {panelOpened > 0 && <div className="absolute top-0 left-0 right-0 bottom-0 z-30 bg-black/40"></div>}
+            
+            {isLoading && (
+                <div className="absolute top-0 left-0 right-0 bottom-0 z-50 bg-black/50 flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-sky-500"></div>
+                </div>
+            )}
 
             <div className="relative mb-4 z-40 w-full">
                 <div className="bg-slate-600/70 text-white w-full">
@@ -200,7 +199,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             ].join(' ')}>
                 <StatusEditor 
                     onAddAssessment={(data) => addAssessment(data)} 
-                    progressBar={progressBar}
+                    progressBar={undefined}
                     defaultStatus={uniformStatus}
                 />
             </div>
@@ -211,7 +210,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             ].join(' ')}>
                 <TimeEstimateEditor
                     onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
-                    progressBar={progressBar}
+                    progressBar={undefined}
                     actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
                 />
             </div>
