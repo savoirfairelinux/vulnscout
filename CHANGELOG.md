@@ -9,6 +9,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ## [Unreleased]
 ---
 
+## [0.9.1] - 2025-12-01
+### Added
+- Batch multi-edit requests: When selecting multiple vulnerabilities, changes are now sent in a single batch request instead of individually.
+
+### Changed
+- Clear impact statement when status is different from not_affected / false positive.
+- Remove justification when status is not not_affected / false_positive.
+- Remove licenses from frontend UI.
+- Vulnerabilities by Source chart: Title changed to "Vulnerabilities by Database", "User Data" to "Local User Data", and fixed typos ("yocto" to "Yocto", "grype" to "Grype").
+- Community Pending Analysis renamed to "Pending Assessment".
+- Remove openvex(scanner) and change openvex to User Data.
+- Fix vulnerability index: Improved stack count consistency when assessing vulnerabilities within a filtered set.
+- Resolve sorting issue with tables.
+- Change Active Vulnerabilities dot colors.
+- Change time empty estimate error message.
+- Hide message banner when moving to another CVE.
+- Updated and added tests.
+
+### Fixed
+- Spelling and formatting: Fixed spelling of VulnScout and added missing inline code formatting.
+- vulnscout_CI_test.sh: Fixed CI test to account for new sbom.spdx3.json output.
+
+---
+
 ## [0.9.0] - 2025-11-12
 
 ### Added
