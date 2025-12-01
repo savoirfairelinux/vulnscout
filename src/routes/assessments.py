@@ -119,6 +119,7 @@ def init_app(app):
                 return {"error": "Invalid status"}, 400
             if existing_assessment.status not in ["not_affected", "false_positive"]:
                 existing_assessment.justification = ""
+                existing_assessment.impact_statement = ""
 
         if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
             existing_assessment.set_status_notes(payload_data["status_notes"], False)
