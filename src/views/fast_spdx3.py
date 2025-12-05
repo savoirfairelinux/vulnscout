@@ -247,7 +247,7 @@ class FastSPDX3:
                     locators = []
                 datasource = locators[0] if locators else "unknown"
 
-                vulnerability = Vulnerability(cve_id, ["yocto"], datasource, "unknown")
+                vulnerability = Vulnerability(cve_id, ["spdx3"], datasource, "unknown")
 
                 # Add remaining locators as URLs
                 for locator in locators[1:]:

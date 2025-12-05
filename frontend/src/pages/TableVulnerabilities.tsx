@@ -125,6 +125,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     ? 'Grype'
                     : source === 'cyclonedx'
                     ? 'CycloneDx'
+                    : source === 'spdx3'
+                    ? 'SPDX3'
                     : source
             ),
         [sources_list]
@@ -139,6 +141,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ? 'Grype'
             : source === 'cyclonedx'
             ? 'CycloneDx'
+            : source === 'spdx3'
+            ? 'SPDX3'
             : source;
 
     const getOriginalSourceName = (displayName: string) =>
@@ -150,6 +154,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ? 'grype'
             : displayName === 'CycloneDx'
             ? 'cyclonedx'
+            : displayName === 'SPDX3'
+            ? 'spdx3'
             : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
@@ -349,6 +355,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                                 ? 'Grype'
                                 : source === 'cyclonedx'
                                 ? 'CycloneDx'
+                                : source === 'spdx3'
+                                ? 'SPDX3'
                                 : source
                         )
                         .join(', ')}
