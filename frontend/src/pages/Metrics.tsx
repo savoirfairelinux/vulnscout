@@ -113,6 +113,7 @@ import { useMemo, useState } from "react";
             const map: Record<string, string> = {
                 openvex: 'Local User Data',
                 yocto: 'Yocto',
+                spdx3: 'SPDX3',
                 grype: 'Grype',
                 cyclonedx: 'CycloneDx'
             };
