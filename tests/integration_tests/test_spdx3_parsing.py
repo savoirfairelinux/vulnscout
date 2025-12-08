@@ -594,3 +594,387 @@ def test_vex_relationship_invalid_structure(spdx3_parser):
     assert len(spdx3_parser.packagesCtrl) == 1
     assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
     assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_could_parse_spdx(spdx3_parser):
+    """Test could_parse_spdx version checking."""
+    # Valid SPDX 3.x
+    spdx_v3 = {
+        "@graph": [
+            {
+                "@type": "CreationInfo",
+                "specVersion": "3.0.1"
+            }
+        ]
+    }
+    assert spdx3_parser.could_parse_spdx(spdx_v3) is True
+    
+    # Valid SPDX 3.x with "type" instead of "@type"
+    spdx_v3_alt = {
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "specVersion": "3.1.0"
+            }
+        ]
+    }
+    assert spdx3_parser.could_parse_spdx(spdx_v3_alt) is True
+    
+    # Invalid - SPDX 2.x
+    spdx_v2 = {
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "specVersion": "2.3"
+            }
+        ]
+    }
+    assert spdx3_parser.could_parse_spdx(spdx_v2) is False
+    
+    # Invalid - no specVersion
+    spdx_no_version = {
+        "@graph": [
+            {
+                "type": "CreationInfo"
+            }
+        ]
+    }
+    assert spdx3_parser.could_parse_spdx(spdx_no_version) is False
+    
+    # Invalid - empty
+    assert spdx3_parser.could_parse_spdx({}) is False
+
+
+def test_extract_purl_variations(spdx3_parser):
+    """Test extract_purl with different field names."""
+    # Test with 'packageUrl'
+    element1 = {"packageUrl": "pkg:generic/test@1.0"}
+    assert spdx3_parser.extract_purl(element1) == "pkg:generic/test@1.0"
+    
+    # Test with 'software_packageUrl'
+    element2 = {"software_packageUrl": "pkg:generic/test@2.0"}
+    assert spdx3_parser.extract_purl(element2) == "pkg:generic/test@2.0"
+    
+    # Test with no PURL
+    element3 = {"name": "test"}
+    assert spdx3_parser.extract_purl(element3) is None
+
+
+def test_extract_cpes_invalid_structure(spdx3_parser):
+    """Test extract_cpes with invalid externalIdentifier structure."""
+    # Non-list externalIdentifier
+    element1 = {"externalIdentifier": "invalid_string"}
+    assert spdx3_parser.extract_cpes(element1) == []
+    
+    # List with non-dict items
+    element2 = {"externalIdentifier": ["string", 123, None]}
+    assert spdx3_parser.extract_cpes(element2) == []
+    
+    # List with dicts but wrong type
+    element3 = {
+        "externalIdentifier": [
+            {"externalIdentifierType": "other", "identifier": "value"}
+        ]
+    }
+    assert spdx3_parser.extract_cpes(element3) == []
+    
+    # Valid CPE
+    element4 = {
+        "externalIdentifier": [
+            {"externalIdentifierType": "cpe23", "identifier": "cpe:2.3:a:test:test:1.0:*:*:*:*:*:*:*"},
+            {"externalIdentifierType": "cpe22", "identifier": "cpe:/a:test:test:2.0"}
+        ]
+    }
+    cpes = spdx3_parser.extract_cpes(element4)
+    assert len(cpes) == 2
+    assert "cpe:2.3:a:test:test:1.0:*:*:*:*:*:*:*" in cpes
+    assert "cpe:/a:test:test:2.0" in cpes
+
+
+def test_package_with_skip_purposes(spdx3_parser):
+    """Test that packages with certain purposes are skipped."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/source",
+                "name": "source-package",
+                "software_packageVersion": "1.0",
+                "software_primaryPurpose": "source",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/dev",
+                "name": "dev-package",
+                "software_packageVersion": "1.0",
+                "software_primaryPurpose": "development",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/doc",
+                "name": "doc-package",
+                "software_packageVersion": "1.0",
+                "software_primaryPurpose": "documentation",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/app",
+                "name": "app-package",
+                "software_packageVersion": "1.0",
+                "software_primaryPurpose": "application",
+                "creationInfo": "_:CreationInfo1"
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_from_dict(spdx_data)
+    
+    # Only the application package should be included
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert "app-package@1.0" in spdx3_parser.packagesCtrl
+    assert "source-package@1.0" not in spdx3_parser.packagesCtrl
+    assert "dev-package@1.0" not in spdx3_parser.packagesCtrl
+    assert "doc-package@1.0" not in spdx3_parser.packagesCtrl
+
+
+def test_vex_relationship_unknown_package_uri(spdx3_parser):
+    """Test VEX relationship when package URI is not in mapping."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2023-1234"
+                    }
+                ]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "to": ["http://spdx.org/spdxdocs/test/package/unknown"],
+                "relationshipType": "doesNotAffect"
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_from_dict(spdx_data)
+    
+    # Assessment should not be created when package is not found
+    assert len(spdx3_parser.assessmentsCtrl) == 0
+
+
+def test_relationship_with_empty_to_list(spdx3_parser):
+    """Test relationship with empty 'to' list."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/kernel",
+                "name": "kernel",
+                "software_packageVersion": "6.0",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/relationship/1",
+                "from": "http://spdx.org/spdxdocs/test/package/kernel",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": []
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_from_dict(spdx_data)
+    
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+
+
+def test_vex_impact_statement(spdx3_parser):
+    """Test VEX relationships with impact statements."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/kernel",
+                "name": "kernel",
+                "software_packageVersion": "6.0",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2023-1234"
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/relationship/1",
+                "from": "http://spdx.org/spdxdocs/test/package/kernel",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": ["http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234"]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "to": ["http://spdx.org/spdxdocs/test/package/kernel"],
+                "relationshipType": "doesNotAffect",
+                "security_impactStatement": "This is a detailed impact statement",
+                "security_justificationType": "componentNotPresent"
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_from_dict(spdx_data)
+    
+    assessments = spdx3_parser.assessmentsCtrl.gets_by_vuln("CVE-2023-1234")
+    assert len(assessments) == 1
+    assert assessments[0].impact_statement == "This is a detailed impact statement"
+    assert assessments[0].justification == "component_not_present"
+
+
+def test_parse_controllers_from_dict(spdx3_parser):
+    """Test parse_controllers_from_dict which only parses packages."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/test",
+                "name": "test",
+                "software_packageVersion": "1.0",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-1234",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2023-1234"
+                    }
+                ]
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_controllers_from_dict(spdx_data)
+    
+    # Only packages should be parsed, not vulnerabilities
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+
+
+def test_external_identifier_with_multiple_locators(spdx3_parser):
+    """Test vulnerability with multiple identifier locators."""
+    spdx_data = {
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/test",
+                "name": "test",
+                "software_packageVersion": "1.0",
+                "creationInfo": "_:CreationInfo1"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-5678",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2023-5678",
+                        "identifierLocator": [
+                            "https://primary.datasource.com/CVE-2023-5678",
+                            "https://secondary.datasource.com/CVE-2023-5678",
+                            "https://tertiary.datasource.com/CVE-2023-5678"
+                        ]
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/relationship/1",
+                "from": "http://spdx.org/spdxdocs/test/package/test",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": ["http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-5678"]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2023-5678",
+                "to": ["http://spdx.org/spdxdocs/test/package/test"],
+                "relationshipType": "doesNotAffect"
+            }
+        ]
+    }
+    
+    spdx3_parser.parse_from_dict(spdx_data)
+    
+    vuln = spdx3_parser.vulnerabilitiesCtrl.get("CVE-2023-5678")
+    assert vuln.datasource == "https://primary.datasource.com/CVE-2023-5678"
+    # Secondary and tertiary URLs should be in the URLs list
+    assert "https://secondary.datasource.com/CVE-2023-5678" in vuln.urls
+    assert "https://tertiary.datasource.com/CVE-2023-5678" in vuln.urls

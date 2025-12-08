@@ -268,3 +268,25 @@ def test_export_assessments_json(cdx_exporter):
     except Exception as e:
         print(json.dumps(output, indent=2))
         raise e
+
+
+def test_export_output_versions(cdx_exporter):
+    """Test output_as_json with different versions."""
+    pkg = Package("test", "1.0", [], [])
+    cdx_exporter.packagesCtrl.add(pkg)
+    
+    # Test version 4
+    output_v4 = json.loads(cdx_exporter.output_as_json(version=4))
+    assert output_v4["specVersion"] == "1.4"
+    
+    # Test version 5
+    output_v5 = json.loads(cdx_exporter.output_as_json(version=5))
+    assert output_v5["specVersion"] == "1.5"
+    
+    # Test version 6 (default)
+    output_v6 = json.loads(cdx_exporter.output_as_json(version=6))
+    assert output_v6["specVersion"] == "1.6"
+    
+    # Test any other version defaults to 1.6
+    output_other = json.loads(cdx_exporter.output_as_json(version=99))
+    assert output_other["specVersion"] == "1.6"
