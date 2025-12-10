@@ -11,7 +11,7 @@ services:
       # Put .cdx.json and .cdx.xml files in /scan/inputs/cdx
       # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
       - ../cache:/cache/vulnscout:Z # Cache directory for VulnScout to store the DB EPSS and NVD
-      - ./output:/scan/outputs:Z
+      - ./state:/scan/outputs:Z
       - ./input/core-image-minimal-qemux86-64.rootfs.json:/scan/inputs/yocto_cve_check/core-image-minimal-qemux86-64.rootfs.json:ro,Z
       - ./input/core-image-minimal-qemux86-64.rootfs.spdx.json:/scan/inputs/spdx/core-image-minimal-qemux86-64.rootfs.spdx.json:ro,Z
       # cyclonedx is not yet available for walnascar

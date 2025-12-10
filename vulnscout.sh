@@ -256,7 +256,7 @@ EOF
     if [ ! -z "$VULNSCOUT_CDX_PATH" ]; then
         echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro" >> "$YAML_FILE"
     fi
-    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs" >> "$YAML_FILE"
+    echo "      - $VULNSCOUT_COMBINED_PATH/state:/scan/outputs" >> "$YAML_FILE"
     echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
 
     # Add Environment Variables section
@@ -324,7 +324,7 @@ start_vulnscout(){
         if [ -n "$VULNSCOUT_FAIL_CONDITION" ]; then
             echo "---------- Condition set : $VULNSCOUT_FAIL_CONDITION ----------"
         fi
-        echo "--- Vulnscout has generated multiple files here : $VULNSCOUT_COMBINED_PATH/output ---"
+        echo "--- Vulnscout has generated multiple files here : $VULNSCOUT_COMBINED_PATH/state ---"
     fi
 
 }
