@@ -491,10 +491,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     <span className="font-bold mr-1">Found by:</span>
                                     {vuln.found_by
                                         .map(source => {
-                                            if (source === 'openvex') return 'Local User Data';
+                                            if (source === 'openvex') return 'OpenVex';
                                             if (source === 'yocto') return 'Yocto';
                                             if (source === 'grype') return 'Grype';
                                             if (source === 'cyclonedx') return 'CycloneDx';
+                                            if (source === 'local_user_data') return 'Local User Data';
                                             return source;
                                         })
                                         .join(', ')

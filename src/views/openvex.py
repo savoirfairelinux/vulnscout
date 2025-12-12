@@ -46,12 +46,12 @@ class OpenVex:
                 pkg = Package(match.group(1), match.group(2), [], [])
         return pkg
 
-    def load_from_dict(self, data: dict):
+    def load_from_dict(self, data: dict, found_by = ["openvex"]):
         if "statements" in data:
             for statement in data["statements"]:
                 if "vulnerability" not in statement or "name" not in statement["vulnerability"]:
                     continue
-                vuln = Vulnerability(statement["vulnerability"]["name"], ["openvex"], "unknown", "unknown")
+                vuln = Vulnerability(statement["vulnerability"]["name"], found_by, "unknown", "unknown")
                 if "description" in statement["vulnerability"]:
                     vuln.add_text(statement["vulnerability"]["description"], "description")
                 if "aliases" in statement["vulnerability"]:
