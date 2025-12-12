@@ -111,7 +111,8 @@ import { useMemo, useState } from "react";
 
         function formatSourceName(source: string): string {
             const map: Record<string, string> = {
-                openvex: 'Local User Data',
+                openvex: 'OpenVex',
+                local_user_data: 'Local User Data',
                 yocto: 'Yocto',
                 spdx3: 'SPDX3',
                 grype: 'Grype',
