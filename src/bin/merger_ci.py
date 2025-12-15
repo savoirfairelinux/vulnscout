@@ -46,6 +46,7 @@ OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
 
+
 def is_items_only_openvex(scanners: list[str]) -> bool:
     """Return True if only openvex scanners are found."""
     for scanner in scanners:

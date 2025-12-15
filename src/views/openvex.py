@@ -46,7 +46,7 @@ class OpenVex:
                 pkg = Package(match.group(1), match.group(2), [], [])
         return pkg
 
-    def load_from_dict(self, data: dict, found_by = ["openvex"]):
+    def load_from_dict(self, data: dict, found_by=["openvex"]):
         if "statements" in data:
             for statement in data["statements"]:
                 if "vulnerability" not in statement or "name" not in statement["vulnerability"]:
