@@ -19,6 +19,7 @@ import json
 INPUT_OPENVEX_FOLDER = "/scan/tmp/openvex"
 OUTPUT_OPENVEX_FILE = "/scan/outputs/sbom.openvex.json"
 
+
 def read_inputs(controllers):
     """Read OpenVEX files from folder and merge them into controllers."""
     openvex = OpenVex(controllers)
@@ -37,6 +38,7 @@ def read_inputs(controllers):
             else:
                 print(f"Ignored: Error parsing OpenVEX file: {file} {e}")
 
+
 def output_results(controllers):
     """Output the merged OpenVEX results to a single file."""
     openvex = OpenVex(controllers)
@@ -44,6 +46,7 @@ def output_results(controllers):
     verbose(f"openvex_merge: Writing {os.getenv('OUTPUT_OPENVEX_FILE', OUTPUT_OPENVEX_FILE)}")
     with open(os.getenv("OUTPUT_OPENVEX_FILE", OUTPUT_OPENVEX_FILE), "w") as f:
         json.dump(openvex.to_dict(), f, indent=2)
+
 
 def main():
     pkg_ctrl = PackagesController()
