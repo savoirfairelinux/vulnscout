@@ -61,7 +61,7 @@ class OpenVex:
                     vuln.add_url(statement["vulnerability"]["@id"])
                     vuln.datasource = statement["vulnerability"]["@id"]
                 # scanners is not part of OpenVex standard
-                if "scanners" in statement:
+                if "scanners" in statement and found_by != ["openvex"]:
                     for scanner in statement["scanners"]:
                         if "openvex" not in scanner:
                             vuln.add_found_by(scanner)
