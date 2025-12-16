@@ -267,7 +267,9 @@ const packageColumns = [
     ),
     cell: (info: any) => (
       <div className="flex items-center justify-center h-full text-center">
-        {info.getValue()}
+        <span className="truncate max-w-full block" title={info.getValue()}>
+          {info.getValue()}
+        </span>
       </div>
     ),
     enableSorting: false,
