@@ -12,7 +12,7 @@ services:
       # Put .json generated from yocto cve-check in /scan/inputs/yocto_cve_check
       # Also accepted .tar, .tar.gz, .tar.zst for all inputs
       - ../cache:/cache/vulnscout:Z # Cache directory for VulnScout to store the DB EPSS and NVD
-      - ./output:/scan/outputs:Z
+      - ./state:/scan/outputs:Z
       - ./input/example.rootfs.json:/scan/inputs/yocto_cve_check/example.rootfs.json:ro,Z
       - ./input/example.rootfs.spdx.tar.zst:/scan/inputs/spdx/example.rootfs.spdx.tar.zst:ro,Z
       - ./input/cyclonedx-export:/scan/inputs/cdx:ro,Z
