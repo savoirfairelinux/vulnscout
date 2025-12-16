@@ -14,7 +14,7 @@ import os
 from datetime import datetime, timezone
 import signal
 
-MAX_SCRIPT_STEPS = 7
+MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 
 

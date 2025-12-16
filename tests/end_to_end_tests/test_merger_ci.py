@@ -14,13 +14,14 @@ from . import write_demo_files
 def init_files(tmp_path):
     files = {
         "CDX_PATH": tmp_path / "input.cdx.json",
+        "OPENVEX_PATH": tmp_path / "merged.openvex.json",
         "SPDX_FOLDER": tmp_path / "spdx",
         "SPDX_PATH": tmp_path / "spdx" / "input.spdx.json",
         "GRYPE_CDX_PATH": tmp_path / "cdx.grype.json",
         "GRYPE_SPDX_PATH": tmp_path / "spdx.grype.json",
         "YOCTO_FOLDER": tmp_path / "yocto_cve",
         "YOCTO_CVE_CHECKER": tmp_path / "yocto_cve" / "demo.json",
-        "OPENVEX_PATH": tmp_path / "openvex.json",
+        "LOCAL_USER_DATABASE_PATH": tmp_path / "openvex.json",
         "TIME_ESTIMATES_PATH": tmp_path / "time_estimates.json",
         "OUTPUT_CDX_PATH": tmp_path / "output.cdx.json",
         "OUTPUT_SPDX_PATH": tmp_path / "output.spdx.json",
@@ -29,6 +30,7 @@ def init_files(tmp_path):
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
         "OUTPUT_VULN_PATH": tmp_path / "vulnerabilities-merged.json",
         "OUTPUT_ASSESSEMENT_PATH": tmp_path / "assessments-merged.json",
+        "OUTPUT_OPENVEX_PATH": tmp_path / "openvex.json"
     }
     files["YOCTO_FOLDER"].mkdir()
     files["SPDX_FOLDER"].mkdir()
@@ -84,7 +86,7 @@ def test_invalid_openvex(init_files):
     for key, value in init_files.items():
         os.environ[key] = str(value)
 
-    init_files["OPENVEX_PATH"].write_text("invalid{ json")
+    init_files["LOCAL_USER_DATABASE_PATH"].write_text("invalid{ json")
     os.environ["IGNORE_PARSING_ERRORS"] = 'false'
     with pytest.raises(Exception):
         main()
@@ -164,7 +166,7 @@ def test_expiration_vulnerabilities(init_files):
     for key, value in init_files.items():
         os.environ[key] = str(value)
 
-    init_files["OPENVEX_PATH"].write_text("""{
+    init_files["LOCAL_USER_DATABASE_PATH"].write_text("""{
         "@context": "https://openvex.dev/ns/v0.2.0",
         "@id": "https://openvex.dev/docs/example/vex-9fb3463de1b57",
         "author": "Savoir-faire Linux",

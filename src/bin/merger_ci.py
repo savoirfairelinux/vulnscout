@@ -30,11 +30,12 @@ import os
 from datetime import date, datetime, timezone
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
+OPENVEX_PATH = "/scan/tmp/merged.openvex.json"
 SPDX_FOLDER = "/scan/tmp/spdx"
 GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
 GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
 YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
-OPENVEX_PATH = "/scan/outputs/openvex.json"
+LOCAL_USER_DATABASE_PATH = "/scan/outputs/openvex.json"
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 OUTPUT_PATH = "/scan/tmp/vulns-merged.json"
@@ -154,6 +155,7 @@ def read_inputs(controllers):
     """Read from well-known files to grab vulnerabilities."""
     scanGrype = GrypeVulns(controllers)
     scanYocto = YoctoVulns(controllers)
+    local_database = OpenVex(controllers)
     openvex = OpenVex(controllers)
     timeEstimates = TimeEstimates(controllers)
     cdx = CycloneDx(controllers)
@@ -162,12 +164,12 @@ def read_inputs(controllers):
     fastspdx = FastSPDX(controllers)
     templates = Templates(controllers)
 
-    verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
+    verbose(f"merger_ci: Reading {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
     try:
-        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
-            openvex.load_from_dict(json.loads(f.read()))
+        with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "r") as f:
+            local_database.load_from_dict(json.loads(f.read()), ["local_user_data"])
     except FileNotFoundError:
-        print("Warning: Did not find openvex file, which is used to store history of analysis."
+        print("Warning: Did not find local user database file, which is used to store history of analysis."
               + " This is normal at first start but not in later analysis")
     except Exception as e:
         if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
@@ -187,6 +189,14 @@ def read_inputs(controllers):
         print("Warning: Did not find CycloneDX files. If you intended to scan CycloneDX files,"
               + " this mean there was an issue when collecting them.")
         error_cdx_not_found_displayed = True
+
+    verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
+    try:
+        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
+            openvex.load_from_dict(json.loads(f.read()))
+    except FileNotFoundError:
+        print("Warning: Did not find OpenVEX files. If you intended to scan OpenVEX files,"
+              + " this mean there was an issue when collecting them.")
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_CDX_PATH', GRYPE_CDX_PATH)}")
     try:
@@ -278,8 +288,8 @@ def output_results(controllers, files):
     with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
         f.write(json.dumps(output["assessments"]))
 
-    verbose(f"merger_ci: Exporting {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
-    with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "w") as f:
+    verbose(f"merger_ci: Exporting {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
+    with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "w") as f:
         f.write(json.dumps(files["openvex"].to_dict(), indent=2))
 
     verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")

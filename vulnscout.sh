@@ -25,8 +25,9 @@ show_help() {
   echo "  --nvd-api-key <key>   (optional) NVD API key to increase rate limits"
   echo ""
   echo "Sources configuration:"
-  echo "  --sbom  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
+  echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
   echo "  --cdx  <path>      path to the CycloneDX directory"
+  echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
   echo ""
   echo "CI configuration:"
@@ -40,11 +41,15 @@ show_help() {
   echo "  --contact_email <email>     Contact email"
   echo "  --document_url <url>        Document URL"
   echo ""
+  echo "Other options:"
+  echo "  --help, -h        Show this help message and exit"
+  echo "  --dev             Use the development version of VulnScout"
 }
 
 VULNSCOUT_PATH="$(dirname "$(readlink -f "$0")")/.vulnscout"
-VULNSCOUT_SBOM_PATH=""
+VULNSCOUT_SPDX_PATH=""
 VULNSCOUT_CDX_PATH=""
+VULNSCOUT_OPENVEX_PATH=""
 VULNSCOUT_CVE_PATH=""
 VULNSCOUT_ENTRY_NAME=""
 VULNSCOUT_FAIL_CONDITION=""
@@ -60,6 +65,7 @@ VULNSCOUT_PRODUCT_VERSION=""
 VULNSCOUT_COMPANY_NAME=""
 VULNSCOUT_CONTACT_EMAIL=""
 VULNSCOUT_DOCUMENT_URL=""
+VULNSCOUT_DEV_MODE="false"
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -110,16 +116,25 @@ while [[ $# -gt 0 ]]; do
       ;;
     --sbom)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_SBOM_PATH="$2"
+        VULNSCOUT_SPDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --sbom requires a value"
         exit 1
       fi
       ;;
+    --openvex)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_OPENVEX_PATH="$(dirname "$(readlink -f "$2")")"
+        shift 2
+      else
+        echo "Error: --openvex requires a value"
+        exit 1
+      fi
+      ;;
     --cdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CDX_PATH="$2"
+        VULNSCOUT_CDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --cdx requires a value"
@@ -128,7 +143,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CVE_PATH="$2"
+        VULNSCOUT_CVE_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --cve-check requires a value"
@@ -189,6 +204,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --dev)
+      VULNSCOUT_DEV_MODE="true"
+      shift
+      ;;
     --help|-h)
       show_help
       exit 0
@@ -248,13 +267,19 @@ EOF
 
     # Add Volumes section
     if [ ! -z "$VULNSCOUT_CVE_PATH" ]; then
-        echo "      - $VULNSCOUT_CVE_PATH:/scan/inputs/yocto_cve_check/$(basename -- "$VULNSCOUT_CVE_PATH"):ro" >> "$YAML_FILE"
+        echo "      - $VULNSCOUT_CVE_PATH:/scan/inputs/yocto_cve_check/$(basename -- "$VULNSCOUT_CVE_PATH"):ro,Z" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_SBOM_PATH" ]; then
-        echo "      - $VULNSCOUT_SBOM_PATH:/scan/inputs/spdx/$(basename -- "$VULNSCOUT_SBOM_PATH"):ro" >> "$YAML_FILE"
+    if [ ! -z "$VULNSCOUT_SPDX_PATH" ]; then
+        echo "      - $VULNSCOUT_SPDX_PATH:/scan/inputs/spdx/$(basename -- "$VULNSCOUT_SPDX_PATH"):ro,Z" >> "$YAML_FILE"
     fi
     if [ ! -z "$VULNSCOUT_CDX_PATH" ]; then
-        echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro" >> "$YAML_FILE"
+        echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro,Z" >> "$YAML_FILE"
+    fi
+    if [ ! -z "$VULNSCOUT_OPENVEX_PATH" ]; then
+        echo "      - $VULNSCOUT_OPENVEX_PATH:/scan/inputs/openvex/$(basename -- "$VULNSCOUT_OPENVEX_PATH"):ro,Z" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+        echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
     fi
     echo "      - $VULNSCOUT_COMBINED_PATH/state:/scan/outputs" >> "$YAML_FILE"
     echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
@@ -299,6 +324,51 @@ EOF
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }
 
+# Function to set up frontend - Only required for development
+setup_devtools() {
+  local is_detached=$1
+
+  # Check if npm is installed
+  if ! command -v npm &> /dev/null; then
+    echo "Error: npm is not installed or not in PATH."
+    exit 1
+  fi
+
+  # Create the .env file in frontend if it doesn't exist
+  if [ ! -f frontend/.env ]; then
+    echo 'VITE_API_URL="http://localhost:7275"' > frontend/.env
+  fi
+
+  # Check if node_modules exists in frontend; if not, run npm install
+  if [ ! -d frontend/node_modules ]; then
+    echo "node_modules not found. Running npm install first..."
+    (cd frontend && npm install)
+  fi
+
+  # Start frontend dev server from within the frontend folder
+  echo "Starting frontend in development mode..."
+  (cd frontend && npm run dev) &
+  npm_pid=$!
+  echo "Frontend dev server started (PID $npm_pid)"
+
+  # Store PID for later cleanup
+  echo "$npm_pid" > .vulnscout-npm.pid
+
+  if [ "$is_detached" == "false" ]; then
+    # Function to cleanup background process on exit (Ctrl+C)
+    cleanup() {
+        echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
+        kill -- -$(ps -o pgid= $npm_pid | grep -o '[0-9]*') 2>/dev/null
+        wait $npm_pid 2>/dev/null
+        rm -f .vulnscout-npm.pid
+        exit 0
+    }
+    trap cleanup SIGINT SIGTERM EXIT
+  else
+    echo "Frontend dev server running in detached mode. Use './start-example.sh --stop' to stop it."
+  fi
+}
+
 start_vulnscout(){
     # Update the docker image if necessary
     docker pull sflinux/vulnscout:latest
@@ -331,4 +401,7 @@ start_vulnscout(){
 
 check_docker_compose_command
 create_yaml_file
+if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+  setup_devtools "false"
+fi
 start_vulnscout
