@@ -20,7 +20,7 @@ show_help() {
   echo "Mandatory argument:"
   echo "  --name <project_name> name of the sub folder entry in .vulnscout/"
   echo ""
-  echo "Extra Vulnscout configuration:"
+  echo "Extra VulnScout configuration:"
   echo "  --workdir_path <path>   (default: current directory) Path to vulnscout installation"
   echo "  --nvd-api-key <key>   (optional) NVD API key to increase rate limits"
   echo ""
@@ -253,6 +253,12 @@ create_yaml_file(){
         touch "$YAML_FILE"
     fi
 
+    # Migrate old output directory to state if needed
+    if [ -d "$VULNSCOUT_COMBINED_PATH/output" ] && [ ! -d "$VULNSCOUT_COMBINED_PATH/state" ]; then
+        echo "Migrating old output directory to state"
+        mv "$VULNSCOUT_COMBINED_PATH/output" "$VULNSCOUT_COMBINED_PATH/state"
+    fi
+
     # Add Header section
     cat > "$YAML_FILE" <<EOF
 services:
@@ -321,7 +327,7 @@ EOF
     if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
     fi
-    echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
+    echo "VulnScout Succeed: Docker Compose file set at $YAML_FILE"
 }
 
 # Function to set up frontend - Only required for development
@@ -386,15 +392,15 @@ start_vulnscout(){
     docker_result=$(docker logs vulnscout 2>/dev/null || echo "")
 
     if [ "$docker_exit_code" -eq 2 ]; then
-        echo "---------------- Vulnscout triggered fail condition ----------------"
-        echo "--- Vulnscout exited with code 2 with fail condition: $VULNSCOUT_FAIL_CONDITION ---"
+        echo "---------------- VulnScout triggered fail condition ----------------"
+        echo "--- VulnScout exited with code 2 with fail condition: $VULNSCOUT_FAIL_CONDITION ---"
         exit 2
     else
         echo "---------------- Vulnscout scanning success ----------------"
         if [ -n "$VULNSCOUT_FAIL_CONDITION" ]; then
             echo "---------- Condition set : $VULNSCOUT_FAIL_CONDITION ----------"
         fi
-        echo "--- Vulnscout has generated multiple files here : $VULNSCOUT_COMBINED_PATH/state ---"
+        echo "--- VulnScout has generated multiple files here : $VULNSCOUT_COMBINED_PATH/state ---"
     fi
 
 }
