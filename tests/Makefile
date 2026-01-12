@@ -37,3 +37,16 @@ docker_test:
 docker_clean:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
 	docker image rm -f "sflinux/vulnscout:${BUILD_TAG}"
+
+podman_build:
+	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
+	# Build from repo root where the Dockerfile is located
+	podman build -t "sflinux/vulnscout:${BUILD_TAG}" -f "$(MAKEFILE_DIR)../Dockerfile" "$(MAKEFILE_DIR).."
+
+podman_test:
+	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
+	cd "$(MAKEFILE_DIR).."; tests/podman/testPodman.sh "sflinux/vulnscout:${BUILD_TAG}"
+
+podman_clean:
+	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
+	podman image rm -f "sflinux/vulnscout:${BUILD_TAG}"
