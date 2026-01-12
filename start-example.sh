@@ -73,6 +73,7 @@ DOCKER_COMPOSE_FILE=".vulnscout/example/docker-example.yml"
 DOCKER_EXTRA_VOLUMES=""
 DETACH_MODE="false"
 STOP_MODE="false"
+CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 
 # Parse arguments
 for arg in "$@"; do
@@ -142,14 +143,14 @@ fi
 echo "Docker Compose command found: $DOCKER_COMPOSE"
 
 # Detect container engine
-if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+if [ "$DOCKER_COMPOSE" == "podman-compose" ]; then
   CONTAINER_ENGINE="podman"
 else
   CONTAINER_ENGINE="docker"
 fi
 
 # Update the container image if necessary
-$CONTAINER_ENGINE pull docker.io/sflinux/vulnscout:latest
+$CONTAINER_ENGINE pull $CONTAINER_IMAGE
 
 # Close any existing container processes
 $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true

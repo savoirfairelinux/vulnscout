@@ -66,6 +66,7 @@ VULNSCOUT_COMPANY_NAME=""
 VULNSCOUT_CONTACT_EMAIL=""
 VULNSCOUT_DOCUMENT_URL=""
 VULNSCOUT_DEV_MODE="false"
+CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -226,7 +227,9 @@ VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
 check_docker_compose_command() {
-    if docker compose version &> /dev/null; then
+    if command -v podman-compose &> /dev/null; then
+        DOCKER_COMPOSE="podman-compose"
+    elif docker compose version &> /dev/null; then
         DOCKER_COMPOSE="docker compose"
     elif command -v docker-compose &> /dev/null; then
         DOCKER_COMPOSE="docker-compose"
@@ -257,7 +260,7 @@ create_yaml_file(){
     cat > "$YAML_FILE" <<EOF
 services:
   vulnscout:
-    image: sflinux/vulnscout:latest
+    image: $CONTAINER_IMAGE
     container_name: vulnscout
     restart: "no"
     ports:
@@ -370,11 +373,18 @@ setup_devtools() {
 }
 
 start_vulnscout(){
-    # Update the docker image if necessary
-    docker pull sflinux/vulnscout:latest
+    # Detect container engine
+    if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+        CONTAINER_ENGINE="podman"
+    else
+        CONTAINER_ENGINE="docker"
+    fi
 
-    # Close any existing docker-compose processes
-    docker rm -f vulnscout 2>/dev/null || true
+    # Update the container image if necessary
+    $CONTAINER_ENGINE pull $CONTAINER_IMAGE
+
+    # Close any existing container processes
+    $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
 
     # Start docker services
     $DOCKER_COMPOSE -f "$YAML_FILE" up
