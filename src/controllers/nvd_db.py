@@ -12,6 +12,7 @@ from ..helpers.fixs_scrapper import FixsScrapper
 from typing import Optional, Generator, Tuple
 import time
 import sys
+import os
 
 sys.tracebacklimit = 0  # disable traceback
 
@@ -100,7 +101,23 @@ class NVD_DB:
         Call the NVD API and return the status code as int and response as a dictionary.
         """
         if self.client is None:
-            self.client = http.client.HTTPSConnection('services.nvd.nist.gov', 443)
+            # Check for proxy settings
+            https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+            if https_proxy:
+                # Parse proxy URL
+                proxy_url = https_proxy.replace('https://', '').replace('http://', '')
+                if '@' in proxy_url:
+                    # Handle proxy with authentication
+                    auth, proxy_url = proxy_url.split('@')
+                proxy_parts = proxy_url.split(':')
+                proxy_host = proxy_parts[0]
+                proxy_port = int(proxy_parts[1]) if len(proxy_parts) > 1 else 3128
+                
+                # Connect to proxy first, then tunnel to target
+                self.client = http.client.HTTPSConnection(proxy_host, proxy_port)
+                self.client.set_tunnel('services.nvd.nist.gov', 443)
+            else:
+                self.client = http.client.HTTPSConnection('services.nvd.nist.gov', 443)
         txt_params = "&".join(
             [
                 f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
