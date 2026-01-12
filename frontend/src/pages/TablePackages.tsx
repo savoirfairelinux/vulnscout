@@ -6,6 +6,7 @@ import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
+import Popup from "../components/Popup";
 
 type Props = {
     packages: Package[];
@@ -39,6 +40,50 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 }
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
+
+function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
+    const [showCpeBox, setShowCpeBox] = useState(false);
+    const buttonRef = useRef<HTMLSpanElement>(null);
+    
+    return (
+        <div className="flex items-center justify-center h-full text-center gap-1">
+            <span>{version}</span>
+            {cpe && cpe.length > 0 && (
+                <>
+                    <span 
+                        ref={buttonRef}
+                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold" 
+                        onClick={() => setShowCpeBox(!showCpeBox)}
+                    >
+                        CPE
+                    </span>
+                    <Popup
+                        isOpen={showCpeBox}
+                        onClose={() => setShowCpeBox(false)}
+                        anchorRef={buttonRef}
+                    >
+                        <div className="flex flex-col gap-2">
+                            {cpe.map((cpeStr, index) => (
+                                <div key={index} className="flex items-center gap-2">
+                                    <span>{cpeStr}</span>
+                                </div>
+                            ))}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowCpeBox(false);
+                                }}
+                                className="text-gray-400 hover:text-white self-end"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    </Popup>
+                </>
+            )}
+        </div>
+    );
+}
 
 function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
@@ -77,7 +122,11 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             }),
             columnHelper.accessor('version', {
                 header: () => <div className="flex items-center justify-center">Version</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>
+                cell: info => {
+                    const version = info.getValue();
+                    const cpe = info.row.original.cpe;
+                    return <CpeCell version={version} cpe={cpe} />;
+                }
             }),
             columnHelper.accessor(
             row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
