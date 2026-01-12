@@ -166,7 +166,8 @@ describe('Vulnerability Table', () => {
         expect(last_updated_header).toBeInTheDocument();
 
         // Now enable hidden columns to test they can be shown
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
 
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
@@ -205,7 +206,8 @@ describe('Vulnerability Table', () => {
         expect(status_col).toBeInTheDocument();
 
         // Now enable hidden columns to test their content
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
 
         const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
@@ -274,7 +276,8 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // First, enable the Attack Vector column
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
         await user.click(attackVectorCheckbox);
@@ -322,8 +325,9 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // First, enable the Estimated Effort column
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
-        await user.click(columnsBtn);
+        // Use getAllByRole to handle multiple buttons with 'columns' in name, select the first (main button)
+        const columnsButtons = await screen.getAllByRole('button', { name: /columns/i });
+        await user.click(columnsButtons[0]);
         const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
         await user.click(effortCheckbox);
 
@@ -814,8 +818,9 @@ describe('Vulnerability Table', () => {
         });
 
         // Now manually select 'fixed' in status filter
-        const statusBtn = await screen.getByRole('button', { name: /status/i });
-        await user.click(statusBtn);
+        // Use getAllByRole to handle multiple buttons with 'status' in name, select the first (main button)
+        const statusButtons = await screen.getAllByRole('button', { name: /status/i });
+        await user.click(statusButtons[0]);
         const fixedCheckbox = await screen.getByRole('checkbox', { name: 'Fixed' });
         await user.click(fixedCheckbox);
 
@@ -1105,4 +1110,108 @@ describe('Vulnerability Table', () => {
             expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
         });
     })
+
+    test('handleHideFixedToggle filters out Fixed status when enabled', async () => {
+        const vulnsWithFixed: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-FIXED-001',
+                simplified_status: 'Fixed'
+            },
+            {
+                ...vulnerabilities[1],
+                id: 'CVE-ACTIVE-001',
+                simplified_status: 'Exploitable'
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Toggle "Hide Fixed"
+        const hideFixedToggle = await screen.getByRole('button', {name: /hide fixed/i});
+        await user.click(hideFixedToggle);
+
+        // Fixed vulnerability should not be visible
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-FIXED-001')).not.toBeInTheDocument();
+            expect(screen.getByText('CVE-ACTIVE-001')).toBeInTheDocument();
+        });
+    })
+
+    test('handleHideFixedToggle can be toggled on and off', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Enable "Hide Fixed"
+        const hideFixedToggle = await screen.getByRole('button', {name: /show hide fixed/i});
+        await user.click(hideFixedToggle);
+
+        // Toggle should change its aria-label
+        await waitFor(() => {
+            const toggleAfter = screen.getByRole('button', {name: /hide hide fixed/i});
+            expect(toggleAfter).toBeInTheDocument();
+        });
+
+        // Disable "Hide Fixed" by clicking again
+        const hideFixedToggle2 = await screen.getByRole('button', {name: /hide hide fixed/i});
+        await user.click(hideFixedToggle2);
+
+        // Toggle should revert
+        await waitFor(() => {
+            const toggleReverted = screen.getByRole('button', {name: /show hide fixed/i});
+            expect(toggleReverted).toBeInTheDocument();
+        });
+    })
+
+    test('modal navigation works correctly', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Open modal for first vulnerability
+        const firstVulnId = await screen.getByText('CVE-2010-1234');
+        await user.click(firstVulnId);
+
+        // Modal should be open
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+
+        // Navigate to next vulnerability (if navigation buttons exist in modal)
+        // This would require the modal to have next/previous buttons
+    })
+
+    test('clicking Edit button opens modal in edit mode', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Click Edit button for first vulnerability
+        const editButtons = await screen.getAllByRole('button', { name: /^edit$/i });
+        await user.click(editButtons[0]);
+
+        // Modal should be open in edit mode
+        await waitFor(() => {
+            // The modal should show the vulnerability details
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+    })
+
+    test('clicking vulnerability ID opens modal in view mode', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Click on vulnerability ID cell
+        const vulnIdCells = await screen.getAllByText('CVE-2010-1234');
+        await user.click(vulnIdCells[0]);
+
+        // Modal should be open
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+    });
 });

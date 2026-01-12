@@ -228,4 +228,162 @@ describe('Packages Table', () => {
         expect(pkg_xyz2).toBeTruthy();
     })
 
+    test('reset filters button clears all filters', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // Set some filters
+        const search_bar = await screen.getByRole('searchbox');
+        await user.type(search_bar, 'xyz');
+
+        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
+        await user.click(severity_toggle);
+
+        const source_btn = await screen.getByRole('button', { name: /source/i });
+        await user.click(source_btn);
+        const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
+        await user.click(cveFinderCheckbox);
+
+        // ACT: Click reset filters
+        const resetBtn = await screen.getByRole('button', { name: /reset filters/i });
+        await user.click(resetBtn);
+
+        // ASSERT: All packages should be visible again
+        await waitFor(async () => {
+            const pkg_abc = await screen.findByRole('cell', { name: /aaabbbccc/ });
+            expect(pkg_abc).toBeTruthy();
+        });
+    })
+
+    test('CPE button shows popup with CPE IDs', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // ACT: Click CPE button
+        const cpeButtons = await screen.getAllByText('CPE');
+        await user.click(cpeButtons[0]);
+
+        // ASSERT: CPE ID should be visible in popup
+        const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+        expect(cpeId).toBeTruthy();
+    })
+
+    test('CPE popup close button works', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // Open CPE popup
+        const cpeButtons = await screen.getAllByText('CPE');
+        await user.click(cpeButtons[0]);
+
+        // ACT: Click close button in popup
+        const closeBtn = await screen.getByText('✕');
+        await user.click(closeBtn);
+
+        // ASSERT: CPE ID should no longer be visible
+        await waitFor(() => {
+            const cpeId = screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+            expect(cpeId).toBe(null);
+        });
+    })
+
+    test('CPE popup closes when clicking CPE button again', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // Open CPE popup
+        const cpeButtons = await screen.getAllByText('CPE');
+        await user.click(cpeButtons[0]);
+
+        // Verify popup is open
+        const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+        expect(cpeId).toBeTruthy();
+
+        // ACT: Click CPE button again
+        await user.click(cpeButtons[0]);
+
+        // ASSERT: CPE ID should no longer be visible
+        await waitFor(() => {
+            const cpeId = screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+            expect(cpeId).toBe(null);
+        });
+    })
+
+    test('show vulnerabilities button calls onShowVulns', async () => {
+        // ARRANGE
+        const mockOnShowVulns = jest.fn();
+        render(<TablePackages packages={packages} onShowVulns={mockOnShowVulns} />);
+
+        const user = userEvent.setup();
+
+        // ACT: Click show vulnerabilities button
+        const showVulnsButtons = await screen.getAllByRole('button', { name: /show vulnerabilities/i });
+        await user.click(showVulnsButtons[0]);
+
+        // ASSERT
+        expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
+    })
+
+    test('package without CPE does not show CPE button', async () => {
+        // ARRANGE
+        const packagesNoCpe: Package[] = [
+            {
+                id: 'pkg-no-cpe@1.0.0',
+                name: 'pkg-no-cpe',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {"active": 1},
+                maxSeverity: {"active": {label: 'low', index: 2}},
+                source: ['test']
+            }
+        ];
+
+        render(<TablePackages packages={packagesNoCpe} />);
+
+        // ACT & ASSERT
+        const cpeButtons = screen.queryAllByText('CPE');
+        expect(cpeButtons).toHaveLength(0);
+    })
+
+    test('multiple CPE IDs are displayed in popup', async () => {
+        // ARRANGE
+        const packagesMultiCpe: Package[] = [
+            {
+                id: 'multi-cpe@1.0.0',
+                name: 'multi-cpe',
+                version: '1.0.0',
+                cpe: [
+                    'cpe:2.3:a:vendor:multi-cpe:1.0.0:*:*:*:*:*:*:*:*',
+                    'cpe:2.3:a:another:multi-cpe:1.0.0:*:*:*:*:*:*:*:*'
+                ],
+                purl: [],
+                vulnerabilities: {"active": 1},
+                maxSeverity: {"active": {label: 'low', index: 2}},
+                source: ['test']
+            }
+        ];
+
+        render(<TablePackages packages={packagesMultiCpe} />);
+
+        const user = userEvent.setup();
+
+        // ACT: Click CPE button
+        const cpeButton = await screen.getByText('CPE');
+        await user.click(cpeButton);
+
+        // ASSERT: Both CPE IDs should be visible
+        const cpeId1 = await screen.getByText(/cpe:2.3:a:vendor:multi-cpe:1.0.0/);
+        const cpeId2 = await screen.getByText(/cpe:2.3:a:another:multi-cpe:1.0.0/);
+        expect(cpeId1).toBeTruthy();
+        expect(cpeId2).toBeTruthy();
+    });
 });
