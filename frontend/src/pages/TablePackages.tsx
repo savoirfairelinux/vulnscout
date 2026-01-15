@@ -61,11 +61,12 @@ function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
                         isOpen={showCpeBox}
                         onClose={() => setShowCpeBox(false)}
                         anchorRef={buttonRef}
+                        className="!text-base whitespace-normal"
                     >
                         <div className="flex flex-col gap-2">
                             {cpe.map((cpeStr, index) => (
                                 <div key={index} className="flex items-center gap-2">
-                                    <span>{cpeStr}</span>
+                                    <span className="text-base">{cpeStr}</span>
                                 </div>
                             ))}
                             <button
@@ -73,7 +74,7 @@ function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
                                     e.stopPropagation();
                                     setShowCpeBox(false);
                                 }}
-                                className="text-gray-400 hover:text-white self-end"
+                                className="text-gray-400 hover:text-white self-end text-base"
                             >
                                 ✕
                             </button>
