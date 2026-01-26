@@ -23,6 +23,9 @@ show_help() {
   echo "Extra Vulnscout configuration:"
   echo "  --workdir_path <path>   (default: current directory) Path to vulnscout installation"
   echo "  --nvd-api-key <key>   (optional) NVD API key to increase rate limits"
+  echo "  --http-proxy <url>   (optional) HTTP proxy URL"
+  echo "  --https-proxy <url>   (optional) HTTPS proxy URL"
+  echo "  --no-proxy <hosts>   (optional) Comma-separated list of hosts to bypass proxy"
   echo ""
   echo "Sources configuration:"
   echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
@@ -67,6 +70,9 @@ VULNSCOUT_CONTACT_EMAIL=""
 VULNSCOUT_DOCUMENT_URL=""
 VULNSCOUT_DEV_MODE="false"
 CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
+VULNSCOUT_HTTP_PROXY=""
+VULNSCOUT_HTTPS_PROXY=""
+VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -209,6 +215,33 @@ while [[ $# -gt 0 ]]; do
       VULNSCOUT_DEV_MODE="true"
       shift
       ;;
+    --http-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_HTTP_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --http-proxy requires a value"
+        exit 1
+      fi
+      ;;
+    --https-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_HTTPS_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --https-proxy requires a value"
+        exit 1
+      fi
+      ;;
+    --no-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_NO_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --no-proxy requires a value"
+        exit 1
+      fi
+      ;;
     --help|-h)
       show_help
       exit 0
@@ -323,6 +356,15 @@ EOF
     fi
     if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
+    fi
+    if [ ! -z "$VULNSCOUT_HTTP_PROXY" ] || [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
+        if [ ! -z "$VULNSCOUT_HTTP_PROXY" ]; then
+            echo "      - HTTP_PROXY=$VULNSCOUT_HTTP_PROXY" >> "$YAML_FILE"
+        fi
+        if [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
+            echo "      - HTTPS_PROXY=$VULNSCOUT_HTTPS_PROXY" >> "$YAML_FILE"
+        fi
+        echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
     fi
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }

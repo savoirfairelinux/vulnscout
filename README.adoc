@@ -127,6 +127,18 @@ To configure your `yaml` file, you can look at the example provided here _.vulns
 - To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ====
 
+===== HTTP Proxy Configuration
+
+If you want to run VulnScout with an HTTP proxy, simply add the standard http_proxy environment variables to the docker-compose file. These variables are respected by all traffic in the container:
+
+[source,yaml]
+----
+environment:
+  - HTTP_PROXY=http://proxy.example.com:8080
+  - HTTPS_PROXY=http://proxy.example.com:8080
+  - NO_PROXY=localhost,127.0.0.1
+----
+
 == :mag_right: Architecture
 
 image::doc/images/architecture_with_logo.png[An architecture diagram showing different components of the VulnScout app]
