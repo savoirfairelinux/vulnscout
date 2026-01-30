@@ -1,6 +1,6 @@
 services:
   vulnscout:
-    image: sflinux/vulnscout:latest
+    image: docker.io/sflinux/vulnscout:latest
     container_name: vulnscout
     restart: "no"
     ports:
