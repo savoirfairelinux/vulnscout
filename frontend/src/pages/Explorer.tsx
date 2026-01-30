@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
+import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -204,6 +205,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab == 'exports' && <Exports />}
             </div>
+            <VersionDisplay />
         </div>
     )
 }
