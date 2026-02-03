@@ -278,10 +278,12 @@ VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
 check_docker_compose_command() {
-    if command -v podman-compose &> /dev/null; then
+    if command -v podman &> /dev/null && command -v podman-compose &> /dev/null; then
         DOCKER_COMPOSE="podman-compose"
     elif command -v docker-compose &> /dev/null; then
         DOCKER_COMPOSE="docker-compose"
+    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
     else
         echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
         exit 1
