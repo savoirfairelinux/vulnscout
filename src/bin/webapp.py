@@ -9,18 +9,38 @@
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..routes import init_app
+from ..models.db import db
 import sys
 import os
+import sqlite3
 from datetime import datetime, timezone
 import signal
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
+VULNSCOUT_DB_PATH = os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db")
 
 
 def create_app():
+    # Ensure the database file exists
+    if not os.path.exists(VULNSCOUT_DB_PATH):
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(VULNSCOUT_DB_PATH), exist_ok=True)
+        # Create empty db file
+        conn = sqlite3.connect(VULNSCOUT_DB_PATH)
+        conn.close()
+
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
+
+    # Configure SQLite database
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{VULNSCOUT_DB_PATH}"
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    db.init_app(app)
+
+    with app.app_context():
+        db.create_all()
+
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE

@@ -324,6 +324,11 @@ create_yaml_file(){
         mkdir -p "$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
     fi
 
+    # Ensure cache directory exists for databases
+    if [ ! -d "$VULNSCOUT_PATH/cache" ]; then
+        mkdir -p "$VULNSCOUT_PATH/cache"
+    fi
+
     if [ ! -f "$YAML_FILE" ]; then
         touch "$YAML_FILE"
     fi
@@ -372,6 +377,7 @@ EOF
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
+      - VULNSCOUT_DB_PATH=/cache/vulnscout/vulnscout.db
 EOF
 
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
