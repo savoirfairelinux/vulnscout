@@ -88,8 +88,8 @@ GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
 if [ -n "$GIT_HASH" ]; then
 	VULNSCOUT_VERSION="${GIT_DESCRIBE:-g${GIT_HASH:0:8}}"
-else
-	VULNSCOUT_VERSION="unknown"
+elif [ -f "$SCRIPT_DIR/frontend/package.json" ]; then
+	VULNSCOUT_VERSION=$(grep '"version":' "$SCRIPT_DIR/frontend/package.json" | head -n 1 | sed -E 's/.*"version": "([^"]+)".*/\1/')
 fi
 
 # If no arguments are provided, show help and exit

@@ -133,3 +133,17 @@ pre-commit install
 ----
 
 This helps enforce code quality and consistency across all contributions.
+
+== icon:rocket[] Release Process
+
+VulnScout follows a semantic versioning strategy with development versions between releases.
+
+=== Version Numbering Strategy
+
+The versioning workflow follows these steps:
+
+1. *Current stable version*: `v0.9.1` (example - keep for now)
+2. *Before creating a release tag*: Bump version to `v0.10`
+3. *First PR after release*: Bump version to `v0.10-dev`
+4. *Feature PRs*: Continue development with `-dev` suffix
+5. Repeat the cycle
