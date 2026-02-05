@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # VulnScout script intended to be used in projects.
-# Some features include running an interactive scan, generate report, CI/CD scan, etc.
+# Some features include running an interactive scan, generate report, non-interactive scan, etc.
 # Use `vulnscout.sh --help` for more information.
 # Exit 0: everything ok
 # Exit 1: execution error (missing conf, docker issue)
-# Exit 2: only in ci mode, used when report failed to met user conditions
+# Exit 2: only in non-interactive mode, used when report failed to met user conditions
 #
 # Note: Keep this file indented with tabs, not spaces, or you break the help message.
 #
@@ -40,7 +40,7 @@ show_help() {
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
   echo ""
-  echo "CI configuration:"
+  echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
   echo "  --fail_condition <condition>  Set the fail condition for the scan (e.g., cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%))"
   echo ""
