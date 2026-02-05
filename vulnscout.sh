@@ -43,6 +43,7 @@ show_help() {
   echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
   echo "  --fail_condition <condition>  Set the fail condition for the scan (e.g., cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%))"
+  echo "  --report-template <filename>  Template filename from .vulnscout/templates/ to generate in non-interactive mode"
   echo ""
   echo "Optional company/product information (for report generation):"
   echo "  --product_name <name>       Product name"
@@ -91,6 +92,7 @@ if [ -n "$GIT_HASH" ]; then
 elif [ -f "$SCRIPT_DIR/frontend/package.json" ]; then
 	VULNSCOUT_VERSION=$(grep '"version":' "$SCRIPT_DIR/frontend/package.json" | head -n 1 | sed -E 's/.*"version": "([^"]+)".*/\1/')
 fi
+VULNSCOUT_TEMPLATE=""
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -136,6 +138,15 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Error: --fail_condition requires a value"
+        exit 1
+      fi
+      ;;
+    --report-template)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_TEMPLATE="$2"
+        shift 2
+      else
+        echo "Error: --report-template requires a value"
         exit 1
       fi
       ;;
@@ -272,6 +283,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If template is specified, add it to GENERATE_DOCUMENTS
+if [ ! -z "$VULNSCOUT_TEMPLATE" ]; then
+  VULNSCOUT_GENERATE_DOCUMENTS="$VULNSCOUT_GENERATE_DOCUMENTS,$VULNSCOUT_TEMPLATE"
+fi
 
 # Create paths and yaml file variable
 VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
@@ -334,6 +349,10 @@ EOF
     fi
     if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
+    fi
+    # Mount templates directory if it exists
+    if [ -d "$VULNSCOUT_PATH/templates" ]; then
+        echo "      - $VULNSCOUT_PATH/templates:/scan/templates:ro,Z" >> "$YAML_FILE"
     fi
     echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs" >> "$YAML_FILE"
     echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
