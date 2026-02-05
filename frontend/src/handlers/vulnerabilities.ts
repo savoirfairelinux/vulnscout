@@ -23,6 +23,7 @@ type Vulnerability = {
     datasource: string;
     packages: string[];
     urls: string[];
+    published?: string;
     texts: {
         title: string;
         content: string;
@@ -134,6 +135,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.effort?.likely === "string") vuln.effort.likely = new Iso8601Duration(data.effort.likely)
     if (typeof data?.effort?.pessimistic === "string") vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic)
     if (typeof data?.fix?.state === "string") vuln.fix.state = data.fix.state
+    if (typeof data?.published === "string") vuln.published = data.published
     return vuln
 }
 
