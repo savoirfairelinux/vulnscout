@@ -58,7 +58,11 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return indexA - indexB
 }
 
-const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
+const fuseKeys = [
+    'id', 
+    'packages',
+    'texts.content'
+]
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
@@ -118,6 +122,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         () =>
             sources_list.map(source =>
                 source === 'openvex'
+                    ? 'OpenVex'
+                    : source === 'local_user_data'
                     ? 'Local User Data'
                     : source === 'yocto'
                     ? 'Yocto'
@@ -125,6 +131,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     ? 'Grype'
                     : source === 'cyclonedx'
                     ? 'CycloneDx'
+                    : source === 'spdx3'
+                    ? 'SPDX3'
                     : source
             ),
         [sources_list]
@@ -132,6 +140,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const formatSourceName = (source: string) =>
         source === 'openvex'
+            ? 'OpenVex'
+            : source === 'local_user_data'
             ? 'Local User Data'
             : source === 'yocto'
             ? 'Yocto'
@@ -139,17 +149,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ? 'Grype'
             : source === 'cyclonedx'
             ? 'CycloneDx'
+            : source === 'spdx3'
+            ? 'SPDX3'
             : source;
 
     const getOriginalSourceName = (displayName: string) =>
-        displayName === 'Local User Data'
+        displayName === 'OpenVex'
             ? 'openvex'
             : displayName === 'Yocto'
             ? 'yocto'
+            : displayName === 'Local User Data'
+            ? 'local_user_data'
             : displayName === 'Grype'
             ? 'grype'
             : displayName === 'CycloneDx'
             ? 'cyclonedx'
+            : displayName === 'SPDX3'
+            ? 'spdx3'
             : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
@@ -342,6 +358,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     {info.renderValue()
                         ?.map((source: string) =>
                             source === 'openvex'
+                                ? 'OpenVex'
+                                : source === 'local_user_data'
                                 ? 'Local User Data'
                                 : source === 'yocto'
                                 ? 'Yocto'
@@ -349,6 +367,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                                 ? 'Grype'
                                 : source === 'cyclonedx'
                                 ? 'CycloneDx'
+                                : source === 'spdx3'
+                                ? 'SPDX3'
                                 : source
                         )
                         .join(', ')}

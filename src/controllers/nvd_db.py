@@ -4,14 +4,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import sqlite3
-import http.client
 import json
+import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 from ..helpers.fixs_scrapper import FixsScrapper
 from typing import Optional, Generator, Tuple
 import time
 import sys
+import os
 
 sys.tracebacklimit = 0  # disable traceback
 
@@ -33,7 +34,7 @@ class NVD_DB:
         self.in_sync: bool = False
 
         self.nvd_api_key = nvd_api_key
-        self.client: Optional[http.client.HTTPSConnection] = None
+        self._setup_proxy()
         self._init_db()
 
     def _init_db(self):
@@ -95,18 +96,33 @@ class NVD_DB:
         )
         self.conn.commit()
 
+    def _setup_proxy(self):
+        """
+        Set up proxy handler if proxy environment variables are set.
+        """
+        proxies = {}
+        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
+            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
+            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+
+        if proxies:
+            proxy_handler = urllib.request.ProxyHandler(proxies)
+            opener = urllib.request.build_opener(proxy_handler)
+            urllib.request.install_opener(opener)
+
     def _call_nvd_api(self, params: dict = {}) -> Tuple[int, dict]:
         """
         Call the NVD API and return the status code as int and response as a dictionary.
         """
-        if self.client is None:
-            self.client = http.client.HTTPSConnection('services.nvd.nist.gov', 443)
         txt_params = "&".join(
             [
                 f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
                 for k, v in params.items()
             ]
         )
+        url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?{txt_params}"
+
         headers = {
             'Content-Type': 'application/json'
         }
@@ -114,24 +130,23 @@ class NVD_DB:
             headers['apiKey'] = self.nvd_api_key
 
         try:
-            self.client.request("GET", f"/rest/json/cves/2.0?{txt_params}", headers=headers)
-            resp = self.client.getresponse()
-            resp_status = resp.status
-
-            try:
-                resp_json = json.loads(resp.read().decode())
-            except json.decoder.JSONDecodeError:
-                print("NVD API responded with invalid JSON. Adding an free NVD API key "
-                      + f"can help to avoid this error. (status: {resp_status})", flush=True)
-                resp_json = {}
-
-            self.client.close()
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                resp_status = response.status
+                try:
+                    resp_json = json.loads(response.read().decode())
+                except json.decoder.JSONDecodeError:
+                    print("NVD API responded with invalid JSON. Adding an free NVD API key "
+                          + f"can help to avoid this error. (status: {resp_status})", flush=True)
+                    resp_json = {}
 
             return resp_status, resp_json
 
+        except urllib.error.HTTPError as e:
+            print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
+            return e.code, {}
         except Exception as e:
             print(f"Error calling NVD API: {e}", flush=True)
-            self.client.close()
             raise e
 
     def api_get_cve(self, cve_id: str) -> Tuple[int, dict]:

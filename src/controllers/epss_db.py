@@ -3,6 +3,7 @@ import csv
 import urllib.request
 import gzip
 from datetime import datetime
+import os
 
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
@@ -32,6 +33,19 @@ class EPSS_DB:
 
     def update_epss(self):
         tmp_gz = "/tmp/epss.csv.gz"
+
+        # Set up proxy handler if proxy environment variables are set
+        proxies = {}
+        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
+            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
+            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+
+        if proxies:
+            proxy_handler = urllib.request.ProxyHandler(proxies)
+            opener = urllib.request.build_opener(proxy_handler)
+            urllib.request.install_opener(opener)
+
         urllib.request.urlretrieve(EPSS_URL, tmp_gz)
 
         with gzip.open(tmp_gz, "rt") as f:

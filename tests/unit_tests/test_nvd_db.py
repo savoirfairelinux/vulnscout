@@ -47,24 +47,17 @@ def test_call_nvd_api_json_decode(monkeypatch, tmp_path):
 
         def read(self):
             return self._body
-
-    class FakeConn:
-        def __init__(self, host, port):
-            self.host = host
-            self.port = port
-            self.closed = False
-
-        def request(self, method, path, headers=None):
-            # Accept all calls
+        
+        def __enter__(self):
+            return self
+        
+        def __exit__(self, *args):
             pass
 
-        def getresponse(self):
-            return FakeResp(200, b"not json")
+    def fake_urlopen(req):
+        return FakeResp(200, b"not json")
 
-        def close(self):
-            self.closed = True
-
-    monkeypatch.setattr("src.controllers.nvd_db.http.client.HTTPSConnection", FakeConn)
+    monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", fake_urlopen)
 
     db = NVD_DB(str(tmp_path / "nvd3.db"))
     status, data = db._call_nvd_api({"foo": "bar"})
@@ -73,17 +66,10 @@ def test_call_nvd_api_json_decode(monkeypatch, tmp_path):
 
 
 def test_call_nvd_api_exception(monkeypatch, tmp_path):
-    class FakeConnErr:
-        def __init__(self, host, port):
-            pass
+    def fake_urlopen_err(req):
+        raise RuntimeError("boom")
 
-        def request(self, method, path, headers=None):
-            raise RuntimeError("boom")
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("src.controllers.nvd_db.http.client.HTTPSConnection", FakeConnErr)
+    monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", fake_urlopen_err)
 
     db = NVD_DB(str(tmp_path / "nvd4.db"))
     with pytest.raises(RuntimeError):

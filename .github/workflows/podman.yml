@@ -1,0 +1,26 @@
+name: Run Podman Tests
+
+on: [push, pull_request]
+
+jobs:
+  podman-tests:
+    name: Podman Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install podman
+
+      - name: Podman Build
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_build
+
+      - name: Podman Test
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_test
+
+      - name: Podman Clean
+        if: ${{ always() }}
+        run: BUILD_TAG=${{ github.sha }} make -C tests podman_clean

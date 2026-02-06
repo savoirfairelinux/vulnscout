@@ -14,7 +14,7 @@ import os
 from datetime import datetime, timezone
 import signal
 
-MAX_SCRIPT_STEPS = 7
+MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 
 
@@ -48,6 +48,11 @@ def create_app():
     @app.route("/<path:path>", methods=["OPTIONS"])
     def allow_OPTION_CORS(path):
         return "OK", 200
+
+    # provide version info
+    @app.route("/api/version")
+    def version():
+        return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
     # bypass fail_scan middleware because it's before
     @app.route("/api/scan/status")

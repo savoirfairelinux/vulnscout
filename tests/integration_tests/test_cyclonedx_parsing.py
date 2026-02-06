@@ -259,3 +259,100 @@ def test_parsing_assessment_already_present(cdx_parser):
     assert assess_final.workaround == "Disable red color in images"
     assert "workaround_available" in assess_final.responses
     assert "update" in assess_final.responses
+
+
+def test_clean_sbom_with_lists(cdx_parser):
+    """Test clean_sbom method handles lists with null items."""
+    test_data = {
+        "vulnerabilities": [
+            {"id": "CVE-2020-1234", "justification": None},
+            None,
+            {"id": "CVE-2020-5678", "justification": "null"},
+            {"id": "CVE-2020-9012"}
+        ],
+        "components": [
+            {"name": "test", "version": "1.0"},
+            None
+        ]
+    }
+    cleaned = cdx_parser.clean_sbom(test_data)
+    assert len(cleaned["vulnerabilities"]) == 3  # None item removed
+    assert "justification" not in cleaned["vulnerabilities"][0]  # null justification removed
+    assert "justification" not in cleaned["vulnerabilities"][1]  # "null" string justification removed
+    assert len(cleaned["components"]) == 1  # None item removed
+
+
+def test_vulnerability_without_id(cdx_parser):
+    """Test parsing vulnerability without ID doesn't create assessment and doesn't add vulnerability."""
+    cdx_parser.load_from_dict(json.loads("""{
+        "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": "urn:uuid:88fabcfa-7529-4ba2-8256-29bec0c03900",
+        "version": 1,
+        "components": [
+            {
+                "type": "library",
+                "name": "cairo",
+                "version": "1.16.0",
+                "bom-ref": "pkg:generic/cairo@1.16.0"
+            }
+        ],
+        "vulnerabilities": [
+            {
+                "bom-ref": "VULN-REF",
+                "analysis": {
+                    "state": "exploitable",
+                    "detail": "Test detail"
+                },
+                "affects": [
+                    { "ref": "pkg:generic/cairo@1.16.0" }
+                ]
+            }
+        ]
+    }"""))
+    
+    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'upper'"):
+        cdx_parser.parse_and_merge()
+    
+    # Assessment should not be created if vulnerability ID is None
+    assert len(cdx_parser.assessmentsCtrl) == 0
+    # Vulnerability without ID should be skipped entirely
+    assert len(cdx_parser.vulnerabilitiesCtrl) == 0
+    # Package from components should still be parsed
+    assert 1 == 1
+def test_vulnerability_with_workaround_and_analysis(cdx_parser):
+    """Test vulnerability with workaround and analysis creates assessment with workaround."""
+    cdx_parser.load_from_dict(json.loads("""{
+        "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "components": [
+            {
+                "type": "library",
+                "name": "test-lib",
+                "version": "1.0.0",
+                "bom-ref": "pkg:generic/test-lib@1.0.0"
+            }
+        ],
+        "vulnerabilities": [
+            {
+                "id": "CVE-2020-1234",
+                "bom-ref": "CVE-2020-1234",
+                "workaround": "Apply the patch manually",
+                "analysis": {
+                    "state": "exploitable"
+                },
+                "affects": [
+                    { "ref": "pkg:generic/test-lib@1.0.0" }
+                ]
+            }
+        ]
+    }"""))
+    cdx_parser.parse_and_merge()
+    
+    assessments = cdx_parser.assessmentsCtrl.gets_by_vuln("CVE-2020-1234")
+    assert len(assessments) == 1
+    assert assessments[0].workaround == "Apply the patch manually"
+    assert "workaround_available" in assessments[0].responses

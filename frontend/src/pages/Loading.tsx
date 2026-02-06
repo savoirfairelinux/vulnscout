@@ -1,4 +1,5 @@
 import infinityLoader from '/infinity_loader.svg';
+import VersionDisplay from '../components/VersionDisplay';
 
 type Props = {
   topline?: string;
@@ -16,6 +17,7 @@ function Loading(
         <img src={infinityLoader} alt='Loading animation' className='min-w-[150px] m-auto' />
         <h1 id='topline' className='text-5xl p-8'>{topline}</h1>
         <h2 id='details' className='text-3xl p-8'>{details}</h2>
+        <VersionDisplay />
     </div>
   )
 }

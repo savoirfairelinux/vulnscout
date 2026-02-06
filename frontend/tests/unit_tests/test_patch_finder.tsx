@@ -355,6 +355,7 @@ describe('Render patch found', () => {
                 }
             })}
             db_ready={true}
+            nvdProgress={null}
         />);
 
         // ACT
@@ -384,6 +385,7 @@ describe('Render patch found', () => {
                 }
             })}
             db_ready={true}
+            nvdProgress={null}
         />);
 
         // ACT
@@ -411,6 +413,7 @@ describe('Render patch found', () => {
                 }
             })}
             db_ready={true}
+            nvdProgress={null}
         />);
 
         // ACT
@@ -435,6 +438,7 @@ describe('Render patch found', () => {
             packages={pkg}
             patchData={asPackageVulnerabilities({})}
             db_ready={true}
+            nvdProgress={null}
         />);
 
         // ACT
@@ -470,6 +474,7 @@ describe('Render patch found', () => {
                 }
             })}
             db_ready={true}
+            nvdProgress={null}
         />);
 
         // ACT
@@ -500,6 +505,7 @@ describe('Render patch found', () => {
             packages={[]}
             patchData={{}}
             db_ready={false}
+            nvdProgress={null}
         />);
 
         // ACT

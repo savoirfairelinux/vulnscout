@@ -1,0 +1,1 @@
+../docker/test_1_normal_operation.sh

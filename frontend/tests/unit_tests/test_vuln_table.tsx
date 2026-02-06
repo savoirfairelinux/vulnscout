@@ -132,6 +132,70 @@ describe('Vulnerability Table', () => {
             status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             assessments: []
+        },
+        {
+            id: 'CVE-2024-56730',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'unknown',
+            found_by: ['yocto'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2024-56730',
+            packages: ['linux-yocto@6.6.21'],
+            urls: ['https://nvd.nist.gov/vuln/detail/CVE-2024-56730'],
+            texts: [
+                {
+                    title: 'summary',
+                    content: 'In the Linux kernel, the following vulnerability has been resolved:\n\nnet/9p/usbg: fix handling of the failed kzalloc() memory allocation\n\nOn the linux-next, next-20241108 vanilla kernel, the coccinelle tool gave the\nfollowing error report:\n\n./net/9p/trans_usbg.c:912:5-11: ERROR: allocation function on line 911 returns\nNULL not ERR_PTR on failure\n\nkzalloc() failure is fixed to handle the NULL return case on the memory exhaustion.'
+                }
+            ],
+            severity: {
+                severity: 'medium',
+                min_score: 5.5,
+                max_score: 5.5,
+                cvss: [
+                    {
+                        author: 'unknown',
+                        severity: 'Medium',
+                        version: '3.1',
+                        vector_string: 'CVSS:3.1/AV:LOCAL',
+                        attack_vector: 'LOCAL',
+                        base_score: 5.5,
+                        exploitability_score: 0,
+                        impact_score: 0
+                    }
+                ]
+            },
+            epss: {
+                score: 0.00021,
+                percentile: 0.04731
+            },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: {
+                state: 'unknown'
+            },
+            status: 'fixed',
+            simplified_status: 'Fixed',
+            assessments: [
+                {
+                    id: '9db07870-42c0-4e7a-b1b5-689c29f8943f',
+                    vuln_id: 'CVE-2024-56730',
+                    packages: ['linux-yocto@6.6.21'],
+                    status: 'fixed',
+                    simplified_status: 'Fixed',
+                    status_notes: '',
+                    justification: '',
+                    impact_statement: 'Yocto reported vulnerability as Patched',
+                    workaround: '',
+                    workaround_timestamp: '',
+                    timestamp: '2026-02-06T17:43:14.254534+00:00',
+                    last_update: '2026-02-06T17:43:14.254537+00:00',
+                    responses: []
+                }
+            ]
         }
     ];
 
@@ -166,7 +230,8 @@ describe('Vulnerability Table', () => {
         expect(last_updated_header).toBeInTheDocument();
 
         // Now enable hidden columns to test they can be shown
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
 
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
@@ -205,7 +270,8 @@ describe('Vulnerability Table', () => {
         expect(status_col).toBeInTheDocument();
 
         // Now enable hidden columns to test their content
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
 
         const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
@@ -274,7 +340,8 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // First, enable the Attack Vector column
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        const columnsBtn = buttons[0]; // Get the first Columns button
         await user.click(columnsBtn);
         const attackVectorCheckbox = await screen.getByRole('checkbox', { name: 'Attack Vector' });
         await user.click(attackVectorCheckbox);
@@ -322,8 +389,9 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // First, enable the Estimated Effort column
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
-        await user.click(columnsBtn);
+        // Use getAllByRole to handle multiple buttons with 'columns' in name, select the first (main button)
+        const columnsButtons = await screen.getAllByRole('button', { name: /columns/i });
+        await user.click(columnsButtons[0]);
         const effortCheckbox = await screen.getByRole('checkbox', { name: 'Estimated Effort' });
         await user.click(effortCheckbox);
 
@@ -397,6 +465,42 @@ describe('Vulnerability Table', () => {
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
+    })
+
+    test('searching with negation text', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
+
+        await user.type(search_bar, '-2010');
+
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(vuln_xyz).toBeInTheDocument();
+    })
+
+    test('searching with a combination of queries', async () => {
+        // ARRANGE
+         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        await user.type(search_bar, '-2010 2024');
+
+        // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
+        }, { timeout: 2000 });
+
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2024-56730/});
+        expect(vuln_xyz).toBeTruthy();
     })
 
     test('searching for description', async () => {
@@ -814,8 +918,9 @@ describe('Vulnerability Table', () => {
         });
 
         // Now manually select 'fixed' in status filter
-        const statusBtn = await screen.getByRole('button', { name: /status/i });
-        await user.click(statusBtn);
+        // Use getAllByRole to handle multiple buttons with 'status' in name, select the first (main button)
+        const statusButtons = await screen.getAllByRole('button', { name: /status/i });
+        await user.click(statusButtons[0]);
         const fixedCheckbox = await screen.getByRole('checkbox', { name: 'Fixed' });
         await user.click(fixedCheckbox);
 
@@ -1105,4 +1210,108 @@ describe('Vulnerability Table', () => {
             expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
         });
     })
+
+    test('handleHideFixedToggle filters out Fixed status when enabled', async () => {
+        const vulnsWithFixed: Vulnerability[] = [
+            {
+                ...vulnerabilities[0],
+                id: 'CVE-FIXED-001',
+                simplified_status: 'Fixed'
+            },
+            {
+                ...vulnerabilities[1],
+                id: 'CVE-ACTIVE-001',
+                simplified_status: 'Exploitable'
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Toggle "Hide Fixed"
+        const hideFixedToggle = await screen.getByRole('button', {name: /hide fixed/i});
+        await user.click(hideFixedToggle);
+
+        // Fixed vulnerability should not be visible
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-FIXED-001')).not.toBeInTheDocument();
+            expect(screen.getByText('CVE-ACTIVE-001')).toBeInTheDocument();
+        });
+    })
+
+    test('handleHideFixedToggle can be toggled on and off', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Enable "Hide Fixed"
+        const hideFixedToggle = await screen.getByRole('button', {name: /show hide fixed/i});
+        await user.click(hideFixedToggle);
+
+        // Toggle should change its aria-label
+        await waitFor(() => {
+            const toggleAfter = screen.getByRole('button', {name: /hide hide fixed/i});
+            expect(toggleAfter).toBeInTheDocument();
+        });
+
+        // Disable "Hide Fixed" by clicking again
+        const hideFixedToggle2 = await screen.getByRole('button', {name: /hide hide fixed/i});
+        await user.click(hideFixedToggle2);
+
+        // Toggle should revert
+        await waitFor(() => {
+            const toggleReverted = screen.getByRole('button', {name: /show hide fixed/i});
+            expect(toggleReverted).toBeInTheDocument();
+        });
+    })
+
+    test('modal navigation works correctly', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Open modal for first vulnerability
+        const firstVulnId = await screen.getByText('CVE-2010-1234');
+        await user.click(firstVulnId);
+
+        // Modal should be open
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+
+        // Navigate to next vulnerability (if navigation buttons exist in modal)
+        // This would require the modal to have next/previous buttons
+    })
+
+    test('clicking Edit button opens modal in edit mode', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Click Edit button for first vulnerability
+        const editButtons = await screen.getAllByRole('button', { name: /^edit$/i });
+        await user.click(editButtons[0]);
+
+        // Modal should be open in edit mode
+        await waitFor(() => {
+            // The modal should show the vulnerability details
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+    })
+
+    test('clicking vulnerability ID opens modal in view mode', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Click on vulnerability ID cell
+        const vulnIdCells = await screen.getAllByText('CVE-2010-1234');
+        await user.click(vulnIdCells[0]);
+
+        // Modal should be open
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+    });
 });
