@@ -15,6 +15,13 @@
 set -euo pipefail # Enable error checking
 
 show_help() {
+  echo "    VulnScout ${VULNSCOUT_VERSION}"
+  echo "    Copyright (C) 2024-2026 Savoir-faire Linux, Inc."
+  echo ""
+  echo "    This program comes with ABSOLUTELY NO WARRANTY. This is free"
+  echo "    software, and you are welcome to redistribute it under the terms"
+  echo "    of the GNU GPLv3 license; see the LICENSE for more informations."
+  echo ""
   echo "Usage: ./vulnscout.sh --name <project_name> [--option]"
   echo ""
   echo "Mandatory argument:"
@@ -73,6 +80,17 @@ CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 VULNSCOUT_HTTP_PROXY=""
 VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
+
+# Build version string
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+GIT_DESCRIBE=$(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo "")
+GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+if [ -n "$GIT_HASH" ]; then
+	VULNSCOUT_VERSION="${GIT_DESCRIBE:-g${GIT_HASH:0:8}}"
+elif [ -f "$SCRIPT_DIR/frontend/package.json" ]; then
+	VULNSCOUT_VERSION=$(grep '"version":' "$SCRIPT_DIR/frontend/package.json" | head -n 1 | sed -E 's/.*"version": "([^"]+)".*/\1/')
+fi
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -260,12 +278,12 @@ VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
 check_docker_compose_command() {
-    if command -v podman-compose &> /dev/null; then
+    if command -v podman &> /dev/null && command -v podman-compose &> /dev/null; then
         DOCKER_COMPOSE="podman-compose"
-    elif docker compose version &> /dev/null; then
-        DOCKER_COMPOSE="docker compose"
     elif command -v docker-compose &> /dev/null; then
         DOCKER_COMPOSE="docker-compose"
+    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
     else
         echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
         exit 1
@@ -328,6 +346,7 @@ EOF
       - IGNORE_PARSING_ERRORS=$VULNSCOUT_IGNORE_PARSING_ERRORS
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
+      - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 EOF
 
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
