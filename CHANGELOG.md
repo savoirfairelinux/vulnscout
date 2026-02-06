@@ -9,6 +9,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ## [Unreleased]
 ---
 
+## [0.10.0] - 2026-02-06
+
+### Added
+- Patch-Finder: Add loading bar.
+- SPDX3: Read CVEs contained in the SBOM file.
+- OpenVEX: Support OpenVEX input files.
+- Packages table: Add CPE ID column.
+- Networking: Add support for HTTP proxy.
+- Container runtime: Add support for Podman.
+- UI: Display version string in the app.
+- Templates: Support templates in non-interactive mode.
+- `vulnscout.sh`: Add support for SELinux.
+
+### Changed
+- Documentation: Update architecture schema.
+- Reports: Add filter based on assessment dates.
+
+### Fixed
+- Metrics: Fix version string overflow.
+
+---
+
 ## [0.9.1] - 2025-12-01
 ### Added
 - Batch multi-edit requests: When selecting multiple vulnerabilities, changes are now sent in a single batch request instead of individually.
