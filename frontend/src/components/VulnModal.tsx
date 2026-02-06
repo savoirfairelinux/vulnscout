@@ -487,6 +487,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     <span className="font-bold mr-1">EPSS Score: </span>
                                     {(vuln.epss.score * 100).toFixed(2)}%
                                 </li>}
+                                {vuln.published && <li key="published">
+                                    <span className="font-bold mr-1">Published:</span>
+                                    {new Date(vuln.published).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                                </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
                                     {vuln.found_by

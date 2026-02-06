@@ -12,6 +12,21 @@ import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 
+// Mock NVDProgressHandler to prevent unwanted fetch calls
+jest.mock('../../src/handlers/nvd_progress', () => ({
+    __esModule: true,
+    default: {
+        getProgress: jest.fn().mockResolvedValue({
+            in_progress: false,
+            phase: 'idle',
+            current: 0,
+            total: 0,
+            message: '',
+        }),
+        getProgressPercentage: jest.fn().mockReturnValue(0),
+    },
+}));
+
 
 const getDOMRect = (width: number, height: number) => ({
     width,
