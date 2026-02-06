@@ -55,7 +55,12 @@ function TableGeneric<DataType> ({
             const processedSearch = search
                 .trim()
                 .split(/\s+/)
-                .map(term => `'${term}`)
+                .map(term => {
+                    if (term.startsWith('!')) {
+                        return `${term}`; // negation pattern for Fuse, which uses exactly a leading exclamation mark
+                    }
+                    return `'${term}`; // exact match pattern for Fuse, which has a leading apostrophe
+                })
                 .join(' ')
 
             return fuse.search(processedSearch).map(result => result.item);

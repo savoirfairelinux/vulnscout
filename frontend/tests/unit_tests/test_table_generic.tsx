@@ -162,4 +162,94 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
       expect(screen.getByText(/1-600 \/ 600/)).toBeInTheDocument();
     });
   }, 10000);
+
+  test('search feature: exact match with apostrophe prefix and exclude match with exclamation mark (lines 52-69)', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row5"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // Exact match search for 'row5' should return only row5
+    const row5Cell = await screen.findByRole('cell', { name: /row5/ });
+    expect(row5Cell).toBeInTheDocument();
+
+    // row4 and row6 should not be present (exact match only)
+    const row4Cell = screen.queryByRole('cell', { name: /^row4$/ });
+    const row6Cell = screen.queryByRole('cell', { name: /^row6$/ });
+    expect(row4Cell).not.toBeInTheDocument();
+    expect(row6Cell).not.toBeInTheDocument();
+  });
+
+  test('search feature: exclude pattern with exclamation mark (lines 52-69)', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="!row5"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // Exclude search with !row5 should return all rows except row5
+    const row0Cell = await screen.findByRole('cell', { name: /row0/ });
+    expect(row0Cell).toBeInTheDocument();
+
+    const row4Cell = await screen.findByRole('cell', { name: /row4/ });
+    expect(row4Cell).toBeInTheDocument();
+
+    // row5 should not be present (excluded)
+    const row5Cell = screen.queryByRole('cell', { name: /^row5$/ });
+    expect(row5Cell).not.toBeInTheDocument();
+
+    const row6Cell = await screen.findByRole('cell', { name: /row6/ });
+    expect(row6Cell).toBeInTheDocument();
+  });
+
+  test('search feature: combining exact match and exclude patterns (lines 52-69)', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row !row10"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // Search for rows containing 'row' but exclude 'row10'
+    const row11Cell = await screen.findByRole('cell', { name: /row11/ });
+    expect(row11Cell).toBeInTheDocument();
+
+    const row9Cell = await screen.findByRole('cell', { name: /row9/ });
+    expect(row9Cell).toBeInTheDocument();
+
+    // row10 should be excluded
+    const row10Cell = screen.queryByRole('cell', { name: /^row10$/ });
+    expect(row10Cell).not.toBeInTheDocument();
+  });
+
+  test('search feature: search with minimum character length (lines 52-69)', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="x"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // Search with less than 2 characters should return all data
+    const row0Cell = await screen.findByRole('cell', { name: /row0/ });
+    expect(row0Cell).toBeInTheDocument();
+
+    const row5Cell = await screen.findByRole('cell', { name: /row5/ });
+    expect(row5Cell).toBeInTheDocument();
+  });
 });
