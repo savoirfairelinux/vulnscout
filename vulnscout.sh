@@ -404,6 +404,23 @@ EOF
         fi
         echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
     fi
+
+    # Scan the provided report template for env("VAR") usage and pass those host env vars to container
+    if [ ! -z "$VULNSCOUT_TEMPLATE" ] && [ -f "$VULNSCOUT_PATH/templates/$VULNSCOUT_TEMPLATE" ]; then
+        # Extract all env("...") and env('...') variable names from the template
+        template_env_vars=$(grep -hoE 'env\s*\(\s*["\x27]([^"\x27]+)["\x27]' "$VULNSCOUT_PATH/templates/$VULNSCOUT_TEMPLATE" 2>/dev/null | \
+            sed -E "s/env\s*\(\s*[\"']([^\"']+)[\"']/\1/" | \
+            sort -u || true)
+        
+        for var_name in $template_env_vars; do
+            # Get the value from host environment
+            var_value="${!var_name:-}"
+            if [ ! -z "$var_value" ]; then
+                echo "      - VULNSCOUT_TPL_${var_name}=${var_value}" >> "$YAML_FILE"
+            fi
+        done
+    fi
+
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }
 

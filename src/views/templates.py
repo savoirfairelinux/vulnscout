@@ -155,6 +155,9 @@ class Templates:
 
 class TemplatesExtensions:
     def __init__(self, jinjaEnv):
+        # Add env() global function to access environment variables from templates
+        jinjaEnv.globals["env"] = TemplatesExtensions.get_env_var
+
         jinjaEnv.filters["status"] = TemplatesExtensions.filter_status
         jinjaEnv.filters["status_pending"] = lambda value: TemplatesExtensions.filter_status(
             value,
@@ -190,6 +193,14 @@ class TemplatesExtensions:
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
         jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
+
+    @staticmethod
+    def get_env_var(name: str, default: str = "") -> str:
+        """Get environment variable from host (passed via VULNSCOUT_TPL_ prefix).
+
+        Usage in templates: {{ env("MY_VAR") }} or {{ env("MY_VAR", "default_value") }}
+        """
+        return os.environ.get(f"VULNSCOUT_TPL_{name}", default)
 
     @staticmethod
     def filter_status(value: list, status: str | list[str]) -> list:

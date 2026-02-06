@@ -25,6 +25,14 @@ All templates can be run from the graphical interface, using the export button i
 * `scan_date`: string in form `<date> at <time> (timezone)` or `unknown date` if scan date is not known.
 * `client_name`: string which may be undefined, empty or contain the company name of the customer.
 
+=== Environment variables available in templates
+
+* `env(name, default="")`: Access host environment variables in your templates.
+For example, to fetch the value of the `DISTRO` environment variable from the host, you can use one of the following:
+* `{{ env("DISTRO") }}` 
+* `{{ env("DISTRO", "unknown") }}`
+VulnnScout will automatically scan your templates for `env("...")` patterns and passes the corresponding environment variable values from host system.
+
 When exporting, user can add filters to export only some vulnerabilites. If you want to access all vulnerabilities and bypassing these filters,
 you can use `unfiltered_vulnerabilities` instead of `vulnerabilities` and `unfiltered_assessments` instead of `assessments`.
 This can be a valid use-case when you want to produce a summary, or to show the number of filtered-out vulnerabilities for example.

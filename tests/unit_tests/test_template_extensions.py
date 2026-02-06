@@ -10,6 +10,7 @@ from src.views.templates import TemplatesExtensions
 class MockEnv:
     def __init__(self):
         self.filters = {}
+        self.globals = {}
 
 
 @pytest.fixture
