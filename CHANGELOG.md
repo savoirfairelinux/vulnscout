@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - Patch-Finder: Add loading bar.
-- SPDX3: Read CVEs contained in the SBOM file.
+- SPDX3: fix parsing and read CVEs contained in the SBOM file.
 - OpenVEX: Support OpenVEX input files.
 - Packages table: Add CPE ID column.
 - Networking: Add support for HTTP proxy.
