@@ -89,3 +89,121 @@ def test_sort_by_last_modified(extensions):
     vulns_dict = {"a": a, "b": b, "c": c}
     assert extensions.filters["sort_by_last_modified"](vulns) == [c, a, b]
     assert extensions.filters["sort_by_last_modified"](vulns_dict) == [c, a, b]
+
+
+def test_filter_last_assessment_date_greater_than(extensions):
+    """Test filtering with > operator"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:59:59"}}
+    vulns = [a, b, c]
+    
+    # After 2026-01-01 (exclusive - should not include anything on that day)
+    result = extensions.filters["last_assessment_date"](vulns, ">2026-01-01")
+    assert result == [b]
+    
+    # Test with dict input
+    vulns_dict = {"a": a, "b": b, "c": c}
+    result = extensions.filters["last_assessment_date"](vulns_dict, ">2026-01-01")
+    assert result == [b]
+
+
+def test_filter_last_assessment_date_greater_than_or_equal(extensions):
+    """Test filtering with >= operator"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:59:59"}}
+    vulns = [a, b, c]
+    
+    # After or on 2026-01-01 (inclusive)
+    result = extensions.filters["last_assessment_date"](vulns, ">=2026-01-01")
+    assert result == [a, b]
+
+
+def test_filter_last_assessment_date_less_than(extensions):
+    """Test filtering with < operator"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:59:59"}}
+    vulns = [a, b, c]
+    
+    # Before 2026-01-02 (exclusive - should not include anything on that day)
+    result = extensions.filters["last_assessment_date"](vulns, "<2026-01-02")
+    assert result == [a, c]
+
+
+def test_filter_last_assessment_date_less_than_or_equal(extensions):
+    """Test filtering with <= operator"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:59:59"}}
+    vulns = [a, b, c]
+    
+    # Before or on 2026-01-01 (inclusive)
+    result = extensions.filters["last_assessment_date"](vulns, "<=2026-01-01")
+    assert result == [a, c]
+
+
+def test_filter_last_assessment_date_range(extensions):
+    """Test filtering with date range"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-15T15:00:00"}}
+    c = {"last_assessment": {"timestamp": "2026-01-31T23:59:59"}}
+    d = {"last_assessment": {"timestamp": "2026-02-01T00:00:00"}}
+    vulns = [a, b, c, d]
+    
+    # Between 2026-01-01 and 2026-01-31 (inclusive)
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01..2026-01-31")
+    assert result == [a, b, c]
+
+
+def test_filter_last_assessment_date_exact(extensions):
+    """Test filtering with exact date"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-01T23:59:59"}}
+    c = {"last_assessment": {"timestamp": "2026-01-02T00:00:00"}}
+    d = {"last_assessment": {"timestamp": "2025-12-31T23:59:59"}}
+    vulns = [a, b, c, d]
+    
+    # Exact date 2026-01-01 (includes all times on that day)
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01")
+    assert result == [a, b]
+
+
+def test_filter_last_assessment_date_no_assessment(extensions):
+    """Test filtering when vulnerabilities have no last_assessment"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {}  # No last_assessment
+    c = {"last_assessment": None}  # None last_assessment
+    d = {"last_assessment": {}}  # No timestamp
+    vulns = [a, b, c, d]
+    
+    result = extensions.filters["last_assessment_date"](vulns, ">2025-12-31")
+    assert result == [a]
+
+
+def test_filter_last_assessment_date_invalid_format(extensions):
+    """Test that invalid date formats return all vulnerabilities"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    vulns = [a, b]
+    
+    # Invalid date format should return all
+    result = extensions.filters["last_assessment_date"](vulns, "invalid-date")
+    assert result == vulns
+    
+    # Invalid range format should return all
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01..2026-01-02..2026-01-03")
+    assert result == vulns
+
+
+def test_filter_last_assessment_date_invalid_timestamp(extensions):
+    """Test that invalid timestamps in vulnerabilities are handled gracefully"""
+    a = {"last_assessment": {"timestamp": "2026-01-01T10:00:00"}}
+    b = {"last_assessment": {"timestamp": "invalid-timestamp"}}
+    c = {"last_assessment": {"timestamp": "2026-01-02T15:00:00"}}
+    vulns = [a, b, c]
+    
+    # Should only include valid dates that match the filter
+    result = extensions.filters["last_assessment_date"](vulns, ">=2026-01-01")
+    assert result == [a, c]

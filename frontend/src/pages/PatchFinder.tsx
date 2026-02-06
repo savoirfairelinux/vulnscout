@@ -2,6 +2,8 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Package } from '../handlers/packages';
 import type { PackageVulnerabilities } from '../handlers/patch_finder';
 import PatchFinderLogic from '../handlers/patch_finder';
+import type { NVDProgress } from '../handlers/nvd_progress';
+import NVDProgressHandler from '../handlers/nvd_progress';
 import { useMemo, useState } from "react";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
@@ -15,9 +17,10 @@ type Props = {
     packages: Package[];
     patchData: PackageVulnerabilities;
     db_ready: boolean;
+    nvdProgress: NVDProgress | null;
 };
 
-function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
+function PatchFinder ({ packages, patchData, db_ready, nvdProgress }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [showLegend, setShowLegend] = useState<boolean>(true);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -53,11 +56,19 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
         return PatchFinderLogic.compute_vulns_per_versions(patchData, actual_pkgs, selectedSources, search)
     }, [patchData, actual_pkgs, selectedSources, search])
 
+    const progressPercentage = nvdProgress ? NVDProgressHandler.getProgressPercentage(nvdProgress) : 0;
+    const showProgressOverlay = !db_ready && nvdProgress?.in_progress;
 
-    return (<>
+    return (<div className="relative">
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
-            <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[400px]" placeholder="Search by version or vulnerability ID" />
+            <input 
+                onInput={updateSearch} 
+                type="search" 
+                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[400px]" 
+                placeholder="Search by version or vulnerability ID"
+                disabled={showProgressOverlay}
+            />
 
             <FilterOption
                 label="Source"
@@ -75,12 +86,39 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
             />
         </div>
 
-        {!db_ready && <div className="p-4 bg-orange-600">
+        {!db_ready && !showProgressOverlay && <div className="p-4 bg-orange-600">
             Database is currently updating, please wait. This page will refresh when patch data are available.<br/>
             <i>You can leave and come back at this page, DB will continue update in background. To speed up the process, ensure you have cache configured in vulnscout configuration.</i>
         </div>}
 
-        <div className="rounded-md my-4 p-4 bg-slate-700 flex flex-row flex-wrap">
+        {showProgressOverlay && (
+            <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-slate-800 rounded-lg p-8 max-w-lg w-full mx-4 shadow-2xl">
+                    <h2 className="text-2xl font-bold text-white mb-4 text-center">
+                        Building NVD Database
+                    </h2>
+                    <div className="mb-6">
+                        <div className="flex justify-between text-sm text-slate-300 mb-2">
+                            <span>{nvdProgress?.phase || 'Initializing...'}</span>
+                            <span>{Math.round(progressPercentage * 100)}%</span>
+                        </div>
+                        <div className="w-full bg-slate-700 rounded-full h-4 overflow-hidden">
+                            <div 
+                                className="bg-gradient-to-r from-blue-500 to-cyan-500 h-full transition-all duration-300 ease-out"
+                                style={{ width: `${progressPercentage * 100}%` }}
+                            ></div>
+                        </div>
+                        {nvdProgress?.current !== undefined && nvdProgress?.total !== undefined && (
+                            <div className="text-sm text-slate-400 mt-2 text-center">
+                                Processing {nvdProgress.current} of {nvdProgress.total} items
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        <div className={`rounded-md my-4 p-4 bg-slate-700 flex flex-row flex-wrap ${showProgressOverlay ? 'pointer-events-none opacity-50' : ''}`}>
             {showLegend && <div className="rounded-md flex-none w-full px-8 bg-slate-600">
                 <h2 className="pt-4 font-bold font-mono text-center text-white">Legend</h2>
                 <VersionsLine reduce_size={true} versions={[
@@ -140,7 +178,7 @@ function PatchFinder ({ packages, patchData, db_ready }: Readonly<Props>) {
                 </div>
             })}
         </div>
-    </>)
+    </div>)
 }
 
 export default PatchFinder;
