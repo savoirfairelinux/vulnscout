@@ -491,7 +491,7 @@ start_vulnscout(){
 
 check_docker_compose_command
 create_yaml_file
-if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+if [ "$VULNSCOUT_DEV_MODE" == "true" ] && [ "$VULNSCOUT_INTERACTIVE_MODE" == "true" ]; then
   setup_devtools "false"
 fi
 start_vulnscout
