@@ -189,6 +189,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["sort_by_effort"] = TemplatesExtensions.sort_by_effort
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
+        jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
 
     @staticmethod
     def filter_status(value: list, status: str | list[str]) -> list:
@@ -270,3 +271,150 @@ class TemplatesExtensions:
         if type(value) is dict:
             value = list(value.values())
         return sorted(value, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)  # type: ignore
+
+    @staticmethod
+    def filter_last_assessment_date(value: dict[str, dict] | list[dict], date_filter: str) -> list[dict]:
+        """
+        Filter vulnerabilities based on their last assessment date.
+
+                Supports the following formats:
+        - '>2026-01-01': After this date (exclusive)
+        - '>=2026-01-01': After or on this date (inclusive)
+        - '<2026-01-01': Before this date (exclusive)
+        - '<=2026-01-01': Before or on this date (inclusive)
+        - '2026-01-01..2026-01-31': Between two dates (inclusive)
+        - '2026-01-01': Exact date match
+
+                Args:
+            value: Dictionary or list of vulnerabilities
+            date_filter: Date filter string in one of the supported formats
+
+                    Returns:
+            List of filtered vulnerabilities
+        """
+        vals: List[dict]
+        if isinstance(value, dict):
+            vals = list(value.values())
+        else:
+            vals = list(value)
+
+        result: List[dict] = []
+
+        # Parse the date filter
+        if ".." in date_filter:
+            # Range filter: '2026-01-01..2026-01-31'
+            parts = date_filter.split("..")
+            if len(parts) != 2:
+                return vals  # Invalid format, return all
+            try:
+                start_date = datetime.fromisoformat(parts[0].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                end_date = datetime.fromisoformat(parts[1].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if start_date <= assess_date <= end_date:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals  # Invalid date format, return all
+
+        elif date_filter.startswith(">="):
+            # Greater than or equal: '>=2026-01-01'
+            try:
+                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if assess_date >= filter_date:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals
+
+        elif date_filter.startswith(">"):
+            # Greater than: '>2026-01-01'
+            try:
+                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if assess_date > filter_date:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals
+
+        elif date_filter.startswith("<="):
+            # Less than or equal: '<=2026-01-01'
+            try:
+                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if assess_date <= filter_date:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals
+
+        elif date_filter.startswith("<"):
+            # Less than: '<2026-01-01'
+            try:
+                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if assess_date < filter_date:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals
+
+        else:
+            # Exact date: '2026-01-01'
+            try:
+                filter_date_start = datetime.fromisoformat(date_filter.strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                filter_date_end = datetime.fromisoformat(date_filter.strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+                for v in vals:
+                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
+                        try:
+                            assess_date = datetime.fromisoformat(
+                                v["last_assessment"]["timestamp"]
+                            ).astimezone(timezone.utc)
+                            if filter_date_start <= assess_date <= filter_date_end:
+                                result.append(v)
+                        except Exception:
+                            pass
+            except Exception:
+                return vals
+
+        return result

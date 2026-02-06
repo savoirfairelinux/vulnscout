@@ -136,6 +136,13 @@ In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-bui
 *** `status_inactive`: `status_fixed` + `status_ignored`.
 ** `severity(x)`: [x: str or list of str] Keep only vulnerabilities with severity in `x`.
 ** `epss_score(x)`: [x: float] Keep only vulnerabilities with EPSS score greater than or equal to `x`. x us a percentage in [0, 100]
+** `last_assessment_date(x)`: [x: str] Filter vulnerabilities by their last assessment date. Supports multiple formats:
+*** `'>2026-01-01'`: After this date (exclusive)
+*** `'>=2026-01-01'`: After or on this date (inclusive)
+*** `'<2026-01-01'`: Before this date (exclusive)
+*** `'<=2026-01-01'`: Before or on this date (inclusive)
+*** `'2026-01-01..2026-01-31'`: Between two dates (inclusive)
+*** `'2026-01-01'`: Exact date match
 
 * Sorting:
 ** `sort_by_epss`: Sort vulnerabilities by EPSS score, with greater score first.
@@ -149,3 +156,12 @@ Get total count of active / open vulnerabilities:
 
 Get active vulnerability with highest EPSS score:
 `{{ vulnerabilities | as_list | status_active | sort_by_epss | first }}`
+
+Get vulnerabilities assessed after a specific date:
+`{{ vulnerabilities | as_list | last_assessment_date('>2026-01-01') | length }}`
+
+Get vulnerabilities assessed in January 2026:
+`{{ vulnerabilities | as_list | last_assessment_date('2026-01-01..2026-01-31') }}`
+
+Get critical vulnerabilities assessed recently (after or on 2026-01-15):
+`{{ vulnerabilities | as_list | severity('critical') | last_assessment_date('>=2026-01-15') | sort_by_last_modified }}`
