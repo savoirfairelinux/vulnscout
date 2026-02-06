@@ -111,8 +111,10 @@ import { useMemo, useState } from "react";
 
         function formatSourceName(source: string): string {
             const map: Record<string, string> = {
-                openvex: 'Local User Data',
+                openvex: 'OpenVex',
+                local_user_data: 'Local User Data',
                 yocto: 'Yocto',
+                spdx3: 'SPDX3',
                 grype: 'Grype',
                 cyclonedx: 'CycloneDx'
             };
@@ -265,7 +267,9 @@ const packageColumns = [
     ),
     cell: (info: any) => (
       <div className="flex items-center justify-center h-full text-center">
-        {info.getValue()}
+        <span className="truncate max-w-full block" title={info.getValue()}>
+          {info.getValue()}
+        </span>
       </div>
     ),
     enableSorting: false,

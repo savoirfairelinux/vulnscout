@@ -361,4 +361,229 @@ describe('EditAssessment Component', () => {
         // Internal banner should not be visible when external trigger is provided
         expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument();
     });
+
+    test('changes status to not_affected and shows justification field', async () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const statusSelect = screen.getByDisplayValue(/Affected \/ exploitable/i);
+        
+        await user.selectOptions(statusSelect, 'not_affected');
+        
+        // Justification dropdown should appear
+        await waitFor(() => {
+            expect(screen.getByDisplayValue(/No justification/i)).toBeInTheDocument();
+        });
+    });
+
+    test('changes status to false_positive and shows impact field', async () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const statusSelect = screen.getByDisplayValue(/Affected \/ exploitable/i);
+        
+        await user.selectOptions(statusSelect, 'false_positive');
+        
+        // Impact field should appear
+        await waitFor(() => {
+            expect(screen.getByPlaceholderText(/why this vulnerability is not exploitable/i)).toBeInTheDocument();
+        });
+    });
+
+    test('changes justification field when not_affected status', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: 'component_not_present'
+        };
+
+        render(
+            <EditAssessment
+                assessment={notAffectedAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const justificationSelect = screen.getByDisplayValue(/Component not present/i);
+        
+        await user.selectOptions(justificationSelect, 'code_not_reachable');
+        
+        await waitFor(() => {
+            expect(screen.getByDisplayValue(/The vulnerable code is not invoked at runtime/i)).toBeInTheDocument();
+        });
+    });
+
+    test('saves assessment with not_affected status and proper justification', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: 'component_not_present'
+        };
+
+        render(
+            <EditAssessment
+                assessment={notAffectedAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const saveButton = screen.getByText('Save Changes');
+        
+        await user.click(saveButton);
+        
+        expect(mockOnSave).toHaveBeenCalledWith({
+            id: 'test-assessment-id',
+            status: 'not_affected',
+            justification: 'component_not_present',
+            status_notes: 'test notes',
+            workaround: 'test workaround',
+            impact_statement: 'test impact'
+        });
+    });
+
+    test('modifies status_notes and detects changes', async () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                onFieldsChange={mockOnFieldsChange}
+            />
+        );
+
+        const user = userEvent.setup();
+        const notesField = screen.getByDisplayValue('test notes');
+        
+        await user.clear(notesField);
+        await user.type(notesField, 'updated notes');
+        
+        expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
+    });
+
+    test('modifies workaround and detects changes', async () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                onFieldsChange={mockOnFieldsChange}
+            />
+        );
+
+        const user = userEvent.setup();
+        const workaroundField = screen.getByDisplayValue('test workaround');
+        
+        await user.clear(workaroundField);
+        await user.type(workaroundField, 'updated workaround');
+        
+        expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
+    });
+
+    test('does not save when justification is empty and required', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: ''
+        };
+
+        render(
+            <EditAssessment
+                assessment={notAffectedAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const saveButton = screen.getByText('Save Changes');
+        
+        await user.click(saveButton);
+        
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('changes all justification options and saves correctly', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: 'component_not_present'
+        };
+
+        const justificationOptions = [
+            'vulnerable_code_not_present',
+            'code_not_reachable',
+            'requires_configuration',
+            'requires_environment',
+            'inline_mitigations_already_exist'
+        ];
+
+        for (const justOption of justificationOptions) {
+            const { unmount } = render(
+                <EditAssessment
+                    assessment={notAffectedAssessment}
+                    onSaveAssessment={mockOnSave}
+                    onCancel={mockOnCancel}
+                />
+            );
+
+            const user = userEvent.setup();
+            const justificationSelect = document.querySelector('select[name="edit_assessment_justification"]') as HTMLSelectElement;
+            
+            await user.selectOptions(justificationSelect, justOption);
+            
+            const saveButton = screen.getByText('Save Changes');
+            await user.click(saveButton);
+            
+            expect(mockOnSave).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    justification: justOption
+                })
+            );
+            
+            jest.clearAllMocks();
+            unmount();
+        }
+    });
+
+    test('impact field is editable when status is not_affected', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: 'component_not_present',
+            impact_statement: 'original impact'
+        };
+
+        render(
+            <EditAssessment
+                assessment={notAffectedAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                onFieldsChange={mockOnFieldsChange}
+            />
+        );
+
+        const user = userEvent.setup();
+        const impactField = screen.getByDisplayValue('original impact');
+        
+        await user.clear(impactField);
+        await user.type(impactField, 'updated impact');
+        
+        expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
+    });
 });

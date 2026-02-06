@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # VulnScout script intended to be used in projects.
-# Some features include running an interactive scan, generate report, CI/CD scan, etc.
+# Some features include running an interactive scan, generate report, non-interactive scan, etc.
 # Use `vulnscout.sh --help` for more information.
 # Exit 0: everything ok
 # Exit 1: execution error (missing conf, docker issue)
-# Exit 2: only in ci mode, used when report failed to met user conditions
+# Exit 2: only in non-interactive mode, used when report failed to met user conditions
 #
 # Note: Keep this file indented with tabs, not spaces, or you break the help message.
 #
@@ -15,6 +15,13 @@
 set -euo pipefail # Enable error checking
 
 show_help() {
+  echo "    VulnScout ${VULNSCOUT_VERSION}"
+  echo "    Copyright (C) 2024-2026 Savoir-faire Linux, Inc."
+  echo ""
+  echo "    This program comes with ABSOLUTELY NO WARRANTY. This is free"
+  echo "    software, and you are welcome to redistribute it under the terms"
+  echo "    of the GNU GPLv3 license; see the LICENSE for more informations."
+  echo ""
   echo "Usage: ./vulnscout.sh --name <project_name> [--option]"
   echo ""
   echo "Mandatory argument:"
@@ -23,15 +30,20 @@ show_help() {
   echo "Extra Vulnscout configuration:"
   echo "  --workdir_path <path>   (default: current directory) Path to vulnscout installation"
   echo "  --nvd-api-key <key>   (optional) NVD API key to increase rate limits"
+  echo "  --http-proxy <url>   (optional) HTTP proxy URL"
+  echo "  --https-proxy <url>   (optional) HTTPS proxy URL"
+  echo "  --no-proxy <hosts>   (optional) Comma-separated list of hosts to bypass proxy"
   echo ""
   echo "Sources configuration:"
-  echo "  --sbom  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
+  echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
   echo "  --cdx  <path>      path to the CycloneDX directory"
+  echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
   echo ""
-  echo "CI configuration:"
+  echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
   echo "  --fail_condition <condition>  Set the fail condition for the scan (e.g., cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%))"
+  echo "  --report-template <filename>  Template filename from .vulnscout/templates/ to generate in non-interactive mode"
   echo ""
   echo "Optional company/product information (for report generation):"
   echo "  --product_name <name>       Product name"
@@ -40,11 +52,15 @@ show_help() {
   echo "  --contact_email <email>     Contact email"
   echo "  --document_url <url>        Document URL"
   echo ""
+  echo "Other options:"
+  echo "  --help, -h        Show this help message and exit"
+  echo "  --dev             Use the development version of VulnScout"
 }
 
 VULNSCOUT_PATH="$(dirname "$(readlink -f "$0")")/.vulnscout"
-VULNSCOUT_SBOM_PATH=""
+VULNSCOUT_SPDX_PATH=""
 VULNSCOUT_CDX_PATH=""
+VULNSCOUT_OPENVEX_PATH=""
 VULNSCOUT_CVE_PATH=""
 VULNSCOUT_ENTRY_NAME=""
 VULNSCOUT_FAIL_CONDITION=""
@@ -60,6 +76,23 @@ VULNSCOUT_PRODUCT_VERSION=""
 VULNSCOUT_COMPANY_NAME=""
 VULNSCOUT_CONTACT_EMAIL=""
 VULNSCOUT_DOCUMENT_URL=""
+VULNSCOUT_DEV_MODE="false"
+CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
+VULNSCOUT_HTTP_PROXY=""
+VULNSCOUT_HTTPS_PROXY=""
+VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
+
+# Build version string
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+GIT_DESCRIBE=$(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo "")
+GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+if [ -n "$GIT_HASH" ]; then
+	VULNSCOUT_VERSION="${GIT_DESCRIBE:-g${GIT_HASH:0:8}}"
+elif [ -f "$SCRIPT_DIR/frontend/package.json" ]; then
+	VULNSCOUT_VERSION=$(grep '"version":' "$SCRIPT_DIR/frontend/package.json" | head -n 1 | sed -E 's/.*"version": "([^"]+)".*/\1/')
+fi
+VULNSCOUT_TEMPLATE=""
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -108,18 +141,36 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --report-template)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_TEMPLATE="$2"
+        shift 2
+      else
+        echo "Error: --report-template requires a value"
+        exit 1
+      fi
+      ;;
     --sbom)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_SBOM_PATH="$2"
+        VULNSCOUT_SPDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --sbom requires a value"
         exit 1
       fi
       ;;
+    --openvex)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_OPENVEX_PATH="$(dirname "$(readlink -f "$2")")"
+        shift 2
+      else
+        echo "Error: --openvex requires a value"
+        exit 1
+      fi
+      ;;
     --cdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CDX_PATH="$2"
+        VULNSCOUT_CDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --cdx requires a value"
@@ -128,7 +179,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CVE_PATH="$2"
+        VULNSCOUT_CVE_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
         echo "Error: --cve-check requires a value"
@@ -189,6 +240,37 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --dev)
+      VULNSCOUT_DEV_MODE="true"
+      shift
+      ;;
+    --http-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_HTTP_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --http-proxy requires a value"
+        exit 1
+      fi
+      ;;
+    --https-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_HTTPS_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --https-proxy requires a value"
+        exit 1
+      fi
+      ;;
+    --no-proxy)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_NO_PROXY="$2"
+        shift 2
+      else
+        echo "Error: --no-proxy requires a value"
+        exit 1
+      fi
+      ;;
     --help|-h)
       show_help
       exit 0
@@ -201,16 +283,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If template is specified, add it to GENERATE_DOCUMENTS
+if [ ! -z "$VULNSCOUT_TEMPLATE" ]; then
+  VULNSCOUT_GENERATE_DOCUMENTS="$VULNSCOUT_GENERATE_DOCUMENTS,$VULNSCOUT_TEMPLATE"
+fi
 
 # Create paths and yaml file variable
 VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
 check_docker_compose_command() {
-    if docker compose version &> /dev/null; then
-        DOCKER_COMPOSE="docker compose"
+    if command -v podman &> /dev/null && command -v podman-compose &> /dev/null; then
+        DOCKER_COMPOSE="podman-compose"
     elif command -v docker-compose &> /dev/null; then
         DOCKER_COMPOSE="docker-compose"
+    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
     else
         echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
         exit 1
@@ -238,7 +326,7 @@ create_yaml_file(){
     cat > "$YAML_FILE" <<EOF
 services:
   vulnscout:
-    image: sflinux/vulnscout:latest
+    image: $CONTAINER_IMAGE
     container_name: vulnscout
     restart: "no"
     ports:
@@ -248,16 +336,26 @@ EOF
 
     # Add Volumes section
     if [ ! -z "$VULNSCOUT_CVE_PATH" ]; then
-        echo "      - $VULNSCOUT_CVE_PATH:/scan/inputs/yocto_cve_check/$(basename -- "$VULNSCOUT_CVE_PATH"):ro" >> "$YAML_FILE"
+        echo "      - $VULNSCOUT_CVE_PATH:/scan/inputs/yocto_cve_check/$(basename -- "$VULNSCOUT_CVE_PATH"):ro,Z" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_SBOM_PATH" ]; then
-        echo "      - $VULNSCOUT_SBOM_PATH:/scan/inputs/spdx/$(basename -- "$VULNSCOUT_SBOM_PATH"):ro" >> "$YAML_FILE"
+    if [ ! -z "$VULNSCOUT_SPDX_PATH" ]; then
+        echo "      - $VULNSCOUT_SPDX_PATH:/scan/inputs/spdx/$(basename -- "$VULNSCOUT_SPDX_PATH"):ro,Z" >> "$YAML_FILE"
     fi
     if [ ! -z "$VULNSCOUT_CDX_PATH" ]; then
-        echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro" >> "$YAML_FILE"
+        echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro,Z" >> "$YAML_FILE"
     fi
-    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs" >> "$YAML_FILE"
-    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
+    if [ ! -z "$VULNSCOUT_OPENVEX_PATH" ]; then
+        echo "      - $VULNSCOUT_OPENVEX_PATH:/scan/inputs/openvex/$(basename -- "$VULNSCOUT_OPENVEX_PATH"):ro,Z" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+        echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
+    fi
+    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
+    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout:Z" >> "$YAML_FILE"
+    # Mount templates directory if it exists
+    if [ -d "$VULNSCOUT_PATH/templates" ]; then
+        echo "      - $VULNSCOUT_PATH/templates:/scan/templates:ro,Z" >> "$YAML_FILE"
+    fi
 
     # Add Environment Variables section
     cat >> "$YAML_FILE" <<EOF
@@ -267,6 +365,7 @@ EOF
       - IGNORE_PARSING_ERRORS=$VULNSCOUT_IGNORE_PARSING_ERRORS
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
+      - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 EOF
 
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
@@ -296,15 +395,76 @@ EOF
     if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
     fi
+    if [ ! -z "$VULNSCOUT_HTTP_PROXY" ] || [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
+        if [ ! -z "$VULNSCOUT_HTTP_PROXY" ]; then
+            echo "      - HTTP_PROXY=$VULNSCOUT_HTTP_PROXY" >> "$YAML_FILE"
+        fi
+        if [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
+            echo "      - HTTPS_PROXY=$VULNSCOUT_HTTPS_PROXY" >> "$YAML_FILE"
+        fi
+        echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
+    fi
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }
 
-start_vulnscout(){
-    # Update the docker image if necessary
-    docker pull sflinux/vulnscout:latest
+# Function to set up frontend - Only required for development
+setup_devtools() {
+  local is_detached=$1
 
-    # Close any existing docker-compose processes
-    docker rm -f vulnscout 2>/dev/null || true
+  # Check if npm is installed
+  if ! command -v npm &> /dev/null; then
+    echo "Error: npm is not installed or not in PATH."
+    exit 1
+  fi
+
+  # Create the .env file in frontend if it doesn't exist
+  if [ ! -f frontend/.env ]; then
+    echo 'VITE_API_URL="http://localhost:7275"' > frontend/.env
+  fi
+
+  # Check if node_modules exists in frontend; if not, run npm install
+  if [ ! -d frontend/node_modules ]; then
+    echo "node_modules not found. Running npm install first..."
+    (cd frontend && npm install)
+  fi
+
+  # Start frontend dev server from within the frontend folder
+  echo "Starting frontend in development mode..."
+  (cd frontend && npm run dev) &
+  npm_pid=$!
+  echo "Frontend dev server started (PID $npm_pid)"
+
+  # Store PID for later cleanup
+  echo "$npm_pid" > .vulnscout-npm.pid
+
+  if [ "$is_detached" == "false" ]; then
+    # Function to cleanup background process on exit (Ctrl+C)
+    cleanup() {
+        echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
+        kill -- -$(ps -o pgid= $npm_pid | grep -o '[0-9]*') 2>/dev/null
+        wait $npm_pid 2>/dev/null
+        rm -f .vulnscout-npm.pid
+        exit 0
+    }
+    trap cleanup SIGINT SIGTERM EXIT
+  else
+    echo "Frontend dev server running in detached mode. Use './start-example.sh --stop' to stop it."
+  fi
+}
+
+start_vulnscout(){
+    # Detect container engine
+    if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+        CONTAINER_ENGINE="podman"
+    else
+        CONTAINER_ENGINE="docker"
+    fi
+
+    # Update the container image if necessary
+    $CONTAINER_ENGINE pull $CONTAINER_IMAGE
+
+    # Close any existing container processes
+    $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
 
     # Start docker services
     $DOCKER_COMPOSE -f "$YAML_FILE" up
@@ -331,4 +491,7 @@ start_vulnscout(){
 
 check_docker_compose_command
 create_yaml_file
+if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+  setup_devtools "false"
+fi
 start_vulnscout

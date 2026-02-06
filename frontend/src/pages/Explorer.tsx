@@ -1,13 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
+import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { PackageVulnerabilities } from "../handlers/patch_finder";
+import type { NVDProgress } from "../handlers/nvd_progress";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
 import PatchFinderLogic from "../handlers/patch_finder";
+import NVDProgressHandler from "../handlers/nvd_progress";
 import TablePackages from "./TablePackages";
 import TableVulnerabilities from "./TableVulnerabilities";
 import PatchFinder from "./PatchFinder";
@@ -25,6 +28,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
+    const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -55,14 +59,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }, []);
 
     const checkPatchReady = useCallback((vulns_list: Vulnerability[]) => {
-        PatchFinderLogic
-        .status()
-        .then((patchData) => {
+        // Check both patch status and NVD progress
+        Promise.all([
+            PatchFinderLogic.status(),
+            NVDProgressHandler.getProgress()
+        ])
+        .then(([patchData, progress]) => {
+            setNvdProgress(progress);
+            
             if (patchData.db_ready) {
                 setPatchDbReady(true);
                 loadPatchData(vulns_list);
             } else {
-                setTimeout(() => checkPatchReady(vulns_list), 15000)
+                setTimeout(() => checkPatchReady(vulns_list), progress.in_progress ? 3000 : 15000);
                 setPatchDbReady(false);
             }
         })
@@ -193,9 +202,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     filterLabel={filterLabel}
                     filterValue={filterValue}
                 />}
-                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} />}
+                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab == 'exports' && <Exports />}
             </div>
+            <VersionDisplay />
         </div>
     )
 }

@@ -1,6 +1,6 @@
 services:
   vulnscout:
-    image: sflinux/vulnscout:latest
+    image: docker.io/sflinux/vulnscout:latest
     container_name: vulnscout
     restart: "no"
     ports:
@@ -28,3 +28,7 @@ services:
       # - AUTHOR_NAME="Savoir-faire Linux"
       # - CONTACT_EMAIL="abc@xyz.org"
       # - DOCUMENT_URL="https://example.com/unique/identifier"
+      # Uncomment to use your host proxy settings
+      # - HTTP_PROXY=${http_proxy:-}
+      # - HTTPS_PROXY=${https_proxy:-}
+      # - NO_PROXY=${no_proxy:-localhost,127.0.0.1}
