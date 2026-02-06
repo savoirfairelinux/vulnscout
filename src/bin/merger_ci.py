@@ -345,14 +345,14 @@ def main():
     post_treatment(controllers, files)
     verbose("merger_ci: Finished post-treatment")
 
+    verbose("merger_ci: Start exporting results")
+    output_results(controllers, files)
+    verbose("merger_ci: Finished exporting results")
+
     if os.getenv("FAIL_CONDITION", "") != "":
         verbose("merger_ci: Start evaluating conditions")
         evaluate_condition(controllers, os.getenv("FAIL_CONDITION"))
         verbose("merger_ci: Finished evaluating conditions")
-
-    verbose("merger_ci: Start exporting results")
-    output_results(controllers, files)
-    verbose("merger_ci: Finished exporting results")
 
 
 if __name__ == "__main__":
