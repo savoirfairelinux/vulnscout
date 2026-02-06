@@ -350,12 +350,12 @@ EOF
     if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
     fi
+    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
+    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout:Z" >> "$YAML_FILE"
     # Mount templates directory if it exists
     if [ -d "$VULNSCOUT_PATH/templates" ]; then
         echo "      - $VULNSCOUT_PATH/templates:/scan/templates:ro,Z" >> "$YAML_FILE"
     fi
-    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs" >> "$YAML_FILE"
-    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
 
     # Add Environment Variables section
     cat >> "$YAML_FILE" <<EOF
