@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # VulnScout script intended to be used in projects.
-# Some features include running an interactive scan, generate report, CI/CD scan, etc.
+# Some features include running an interactive scan, generate report, non-interactive scan, etc.
 # Use `vulnscout.sh --help` for more information.
 # Exit 0: everything ok
 # Exit 1: execution error (missing conf, docker issue)
-# Exit 2: only in ci mode, used when report failed to met user conditions
+# Exit 2: only in non-interactive mode, used when report failed to met user conditions
 #
 # Note: Keep this file indented with tabs, not spaces, or you break the help message.
 #
@@ -15,6 +15,13 @@
 set -euo pipefail # Enable error checking
 
 show_help() {
+  echo "    VulnScout ${VULNSCOUT_VERSION}"
+  echo "    Copyright (C) 2024-2026 Savoir-faire Linux, Inc."
+  echo ""
+  echo "    This program comes with ABSOLUTELY NO WARRANTY. This is free"
+  echo "    software, and you are welcome to redistribute it under the terms"
+  echo "    of the GNU GPLv3 license; see the LICENSE for more informations."
+  echo ""
   echo "Usage: ./vulnscout.sh --name <project_name> [--option]"
   echo ""
   echo "Mandatory argument:"
@@ -33,9 +40,10 @@ show_help() {
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
   echo ""
-  echo "CI configuration:"
+  echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
   echo "  --fail_condition <condition>  Set the fail condition for the scan (e.g., cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%))"
+  echo "  --report-template <filename>  Template filename from .vulnscout/templates/ to generate in non-interactive mode"
   echo ""
   echo "Optional company/product information (for report generation):"
   echo "  --product_name <name>       Product name"
@@ -73,6 +81,18 @@ CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 VULNSCOUT_HTTP_PROXY=""
 VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
+
+# Build version string
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+GIT_DESCRIBE=$(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || echo "")
+GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+if [ -n "$GIT_HASH" ]; then
+	VULNSCOUT_VERSION="${GIT_DESCRIBE:-g${GIT_HASH:0:8}}"
+elif [ -f "$SCRIPT_DIR/frontend/package.json" ]; then
+	VULNSCOUT_VERSION=$(grep '"version":' "$SCRIPT_DIR/frontend/package.json" | head -n 1 | sed -E 's/.*"version": "([^"]+)".*/\1/')
+fi
+VULNSCOUT_TEMPLATE=""
 
 # If no arguments are provided, show help and exit
 if [[ $# -eq 0 ]]; then
@@ -118,6 +138,15 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Error: --fail_condition requires a value"
+        exit 1
+      fi
+      ;;
+    --report-template)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_TEMPLATE="$2"
+        shift 2
+      else
+        echo "Error: --report-template requires a value"
         exit 1
       fi
       ;;
@@ -254,18 +283,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# If template is specified, add it to GENERATE_DOCUMENTS
+if [ ! -z "$VULNSCOUT_TEMPLATE" ]; then
+  VULNSCOUT_GENERATE_DOCUMENTS="$VULNSCOUT_GENERATE_DOCUMENTS,$VULNSCOUT_TEMPLATE"
+fi
 
 # Create paths and yaml file variable
 VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
 check_docker_compose_command() {
-    if command -v podman-compose &> /dev/null; then
+    if command -v podman &> /dev/null && command -v podman-compose &> /dev/null; then
         DOCKER_COMPOSE="podman-compose"
-    elif docker compose version &> /dev/null; then
-        DOCKER_COMPOSE="docker compose"
     elif command -v docker-compose &> /dev/null; then
         DOCKER_COMPOSE="docker-compose"
+    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        DOCKER_COMPOSE="docker compose"
     else
         echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
         exit 1
@@ -317,8 +350,12 @@ EOF
     if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
     fi
-    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs" >> "$YAML_FILE"
-    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout" >> "$YAML_FILE"
+    echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
+    echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout:Z" >> "$YAML_FILE"
+    # Mount templates directory if it exists
+    if [ -d "$VULNSCOUT_PATH/templates" ]; then
+        echo "      - $VULNSCOUT_PATH/templates:/scan/templates:ro,Z" >> "$YAML_FILE"
+    fi
 
     # Add Environment Variables section
     cat >> "$YAML_FILE" <<EOF
@@ -328,6 +365,7 @@ EOF
       - IGNORE_PARSING_ERRORS=$VULNSCOUT_IGNORE_PARSING_ERRORS
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
+      - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 EOF
 
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then

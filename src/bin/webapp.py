@@ -49,6 +49,11 @@ def create_app():
     def allow_OPTION_CORS(path):
         return "OK", 200
 
+    # provide version info
+    @app.route("/api/version")
+    def version():
+        return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
+
     # bypass fail_scan middleware because it's before
     @app.route("/api/scan/status")
     def loading():
