@@ -3,6 +3,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import os
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
@@ -29,6 +30,9 @@ class YoctoVulns:
             self.packagesCtrl.add(package)
 
             for issue in pkg.get("issue", []):
+                # Skip fixed vulnerabilities if CVE_CHECK_EXCLUDE_PATCHED is set
+                if os.getenv('CVE_CHECK_EXCLUDE_PATCHED', 'false') == 'true' and issue.get("status") == "Patched":
+                    continue
 
                 vuln = Vulnerability(
                     issue.get("id").upper(),

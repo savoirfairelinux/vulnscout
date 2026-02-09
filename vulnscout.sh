@@ -30,6 +30,8 @@ show_help() {
   echo "Extra Vulnscout configuration:"
   echo "  --workdir_path <path>   (default: current directory) Path to vulnscout installation"
   echo "  --nvd-api-key <key>   (optional) NVD API key to increase rate limits"
+  echo "  --api-port <port>   (default: 7275) Port to run the web UI on"
+  echo "  --host <host>   (default: 0.0.0.0) Host to bind the web UI to"
   echo "  --http-proxy <url>   (optional) HTTP proxy URL"
   echo "  --https-proxy <url>   (optional) HTTPS proxy URL"
   echo "  --no-proxy <hosts>   (optional) Comma-separated list of hosts to bypass proxy"
@@ -38,7 +40,8 @@ show_help() {
   echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
   echo "  --cdx  <path>      path to the CycloneDX directory"
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
-  echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
+  echo "  --cve-check  <path>      path to the Yocto CVE check JSON file
+  --cve-check-exclude-patched     do not parse cve_check vulnerabilities with patched status"
   echo ""
   echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
@@ -49,12 +52,16 @@ show_help() {
   echo "  --product_name <name>       Product name"
   echo "  --product_version <version> Product version"
   echo "  --company_name <name>       Company name"
+  echo "  --author_name <name>        Author name"
   echo "  --contact_email <email>     Contact email"
   echo "  --document_url <url>        Document URL"
   echo ""
   echo "Other options:"
   echo "  --help, -h        Show this help message and exit"
   echo "  --dev             Use the development version of VulnScout"
+  echo "  --verbose         Enable verbose mode"
+  echo "  --ignore-parsing-errors  Ignore parsing errors and continue"
+  echo "  --skip-scan  Skip scan and re-use last scan result"
 }
 
 VULNSCOUT_PATH="$(dirname "$(readlink -f "$0")")/.vulnscout"
@@ -74,13 +81,16 @@ VULNSCOUT_IGNORE_PARSING_ERRORS="false"
 VULNSCOUT_PRODUCT_NAME=""
 VULNSCOUT_PRODUCT_VERSION=""
 VULNSCOUT_COMPANY_NAME=""
+VULNSCOUT_AUTHOR_NAME=""
 VULNSCOUT_CONTACT_EMAIL=""
 VULNSCOUT_DOCUMENT_URL=""
 VULNSCOUT_DEV_MODE="false"
+VULNSCOUT_DEBUG_SKIP_SCAN="false"
 CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 VULNSCOUT_HTTP_PROXY=""
 VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
+VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -150,18 +160,18 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
-    --sbom)
+    --spdx|--sbom)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_SPDX_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_SPDX_PATH="$(readlink -f "$2")"
         shift 2
       else
-        echo "Error: --sbom requires a value"
+        echo "Error: --spdx/--sbom requires a value"
         exit 1
       fi
       ;;
     --openvex)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_OPENVEX_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_OPENVEX_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --openvex requires a value"
@@ -170,7 +180,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CDX_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_CDX_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --cdx requires a value"
@@ -179,12 +189,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CVE_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_CVE_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --cve-check requires a value"
         exit 1
       fi
+      ;;
+    --cve-check-exclude-patched)
+      VULNSCOUT_CVE_EXCLUDE_PATCHED="true"
+      shift
       ;;
     --vulnscout_path)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
@@ -243,6 +257,46 @@ while [[ $# -gt 0 ]]; do
     --dev)
       VULNSCOUT_DEV_MODE="true"
       shift
+      ;;
+    --verbose)
+      VULNSCOUT_VERBOSE_MODE="true"
+      shift
+      ;;
+    --ignore-parsing-errors)
+      VULNSCOUT_IGNORE_PARSING_ERRORS="true"
+      shift
+      ;;
+    --skip-scan)
+      VULNSCOUT_DEBUG_SKIP_SCAN="true"
+      shift
+      ;;
+    --api-port)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_FLASK_RUN_PORT="$2"
+        shift 2
+      else
+        echo "Error: --api-port requires a value"
+        exit 1
+      fi
+      ;;
+    --host)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_FLASK_RUN_HOST="$2"
+        shift 2
+      else
+        echo "Error: --host requires a value"
+        exit 1
+      fi
+      ;;
+
+    --author_name)
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        VULNSCOUT_AUTHOR_NAME="$2"
+        shift 2
+      else
+        echo "Error: --author_name requires a value"
+        exit 1
+      fi
       ;;
     --http-proxy)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
@@ -330,7 +384,7 @@ services:
     container_name: vulnscout
     restart: "no"
     ports:
-      - "7275:7275"
+      - "$VULNSCOUT_FLASK_RUN_PORT:$VULNSCOUT_FLASK_RUN_PORT"
     volumes:
 EOF
 
@@ -392,6 +446,12 @@ EOF
     if [ ! -z "$VULNSCOUT_DOCUMENT_URL" ]; then
         echo "      - DOCUMENT_URL=$VULNSCOUT_DOCUMENT_URL" >> "$YAML_FILE"
     fi
+    if [ ! -z "$VULNSCOUT_AUTHOR_NAME" ]; then
+        echo "      - AUTHOR_NAME=$VULNSCOUT_AUTHOR_NAME" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_DEBUG_SKIP_SCAN" == "true" ]; then
+        echo "      - DEBUG_SKIP_SCAN=true" >> "$YAML_FILE"
+    fi
     if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
     fi
@@ -403,6 +463,9 @@ EOF
             echo "      - HTTPS_PROXY=$VULNSCOUT_HTTPS_PROXY" >> "$YAML_FILE"
         fi
         echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_CVE_EXCLUDE_PATCHED" == "true" ]; then
+        echo "      - CVE_CHECK_EXCLUDE_PATCHED=true" >> "$YAML_FILE"
     fi
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }
