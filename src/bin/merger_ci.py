@@ -86,7 +86,10 @@ def post_treatment(controllers, files):
     # 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
 
-    # 2. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
+    # 2. fetch published dates from NVD
+    controllers["vulnerabilities"].fetch_published_dates()
+
+    # 3. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
     for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
         assessments = controllers["assessments"].gets_by_vuln(vuln_id)
         already_expired = False
