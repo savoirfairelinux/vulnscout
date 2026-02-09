@@ -38,7 +38,8 @@ show_help() {
   echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
   echo "  --cdx  <path>      path to the CycloneDX directory"
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
-  echo "  --cve-check  <path>      path to the Yocto CVE check JSON file"
+  echo "  --cve-check  <path>      path to the Yocto CVE check JSON file
+  --cve-check-exclude-patched     do not parse cve_check vulnerabilities with patched status"
   echo ""
   echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
@@ -81,6 +82,7 @@ CONTAINER_IMAGE="docker.io/sflinux/vulnscout:latest"
 VULNSCOUT_HTTP_PROXY=""
 VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
+VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -185,6 +187,10 @@ while [[ $# -gt 0 ]]; do
         echo "Error: --cve-check requires a value"
         exit 1
       fi
+      ;;
+    --cve-check-exclude-patched)
+      VULNSCOUT_CVE_EXCLUDE_PATCHED="true"
+      shift
       ;;
     --vulnscout_path)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
@@ -403,6 +409,9 @@ EOF
             echo "      - HTTPS_PROXY=$VULNSCOUT_HTTPS_PROXY" >> "$YAML_FILE"
         fi
         echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_CVE_EXCLUDE_PATCHED" == "true" ]; then
+        echo "      - CVE_CHECK_EXCLUDE_PATCHED=true" >> "$YAML_FILE"
     fi
     echo "Vulnscout Succeed: Docker Compose file set at $YAML_FILE"
 }
