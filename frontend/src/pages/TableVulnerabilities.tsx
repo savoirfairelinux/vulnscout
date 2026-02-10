@@ -58,7 +58,11 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return indexA - indexB
 }
 
-const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
+const fuseKeys = [
+    'id', 
+    'packages',
+    'texts.content'
+]
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
