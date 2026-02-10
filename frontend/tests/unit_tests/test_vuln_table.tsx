@@ -132,6 +132,70 @@ describe('Vulnerability Table', () => {
             status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             assessments: []
+        },
+        {
+            id: 'CVE-2024-56730',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'unknown',
+            found_by: ['yocto'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2024-56730',
+            packages: ['linux-yocto@6.6.21'],
+            urls: ['https://nvd.nist.gov/vuln/detail/CVE-2024-56730'],
+            texts: [
+                {
+                    title: 'summary',
+                    content: 'In the Linux kernel, the following vulnerability has been resolved:\n\nnet/9p/usbg: fix handling of the failed kzalloc() memory allocation\n\nOn the linux-next, next-20241108 vanilla kernel, the coccinelle tool gave the\nfollowing error report:\n\n./net/9p/trans_usbg.c:912:5-11: ERROR: allocation function on line 911 returns\nNULL not ERR_PTR on failure\n\nkzalloc() failure is fixed to handle the NULL return case on the memory exhaustion.'
+                }
+            ],
+            severity: {
+                severity: 'medium',
+                min_score: 5.5,
+                max_score: 5.5,
+                cvss: [
+                    {
+                        author: 'unknown',
+                        severity: 'Medium',
+                        version: '3.1',
+                        vector_string: 'CVSS:3.1/AV:LOCAL',
+                        attack_vector: 'LOCAL',
+                        base_score: 5.5,
+                        exploitability_score: 0,
+                        impact_score: 0
+                    }
+                ]
+            },
+            epss: {
+                score: 0.00021,
+                percentile: 0.04731
+            },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: {
+                state: 'unknown'
+            },
+            status: 'fixed',
+            simplified_status: 'Fixed',
+            assessments: [
+                {
+                    id: '9db07870-42c0-4e7a-b1b5-689c29f8943f',
+                    vuln_id: 'CVE-2024-56730',
+                    packages: ['linux-yocto@6.6.21'],
+                    status: 'fixed',
+                    simplified_status: 'Fixed',
+                    status_notes: '',
+                    justification: '',
+                    impact_statement: 'Yocto reported vulnerability as Patched',
+                    workaround: '',
+                    workaround_timestamp: '',
+                    timestamp: '2026-02-06T17:43:14.254534+00:00',
+                    last_update: '2026-02-06T17:43:14.254537+00:00',
+                    responses: []
+                }
+            ]
         }
     ];
 
@@ -401,6 +465,42 @@ describe('Vulnerability Table', () => {
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
+    })
+
+    test('searching with negation text', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
+
+        await user.type(search_bar, '-2010');
+
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
+        expect(vuln_xyz).toBeInTheDocument();
+    })
+
+    test('searching with a combination of queries', async () => {
+        // ARRANGE
+         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        await user.type(search_bar, '-2010 2024');
+
+        // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
+        }, { timeout: 2000 });
+
+        const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2024-56730/});
+        expect(vuln_xyz).toBeTruthy();
     })
 
     test('searching for description', async () => {
