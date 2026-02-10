@@ -127,6 +127,13 @@ To configure your `yaml` file, you can look at the example provided here _.vulns
 - To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ====
 
+List of environment variables and their purpose:
+
+* `USER_UID`: This variable sets the UID of the user in the container, allowing
+  Vulnscout to create output files with correct permissions
+* `USER_GID`: This variable sets the GID of the user in the container, allowing
+  Vulnscout to create output files with correct permissions
+
 ===== HTTP Proxy Configuration
 
 If you want to run VulnScout with an HTTP proxy, simply add the standard http_proxy environment variables to the docker-compose file. These variables are respected by all traffic in the container:

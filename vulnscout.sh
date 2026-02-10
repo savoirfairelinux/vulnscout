@@ -374,6 +374,11 @@ EOF
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 EOF
 
+    if [ -n "$UID" ]; then
+        echo "      - USER_UID=$UID" >> "$YAML_FILE"
+        echo "      - USER_GID=${GID:-$UID}" >> "$YAML_FILE"
+    fi
+
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
         echo "      - INTERACTIVE_MODE=false" >> "$YAML_FILE"
         echo "      - FAIL_CONDITION=$VULNSCOUT_FAIL_CONDITION" >> "$YAML_FILE"
