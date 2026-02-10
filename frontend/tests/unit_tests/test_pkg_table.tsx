@@ -199,6 +199,45 @@ describe('Packages Table', () => {
         expect(pkg_xyz).toBeTruthy();
     })
 
+    test('searching with negation text', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        const rowToRemove = await screen.findByRole('cell', {name: /aaabbbccc/});
+
+        await user.type(search_bar, '-aaabbbccc');
+
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        const pkg_def = await screen.getByRole('cell', {name: /dddeeefff/});
+        
+        expect(pkg_xyz).toBeTruthy();
+        expect(pkg_def).toBeTruthy();
+    })
+
+    test('searching with a combination of queries', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
+
+        // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /aaabbbccc/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /dddeeefff/})).toBeNull();
+        }, { timeout: 2000 });
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        expect(pkg_xyz).toBeTruthy();
+    })
+
     test('filter by source', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
