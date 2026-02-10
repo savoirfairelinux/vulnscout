@@ -46,21 +46,24 @@ cd vulnscout
 
 ===  Run VulnScout demo
 
-This project contains a default usable example of VulnScout.
-To use it, you can simply run the default script with the command:
+This project contains default usage examples of VulnScout.
+You can run the demo with the following command:
 
 [source,shell]
 ----
-./start-example.sh
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example/input/core-image-minimal-qemux86-64.spdx.tar.zst \
+--cve-check $(pwd)/.vulnscout/example/input/core-image-minimal-qemux86-64.rootfs.json
 ----
 
-Or, if you prefer to run another example based on SPDX-3.0, you can use the following command:
+Or, if you prefer to run the SPDX-3.0 example, you can use:
 
 [source,shell]
 ----
-./start-example.sh --spdx3
+./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
 ----
-These commands will use the docker-compose files located here: _/.vulnscout/example/_
+
+These commands will start VulnScout and open the web interface at http://localhost:7275
 
 ===  Run VulnScout with Yocto
 
