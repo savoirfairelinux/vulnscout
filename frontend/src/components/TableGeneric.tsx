@@ -52,21 +52,33 @@ function TableGeneric<DataType> ({
 
     const filteredData = useMemo(() => {
         if (search && search.length > 2) {
-            const processedSearch = search
-                .trim()
-                .split(/\s+/)
-                .map(term => {
-                    if (term.startsWith('!')) {
-                        return `${term}`; // negation pattern for Fuse, which uses exactly a leading exclamation mark
-                    }
-                    return `'${term}`; // exact match pattern for Fuse, which has a leading apostrophe
-                })
-                .join(' ')
+            const buildFuseQuery = (raw: string) => {
+                const terms = raw.trim().split(/\s+/);
+                // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
+                return {
+                    $and: terms.map(term => {
+                        const isNegated = term.startsWith('-');
+                        const raw = isNegated ? term.slice(1) : term;
+                        const value = isNegated ? `!${raw}` : `'${raw}`; // exact (non-fuzzy) match
+
+                        if (fuseKeys.length === 1) {
+                            return { [fuseKeys[0]]: value };
+                        }
+
+                        if (isNegated) {
+                            return { $and: fuseKeys.map(key => ({ [key]: value })) };
+                        }
+                        return { $or: fuseKeys.map(key => ({ [key]: value })) };
+                    })
+                };
+            };
+
+            const processedSearch = buildFuseQuery(search);
 
             return fuse.search(processedSearch).map(result => result.item);
         }
         return data;
-    }, [search, fuse, data]);
+    }, [search, fuse, data, fuseKeys]);
 
     // Notify parent component when filtered data changes
     useEffect(() => {
