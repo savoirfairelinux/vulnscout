@@ -190,7 +190,7 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
       <TableGeneric
         columns={columns}
         data={DATA.slice(0, 20)}
-        search="!row5"
+        search="-row5"
         tableHeight="auto"
         hasPagination={false}
       />
@@ -216,7 +216,7 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
       <TableGeneric
         columns={columns}
         data={DATA.slice(0, 20)}
-        search="row !row10"
+        search="row -row10"
         tableHeight="auto"
         hasPagination={false}
       />
