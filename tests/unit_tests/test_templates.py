@@ -250,3 +250,49 @@ class TestFilterAsListMethod:
         assert {"id": "value1"} in result
         assert {"id": "value2"} in result
         assert {"id": "value3"} in result
+
+
+class TestGetEnvVarMethod:
+    """Test get_env_var method for accessing host environment variables in templates"""
+
+    def test_get_env_var_with_prefixed_variable(self):
+        """Test that prefixed VULNSCOUT_TPL_ variables are found"""
+        with patch.dict('os.environ', {'VULNSCOUT_TPL_DISTRO': 'poky'}):
+            result = TemplatesExtensions.get_env_var("DISTRO")
+            assert result == "poky"
+
+    def test_get_env_var_with_direct_variable(self):
+        """Test that direct environment variables without prefix are ignored"""
+        with patch.dict('os.environ', {'MACHINE': 'qemuarm64'}, clear=False):
+            # Ensure no prefixed version exists
+            import os
+            if 'VULNSCOUT_TPL_MACHINE' in os.environ:
+                del os.environ['VULNSCOUT_TPL_MACHINE']
+            result = TemplatesExtensions.get_env_var("MACHINE")
+            assert result == ""
+
+    def test_get_env_var_prefixed_takes_priority(self):
+        """Test that VULNSCOUT_TPL_ prefix takes priority over direct variable"""
+        with patch.dict('os.environ', {
+            'VULNSCOUT_TPL_MY_VAR': 'prefixed_value',
+            'MY_VAR': 'direct_value'
+        }):
+            result = TemplatesExtensions.get_env_var("MY_VAR")
+            assert result == "prefixed_value"
+
+    def test_get_env_var_with_default(self):
+        """Test that default value is returned when variable is not set"""
+        with patch.dict('os.environ', {}, clear=True):
+            result = TemplatesExtensions.get_env_var("NONEXISTENT_VAR", "my_default")
+            assert result == "my_default"
+
+    def test_get_env_var_returns_empty_string_by_default(self):
+        """Test that empty string is returned when variable is not set and no default"""
+        with patch.dict('os.environ', {}, clear=True):
+            result = TemplatesExtensions.get_env_var("NONEXISTENT_VAR")
+            assert result == ""
+
+    def test_env_available_as_jinja_global(self, templates_instance):
+        """Test that env() is available as a Jinja global function"""
+        assert "env" in templates_instance.env.globals
+        assert templates_instance.env.globals["env"] == TemplatesExtensions.get_env_var

@@ -37,6 +37,7 @@ class Templates:
             ]),
             autoescape=False
         )
+        self.env.globals['env'] = TemplatesExtensions.get_env_var
         self.extensions = TemplatesExtensions(self.env)
 
     def render(self, template_name, **kwargs):
@@ -190,6 +191,14 @@ class TemplatesExtensions:
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
         jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
+
+    @staticmethod
+    def get_env_var(key: str, default: str = "") -> str:
+        """Get an environment variable, looking up VULNSCOUT_TPL_<key> prefix first."""
+        prefixed = os.getenv(f"VULNSCOUT_TPL_{key}")
+        if prefixed is not None:
+            return prefixed
+        return default
 
     @staticmethod
     def filter_status(value: list, status: str | list[str]) -> list:
