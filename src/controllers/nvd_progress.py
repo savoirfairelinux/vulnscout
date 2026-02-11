@@ -29,7 +29,7 @@ class NVDProgressTracker:
         if self._initialized:
             return
 
-        cache_dir = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+        cache_dir = os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db")
         progress_file_path = Path(cache_dir).parent / "nvd_progress.json"
         self._progress_file = str(progress_file_path)
 

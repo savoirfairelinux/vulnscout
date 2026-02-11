@@ -8,7 +8,7 @@ from ..controllers.epss_db import EPSS_DB
 
 
 def fetch_epss_updates():
-    epss_db_path = os.getenv("EPSS_DB_PATH", "/cache/vulnscout/epss.db")
+    epss_db_path = os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db")
     epss_db = EPSS_DB(epss_db_path)
 
     if epss_db.needs_update():

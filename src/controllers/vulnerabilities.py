@@ -8,6 +8,7 @@ from ..controllers.packages import PackagesController
 import time
 from typing import Optional
 from ..controllers.epss_db import EPSS_DB
+import os
 
 
 class VulnerabilitiesController:
@@ -25,7 +26,7 @@ class VulnerabilitiesController:
         self.vulnerabilities: dict[str, Vulnerability] = {}
         """A dictionary of vulnerabilities, indexed by their id."""
         self.alias_registered: dict[str, str] = {}
-        self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
+        self.epss_db = EPSS_DB(os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db"))
 
     def get(self, vuln_id: str):
         """Return a vulnerability by id (str) or None if not found. Also look for aliases."""

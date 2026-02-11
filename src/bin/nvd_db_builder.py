@@ -9,7 +9,7 @@ import os
 
 
 def fetch_db_updates():
-    nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+    nvd_db_path = os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db")
     nvd_db = NVD_DB(nvd_db_path)
     nvd_api_key = os.getenv("NVD_API_KEY")
     progress_tracker = NVDProgressTracker()

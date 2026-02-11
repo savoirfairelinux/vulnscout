@@ -6,8 +6,9 @@ from flask import request
 import json
 import re
 import sqlite3
+import os
 
-NVD_DB_PATH = "/cache/vulnscout/nvd.db"
+VULNSCOUT_DB_PATH = os.getenv("VULNSCOUT_DB_PATH", "/cache/vulnscout/vulnscout.db")
 DB_MODEL_VERSION = "nvd2.0-vulnscout1.1"
 
 
@@ -16,12 +17,12 @@ def init_app(app):
     safe_url_regex = r"[^a-zA-Z0-9_\-\.]"
     """Regex to remove unsafe characters from URLs."""
 
-    if "NVD_DB_PATH" not in app.config:
-        app.config["NVD_DB_PATH"] = NVD_DB_PATH
+    if "VULNSCOUT_DB_PATH" not in app.config:
+        app.config["VULNSCOUT_DB_PATH"] = VULNSCOUT_DB_PATH
 
     @app.route('/api/patch-finder/status', methods=['GET'])
     def get_status():
-        conn = sqlite3.connect(app.config["NVD_DB_PATH"])
+        conn = sqlite3.connect(app.config["VULNSCOUT_DB_PATH"])
         cursor = conn.cursor()
         version = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
         write_flag = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'writing_flag';").fetchone()
@@ -45,7 +46,7 @@ def init_app(app):
             return "Invalid payload, require a list of string", 400
         safe_cve = [re.sub(safe_url_regex, '', s) for s in payload_data]
 
-        conn = sqlite3.connect(app.config["NVD_DB_PATH"])
+        conn = sqlite3.connect(app.config["VULNSCOUT_DB_PATH"])
         cursor = conn.cursor()
         res = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
         if res is None or res[0] != DB_MODEL_VERSION:
