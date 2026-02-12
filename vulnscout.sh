@@ -374,9 +374,9 @@ EOF
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 EOF
 
-    if [ -n "$UID" ]; then
-        echo "      - USER_UID=$UID" >> "$YAML_FILE"
-        echo "      - USER_GID=${GID:-$UID}" >> "$YAML_FILE"
+    if [ -n "$(id -u)" ] && [ -n "$(id -g)" ]; then
+        echo "      - USER_UID=$(id -u)" >> "$YAML_FILE"
+        echo "      - USER_GID=$(id -g)" >> "$YAML_FILE"
     fi
 
     if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
