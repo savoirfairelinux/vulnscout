@@ -44,6 +44,8 @@ class YoctoVulns:
                     vuln.add_url(issue.get("link"))
                 if "summary" in issue:
                     vuln.add_text(issue.get("summary"), "summary")
+                if "description" in issue:
+                    vuln.add_text(issue.get("description"), "yocto description")
 
                 if "scorev3" in issue and issue["scorev3"] != "0.0":
                     cvss_item = CVSS(

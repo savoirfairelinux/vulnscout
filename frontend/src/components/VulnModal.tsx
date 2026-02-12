@@ -571,7 +571,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         </div>
 
-                        <div className="mb-6">
+                        <div className="mb-6 flex flex-col gap-2">
                             {vuln.texts.map((text) => {
                                 const title = text.title.split('');
                                 return (
