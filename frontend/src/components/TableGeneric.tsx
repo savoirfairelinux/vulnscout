@@ -293,8 +293,14 @@ function TableGeneric<DataType> ({
                                         }}
                                     >
                                         <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
-                                            <b className='mb-2'>Description of {row.id}</b><br/>
-                                            {(row.original as any)?.[hoverField]?.map((a: any) => a?.content)?.join('\n---\n') ?? "No description was provided"}
+                                            {(row.original as any)?.[hoverField]?.length > 0 ?(row.original as any)?.[hoverField]?.map((a: any, index: number) => {
+                                            console.log({row})
+                                            return <>
+                                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, c => c.toUpperCase()))} of {row.id}</b><br/>
+                                                {a?.content ?? "N/A"}
+                                                {index < (row.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
+                                                </>
+                                        }) : "No description was provided"}
                                         </td>
                                     </tr>
                                 ]
