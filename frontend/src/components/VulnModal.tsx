@@ -573,10 +573,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         <div className="mb-6 flex flex-col gap-2">
                             {vuln.texts.map((text) => {
-                                const title = text.title.split('');
                                 return (
                                 <div key={encodeURIComponent(text.title)}>
-                                    <h3 className="font-bold mb-2">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
+                                    <h3 className="font-bold mb-2">{text.title?.replace(/\b\w/g, c => c.toLocaleUpperCase())}</h3>
                                     <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                                 </div>)
                             })}
