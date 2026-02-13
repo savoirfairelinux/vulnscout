@@ -838,6 +838,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         max={SEVERITY_RANGE_MAX}
                         initialMin={severityRange.min}
                         initialMax={severityRange.max}
+                        step={0.1}
                         onChange={updateCustomSeverityFilter}
                     />
                 )}
