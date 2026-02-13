@@ -101,6 +101,16 @@ If you want to use the non-interactive mode, without the web interface, you can 
 --fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ----
 
+You can obtain the report of vulnerabilities matching the condition by including the proper report remplate:
+
+[source,shell]
+----
+./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
+--fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)" \
+--report-template match_condition.adoc
+----
+
 ==== Configuration tips for other projects
 
 To use VulnScout, you only need a Software Bill of Materials *(SBOM)* file in SPDX or CycloneDX format. +
