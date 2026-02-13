@@ -1613,4 +1613,19 @@ describe('Vulnerability Modal', () => {
         expect(screen.getByText('CVE-2010-1234')).toBeInTheDocument();
         expect(screen.queryByText('Edit Assessment')).not.toBeInTheDocument();
     });
+
+    test('renders yocto description when available', () => {
+        // To avoid breaking other tests, we create a new vulnerability object with the yocto description added to the texts array
+        let vulnWithYoctoDesc = {
+            ...vulnerability,
+            texts: vulnerability.texts.slice().concat({
+                title: 'yocto_description',
+                content: 'Fixed from version 1.2.3rc4.'
+            })
+        }
+
+        render(<VulnModal vuln={vulnWithYoctoDesc} isEditing={false} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.getByText(/Fixed from version 1.2.3rc4/i)).toBeInTheDocument();
+    })
 });
