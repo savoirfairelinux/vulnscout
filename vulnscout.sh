@@ -152,12 +152,12 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
-    --sbom)
+    --spdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
         VULNSCOUT_SPDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
-        echo "Error: --sbom requires a value"
+        echo "Error: --spdx requires a value"
         exit 1
       fi
       ;;
