@@ -80,7 +80,7 @@ For example, to reconfigure the default example SPDX3, you can run:
 
 [source,shell]
 ----
-./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
 --cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
 ----
 
@@ -88,7 +88,7 @@ Then, if you want to use the CI mode, without the web interface, you can the com
 
 [source,shell]
 ----
-./vulnscout.sh --name demo --sbom $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
+./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
 --cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json \
 --fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ----
