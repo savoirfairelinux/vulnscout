@@ -501,10 +501,10 @@ start_vulnscout(){
     $DOCKER_COMPOSE -f "$YAML_FILE" up
 
     # Retrieve container exit code directly from Docker
-    docker_exit_code=$(docker inspect vulnscout --format '{{.State.ExitCode}}' 2>/dev/null || echo 1)
+    docker_exit_code=$($CONTAINER_ENGINE inspect vulnscout --format '{{.State.ExitCode}}' 2>/dev/null || echo 1)
 
     # Retrieve container logs
-    docker_result=$(docker logs vulnscout 2>/dev/null || echo "")
+    docker_result=$($CONTAINER_ENGINE logs vulnscout 2>/dev/null || echo "")
 
     if [ "$docker_exit_code" -eq 2 ]; then
         echo "---------------- Vulnscout triggered fail condition ----------------"
