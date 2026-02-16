@@ -26,7 +26,10 @@ To do so, you can run the following command:
 
 [source,bash]
 ----
-./start-example.sh --dev
+./vulnscout.sh \
+--name example \
+--spdx .vulnscout/example/input/example.rootfs.spdx.tar.zst \
+--dev
 ----
 
 == icon:check[] Testing the project

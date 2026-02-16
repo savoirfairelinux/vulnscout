@@ -51,16 +51,16 @@ To use it, you can simply run the default script with the command:
 
 [source,shell]
 ----
-./start-example.sh
+./vulnscout.sh --name example --spdx .vulnscout/example/input/example.rootfs.spdx.tar.zst
 ----
 
 Or, if you prefer to run another example based on SPDX-3.0, you can use the following command:
 
 [source,shell]
 ----
-./start-example.sh --spdx3
+./vulnscout.sh --name example-spdx3 --spdx .vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json
 ----
-These commands will use the docker-compose files located here: _/.vulnscout/example/_
+These commands will dynamically generate and use docker-compose configuration files.
 
 ===  Run VulnScout with Yocto
 
