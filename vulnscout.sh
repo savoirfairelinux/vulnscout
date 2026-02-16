@@ -57,6 +57,8 @@ show_help() {
   echo "  --skip-grype-scan Skip the Grype scan which can detect new vulnerabilities"
   echo "  --help, -h        Show this help message and exit"
   echo "  --dev             Use the development version of VulnScout"
+  echo "  -d, --detach      Run VulnScout in detached mode"
+  echo "  --stop            Stop running VulnScout container"
 }
 
 VULNSCOUT_PATH="$(dirname "$(readlink -f "$0")")/.vulnscout"
@@ -85,6 +87,8 @@ VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
 VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 VULNSCOUT_SKIP_GRYPE_SCAN="false"
+VULNSCOUT_DETACH_MODE="false"
+VULNSCOUT_STOP_MODE="false"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -254,6 +258,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dev)
       VULNSCOUT_DEV_MODE="true"
+      shift
+      ;;
+    -d|--detach)
+      VULNSCOUT_DETACH_MODE="true"
+      shift
+      ;;
+    --stop)
+      VULNSCOUT_STOP_MODE="true"
       shift
       ;;
     --http-proxy)
@@ -488,7 +500,7 @@ setup_devtools() {
     }
     trap cleanup SIGINT SIGTERM EXIT
   else
-    echo "Frontend dev server running in detached mode. Use './start-example.sh --stop' to stop it."
+    echo "Frontend dev server running in detached mode. Use './vulnscout.sh --stop' to stop it."
   fi
 }
 
@@ -507,6 +519,17 @@ start_vulnscout(){
     $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
 
     # Start docker services
+    if [ "$VULNSCOUT_DETACH_MODE" == "true" ]; then
+        $DOCKER_COMPOSE -f "$YAML_FILE" up -d
+        if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+            echo "Frontend dev server is available at http://localhost:5173"
+            echo "Backend dev server is available at http://localhost:7275"
+        else
+            echo "VulnScout is available at http://localhost:7275"
+        fi
+        return 0
+    fi
+    
     $DOCKER_COMPOSE -f "$YAML_FILE" up
 
     # Retrieve container exit code directly from Docker
@@ -530,8 +553,36 @@ start_vulnscout(){
 }
 
 check_docker_compose_command
+
+# Handle stop mode
+if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
+  echo "Stopping running VulnScout..."
+  
+  # Stop frontend dev server if running
+  if [ -f .vulnscout-npm.pid ]; then
+    npm_pid=$(cat .vulnscout-npm.pid)
+    if ps -p "$npm_pid" > /dev/null 2>&1; then
+      echo "Stopping frontend dev server (PID $npm_pid)..."
+      kill -- -$(ps -o pgid= "$npm_pid" | grep -o '[0-9]*') 2>/dev/null || kill "$npm_pid" 2>/dev/null || true
+    fi
+    rm -f .vulnscout-npm.pid
+  fi
+  
+  # Detect container engine
+  if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+    CONTAINER_ENGINE="podman"
+  else
+    CONTAINER_ENGINE="docker"
+  fi
+  
+  $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
+  
+  echo "VulnScout stopped."
+  exit 0
+fi
+
 create_yaml_file
 if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
-  setup_devtools "false"
+  setup_devtools "$VULNSCOUT_DETACH_MODE"
 fi
 start_vulnscout
