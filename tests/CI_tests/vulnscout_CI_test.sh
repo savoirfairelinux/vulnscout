@@ -35,8 +35,8 @@ else
 	exit 1
 fi
 # Launching VulnScout CI script with an archive of SPDX2
-./vulnscout.sh --name test_ci --spdx $(pwd)/.vulnscout/example/input/example.rootfs.spdx.tar.zst \
-	--cve-check $(pwd)/.vulnscout/example/input/example.rootfs.json \
+./vulnscout.sh --name test_ci --spdx $(pwd)/.vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
+	--cve-check $(pwd)/.vulnscout/example/spdx2/example.rootfs.json \
 	--fail_condition "cvss >= 9.0"
 if [ $? -eq 2 ]; then
 	echo "**Vulnscout condition fail correctly triggered**"
