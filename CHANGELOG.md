@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ---
 
 ## [Unreleased]
+- `vulnscout.sh` (SPDX2): fixed "Read-only file system" error on archived files.
+- `vulnscout.sh`: Renamed `--sbom` to `--spdx`.
+- `vulnscout.sh`: Fixed inaccurate return code when using Podman.
 ---
 
 ## [0.10.0] - 2026-02-06
@@ -114,21 +117,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - Custom CVSS scoring support
-- “Reset filters” button in Packages view 
-- New dashboard elements 
+- “Reset filters” button in Packages view
+- New dashboard elements
 - Filtering criteria propagation from pie charts
-- Persistence & instant display in vulnerability popup 
-- Severity sorting + “Hide fixed” toggle in Vulnerabilities tab  
+- Persistence & instant display in vulnerability popup
+- Severity sorting + “Hide fixed” toggle in Vulnerabilities tab
 - ESC-close + confirmation on vuln modal
 - Grouping multiple packages under one assessment
 - Added README section about custom CVSS scoring
 
 ### Changed
-- Refactored dark mode feature 
+- Refactored dark mode feature
 - Export page redesign
-- Removed excess scroll in Vulnerabilities view 
+- Removed excess scroll in Vulnerabilities view
 - Absolute API URLs used across the app
-- Changed OpenVEX “author” field name  
+- Changed OpenVEX “author” field name
 
 ### Removed
 - `status` column from Packages table
@@ -145,7 +148,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - Enforced minimum test coverage threshold
 - Added frontend linting, config updates, updated Vite version
 - CI workflow extended to ARM architecture
-- Dockerfile updated to latest Node.js version 
+- Dockerfile updated to latest Node.js version
 
 ---
 ## [v0.7.1] - 2025-08-20
@@ -284,4 +287,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - Initial repo setup with Python, frontend, and basic documentation.
-
