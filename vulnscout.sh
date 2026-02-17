@@ -154,7 +154,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --spdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_SPDX_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_SPDX_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --spdx requires a value"
@@ -163,7 +163,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --openvex)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_OPENVEX_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_OPENVEX_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --openvex requires a value"
@@ -181,7 +181,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_CVE_PATH="$(dirname "$(readlink -f "$2")")"
+        VULNSCOUT_CVE_PATH="$(readlink -f "$2")"
         shift 2
       else
         echo "Error: --cve-check requires a value"
