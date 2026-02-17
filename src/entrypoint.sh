@@ -15,6 +15,7 @@ useradd -s "/bin/sh" -oN -u "$USER_UID" -g "$USER_GID" -d "$USER_HOME" "$USER_NA
 mkdir -p "$USER_HOME"
 chown "$USER_UID:$USER_GID" "$USER_HOME"
 chown -Rf "$USER_UID:$USER_GID" "/scan"
+chown -Rf "$USER_UID:$USER_GID" "/cache"
 
 # Drop the root privileges and run provided script using sudo
 exec sudo --preserve-env --set-home -u "#$USER_UID" sh -c "$1"
