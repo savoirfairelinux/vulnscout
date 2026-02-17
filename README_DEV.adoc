@@ -28,7 +28,7 @@ To do so, you can run the following command:
 ----
 ./vulnscout.sh \
 --name example \
---spdx .vulnscout/example/input/example.rootfs.spdx.tar.zst \
+--spdx .vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
 --dev
 ----
 
