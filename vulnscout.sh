@@ -89,6 +89,7 @@ VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 VULNSCOUT_SKIP_GRYPE_SCAN="false"
 VULNSCOUT_DETACH_MODE="false"
 VULNSCOUT_STOP_MODE="false"
+COMPOSE_PROVIDER=""
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -316,18 +317,18 @@ fi
 VULNSCOUT_COMBINED_PATH="$VULNSCOUT_PATH/$VULNSCOUT_ENTRY_NAME"
 YAML_FILE="$VULNSCOUT_COMBINED_PATH/docker-$VULNSCOUT_ENTRY_NAME.yml"
 
-check_docker_compose_command() {
+check_compose_provider_command() {
     if command -v podman &> /dev/null && command -v podman-compose &> /dev/null; then
-        DOCKER_COMPOSE="podman-compose"
+        COMPOSE_PROVIDER="podman-compose"
     elif command -v docker-compose &> /dev/null; then
-        DOCKER_COMPOSE="docker-compose"
+        COMPOSE_PROVIDER="docker-compose"
     elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
-        DOCKER_COMPOSE="docker compose"
+        COMPOSE_PROVIDER="docker compose"
     else
         echo "Error: \"docker compose\" or \"docker-compose\" is not installed or not in PATH."
         exit 1
     fi
-    echo "Docker Compose command found: $DOCKER_COMPOSE"
+    echo "Docker Compose command found: $COMPOSE_PROVIDER"
 }
 
 create_yaml_file(){
@@ -506,7 +507,7 @@ setup_devtools() {
 
 start_vulnscout(){
     # Detect container engine
-    if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+    if [[ "$COMPOSE_PROVIDER" == "podman-compose" ]]; then
         CONTAINER_ENGINE="podman"
     else
         CONTAINER_ENGINE="docker"
@@ -520,7 +521,7 @@ start_vulnscout(){
 
     # Start docker services
     if [ "$VULNSCOUT_DETACH_MODE" == "true" ]; then
-        $DOCKER_COMPOSE -f "$YAML_FILE" up -d
+        $COMPOSE_PROVIDER -f "$YAML_FILE" up -d
         if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
             echo "Frontend dev server is available at http://localhost:5173"
             echo "Backend dev server is available at http://localhost:7275"
@@ -530,7 +531,7 @@ start_vulnscout(){
         return 0
     fi
     
-    $DOCKER_COMPOSE -f "$YAML_FILE" up
+    $COMPOSE_PROVIDER -f "$YAML_FILE" up
 
     # Retrieve container exit code directly from Docker
     docker_exit_code=$($CONTAINER_ENGINE inspect vulnscout --format '{{.State.ExitCode}}' 2>/dev/null || echo 1)
@@ -552,7 +553,7 @@ start_vulnscout(){
 
 }
 
-check_docker_compose_command
+check_compose_provider_command
 
 # Handle stop mode
 if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
@@ -569,7 +570,7 @@ if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
   fi
   
   # Detect container engine
-  if [[ "$DOCKER_COMPOSE" == "podman-compose" ]]; then
+  if [[ "$COMPOSE_PROVIDER" == "podman-compose" ]]; then
     CONTAINER_ENGINE="podman"
   else
     CONTAINER_ENGINE="docker"
