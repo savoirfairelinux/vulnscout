@@ -44,23 +44,34 @@ cd vulnscout
 
 ==  :penguin: Using VulnScout
 
-===  Run VulnScout demo
+===  Run VulnScout in interactive mode
 
-This project contains a default usable example of VulnScout.
-To use it, you can simply run the default script with the command:
+This project contains default examples of VulnScout.
+
+To run VulnScout demo in interactive mode, you can simply run the command:
+[source,shell]
+----
+./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+----
+
+Or, if you prefer to run another example based on SPDX2, you can use the following command:
 
 [source,shell]
 ----
-./start-example.sh
+./vulnscout.sh --name example --spdx .vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
+--cve-check .vulnscout/example/spdx2/example.rootfs.json \
+--cdx .vulnscout/example/spdx2/cyclonedx-export
 ----
 
-Or, if you prefer to run another example based on SPDX-3.0, you can use the following command:
+Then open your browser to view the results:
 
-[source,shell]
+[source,plaintext]
 ----
-./start-example.sh --spdx3
+http://localhost:7275
 ----
-These commands will use the docker-compose files located here: _/.vulnscout/example/_
+
+These commands will dynamically generate and use docker-compose configuration files.
 
 ===  Run VulnScout with Yocto
 
@@ -72,42 +83,15 @@ To be short, a simple `inherit vulnscout` in your image recipe will be enough to
 
 The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
-=== Run VulnScout manually
+=== Run VulnScout in non-interactive mode
 
-To use VulnScout manually, you can use the script `vulnscout.sh` provided in the repository.
-
-For example, to reconfigure the default example SPDX3, you can run:
+If you want to use the non-interactive mode, without the web interface, you can the command with the `--fail_condition` argument:
 
 [source,shell]
 ----
-./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json
-----
-
-Then, if you want to use the CI mode, without the web interface, you can the command with the `--fail_condition` argument:
-
-[source,shell]
-----
-./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/.vulnscout/example-spdx3/input/core-image-minimal-qemux86-64.rootfs.json \
+./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
 --fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
-----
-
-
-===  Run VulnScout with docker
-
-You can start the VulnScout docker container with a `docker compose` or `docker-compose` command:
-
-[source,bash]
-----
-docker compose -f </path/to/yaml> up
-----
-
-Then open your browser to view the results:
-
-[source,plaintext]
-----
-http://localhost:7275
 ----
 
 ==== Configuration tips for other projects
