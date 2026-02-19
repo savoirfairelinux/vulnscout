@@ -54,6 +54,7 @@ show_help() {
   echo "  --document_url <url>        Document URL"
   echo ""
   echo "Other options:"
+  echo "  --skip-grype-scan Skip the Grype scan which can detect new vulnerabilities"
   echo "  --help, -h        Show this help message and exit"
   echo "  --dev             Use the development version of VulnScout"
 }
@@ -83,6 +84,7 @@ VULNSCOUT_HTTP_PROXY=""
 VULNSCOUT_HTTPS_PROXY=""
 VULNSCOUT_NO_PROXY="localhost,127.0.0.1"
 VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
+VULNSCOUT_SKIP_GRYPE_SCAN="false"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -246,6 +248,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
+    --skip-grype-scan)
+      VULNSCOUT_SKIP_GRYPE_SCAN="true"
+      shift
+      ;;
     --dev)
       VULNSCOUT_DEV_MODE="true"
       shift
@@ -402,6 +408,9 @@ EOF
     fi
     if [ ! -z "$VULNSCOUT_DOCUMENT_URL" ]; then
         echo "      - DOCUMENT_URL=$VULNSCOUT_DOCUMENT_URL" >> "$YAML_FILE"
+    fi
+    if [ "$VULNSCOUT_SKIP_GRYPE_SCAN" == "true" ]; then
+        echo "      - SKIP_GRYPE_SCAN=true" >> "$YAML_FILE"
     fi
     if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
