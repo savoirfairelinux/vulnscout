@@ -853,6 +853,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         onChange={updateCustomSeverityFilter}
                     />
                 )}
+                customFilterName="by score"
                 showCustomFilterComponent={showCustomSeverityFilter}
                 setShowCustomFilterComponent={setShowCustomSeverityFilter}
             />
