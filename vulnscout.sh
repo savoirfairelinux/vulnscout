@@ -62,6 +62,46 @@ show_help() {
   echo "  --stop            Stop running VulnScout container"
 }
 
+require_value(){
+    local flag="$1"
+    local value="$2"
+
+    if [[ -z "$value" || "$value" =~ ^-- ]]; then
+        echo "Error: $flag requires a value"
+        exit 1
+    fi
+}
+
+require_directory() {
+    local flag="$1"
+    local path="$2"
+
+    if [[ -z "$path" || "$path" =~ ^-- ]]; then
+        echo "Error: $flag requires a value"
+        exit 1
+    fi
+
+    if [[ ! -d "$path" ]]; then
+        echo "Error: Directory not found for $flag: $path"
+        exit 1
+    fi
+}
+
+require_file() {
+    local flag="$1"
+    local path="$2"
+
+    if [[ -z "$path" || "$path" =~ ^-- ]]; then
+        echo "Error: $flag requires a value"
+        exit 1
+    fi
+
+    if [[ ! -f "$path" ]]; then
+        echo "Error: File not found for $flag: $path"
+        exit 1
+    fi
+}
+
 VULNSCOUT_PATH="$(dirname "$(readlink -f "$0")")/.vulnscout"
 VULNSCOUT_SPDX_PATH=""
 VULNSCOUT_CDX_PATH=""
@@ -113,98 +153,115 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        VULNSCOUT_ENTRY_NAME="$2"
-        shift 2
-      else
-        echo "Error: --name requires a value"
-        exit 1
-      fi
-      ;;
+      require_value "$1" "${2:-}"
+      VULNSCOUT_ENTRY_NAME="$2"
+      shift 2
+    ;;
     --workdir_path)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_PATH="$2/.vulnscout"
-        shift 2
-      else
-        echo "Error: --workdir_path requires a value"
-        exit 1
-      fi
+      require_directory "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_PATH="$2/.vulnscout"
+      shift 2
       ;;
     --nvd-api-key)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_NVD_API_KEY="$2"
-        shift 2
-      else
-        echo "Error: --nvd-api-key requires a value"
-        exit 1
-      fi
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_NVD_API_KEY="$2"
+      shift 2
+      ;;
+    --fail_condition)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_FAIL_CONDITION="$2"
+      shift 2
+      ;;
+    --report-template)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_TEMPLATE="$2"
+      shift 2
+      ;;
+    --spdx)
+      require_file "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_SPDX_PATH="$(readlink -f "$2")"
+      shift 2
+      ;;
+    --openvex)
+      require_file "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_OPENVEX_PATH="$(readlink -f "$2")"
+      shift 2
+      ;;
+    --cdx)
+      require_directory "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_CDX_PATH="$(readlink -f "$2")"
+      shift 2
+      ;;
+    --cve-check)
+      require_file "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_CVE_PATH="$(readlink -f "$2")"
+      shift 2
+      ;;
+    --product_name)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_PRODUCT_NAME="$2"
+      shift 2
+      ;;
+    --product_version)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_PRODUCT_VERSION="$2"
+      shift 2
+      ;;
+    --company_name)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_COMPANY_NAME="$2"
+      shift 2
+      ;;
+    --contact_email)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_CONTACT_EMAIL="$2"
+      shift 2
+      ;;
+    --document_url)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_DOCUMENT_URL="$2"
+      shift 2
+      ;;
+    --http-proxy)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_HTTP_PROXY="$2"
+      shift 2
+      ;;
+    --https-proxy)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_HTTPS_PROXY="$2"
+      shift 2
+      ;;
+    --no-proxy)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_NO_PROXY="$2"
+      shift 2
       ;;
     --no_webui)
       YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_INTERACTIVE_MODE="false"
       shift
       ;;
-    --fail_condition)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_FAIL_CONDITION="$2"
-        shift 2
-      else
-        echo "Error: --fail_condition requires a value"
-        exit 1
-      fi
-      ;;
-    --report-template)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_TEMPLATE="$2"
-        shift 2
-      else
-        echo "Error: --report-template requires a value"
-        exit 1
-      fi
-      ;;
-    --spdx)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_SPDX_PATH="$(readlink -f "$2")"
-        shift 2
-      else
-        echo "Error: --spdx requires a value"
-        exit 1
-      fi
-      ;;
-    --openvex)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_OPENVEX_PATH="$(readlink -f "$2")"
-        shift 2
-      else
-        echo "Error: --openvex requires a value"
-        exit 1
-      fi
-      ;;
-    --cdx)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_CDX_PATH="$(dirname "$(readlink -f "$2")")"
-        shift 2
-      else
-        echo "Error: --cdx requires a value"
-        exit 1
-      fi
-      ;;
-    --cve-check)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_CVE_PATH="$(readlink -f "$2")"
-        shift 2
-      else
-        echo "Error: --cve-check requires a value"
-        exit 1
-      fi
+    --skip-grype-scan)
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_SKIP_GRYPE_SCAN="true"
+      shift
       ;;
     --cve-check-exclude-patched)
       YAML_REQUIRES_UPDATE="true"
@@ -214,71 +271,6 @@ while [[ $# -gt 0 ]]; do
     --ignore-parsing-errors)
       YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_IGNORE_PARSING_ERRORS="true"
-      shift
-      ;;
-    --vulnscout_path)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_PATH="$2"
-        shift 2
-      else
-        echo "Error: --vulnscout_path requires a value"
-        exit 1
-      fi
-      ;;
-    --product_name)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_PRODUCT_NAME="$2"
-        shift 2
-      else
-        echo "Error: --product_name requires a value"
-        exit 1
-      fi
-      ;;
-    --product_version)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_PRODUCT_VERSION="$2"
-        shift 2
-      else
-        echo "Error: --product_version requires a value"
-        exit 1
-      fi
-      ;;
-    --company_name)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_COMPANY_NAME="$2"
-        shift 2
-      else
-        echo "Error: --company_name requires a value"
-        exit 1
-      fi
-      ;;
-    --contact_email)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_CONTACT_EMAIL="$2"
-        shift 2
-      else
-        echo "Error: --contact_email requires a value"
-        exit 1
-      fi
-      ;;
-    --document_url)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_DOCUMENT_URL="$2"
-        shift 2
-      else
-        echo "Error: --document_url requires a value"
-        exit 1
-      fi
-      ;;
-    --skip-grype-scan)
-      YAML_REQUIRES_UPDATE="true"
-      VULNSCOUT_SKIP_GRYPE_SCAN="true"
       shift
       ;;
     --dev)
@@ -293,36 +285,6 @@ while [[ $# -gt 0 ]]; do
       VULNSCOUT_STOP_MODE="true"
       shift
       ;;
-    --http-proxy)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_HTTP_PROXY="$2"
-        shift 2
-      else
-        echo "Error: --http-proxy requires a value"
-        exit 1
-      fi
-      ;;
-    --https-proxy)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_HTTPS_PROXY="$2"
-        shift 2
-      else
-        echo "Error: --https-proxy requires a value"
-        exit 1
-      fi
-      ;;
-    --no-proxy)
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
-        YAML_REQUIRES_UPDATE="true"
-        VULNSCOUT_NO_PROXY="$2"
-        shift 2
-      else
-        echo "Error: --no-proxy requires a value"
-        exit 1
-      fi
-      ;;
     --help|-h)
       show_help
       exit 0
@@ -336,7 +298,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If template is specified, add it to GENERATE_DOCUMENTS
-if [ ! -z "$VULNSCOUT_TEMPLATE" ]; then
+if [ -n "$VULNSCOUT_TEMPLATE" ]; then
   VULNSCOUT_GENERATE_DOCUMENTS="$VULNSCOUT_GENERATE_DOCUMENTS,$VULNSCOUT_TEMPLATE"
 fi
 
@@ -387,19 +349,19 @@ services:
 EOF
 
     # Add Volumes section
-    if [ ! -z "$VULNSCOUT_CVE_PATH" ]; then
+    if [ -n "$VULNSCOUT_CVE_PATH" ]; then
         echo "      - $VULNSCOUT_CVE_PATH:/scan/inputs/yocto_cve_check/$(basename -- "$VULNSCOUT_CVE_PATH"):ro,Z" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_SPDX_PATH" ]; then
+    if [ -n "$VULNSCOUT_SPDX_PATH" ]; then
         echo "      - $VULNSCOUT_SPDX_PATH:/scan/inputs/spdx/$(basename -- "$VULNSCOUT_SPDX_PATH"):ro,Z" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_CDX_PATH" ]; then
+    if [ -n "$VULNSCOUT_CDX_PATH" ]; then
         echo "      - $VULNSCOUT_CDX_PATH:/scan/inputs/cdx/$VULNSCOUT_ENTRY_NAME.cdx.json:ro,Z" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_OPENVEX_PATH" ]; then
+    if [ -n "$VULNSCOUT_OPENVEX_PATH" ]; then
         echo "      - $VULNSCOUT_OPENVEX_PATH:/scan/inputs/openvex/$(basename -- "$VULNSCOUT_OPENVEX_PATH"):ro,Z" >> "$YAML_FILE"
     fi
-    if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+    if [ "$VULNSCOUT_DEV_MODE" = "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
     fi
     echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
@@ -426,7 +388,7 @@ EOF
         echo "      - USER_GID=$(id -g)" >> "$YAML_FILE"
     fi
 
-    if [ ! -z "$VULNSCOUT_FAIL_CONDITION" ]; then
+    if [ -n "$VULNSCOUT_FAIL_CONDITION" ]; then
         echo "      - INTERACTIVE_MODE=false" >> "$YAML_FILE"
         echo "      - FAIL_CONDITION=$VULNSCOUT_FAIL_CONDITION" >> "$YAML_FILE"
     elif [ "$VULNSCOUT_INTERACTIVE_MODE" = "false" ]; then
@@ -435,42 +397,42 @@ EOF
         echo "      - INTERACTIVE_MODE=true" >> "$YAML_FILE"
     fi
 
-    if [ ! -z "$VULNSCOUT_PRODUCT_NAME" ]; then
+    if [ -n "$VULNSCOUT_PRODUCT_NAME" ]; then
         echo "      - PRODUCT_NAME=$VULNSCOUT_PRODUCT_NAME" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_PRODUCT_VERSION" ]; then
+    if [ -n "$VULNSCOUT_PRODUCT_VERSION" ]; then
         echo "      - PRODUCT_VERSION=$VULNSCOUT_PRODUCT_VERSION" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_COMPANY_NAME" ]; then
+    if [ -n "$VULNSCOUT_COMPANY_NAME" ]; then
         echo "      - COMPANY_NAME=$VULNSCOUT_COMPANY_NAME" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_CONTACT_EMAIL" ]; then
+    if [ -n "$VULNSCOUT_CONTACT_EMAIL" ]; then
         echo "      - CONTACT_EMAIL=$VULNSCOUT_CONTACT_EMAIL" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_DOCUMENT_URL" ]; then
+    if [ -n "$VULNSCOUT_DOCUMENT_URL" ]; then
         echo "      - DOCUMENT_URL=$VULNSCOUT_DOCUMENT_URL" >> "$YAML_FILE"
     fi
-    if [ "$VULNSCOUT_SKIP_GRYPE_SCAN" == "true" ]; then
+    if [ "$VULNSCOUT_SKIP_GRYPE_SCAN" = "true" ]; then
         echo "      - SKIP_GRYPE_SCAN=true" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_NVD_API_KEY" ]; then
+    if [ -n "$VULNSCOUT_NVD_API_KEY" ]; then
         echo "      - NVD_API_KEY=$VULNSCOUT_NVD_API_KEY" >> "$YAML_FILE"
     fi
-    if [ ! -z "$VULNSCOUT_HTTP_PROXY" ] || [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
-        if [ ! -z "$VULNSCOUT_HTTP_PROXY" ]; then
+    if [ -n "$VULNSCOUT_HTTP_PROXY" ] || [ -n "$VULNSCOUT_HTTPS_PROXY" ]; then
+        if [ -n "$VULNSCOUT_HTTP_PROXY" ]; then
             echo "      - HTTP_PROXY=$VULNSCOUT_HTTP_PROXY" >> "$YAML_FILE"
         fi
-        if [ ! -z "$VULNSCOUT_HTTPS_PROXY" ]; then
+        if [ -n "$VULNSCOUT_HTTPS_PROXY" ]; then
             echo "      - HTTPS_PROXY=$VULNSCOUT_HTTPS_PROXY" >> "$YAML_FILE"
         fi
         echo "      - NO_PROXY=$VULNSCOUT_NO_PROXY" >> "$YAML_FILE"
     fi
-    if [ "$VULNSCOUT_CVE_EXCLUDE_PATCHED" == "true" ]; then
+    if [ "$VULNSCOUT_CVE_EXCLUDE_PATCHED" = "true" ]; then
         echo "      - CVE_CHECK_EXCLUDE_PATCHED=true" >> "$YAML_FILE"
     fi
 
     # Scan the provided report template for env("VAR") usage and pass those host env vars to container
-    if [ ! -z "$VULNSCOUT_TEMPLATE" ] && [ -f "$VULNSCOUT_PATH/templates/$VULNSCOUT_TEMPLATE" ]; then
+    if [ -n "$VULNSCOUT_TEMPLATE" ] && [ -f "$VULNSCOUT_PATH/templates/$VULNSCOUT_TEMPLATE" ]; then
         # Extract all env("...") and env('...') variable names from the template
         template_env_vars=$(grep -hoE 'env\s*\(\s*["\x27]([^"\x27]+)["\x27]' "$VULNSCOUT_PATH/templates/$VULNSCOUT_TEMPLATE" 2>/dev/null | \
             sed -E "s/env\s*\(\s*[\"']([^\"']+)[\"']/\1/" | \
@@ -479,7 +441,7 @@ EOF
         for var_name in $template_env_vars; do
             # Get the value from host environment
             var_value="${!var_name:-}"
-            if [ ! -z "$var_value" ]; then
+            if [ -n "$var_value" ]; then
                 echo "      - VULNSCOUT_TPL_${var_name}=${var_value}" >> "$YAML_FILE"
             fi
         done
@@ -518,7 +480,7 @@ setup_devtools() {
   # Store PID for later cleanup
   echo "$npm_pid" > .vulnscout-npm.pid
 
-  if [ "$is_detached" == "false" ]; then
+  if [ "$is_detached" = "false" ]; then
     # Function to cleanup background process on exit (Ctrl+C)
     cleanup() {
         echo -e "\n Stopping frontend dev server (PID $npm_pid)..."
@@ -535,7 +497,7 @@ setup_devtools() {
 
 start_vulnscout(){
     # Detect container engine
-    if [[ "$COMPOSE_PROVIDER" == "podman-compose" ]]; then
+    if [[ "$COMPOSE_PROVIDER" = "podman-compose" ]]; then
         CONTAINER_ENGINE="podman"
     else
         CONTAINER_ENGINE="docker"
@@ -548,9 +510,9 @@ start_vulnscout(){
     $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
 
     # Start docker services
-    if [ "$VULNSCOUT_DETACH_MODE" == "true" ]; then
+    if [ "$VULNSCOUT_DETACH_MODE" = "true" ]; then
         $COMPOSE_PROVIDER -f "$YAML_FILE" up -d
-        if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+        if [ "$VULNSCOUT_DEV_MODE" = "true" ]; then
             echo "Frontend dev server is available at http://localhost:5173"
             echo "Backend dev server is available at http://localhost:7275"
         else
@@ -584,7 +546,7 @@ start_vulnscout(){
 check_compose_provider_command
 
 # Handle stop mode
-if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
+if [ "$VULNSCOUT_STOP_MODE" = "true" ]; then
   echo "Stopping running VulnScout..."
   
   # Stop frontend dev server if running
@@ -598,7 +560,7 @@ if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
   fi
   
   # Detect container engine
-  if [[ "$COMPOSE_PROVIDER" == "podman-compose" ]]; then
+  if [[ "$COMPOSE_PROVIDER" = "podman-compose" ]]; then
     CONTAINER_ENGINE="podman"
   else
     CONTAINER_ENGINE="docker"
@@ -618,7 +580,7 @@ else
   create_yaml_file
 fi
 
-if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
+if [ "$VULNSCOUT_DEV_MODE" = "true" ]; then
   setup_devtools "$VULNSCOUT_DETACH_MODE"
 fi
 start_vulnscout
