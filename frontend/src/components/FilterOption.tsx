@@ -88,6 +88,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
                             <label key={`custom-filter-${customFilterName}`} className="flex items-center space-x-2">
                                 <input
                                     type="checkbox"
+                                    id={`custom-filter-checkbox-${customFilterName}`}
                                     checked={showCustomFilterComponent}
                                     onChange={() => {
                                         setShowCustomFilterComponent?.(!showCustomFilterComponent)

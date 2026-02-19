@@ -804,9 +804,11 @@ describe('Vulnerability Table', () => {
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
-        const customCheckbox = await screen.getByRole('checkbox', {name: /custom/});
+        const customCheckbox = await screen.getAllByRole('checkbox').find(
+            (checkbox) => checkbox.id.match(/^custom-filter-checkbox-/)
+        );
         expect(customCheckbox).toBeInTheDocument();
-        await user.click(customCheckbox);
+        await user.click(customCheckbox as HTMLElement);
 
         const [minSlider, maxSlider] = await screen.findAllByRole('slider');
 
@@ -839,14 +841,18 @@ describe('Vulnerability Table', () => {
         await user.click(severityBtn);
 
         const lowCheckbox = await screen.getByRole('checkbox', { name: 'low' });
-        const customCheckbox = await screen.getByRole('checkbox', {name: /custom/});
+        const customCheckbox = await screen.getAllByRole('checkbox').find(
+            (checkbox) => checkbox.id.match(/^custom-filter-checkbox-/)
+        );
+
+        expect(customCheckbox).toBeInTheDocument();
 
         // Check low severity filter
         await user.click(lowCheckbox);
         expect(lowCheckbox).toBeChecked();
 
         // Now check custom filter, which should uncheck low severity filter
-        await user.click(customCheckbox);
+        await user.click(customCheckbox as HTMLElement);
         expect(customCheckbox).toBeChecked();
         expect(lowCheckbox).not.toBeChecked();
 
