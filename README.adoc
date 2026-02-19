@@ -73,6 +73,13 @@ http://localhost:7275
 
 These commands will dynamically generate and use docker-compose configuration files.
 
+If you don't need additional settings after the first configuration, VulnScout can be rerun directly without any additional arguments:
+
+[source,shell]
+----
+./vulnscout.sh --name example
+----
+
 ===  Run VulnScout with Yocto
 
 We have a dedicated layer for VulnScout integration in Yocto.
