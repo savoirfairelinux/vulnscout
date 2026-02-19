@@ -42,6 +42,12 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return SEVERITY_ORDER.indexOf(vulnsA) - SEVERITY_ORDER.indexOf(vulnsB)
 }
 
+const sortSeverityByScoreFn: SortingFn<Vulnerability> = (rowA, rowB) => {
+    const scoreA = rowA.original.severity.max_score || 0;
+    const scoreB = rowB.original.severity.max_score || 0;
+    return scoreA - scoreB;
+}
+
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
     const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
@@ -470,19 +476,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
             }),
-            columnHelper.accessor('severity.severity', {
+            columnHelper.accessor(row => showCustomSeverityFilter ? row.severity.max_score : row.severity.severity, {
             id: 'severity.severity',
             header: () => (
-                <div className="flex items-center justify-center">
-                Severity
+                <div className="flex flex-col items-center justify-center">
+                Severity {showCustomSeverityFilter ? 'Score' : ''}
+                {showCustomSeverityFilter && <div>{severityRange.min} to {severityRange.max}</div>}
                 </div>
             ),
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                <SeverityTag severity={info.getValue()} />
+                    {!showCustomSeverityFilter ? (
+                        <SeverityTag severity={info.getValue()?.toString() || 'N/A'} />
+                    ) : (
+                        <div>{info.getValue() || 'N/A'}</div>
+                    )}
                 </div>
             ),
-            sortingFn: sortSeverityFn,
+            sortingFn: showCustomSeverityFilter ?  sortSeverityByScoreFn : sortSeverityFn,
             sortDescFirst: true,
             size: 40,
             }),
@@ -650,7 +661,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
