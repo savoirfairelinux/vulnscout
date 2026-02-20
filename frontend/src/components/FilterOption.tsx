@@ -8,9 +8,13 @@ type Props = {
     selected: string[];
     setSelected: (values: string[]) => void;
     parentRef?: React.RefObject<HTMLElement>;
+    CustomFilterComponent?: React.ComponentType<any>;
+    customFilterName?: string;
+    showCustomFilterComponent?: boolean;
+    setShowCustomFilterComponent?: (show: boolean) => void;
 };
 
-function FilterOption({ label, options, selected, setSelected, parentRef }: Readonly<Props>) {
+function FilterOption({ label, options, selected, setSelected, parentRef, CustomFilterComponent, customFilterName = 'custom', showCustomFilterComponent, setShowCustomFilterComponent }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
     const [maxHeight, setMaxHeight] = useState<string>('2500px'); 
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -71,12 +75,33 @@ function FilterOption({ label, options, selected, setSelected, parentRef }: Read
                                 <input
                                     type="checkbox"
                                     checked={selected.includes(option)}
-                                    onChange={() => toggleOption(option)}
+                                    onChange={() => {
+                                        toggleOption(option)
+                                        setShowCustomFilterComponent?.(false); // Uncheck custom when any option is toggled
+                                    }}
                                     className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
                                 />
                                 <span>{option}</span>
                             </label>
                         ))}
+                        {CustomFilterComponent && 
+                            <label key={`custom-filter-${customFilterName}`} className="flex items-center space-x-2">
+                                <input
+                                    type="checkbox"
+                                    id={`custom-filter-checkbox-${customFilterName}`}
+                                    checked={showCustomFilterComponent}
+                                    onChange={() => {
+                                        setShowCustomFilterComponent?.(!showCustomFilterComponent)
+                                        if(!showCustomFilterComponent){
+                                            setSelected([]); // Clear other options when custom is selected
+                                        }
+                                    }}
+                                    className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                />
+                                <span>{customFilterName}</span>
+                            </label>
+                        }
+                        {(CustomFilterComponent && showCustomFilterComponent) && <CustomFilterComponent />}
                     </div>
                 </div>
             )}
