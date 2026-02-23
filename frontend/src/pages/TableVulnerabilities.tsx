@@ -16,6 +16,7 @@ import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faCaretDown } from '@fortawesome/free-solid-svg-icons';
+import RangeSlider from "../components/RangeSlider";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -39,6 +40,12 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     const vulnsA = rowA.original.severity.severity.toUpperCase()
     const vulnsB = rowB.original.severity.severity.toUpperCase()
     return SEVERITY_ORDER.indexOf(vulnsA) - SEVERITY_ORDER.indexOf(vulnsB)
+}
+
+const sortSeverityByScoreFn: SortingFn<Vulnerability> = (rowA, rowB) => {
+    const scoreA = rowA.original.severity.max_score || 0;
+    const scoreB = rowB.original.severity.max_score || 0;
+    return scoreA - scoreB;
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -252,6 +259,8 @@ function PublishedDateFilter({
         </div>
     );
 }
+const SEVERITY_RANGE_MIN = 0;
+const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
@@ -279,6 +288,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date'
     ]);
+
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
+    const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -320,6 +332,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (search != '') setSearch('');
         }
         setSearch(event.target.value);
+    }, 750, { maxWait: 5000 });
+
+    const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
+        setSeverityRange(value);
     }, 750, { maxWait: 5000 });
 
     const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
@@ -460,19 +476,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
             }),
-            columnHelper.accessor('severity.severity', {
+            columnHelper.accessor(row => showCustomSeverityFilter ? row.severity.max_score : row.severity.severity, {
             id: 'severity.severity',
             header: () => (
-                <div className="flex items-center justify-center">
-                Severity
+                <div className="flex flex-col items-center justify-center">
+                Severity {showCustomSeverityFilter ? 'Score' : ''}
+                {showCustomSeverityFilter && <div>{severityRange.min} to {severityRange.max}</div>}
                 </div>
             ),
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                <SeverityTag severity={info.getValue()} />
+                    {!showCustomSeverityFilter ? (
+                        <SeverityTag severity={info.getValue()?.toString() || 'N/A'} />
+                    ) : (
+                        <div>{info.getValue() || 'N/A'}</div>
+                    )}
                 </div>
             ),
-            sortingFn: sortSeverityFn,
+            sortingFn: showCustomSeverityFilter ?  sortSeverityByScoreFn : sortSeverityFn,
             sortDescFirst: true,
             size: 40,
             }),
@@ -640,7 +661,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -717,9 +738,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 return false;
             }
             
+            if(showCustomSeverityFilter){
+                // Use the max score as this is how the final severity level is determined
+                const maxScore = el.severity.max_score;
+            
+                if (maxScore === null) return false;
+                if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
+            }
+            
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -746,6 +775,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedRows({});
         setHideFixed(false);
         setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date']);
+        setShowCustomSeverityFilter(false);
+        setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
     }
 
     const handleHideFixedToggle = (enabled: boolean) => {
@@ -812,6 +843,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 )}
                 selected={selectedSeverities}
                 setSelected={setSelectedSeverities}
+                CustomFilterComponent={() => (
+                    <RangeSlider
+                        min={SEVERITY_RANGE_MIN}
+                        max={SEVERITY_RANGE_MAX}
+                        initialMin={severityRange.min}
+                        initialMax={severityRange.max}
+                        step={0.1}
+                        onChange={updateCustomSeverityFilter}
+                    />
+                )}
+                customFilterName="by score"
+                showCustomFilterComponent={showCustomSeverityFilter}
+                setShowCustomFilterComponent={setShowCustomSeverityFilter}
             />
 
             <FilterOption

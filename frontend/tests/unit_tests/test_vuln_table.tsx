@@ -2,7 +2,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -793,6 +793,73 @@ describe('Vulnerability Table', () => {
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
+    })
+
+    test('filter by custom severity range', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        expect(severityBtn).toBeInTheDocument();
+        await user.click(severityBtn);
+
+        const customCheckbox = await screen.getAllByRole('checkbox').find(
+            (checkbox) => checkbox.id.match(/^custom-filter-checkbox-/)
+        );
+        expect(customCheckbox).toBeInTheDocument();
+        await user.click(customCheckbox as HTMLElement);
+
+        const [minSlider, maxSlider] = await screen.findAllByRole('slider');
+
+        console.log(minSlider, maxSlider);
+
+        expect(minSlider).toBeInTheDocument();
+        expect(maxSlider).toBeInTheDocument();
+
+        // Vulneraibilities with the severity max score between 2 and 4 will remain.
+        fireEvent.change(minSlider, { target: { value: '2' } });
+        fireEvent.change(maxSlider, { target: { value: '4' } });
+
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2024-56730/})).toBeNull();
+        }, { timeout: 1000 });
+
+        const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        
+        expect(vuln_abc).toBeInTheDocument();
+    })
+
+    test('custom severity filter and other severity filters cannot be checked at the same time', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        expect(severityBtn).toBeInTheDocument();
+        await user.click(severityBtn);
+
+        const lowCheckbox = await screen.getByRole('checkbox', { name: 'low' });
+        const customCheckbox = await screen.getAllByRole('checkbox').find(
+            (checkbox) => checkbox.id.match(/^custom-filter-checkbox-/)
+        );
+
+        expect(customCheckbox).toBeInTheDocument();
+
+        // Check low severity filter
+        await user.click(lowCheckbox);
+        expect(lowCheckbox).toBeChecked();
+
+        // Now check custom filter, which should uncheck low severity filter
+        await user.click(customCheckbox as HTMLElement);
+        expect(customCheckbox).toBeChecked();
+        expect(lowCheckbox).not.toBeChecked();
+
+        // Vice-versa
+        await user.click(lowCheckbox);
+        expect(lowCheckbox).toBeChecked();
+        expect(customCheckbox).not.toBeChecked();
     })
 
     test('hide fixed toggle functionality', async () => {
