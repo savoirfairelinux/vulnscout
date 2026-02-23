@@ -2,7 +2,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable,
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
@@ -19,6 +19,7 @@ type Props<DataType> = {
     updateSelected?: OnChangeFn<RowSelectionState>;
     hasPagination?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
+    onFocusedRowChange?: (rowIndex: number | null) => void;
 };
 /* tslint:enable:no-explicit-any */
 
@@ -33,11 +34,14 @@ function TableGeneric<DataType> ({
     selected = undefined,
     updateSelected = () => {},
     hasPagination = true,
-    onFilteredDataChange
+    onFilteredDataChange,
+    onFocusedRowChange
 }: Readonly<Props<DataType>>) {
     const [pageIndex, setPageIndex] = useState(0)
     const [itemsPerPage, setItemsPerPage] = useState(50)
     const [sorting, setSorting] = useState<SortingState>([])
+    const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
+    const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -177,11 +181,75 @@ function TableGeneric<DataType> ({
         enabled: useVirtualization,
     })
 
+    // Reset focused row when data changes
+    useEffect(() => {
+        setFocusedRowIndex(null)
+        if (onFocusedRowChange) {
+            onFocusedRowChange(null)
+        }
+    }, [filteredData, onFocusedRowChange])
+
+    // Focus row after scrolling in virtualized mode to make sure the rows are rendered before focus is applied
+    useEffect(() => {
+        if (focusedRowIndex !== null && useVirtualization) {
+            // Use setTimeout to ensure the row is rendered after scroll
+            const timer = setTimeout(() => {
+                const rowElement = rowRefs.current.get(focusedRowIndex)
+                if (rowElement && document.activeElement !== rowElement) {
+                    rowElement.focus({ preventScroll: true })
+                }
+            }, 50)
+            return () => clearTimeout(timer)
+        }
+    }, [focusedRowIndex, useVirtualization])
+
     function ctrl_click (event: React.MouseEvent, row: Row<DataType>) {
         if (event.ctrlKey || event.metaKey) {
             row.getToggleSelectedHandler()(event)
         }
     }
+
+    const handleKeyDown = useCallback((event: React.KeyboardEvent, rowIndex: number) => {
+        const focusRow = (targetIndex: number) => {
+            setFocusedRowIndex(targetIndex)
+            if (onFocusedRowChange) {
+                onFocusedRowChange(targetIndex)
+            }
+            if (useVirtualization) {
+                // Scroll to the target row in virtualized mode
+                rowVirtualizer.scrollToIndex(targetIndex, { align: 'center' })
+            } else {
+                // Directly focus in non-virtualized mode
+                const rowElement = rowRefs.current.get(targetIndex)
+                rowElement?.focus()
+                // Scroll into view if needed
+                rowElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+            }
+        }
+
+        switch (event.key) {
+            case 'ArrowDown':
+                event.preventDefault()
+                if (rowIndex < rows.length - 1) {
+                    focusRow(rowIndex + 1)
+                }
+                break
+            case 'ArrowUp':
+                event.preventDefault()
+                if (rowIndex > 0) {
+                    focusRow(rowIndex - 1)
+                }
+                break
+            case 'Home':
+                event.preventDefault()
+                focusRow(0)
+                break
+            case 'End':
+                event.preventDefault()
+                focusRow(rows.length - 1)
+                break
+        }
+    }, [rows.length, useVirtualization, rowVirtualizer, onFocusedRowChange])
 
     function getPageNumbers(current: number, total: number): (number | string)[] {
         const delta = 2
@@ -255,14 +323,25 @@ function TableGeneric<DataType> ({
                                 return [
                                     <tr
                                     data-index={virtualRow.index} //needed for dynamic row height measurement
-                                    ref={node => rowVirtualizer.measureElement(node)} //measure dynamic row height
+                                    ref={node => {
+                                        rowVirtualizer.measureElement(node)
+                                        if (node) {
+                                            rowRefs.current.set(virtualRow.index, node)
+                                        } else {
+                                            rowRefs.current.delete(virtualRow.index)
+                                        }
+                                    }} //measure dynamic row height
                                     key={row.id}
+                                    tabIndex={0}
                                     className={[
                                         "flex absolute w-full row-with-hover-effect",
                                         row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600',
-                                        "hover:bg-slate-800"
+                                        "hover:bg-slate-800",
+                                        focusedRowIndex === virtualRow.index ? 'ring-2 ring-blue-600 ring-inset' : ''
                                     ].join(' ')}
                                     onClick={(e) => ctrl_click(e, row)}
+                                    onFocus={() => setFocusedRowIndex(virtualRow.index)}
+                                    onKeyDown={(e) => handleKeyDown(e, virtualRow.index)}
                                     style={{
                                         transform: `translateY(${virtualRow.start}px)`, //this should always be a `style` as it changes on scroll
                                     }}
@@ -305,15 +384,26 @@ function TableGeneric<DataType> ({
                                 ]
                             })
                         ) : (
-                            rows.map((row) => [
+                            rows.map((row, rowIndex) => [
                                 <tr
                                 key={row.id}
+                                ref={node => {
+                                    if (node) {
+                                        rowRefs.current.set(rowIndex, node)
+                                    } else {
+                                        rowRefs.current.delete(rowIndex)
+                                    }
+                                }}
+                                tabIndex={0}
                                 className={[
                                     "flex w-full row-with-hover-effect",
                                     row.getIsSelected() ? 'selected bg-gray-700' : 'bg-slate-600',
-                                    "hover:bg-slate-800"
+                                    "hover:bg-slate-800",
+                                    focusedRowIndex === rowIndex ? 'ring-2 ring-blue-400 ring-inset' : ''
                                 ].join(' ')}
                                 onClick={(e) => ctrl_click(e, row)}
+                                onFocus={() => setFocusedRowIndex(rowIndex)}
+                                onKeyDown={(e) => handleKeyDown(e, rowIndex)}
                                 >
                                     {row.getVisibleCells().map(cell => {
                                         return (

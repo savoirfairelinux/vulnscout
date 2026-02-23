@@ -288,9 +288,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
         'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date'
     ]);
+    const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
     const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
     const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+
+    const searchInputRef = useRef<HTMLInputElement>(null);
+
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -797,6 +801,50 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         }
     };
 
+    useEffect(() => {
+        const handleKeyPress = (event: KeyboardEvent) => {
+            // Only trigger if not typing in an input/textarea
+            if (event.target instanceof HTMLInputElement || 
+                event.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            // Bind "/" to focus search input
+            if (event.key === "/") {
+                event.preventDefault();
+                searchInputRef.current?.focus();
+            }
+
+            // Bind "e" to edit focused vulnerability
+            if (event.key === "e" && focusedRowIndex !== null) {
+                event.preventDefault();
+                if (focusedRowIndex >= 0 && focusedRowIndex < searchFilteredData.length) {
+                    const vulnToEdit = searchFilteredData[focusedRowIndex];
+                    handleEditClick(vulnToEdit);
+                    setIsEditing(true);
+                }
+            }
+
+            // Bind "v" to view focused vulnerability details
+            if (event.key === "v" && focusedRowIndex !== null) {
+                event.preventDefault();
+                if (focusedRowIndex >= 0 && focusedRowIndex < searchFilteredData.length) {
+                    const vuln = searchFilteredData[focusedRowIndex];
+                    const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                    setModalVuln(vuln);
+                    setModalVulnIndex(index >= 0 ? index : undefined);
+                    setModalVulnSnapshot([...searchFilteredData]);
+                    setIsEditing(false);
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyPress);
+        return () => document.removeEventListener('keydown', handleKeyPress);
+    }, [focusedRowIndex, searchFilteredData, handleEditClick]);
+
+
+
     return (<>
         {bannerVisible && (
             <MessageBanner
@@ -809,7 +857,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
-            <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
 
             <FilterOption
                 label="Columns"
@@ -938,6 +986,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             selected={selectedRows}
             updateSelected={setSelectedRows}
             onFilteredDataChange={setSearchFilteredData}
+            onFocusedRowChange={setFocusedRowIndex}
         />
 
         {modalVuln != undefined && <VulnModal
