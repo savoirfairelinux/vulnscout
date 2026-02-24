@@ -70,6 +70,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
         }
     }, []);
 
+    useEffect(() => {
+        // Scroll to top when vulnerability changes
+        if (modalRef.current) {
+            modalRef.current.scrollTop = 0;
+        }
+    }, [vuln.id]);
+
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
         setBannerType(type);
