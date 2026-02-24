@@ -40,6 +40,7 @@ show_help() {
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file
   --cve-check-exclude-patched     do not parse cve_check vulnerabilities with patched status"
+  echo "  --ignore-parsing-errors     do not stop execution on parsing error"
   echo ""
   echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
@@ -197,6 +198,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check-exclude-patched)
       VULNSCOUT_CVE_EXCLUDE_PATCHED="true"
+      shift
+      ;;
+    --ignore-parsing-errors)
+      VULNSCOUT_IGNORE_PARSING_ERRORS="true"
       shift
       ;;
     --vulnscout_path)
