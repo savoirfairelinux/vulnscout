@@ -24,6 +24,7 @@ from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
 from ..models.assessment import VulnAssessment
 from ..helpers.verbose import verbose
+from ..helpers.env_vars import get_bool_env
 import glob
 import json
 import os
@@ -175,7 +176,7 @@ def read_inputs(controllers):
         print("Warning: Did not find local user database file, which is used to store history of analysis."
               + " This is normal at first start but not in later analysis")
     except Exception as e:
-        if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+        if not get_bool_env('IGNORE_PARSING_ERRORS'):
             print(f"Error parsing OpenVEX file: {e}")
             print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
             raise e
@@ -211,7 +212,7 @@ def read_inputs(controllers):
                   + " CycloneDX files, this mean there was an issue when analysing them.")
 
     use_fastspdx = False
-    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
+    if get_bool_env('IGNORE_PARSING_ERRORS'):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 
@@ -230,7 +231,7 @@ def read_inputs(controllers):
                     spdx.load_from_file(file)
                     spdx.parse_and_merge()
         except Exception as e:
-            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+            if not get_bool_env('IGNORE_PARSING_ERRORS'):
                 print(f"Error parsing SPDX file: {file} {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e
@@ -257,7 +258,7 @@ def read_inputs(controllers):
     except FileNotFoundError:
         pass
     except Exception as e:
-        if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+        if not get_bool_env('IGNORE_PARSING_ERRORS'):
             print(f"Error parsing time_estimates.json file: {e}")
             print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
             raise e
@@ -328,7 +329,7 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
         "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
         "export_date": date.today().isoformat()
     }
-    if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
+    if not get_bool_env('DEBUG_SKIP_SCAN'):
         metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
     if failed:
         metadata["failed_vulns"] = failed_vulns or []

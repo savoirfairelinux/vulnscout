@@ -3,11 +3,11 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import os
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
 from ..models.cvss import CVSS
+from ..helpers.env_vars import get_bool_env
 
 
 class YoctoVulns:
@@ -37,7 +37,7 @@ class YoctoVulns:
             package.generate_generic_purl()
             self.packagesCtrl.add(package)
 
-            skip_patched = os.getenv('CVE_CHECK_EXCLUDE_PATCHED', 'false') == 'true'
+            skip_patched = get_bool_env('CVE_CHECK_EXCLUDE_PATCHED')
 
             for issue in pkg.get("issue", []):
                 vuln = Vulnerability(

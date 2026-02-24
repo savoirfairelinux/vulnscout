@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
+from ..helpers.env_vars import get_bool_env
 from ..routes import init_app
 import sys
 import os
@@ -31,7 +32,7 @@ def create_app():
             return True
         with open(app.config["SCAN_FILE"], "r") as f:
             if "__END_OF_SCAN_SCRIPT__" in f.read():
-                if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
+                if not get_bool_env('DEBUG_SKIP_SCAN'):
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
 
                 app._INT_SCAN_FINISHED = True
