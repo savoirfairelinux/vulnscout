@@ -212,7 +212,7 @@ def read_inputs(controllers):
                   + " CycloneDX files, this mean there was an issue when analysing them.")
 
     use_fastspdx = False
-    if get_bool_env('IGNORE_PARSING_ERRORS'):
+    if get_bool_env('USE_FAST_SPDX'):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 

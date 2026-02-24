@@ -26,7 +26,7 @@ OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
 def read_inputs(controllers):
     """Read from folder."""
     use_fastspdx = False
-    if get_bool_env('IGNORE_PARSING_ERRORS'):
+    if get_bool_env('USE_FAST_SPDX'):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 

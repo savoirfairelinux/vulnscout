@@ -40,7 +40,8 @@ show_help() {
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
   echo "  --cve-check  <path>      path to the Yocto CVE check JSON file
   --cve-check-exclude-patched     do not parse cve_check vulnerabilities with patched status"
-  echo "  --ignore-parsing-errors     do not stop execution on parsing error"
+  echo "  --ignore-parsing-errors     do not stop execution on parsing error (consider also --use-fast-spdx)"
+  echo "  --use-fast-spdx     use a faster SPDX parsing algorithm"
   echo ""
   echo "Non-interactive configuration:"
   echo "  --no_webui  Disable the web UI (default: enabled)"
@@ -76,6 +77,7 @@ VULNSCOUT_FLASK_RUN_PORT="7275"
 VULNSCOUT_FLASK_RUN_HOST="0.0.0.0"
 VULNSCOUT_GENERATE_DOCUMENTS="summary.adoc,time_estimates.csv"
 VULNSCOUT_IGNORE_PARSING_ERRORS="false"
+VULNSCOUT_USE_FAST_SPDX="false"
 VULNSCOUT_PRODUCT_NAME=""
 VULNSCOUT_PRODUCT_VERSION=""
 VULNSCOUT_COMPANY_NAME=""
@@ -202,6 +204,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ignore-parsing-errors)
       VULNSCOUT_IGNORE_PARSING_ERRORS="true"
+      shift
+      ;;
+    --use-fast-spdx)
+      VULNSCOUT_USE_FAST_SPDX="true"
       shift
       ;;
     --vulnscout_path)
@@ -393,6 +399,7 @@ EOF
       - FLASK_RUN_PORT=$VULNSCOUT_FLASK_RUN_PORT
       - FLASK_RUN_HOST=$VULNSCOUT_FLASK_RUN_HOST
       - IGNORE_PARSING_ERRORS=$VULNSCOUT_IGNORE_PARSING_ERRORS
+      - USE_FAST_SPDX=$VULNSCOUT_USE_FAST_SPDX
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
