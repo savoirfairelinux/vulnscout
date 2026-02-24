@@ -17,7 +17,7 @@ import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus } 
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 type Props = {
     vuln: Vulnerability;
@@ -61,6 +61,15 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [bannerType, setBannerType] = useState<"error" | "success">("error");
     const [showBanner, setShowBanner] = useState(false);
 
+    const modalRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
+        if (modalRef.current) {
+            modalRef.current.focus();
+        }
+    }, []);
+
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
         setBannerType(type);
@@ -95,7 +104,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         setPendingNavigation(null);
     };
 
-    const navigateTo = (targetIndex: number) => {
+    const navigateTo = useCallback((targetIndex: number) => {
         hideBanner();
         if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
         if (hasUnsavedChanges) {
@@ -104,7 +113,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         } else {
             onNavigate(targetIndex);
         }
-    };
+    }, [vulnerabilities, currentIndex, onNavigate, hasUnsavedChanges]);
 
     const canNavigatePrevious = vulnerabilities && currentIndex !== undefined && currentIndex > 0;
     const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
@@ -241,7 +250,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         setEditingAssessmentId(null);
     };
 
-    // Handle ESC key press
+    // Handle keyboard navigation (ESC to close, arrow keys to navigate)
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -252,6 +261,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 } else {
                     onClose();
                 }
+            } else if (event.key === 'ArrowLeft' && canNavigatePrevious) {
+                event.preventDefault();
+                navigateTo(currentIndex! - 1);
+            } else if (event.key === 'ArrowRight' && canNavigateNext) {
+                event.preventDefault();
+                navigateTo(currentIndex! + 1);
             }
         };
 
@@ -259,7 +274,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [hasUnsavedChanges, onClose]);
+    }, [hasUnsavedChanges, onClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
 
     const groupAssessments = (assessments: Assessment[]) => {
         const groups: { [key: string]: Assessment[] } = {};
@@ -428,7 +443,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
             <div className="relative p-16 h-full">
-                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
+                <div
+                    ref={modalRef}
+                    tabIndex={-1}
+                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
 
                     {/* Modal header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
@@ -590,7 +608,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             </ul>
                         </div>
 
-                        <div className="mb-6 mt-6">
+                        <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor
                                 progressBar={undefined}
                                 onSaveTimeEstimation={(data) => saveEstimation(data)}
@@ -700,7 +718,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     disabled={!canNavigatePrevious}
                                     type="button"
                                     aria-label="Previous vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
                                 >
                                     <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
                                 </button>
@@ -709,7 +727,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     disabled={!canNavigateNext}
                                     type="button"
                                     aria-label="Next vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
                                 >
                                     <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
                                 </button>
@@ -725,7 +743,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         <button
                             onClick={handleClose}
                             type="button"
-                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800"
+                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800"
                         >
                             Close
                         </button>
