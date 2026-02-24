@@ -587,7 +587,13 @@ if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
   exit 0
 fi
 
-create_yaml_file
+# If only --name was provided and a compose file already exists, reuse it directly
+if [ "$#" -eq 2 ] && [ -n "$VULNSCOUT_ENTRY_NAME" ] && [ -f "$YAML_FILE" ]; then
+  echo "Reusing existing Docker Compose file: $YAML_FILE"
+else
+  create_yaml_file
+fi
+
 if [ "$VULNSCOUT_DEV_MODE" == "true" ]; then
   setup_devtools "$VULNSCOUT_DETACH_MODE"
 fi
