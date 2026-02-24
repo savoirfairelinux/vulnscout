@@ -1,6 +1,6 @@
 import type { Package, VulnCounts, Severities } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
@@ -91,6 +91,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
+    const searchInputRef = useRef<HTMLInputElement>(null);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -98,6 +99,25 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         }
         setSearch(event.target.value);
     }, 550, { maxWait: 2500 });
+
+    useEffect(() => {
+        const handleKeyPress = (event: KeyboardEvent) => {
+            // Only trigger if not typing in an input/textarea
+            if (event.target instanceof HTMLInputElement || 
+                event.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            // Bind "/" to focus search input
+            if (event.key === "/") {
+                event.preventDefault();
+                searchInputRef.current?.focus();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyPress);
+        return () => document.removeEventListener('keydown', handleKeyPress);
+    }, []);
 
     const sources_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const source of pkg.source) {
@@ -183,7 +203,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
-            <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
+            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
 
             <FilterOption
                 label="Source"
