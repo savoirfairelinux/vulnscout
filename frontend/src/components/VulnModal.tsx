@@ -91,6 +91,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
+        setClearTimeFields(true);
+        setTimeout(() => setClearTimeFields(false), 100);
         if (pendingNavigation !== null && onNavigate) {
             onNavigate(pendingNavigation);
             setPendingNavigation(null);
