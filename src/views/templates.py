@@ -191,7 +191,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["print_iso8601"] = TemplatesExtensions.print_iso8601
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
         jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
-        jinjaEnv.filters["publish_date"] = TemplatesExtensions.filter_publish_date
+        jinjaEnv.filters["filter_by_publish_date"] = TemplatesExtensions.filter_publish_date
 
     @staticmethod
     def get_env_var(key: str, default: str = "") -> str:
