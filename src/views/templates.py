@@ -430,8 +430,12 @@ class TemplatesExtensions:
         return result
 
     @staticmethod
-    def filter_publish_date(value: dict[str, dict] | list[dict], date_filter: str) -> list[dict]:
-        # Similar implementation to filter_last_assessment_date but for the "published" field of vulnerabilities
+    def filter_publish_date(
+        value: dict[str, dict] | list[dict],
+        date_filter: str,
+        include_unknown: bool = False
+    ) -> list[dict]:
+        # Similar implementation to filter_last_assessment_date but for the "published" field
         """
         Filter vulnerabilities based on their publish date.
 
@@ -480,6 +484,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals  # Invalid date format, return all
 
@@ -498,6 +506,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals
 
@@ -516,6 +528,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals
 
@@ -534,6 +550,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals
 
@@ -552,6 +572,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals
 
@@ -572,6 +596,10 @@ class TemplatesExtensions:
                                 result.append(v)
                         except Exception:
                             pass
+                    elif include_unknown and (
+                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                    ):
+                        result.append(v)
             except Exception:
                 return vals
 
