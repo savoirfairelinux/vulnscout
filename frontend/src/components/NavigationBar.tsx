@@ -40,6 +40,27 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
     };
   }, [showShortcutHelper]);
 
+  const getShortcutsForTab = () => {
+    const tabShortcuts: Record<string, Array<{ key: string; description: string }>> = {
+      packages: [
+        { key: '/', description: 'Focus search bar' },
+        { key: '↑ / ↓', description: 'Navigate focused table row' },
+      ],
+      vulnerabilities: [
+        { key: '/', description: 'Focus search bar' },
+        { key: 'e', description: 'Edit focused vulnerability' },
+        { key: 'v', description: 'View vulnerability details' },
+        { key: '↑ / ↓', description: 'Navigate focused table row' },
+        { key: 'Home / End', description: 'Navigate to first/last table row' },
+      ]
+    };
+
+    return tabShortcuts[tab] || [];
+  };
+
+  const shortcuts = getShortcutsForTab();
+  const hasShortcuts = shortcuts.length > 0;
+
   return (
   <nav>
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -110,59 +131,39 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
       {/* Spacer */}
       <li className="grow"></li>
 
-      {/* Shortcut Helper */}
-      <li className="px-4 py-2 flex items-center relative">
-        <div className="flex items-center gap-1">
-            <button
-              ref={shortcutButtonRef}
-              aria-label='shortcut helper'
-              title='View keyboard shortcuts'
-              type='button'
-              className='hover:text-blue-400 transition-colors'
-              onClick={() => setShowShortcutHelper(!showShortcutHelper)}
-            >
-                <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
-            </button>
-            {showShortcutHelper && (
-              <div
-                ref={dropdownRef}
-                className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+      {/* Shortcut Helper - Only show if current tab has shortcuts */}
+      {hasShortcuts && (
+        <li className="px-4 py-2 flex items-center relative">
+          <div className="flex items-center gap-1">
+              <button
+                ref={shortcutButtonRef}
+                aria-label='shortcut helper'
+                title='View keyboard shortcuts'
+                type='button'
+                className='hover:text-blue-400 transition-colors'
+                onClick={() => setShowShortcutHelper(!showShortcutHelper)}
               >
-                <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
-                <div className="space-y-2 text-gray-100">
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">/</span>
-                    <span>Focus search bar</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">e</span>
-                    <span>Edit focused vulnerability</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">v</span>
-                    <span>View vulnerability details</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">Esc</span>
-                    <span>Close modal</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">↑ / ↓</span>
-                    <span>Navigate focused table row</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">← / →</span>
-                    <span>Navigate vulnerabilities on modal</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-cyan-300">Home / End</span>
-                    <span>Navigate to first/last table row</span>
+                  <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
+              </button>
+              {showShortcutHelper && (
+                <div
+                  ref={dropdownRef}
+                  className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                >
+                  <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
+                  <div className="space-y-2 text-gray-100">
+                    {shortcuts.map((shortcut, index) => (
+                      <div key={index} className="flex justify-between">
+                        <span className="font-semibold text-cyan-300">{shortcut.key}</span>
+                        <span>{shortcut.description}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-            )}
-        </div>
-      </li>
+              )}
+          </div>
+        </li>
+      )}
 
       {/* === Dark Mode Toggle === */}
       <li className="px-4 py-2">
