@@ -325,9 +325,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if start_date <= assess_date <= end_date:
                                 result.append(v)
                         except Exception:
@@ -343,9 +345,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date >= filter_date:
                                 result.append(v)
                         except Exception:
@@ -361,9 +365,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date > filter_date:
                                 result.append(v)
                         except Exception:
@@ -379,9 +385,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date <= filter_date:
                                 result.append(v)
                         except Exception:
@@ -397,9 +405,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date < filter_date:
                                 result.append(v)
                         except Exception:
@@ -417,9 +427,11 @@ class TemplatesExtensions:
                 for v in vals:
                     if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
                         try:
-                            assess_date = datetime.fromisoformat(
-                                v["last_assessment"]["timestamp"]
-                            ).astimezone(timezone.utc)
+                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
+                            if assess_date.tzinfo is None:
+                                assess_date = assess_date.replace(tzinfo=timezone.utc)
+                            else:
+                                assess_date = assess_date.astimezone(timezone.utc)
                             if filter_date_start <= assess_date <= filter_date_end:
                                 result.append(v)
                         except Exception:
@@ -477,15 +489,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if start_date <= publish_date <= end_date:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
@@ -499,15 +513,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date >= filter_date:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
@@ -521,15 +537,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date > filter_date:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
@@ -543,15 +561,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date <= filter_date:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
@@ -565,15 +585,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date < filter_date:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
@@ -589,15 +611,17 @@ class TemplatesExtensions:
                 for v in vals:
                     if "published" in v and v["published"]:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                v["published"]
-                            ).astimezone(timezone.utc)
+                            publish_date = datetime.fromisoformat(v["published"])
+                            if publish_date.tzinfo is None:
+                                publish_date = publish_date.replace(tzinfo=timezone.utc)
+                            else:
+                                publish_date = publish_date.astimezone(timezone.utc)
                             if filter_date_start <= publish_date <= filter_date_end:
                                 result.append(v)
                         except Exception:
                             pass
                     elif include_unknown and (
-                        "published" not in v or not v["published"] or v["published"] == "unknown"
+                        "published" not in v or not v["published"]
                     ):
                         result.append(v)
             except Exception:
