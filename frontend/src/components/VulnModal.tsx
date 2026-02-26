@@ -13,7 +13,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -51,6 +51,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
+    const [showShortcutHelper, setShowShortcutHelper] = useState(false);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -62,6 +63,25 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showBanner, setShowBanner] = useState(false);
 
     const modalRef = useRef<HTMLDivElement>(null);
+    const shortcutButtonRef = useRef<HTMLButtonElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && shortcutButtonRef.current &&
+                !dropdownRef.current.contains(event.target as Node) &&
+                !shortcutButtonRef.current.contains(event.target as Node)) {
+                setShowShortcutHelper(false);
+            }
+        };
+
+        if (showShortcutHelper) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showShortcutHelper]);
 
     useEffect(() => {
         // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
@@ -463,6 +483,38 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             {vuln.id}
                         </h3>
                         <div className="flex items-center space-x-2">
+                            {/* Keyboard Shortcut Helper */}
+                            <div className="px-2 py-2 flex items-center relative">
+                                <button
+                                    ref={shortcutButtonRef}
+                                    aria-label='shortcut helper'
+                                    title='View keyboard shortcuts'
+                                    type='button'
+                                    className='hover:text-blue-400 transition-colors'
+                                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
+                                >
+                                    <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
+                                </button>
+                                {showShortcutHelper && (
+                                    <div
+                                        ref={dropdownRef}
+                                        className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[300px] text-sm"
+                                    >
+                                        <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
+                                        <div className="space-y-2 text-gray-100">
+                                            <div className="flex justify-between">
+                                                <span className="font-semibold text-cyan-300">← / →</span>
+                                                <span>Previous/Next vulnerability</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="font-semibold text-cyan-300">Esc</span>
+                                                <span>Close modal</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
