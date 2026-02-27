@@ -448,4 +448,83 @@ describe('Packages Table', () => {
         expect(screen.getByText('Home / End')).toBeTruthy();
         expect(screen.getByText('Navigate to first/last table row')).toBeTruthy();
     });
+
+    test('pressing / focuses search bar', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
+
+        expect(document.activeElement).not.toBe(searchBar);
+
+        await user.keyboard('/');
+
+        expect(document.activeElement).toBe(searchBar);
+    });
+
+    test('pressing / while search bar is focused types slash in search', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
+
+        searchBar.focus();
+        expect(document.activeElement).toBe(searchBar);
+
+        await user.keyboard('/');
+
+        expect(document.activeElement).toBe(searchBar);
+        expect(searchBar.value).toBe('/');
+    });
+
+    test('ArrowDown and ArrowUp navigate focused table row', async () => {
+        const { container } = render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+
+        firstRow.focus();
+        expect(document.activeElement).toBe(firstRow);
+
+        await user.keyboard('{ArrowDown}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(secondRow);
+        });
+
+        await user.keyboard('{ArrowUp}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+    });
+
+    test('Home and End navigate to first and last focused table row', async () => {
+        const { container } = render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+        const lastRow = rows[rows.length - 1] as HTMLElement;
+
+        secondRow.focus();
+        expect(document.activeElement).toBe(secondRow);
+
+        await user.keyboard('{End}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(lastRow);
+        });
+
+        await user.keyboard('{Home}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+    });
 });

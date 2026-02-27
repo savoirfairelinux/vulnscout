@@ -1996,4 +1996,113 @@ describe('Vulnerability Table', () => {
         expect(screen.getByText('Home / End')).toBeInTheDocument();
         expect(screen.getByText('Navigate to first/last table row')).toBeInTheDocument();
     });
+
+    test('pressing / focuses vulnerability search bar', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
+
+        expect(document.activeElement).not.toBe(searchBar);
+
+        await user.keyboard('/');
+
+        expect(document.activeElement).toBe(searchBar);
+    });
+
+    test('ArrowDown and ArrowUp navigate focused vulnerability row', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+
+        firstRow.focus();
+        expect(document.activeElement).toBe(firstRow);
+
+        await user.keyboard('{ArrowDown}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(secondRow);
+        });
+
+        await user.keyboard('{ArrowUp}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+    });
+
+    test('Home and End navigate to first and last vulnerability row', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+        const lastRow = rows[rows.length - 1] as HTMLElement;
+
+        secondRow.focus();
+        expect(document.activeElement).toBe(secondRow);
+
+        await user.keyboard('{End}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(lastRow);
+        });
+
+        await user.keyboard('{Home}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+    });
+
+    test('pressing e opens edit modal for focused vulnerability', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+        const firstRow = rows[0] as HTMLElement;
+
+        firstRow.focus();
+        expect(document.activeElement).toBe(firstRow);
+
+        await user.keyboard('{Home}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+
+        await user.keyboard('e');
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+    });
+
+    test('pressing v opens view modal for focused vulnerability', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+
+        firstRow.focus();
+        expect(document.activeElement).toBe(firstRow);
+
+        await user.keyboard('{ArrowDown}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(secondRow);
+        });
+
+        await user.keyboard('v');
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(1);
+        });
+    });
 });
