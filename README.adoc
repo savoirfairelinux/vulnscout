@@ -124,7 +124,6 @@ List of environment variables and their purpose:
   Vulnscout to create output files with correct permissions
 * `USER_GID`: This variable sets the GID of the user in the container, allowing
   Vulnscout to create output files with correct permissions
-* `DEV_MODE`: Enables development mode in the container. This is set automatically by using the `--dev` option and runs Flask in debug mode.
 
 ===== HTTP Proxy Configuration
 
