@@ -445,5 +445,7 @@ describe('Packages Table', () => {
         expect(screen.getByText('Focus search bar')).toBeTruthy();
         expect(screen.getByText('↑ / ↓')).toBeTruthy();
         expect(screen.getByText('Navigate focused table row')).toBeTruthy();
+        expect(screen.getByText('Home / End')).toBeTruthy();
+        expect(screen.getByText('Navigate to first/last table row')).toBeTruthy();
     });
 });

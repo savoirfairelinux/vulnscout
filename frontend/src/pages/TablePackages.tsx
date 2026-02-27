@@ -101,6 +101,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
         { key: '↑ / ↓', description: 'Navigate focused table row' },
+        { key: 'Home / End', description: 'Navigate to first/last table row' },
     ];
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
