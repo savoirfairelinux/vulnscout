@@ -425,4 +425,25 @@ describe('Packages Table', () => {
         expect(cpeId1).toBeTruthy();
         expect(cpeId2).toBeTruthy();
     });
+
+    test('shortcut helper icon is visible', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        expect(helperBtn).toBeTruthy();
+    });
+
+    test('shortcut helper shows keyboard shortcuts content', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Keyboard Shortcuts')).toBeTruthy();
+        expect(screen.getByText('/')).toBeTruthy();
+        expect(screen.getByText('Focus search bar')).toBeTruthy();
+        expect(screen.getByText('↑ / ↓')).toBeTruthy();
+        expect(screen.getByText('Navigate focused table row')).toBeTruthy();
+    });
 });

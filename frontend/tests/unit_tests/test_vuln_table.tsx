@@ -1969,4 +1969,31 @@ describe('Vulnerability Table', () => {
             expect(publishedDateBtn).toBeDisabled();
         });
     });
+
+    test('shortcut helper icon is visible', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        expect(helperBtn).toBeInTheDocument();
+    });
+
+    test('shortcut helper shows keyboard shortcuts content', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Keyboard Shortcuts')).toBeInTheDocument();
+        expect(screen.getByText('/')).toBeInTheDocument();
+        expect(screen.getByText('Focus search bar')).toBeInTheDocument();
+        expect(screen.getByText('e')).toBeInTheDocument();
+        expect(screen.getByText('Edit focused vulnerability')).toBeInTheDocument();
+        expect(screen.getByText('v')).toBeInTheDocument();
+        expect(screen.getByText('View vulnerability details')).toBeInTheDocument();
+        expect(screen.getByText('↑ / ↓')).toBeInTheDocument();
+        expect(screen.getByText('Navigate focused table row')).toBeInTheDocument();
+        expect(screen.getByText('Home / End')).toBeInTheDocument();
+        expect(screen.getByText('Navigate to first/last table row')).toBeInTheDocument();
+    });
 });
