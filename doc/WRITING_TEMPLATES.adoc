@@ -151,6 +151,14 @@ In addition to https://jinja.palletsprojects.com/en/3.1.x/templates/#list-of-bui
 *** `'<=2026-01-01'`: Before or on this date (inclusive)
 *** `'2026-01-01..2026-01-31'`: Between two dates (inclusive)
 *** `'2026-01-01'`: Exact date match
+** `filter_by_publish_date(x, include_unknown=False)`: [x: str, include_unknown: bool] Filter vulnerabilities by their publish date. Supports multiple formats:
+*** `'>2026-01-01'`: After this date (exclusive)
+*** `'>=2026-01-01'`: After or on this date (inclusive)
+*** `'<2026-01-01'`: Before this date (exclusive)
+*** `'<=2026-01-01'`: Before or on this date (inclusive)
+*** `'2026-01-01..2026-01-31'`: Between two dates (inclusive)
+*** `'2026-01-01'`: Exact date match, but ignores time (hours, minutes, seconds)
+*** `include_unknown` (optional, default: False): When set to True, also includes vulnerabilities without a published date or with unknown publish dates in the results
 
 * Sorting:
 ** `sort_by_epss`: Sort vulnerabilities by EPSS score, with greater score first.
