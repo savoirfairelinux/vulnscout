@@ -11,6 +11,9 @@ import os
 from typing import Optional
 from ..controllers.epss_db import EPSS_DB
 
+import json
+import urllib.request
+
 
 class VulnerabilitiesController:
     """
@@ -108,6 +111,30 @@ class VulnerabilitiesController:
             cursor = conn.cursor()
 
             for vuln in self.vulnerabilities.values():
+                if "GHSA" in vuln.id:
+                    url = f"https://api.github.com/advisories/{vuln.id}"
+
+                    # Setup request with headers
+                    req = urllib.request.Request(
+                        url,
+                        headers={"Accept": "application/vnd.github+json"}
+                    )
+
+                    try:
+                        with urllib.request.urlopen(req) as response:
+                            # Read and parse JSON data
+                            data = json.loads(response.read().decode('utf-8'))
+                            vuln.published = data["published_at"]
+                            nb_vuln += 1
+                    except urllib.error.HTTPError as e:
+                        print(f"Error for {vuln.id}: {e.code}")
+                        continue
+                    except urllib.error.URLError as e:
+                        print(f"Error for {vuln.id}: {e.reason}")
+                        continue
+
+                    continue
+
                 result = cursor.execute(
                     "SELECT published FROM nvd_vulns WHERE id = ?;",
                     (vuln.id,)
