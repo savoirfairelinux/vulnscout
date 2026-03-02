@@ -169,3 +169,161 @@ in c-ares 1.x before 1.12.0 allows remote attackers to cause a denial of service
     assert assessment_1.is_compatible_status("fixed")
     assert assessment_2.is_compatible_status("under_investigation")
     assert assessment_3.is_compatible_status("not_affected")
+
+
+# ---------------------------------------------------------------------------
+# Deduplication tests (found_corresponding_assessment logic)
+# ---------------------------------------------------------------------------
+
+SINGLE_PKG_PATCHED = json.loads("""{
+    "version": "1",
+    "package": [{
+        "name": "c-ares", "version": "1.18.1",
+        "issue": [{
+            "id": "CVE-2007-3152",
+            "status": "Patched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2007-3152"
+        }]
+    }]
+}""")
+
+SINGLE_PKG_IGNORED = json.loads("""{
+    "version": "1",
+    "package": [{
+        "name": "c-ares", "version": "1.18.1",
+        "issue": [{
+            "id": "CVE-2023-31124",
+            "status": "Ignored",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2023-31124"
+        }]
+    }]
+}""")
+
+SINGLE_PKG_UNPATCHED = json.loads("""{
+    "version": "1",
+    "package": [{
+        "name": "c-ares", "version": "1.18.1",
+        "issue": [{
+            "id": "CVE-2016-5180",
+            "status": "Unpatched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2016-5180"
+        }]
+    }]
+}""")
+
+
+def test_duplicate_patched_assessment_not_duplicated(yocto_parser):
+    """Loading the same Patched issue twice must not create duplicate assessments."""
+    yocto_parser.load_from_dict(SINGLE_PKG_PATCHED)
+    yocto_parser.load_from_dict(SINGLE_PKG_PATCHED)
+
+    assert len(yocto_parser.assessmentsCtrl) == 1
+    assessment = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2007-3152")[0]
+    assert assessment.is_compatible_status("fixed")
+    assert "Yocto reported vulnerability as Patched" in assessment.impact_statement
+
+
+def test_duplicate_ignored_assessment_not_duplicated(yocto_parser):
+    """Loading the same Ignored issue twice must not create duplicate assessments."""
+    yocto_parser.load_from_dict(SINGLE_PKG_IGNORED)
+    yocto_parser.load_from_dict(SINGLE_PKG_IGNORED)
+
+    assert len(yocto_parser.assessmentsCtrl) == 1
+    assessment = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2023-31124")[0]
+    assert assessment.is_compatible_status("not_affected")
+    assert assessment.justification == "vulnerable_code_not_present"
+    assert "Yocto reported vulnerability as Ignored" in assessment.impact_statement
+
+
+def test_duplicate_unpatched_assessment_not_duplicated(yocto_parser):
+    """Loading the same Unpatched issue twice must not create duplicate assessments."""
+    yocto_parser.load_from_dict(SINGLE_PKG_UNPATCHED)
+    yocto_parser.load_from_dict(SINGLE_PKG_UNPATCHED)
+
+    assert len(yocto_parser.assessmentsCtrl) == 1
+    assessment = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2016-5180")[0]
+    assert assessment.is_compatible_status("under_investigation")
+
+
+# ---------------------------------------------------------------------------
+# skip_patched (CVE_CHECK_EXCLUDE_PATCHED=true) branch tests
+# ---------------------------------------------------------------------------
+
+def test_skip_patched_no_prior_assessment_removes_vuln(yocto_parser, monkeypatch):
+    """
+    When CVE_CHECK_EXCLUDE_PATCHED=true and there is no prior assessment for a Patched
+    vulnerability, the vulnerability must be removed entirely (no other scanner set it).
+    """
+    monkeypatch.setenv("CVE_CHECK_EXCLUDE_PATCHED", "true")
+    yocto_parser.load_from_dict(SINGLE_PKG_PATCHED)
+
+    assert len(yocto_parser.vulnerabilitiesCtrl) == 0
+    assert len(yocto_parser.assessmentsCtrl) == 0
+
+
+def test_skip_patched_prior_non_fixed_assessment_adds_fixed(yocto_parser, monkeypatch):
+    """
+    When CVE_CHECK_EXCLUDE_PATCHED=true and a prior non-fixed assessment exists, a new
+    'fixed' assessment must be added to record the Yocto Patched status.
+    """
+    # First load: same vuln as Unpatched → creates an under_investigation assessment
+    yocto_parser.load_from_dict(SINGLE_PKG_UNPATCHED)
+    assert len(yocto_parser.assessmentsCtrl) == 1
+
+    monkeypatch.setenv("CVE_CHECK_EXCLUDE_PATCHED", "true")
+    # Second load: same vuln, now Patched + skip_patched active.
+    # The prior assessment is under_investigation (not fixed), so a fixed one should be added.
+    data_patched_same_vuln = json.loads("""{
+        "version": "1",
+        "package": [{
+            "name": "c-ares", "version": "1.18.1",
+            "issue": [{
+                "id": "CVE-2016-5180",
+                "status": "Patched",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2016-5180"
+            }]
+        }]
+    }""")
+    yocto_parser.load_from_dict(data_patched_same_vuln)
+
+    # Vuln must still exist (was not removed because there was a prior assessment)
+    assert "CVE-2016-5180" in yocto_parser.vulnerabilitiesCtrl
+    assessments = yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2016-5180")
+    assert len(assessments) == 2
+    statuses = [a.get_status_openvex() for a in assessments]
+    assert "fixed" in statuses
+    assert "under_investigation" in statuses
+
+
+def test_skip_patched_prior_fixed_assessment_skips(yocto_parser, monkeypatch):
+    """
+    When CVE_CHECK_EXCLUDE_PATCHED=true and the latest assessment is already 'fixed'
+    (but not stamped by Yocto, so deduplication doesn't catch it), no new assessment
+    must be created.
+    """
+    from src.models.assessment import VulnAssessment
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+
+    # Manually seed package, vulnerability and a 'fixed' assessment from another source
+    pkg = Package("c-ares", "1.18.1", [], [])
+    pkg.generate_generic_purl()
+    yocto_parser.packagesCtrl.add(pkg)
+
+    vuln = Vulnerability("CVE-2007-3152", ["other-scanner"], "", "unknown")
+    vuln.add_package(pkg.id)
+    vuln = yocto_parser.vulnerabilitiesCtrl.add(vuln)
+
+    prior_assessment = VulnAssessment(vuln.id, [pkg.id])
+    prior_assessment.set_status("fixed")
+    prior_assessment.set_not_affected_reason("Fixed by upstream patch")
+    yocto_parser.assessmentsCtrl.add(prior_assessment)
+
+    assert len(yocto_parser.assessmentsCtrl) == 1
+
+    monkeypatch.setenv("CVE_CHECK_EXCLUDE_PATCHED", "true")
+    yocto_parser.load_from_dict(SINGLE_PKG_PATCHED)
+
+    # Still only one assessment — the skip branch was taken
+    assert len(yocto_parser.assessmentsCtrl) == 1
+    assert yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2007-3152")[0].impact_statement == "Fixed by upstream patch"
