@@ -87,4 +87,3 @@ venv.bak/
 # Vulnscout files
 .vulnscout/*
 !.vulnscout/example/
-!.vulnscout/cache/
