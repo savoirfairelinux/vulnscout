@@ -91,6 +91,7 @@ VULNSCOUT_SKIP_GRYPE_SCAN="false"
 VULNSCOUT_DETACH_MODE="false"
 VULNSCOUT_STOP_MODE="false"
 COMPOSE_PROVIDER=""
+YAML_REQUIRES_UPDATE="false"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -122,6 +123,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workdir_path)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_PATH="$2/.vulnscout"
         shift 2
       else
@@ -131,6 +133,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --nvd-api-key)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_NVD_API_KEY="$2"
         shift 2
       else
@@ -139,11 +142,13 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --no_webui)
+      YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_INTERACTIVE_MODE="false"
       shift
       ;;
     --fail_condition)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_FAIL_CONDITION="$2"
         shift 2
       else
@@ -153,6 +158,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --report-template)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_TEMPLATE="$2"
         shift 2
       else
@@ -162,6 +168,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --spdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_SPDX_PATH="$(readlink -f "$2")"
         shift 2
       else
@@ -171,6 +178,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --openvex)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_OPENVEX_PATH="$(readlink -f "$2")"
         shift 2
       else
@@ -180,6 +188,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cdx)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_CDX_PATH="$(dirname "$(readlink -f "$2")")"
         shift 2
       else
@@ -189,6 +198,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cve-check)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_CVE_PATH="$(readlink -f "$2")"
         shift 2
       else
@@ -197,15 +207,18 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --cve-check-exclude-patched)
+      YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_CVE_EXCLUDE_PATCHED="true"
       shift
       ;;
     --ignore-parsing-errors)
+      YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_IGNORE_PARSING_ERRORS="true"
       shift
       ;;
     --vulnscout_path)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_PATH="$2"
         shift 2
       else
@@ -215,6 +228,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --product_name)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_PRODUCT_NAME="$2"
         shift 2
       else
@@ -224,6 +238,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --product_version)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_PRODUCT_VERSION="$2"
         shift 2
       else
@@ -233,6 +248,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --company_name)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_COMPANY_NAME="$2"
         shift 2
       else
@@ -242,6 +258,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --contact_email)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_CONTACT_EMAIL="$2"
         shift 2
       else
@@ -251,6 +268,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --document_url)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_DOCUMENT_URL="$2"
         shift 2
       else
@@ -259,6 +277,7 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --skip-grype-scan)
+      YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_SKIP_GRYPE_SCAN="true"
       shift
       ;;
@@ -276,6 +295,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --http-proxy)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_HTTP_PROXY="$2"
         shift 2
       else
@@ -285,6 +305,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --https-proxy)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_HTTPS_PROXY="$2"
         shift 2
       else
@@ -294,6 +315,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-proxy)
       if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+        YAML_REQUIRES_UPDATE="true"
         VULNSCOUT_NO_PROXY="$2"
         shift 2
       else
@@ -396,6 +418,7 @@ EOF
       - GENERATE_DOCUMENTS=$VULNSCOUT_GENERATE_DOCUMENTS
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
+      - DEV_MODE=$VULNSCOUT_DEV_MODE
 EOF
 
     if [ -n "$(id -u)" ] && [ -n "$(id -g)" ]; then
@@ -587,8 +610,9 @@ if [ "$VULNSCOUT_STOP_MODE" == "true" ]; then
   exit 0
 fi
 
-# If only --name was provided and a compose file already exists, reuse it directly
-if [ "$#" -eq 2 ] && [ -n "$VULNSCOUT_ENTRY_NAME" ] && [ -f "$YAML_FILE" ]; then
+# Reuse existing compose file when only runtime flags were provided.
+# Recreate only when at least one YAML-affecting option was passed.
+if [ "$YAML_REQUIRES_UPDATE" = "false" ] && [ -n "$VULNSCOUT_ENTRY_NAME" ] && [ -f "$YAML_FILE" ]; then
   echo "Reusing existing Docker Compose file: $YAML_FILE"
 else
   create_yaml_file

@@ -218,10 +218,7 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         // Find the help button (question mark icon) next to "Estimated efforts to fix"
-        const helpButtons = screen.getAllByRole('button');
-        const show_help = helpButtons.find(button => 
-            button.querySelector('svg[data-icon="circle-question"]')
-        );
+        const show_help = screen.getByTestId('estimated-effort-helper-button');
         expect(show_help).toBeDefined();
 
         // SHOW HELP

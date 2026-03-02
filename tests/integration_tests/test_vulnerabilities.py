@@ -8,7 +8,9 @@ from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
-
+from unittest.mock import patch, MagicMock
+import urllib.request
+import json
 
 @pytest.fixture
 def pkg_ABC():
@@ -190,3 +192,31 @@ def test_fetch_epss_scores(vuln_controller):
         print("Warning: No vulnerabilities with EPSS scores found in the DB for the test range.")
     else:
         assert all(v.epss["score"] is not None for v in scored_vulns)
+
+@pytest.fixture
+def vuln_ghsa():
+    """Fixture for a GitHub Security Advisory vulnerability."""
+    vuln = Vulnerability("GHSA-xxxx-yyyy-zzzz", ["test"], "test", "test")
+    return vuln
+
+@patch('urllib.request.urlopen')
+@patch('sqlite3.connect')
+def test_fetch_published_dates_ghsa_http_error(mock_sqlite, mock_urlopen, vuln_controller, vuln_ghsa):
+    """
+    GIVEN a GHSA vulnerability
+    WHEN the GitHub API returns an HTTP Error
+    THEN the loop should continue gracefully without crashing
+    """
+    vuln_controller.add(vuln_ghsa)
+    vuln_controller.nvd_db_path = "mock_db.sqlite"
+    
+    # Simulate a 404 Not Found from GitHub
+    mock_urlopen.side_effect = urllib.error.HTTPError(
+        url="...", code=404, msg="Not Found", hdrs={}, fp=None
+    )
+
+    # Execute - should not raise exception
+    vuln_controller.fetch_published_dates()
+
+    # Assertions
+    assert vuln_ghsa.published is None
