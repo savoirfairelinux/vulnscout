@@ -142,6 +142,8 @@ def test_ci_mode(init_files):
     os.environ["FAIL_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
     main()
 
+    os.environ["FAIL_CONDITION"] = ""
+
 
 def test_spdx_output_completeness(init_files):
     for key, value in init_files.items():

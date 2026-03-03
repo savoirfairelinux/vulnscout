@@ -1,8 +1,9 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
+import type { NVDProgress } from "../handlers/nvd_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
@@ -12,8 +13,10 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
+import NVDProgressHandler from "../handlers/nvd_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faCaretDown, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
+import RangeSlider from "../components/RangeSlider";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -39,6 +42,12 @@ const sortSeverityFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return SEVERITY_ORDER.indexOf(vulnsA) - SEVERITY_ORDER.indexOf(vulnsB)
 }
 
+const sortSeverityByScoreFn: SortingFn<Vulnerability> = (rowA, rowB) => {
+    const scoreA = rowA.original.severity.max_score || 0;
+    const scoreB = rowB.original.severity.max_score || 0;
+    return scoreA - scoreB;
+}
+
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
     const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
@@ -58,7 +67,200 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
     return indexA - indexB
 }
 
-const fuseKeys = ['id', 'aliases', 'related_vulnerabilities', 'packages', 'simplified_status', 'status', 'texts.content']
+const fuseKeys = [
+    'id', 
+    'packages',
+    'texts.content'
+]
+
+type PublishedDateFilterProps = {
+    filterType: string;
+    dateValue: string;
+    daysValue: string;
+    dateFrom: string;
+    dateTo: string;
+    setFilterType: (value: string) => void;
+    setDateValue: (value: string) => void;
+    setDaysValue: (value: string) => void;
+    setDateFrom: (value: string) => void;
+    setDateTo: (value: string) => void;
+    nvdProgress: NVDProgress | null;
+};
+
+function PublishedDateFilter({ 
+    filterType, dateValue, daysValue, dateFrom, dateTo,
+    setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo, 
+    nvdProgress 
+}: Readonly<PublishedDateFilterProps>) {
+    const [isOpen, setIsOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    const isDisabled = !nvdProgress || nvdProgress.in_progress || nvdProgress.phase !== 'completed';
+    const hasActiveFilter = filterType !== '' && (dateValue || daysValue || (dateFrom && dateTo));
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+
+        if (isOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isOpen]);
+
+    const clearFilters = () => {
+        setFilterType('');
+        setDateValue('');
+        setDaysValue('');
+        setDateFrom('');
+        setDateTo('');
+    };
+
+    return (
+        <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
+            <button
+                onClick={() => !isDisabled && setIsOpen(!isOpen)}
+                disabled={isDisabled}
+                className={`py-1 px-2 rounded flex items-center gap-1 ${
+                    isDisabled
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : isOpen
+                        ? 'bg-sky-950'
+                        : 'bg-sky-900 hover:bg-sky-950'
+                } text-white`}
+                title={isDisabled ? 'NVD sync in progress' : 'Filter by published date'}
+            >
+                Published Date
+                {hasActiveFilter && <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>}
+                <FontAwesomeIcon icon={faCaretDown} />
+            </button>
+
+            {isOpen && (
+                <div className="absolute mt-1 w-72 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50">
+                    <div className="p-3 space-y-3">
+                        <div>
+                            <label htmlFor="published-date-filter-type" className="block text-sm font-semibold mb-1">Filter Type:</label>
+                            <select
+                                id="published-date-filter-type"
+                                value={filterType}
+                                onChange={(e) => {
+                                    setFilterType(e.target.value);
+                                    setDateValue('');
+                                    setDaysValue('');
+                                    setDateFrom('');
+                                    setDateTo('');
+                                }}
+                                className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                            >
+                                <option value="">Select filter type...</option>
+                                <option value="is">Is</option>
+                                <option value=">=">On or after</option>
+                                <option value="<=">On or before</option>
+                                <option value="between">Between</option>
+                                <option value="days_ago">Less than X days ago</option>
+                            </select>
+                        </div>
+
+                        {filterType === 'is' && (
+                            <div>
+                                <label htmlFor="published-date-is" className="block text-sm font-semibold mb-1">Date:</label>
+                                <input
+                                    id="published-date-is"
+                                    type="date"
+                                    value={dateValue}
+                                    onChange={(e) => setDateValue(e.target.value)}
+                                    className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+                        )}
+
+                        {filterType === '>=' && (
+                            <div>
+                                <label htmlFor="published-date-gte" className="block text-sm font-semibold mb-1">On or after:</label>
+                                <input
+                                    id="published-date-gte"
+                                    type="date"
+                                    value={dateValue}
+                                    onChange={(e) => setDateValue(e.target.value)}
+                                    className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+                        )}
+
+                        {filterType === '<=' && (
+                            <div>
+                                <label htmlFor="published-date-lte" className="block text-sm font-semibold mb-1">On or before:</label>
+                                <input
+                                    id="published-date-lte"
+                                    type="date"
+                                    value={dateValue}
+                                    onChange={(e) => setDateValue(e.target.value)}
+                                    className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+                        )}
+
+                        {filterType === 'between' && (
+                            <>
+                                <div>
+                                    <label htmlFor="published-date-from" className="block text-sm font-semibold mb-1">From:</label>
+                                    <input
+                                        id="published-date-from"
+                                        type="date"
+                                        value={dateFrom}
+                                        onChange={(e) => setDateFrom(e.target.value)}
+                                        className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor="published-date-to" className="block text-sm font-semibold mb-1">To:</label>
+                                    <input
+                                        id="published-date-to"
+                                        type="date"
+                                        value={dateTo}
+                                        onChange={(e) => setDateTo(e.target.value)}
+                                        className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                    />
+                                </div>
+                            </>
+                        )}
+
+                        {filterType === 'days_ago' && (
+                            <div>
+                                <label htmlFor="published-date-days" className="block text-sm font-semibold mb-1">Number of days:</label>
+                                <input
+                                    id="published-date-days"
+                                    type="number"
+                                    min="1"
+                                    value={daysValue}
+                                    onChange={(e) => setDaysValue(e.target.value)}
+                                    placeholder="e.g., 30"
+                                    className="w-full px-2 py-1 text-sm bg-sky-800 text-white rounded border border-sky-600 focus:outline-none focus:border-sky-500"
+                                />
+                            </div>
+                        )}
+
+                        {hasActiveFilter && (
+                            <button
+                                onClick={clearFilters}
+                                className="w-full px-2 py-1 text-sm bg-red-700 hover:bg-red-800 text-white rounded"
+                            >
+                                Clear Filter
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+const SEVERITY_RANGE_MIN = 0;
+const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
 
@@ -71,6 +273,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+    const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
+    const [publishedDateValue, setPublishedDateValue] = useState<string>('');
+    const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
+    const [publishedDateFrom, setPublishedDateFrom] = useState<string>('');
+    const [publishedDateTo, setPublishedDateTo] = useState<string>('');
+    const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [hideFixed, setHideFixed] = useState<boolean>(false);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -78,8 +286,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated'
+        'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date'
     ]);
+    const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
+
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
+    const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+    const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const shortcutButtonRef = useRef<HTMLButtonElement>(null);
+    const shortcutDropdownRef = useRef<HTMLDivElement>(null);
+
+    const keyboardShortcuts = [
+        { key: '/', description: 'Focus search bar' },
+        { key: 'e', description: 'Edit focused vulnerability' },
+        { key: 'v', description: 'View vulnerability details' },
+        { key: '↑ / ↓', description: 'Navigate focused table row' },
+        { key: 'Home / End', description: 'Navigate to first/last table row' },
+    ];
+
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -88,6 +314,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Fetch NVD progress on mount and periodically
+    useEffect(() => {
+        const fetchNvdProgress = async () => {
+            try {
+                const progress = await NVDProgressHandler.getProgress();
+                setNvdProgress(progress);
+            } catch (error) {
+                console.error('Failed to fetch NVD progress:', error);
+            }
+        };
+
+        fetchNvdProgress();
+        const interval = setInterval(fetchNvdProgress, 5000); // Poll every 5 seconds
+
+        return () => clearInterval(interval);
+    }, []);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -104,6 +347,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (search != '') setSearch('');
         }
         setSearch(event.target.value);
+    }, 750, { maxWait: 5000 });
+
+    const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
+        setSeverityRange(value);
     }, 750, { maxWait: 5000 });
 
     const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
@@ -181,6 +428,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'simplified_status': 'Status',
         'effort.likely': 'Estimated Effort',
         'assessments': 'Last Updated',
+        'published': 'Published Date',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -243,19 +491,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
             }),
-            columnHelper.accessor('severity.severity', {
+            columnHelper.accessor(row => showCustomSeverityFilter ? row.severity.max_score : row.severity.severity, {
             id: 'severity.severity',
             header: () => (
-                <div className="flex items-center justify-center">
-                Severity
+                <div className="flex flex-col items-center justify-center">
+                Severity {showCustomSeverityFilter ? 'Score' : ''}
+                {showCustomSeverityFilter && <div>{severityRange.min} to {severityRange.max}</div>}
                 </div>
             ),
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
-                <SeverityTag severity={info.getValue()} />
+                    {!showCustomSeverityFilter ? (
+                        <SeverityTag severity={info.getValue()?.toString() || 'N/A'} />
+                    ) : (
+                        <div>{info.getValue() || 'N/A'}</div>
+                    )}
                 </div>
             ),
-            sortingFn: sortSeverityFn,
+            sortingFn: showCustomSeverityFilter ?  sortSeverityByScoreFn : sortSeverityFn,
             sortDescFirst: true,
             size: 40,
             }),
@@ -346,6 +599,34 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             },
             size: 140
             }),
+            columnHelper.accessor('published', {
+            id: 'published',
+            header: () => <div className="flex items-center justify-center">Published Date</div>,
+            cell: info => {
+                const published = info.getValue();
+                if (!published) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                }
+                const publishedDate = new Date(published);
+                const formattedDate = publishedDate.toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+                return (
+                    <div className="flex items-center justify-center h-full text-center text-sm">
+                        {formattedDate}
+                    </div>
+                );
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const dateA = rowA.original.published ? new Date(rowA.original.published).getTime() : 0;
+                const dateB = rowB.original.published ? new Date(rowB.original.published).getTime() : 0;
+                return dateA - dateB;
+            },
+            size: 90
+            }),
             columnHelper.accessor('found_by', {
             id: 'found_by',
             header: () => <div className="flex items-center justify-center">Sources</div>,
@@ -395,7 +676,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -412,9 +693,77 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages.includes(pkg))) return false;
+            
+            // Published date filter
+            if (publishedDateFilterType && el.published) {
+                const publishedDate = new Date(el.published);
+                const today = new Date();
+                
+                switch (publishedDateFilterType) {
+                    case 'is':
+                        if (publishedDateValue) {
+                            const targetDate = new Date(publishedDateValue);
+                            // Compare dates in UTC to avoid timezone issues
+                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
+                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
+                            if (publishedUTC !== targetUTC) return false;
+                        }
+                        break;
+                    case '>=':
+                        if (publishedDateValue) {
+                            const targetDate = new Date(publishedDateValue);
+                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
+                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
+                            if (publishedUTC < targetUTC) return false;
+                        }
+                        break;
+                    case '<=':
+                        if (publishedDateValue) {
+                            const targetDate = new Date(publishedDateValue);
+                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
+                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
+                            if (publishedUTC > targetUTC) return false;
+                        }
+                        break;
+                    case 'between':
+                        if (publishedDateFrom && publishedDateTo) {
+                            const fromDate = new Date(publishedDateFrom);
+                            const toDate = new Date(publishedDateTo);
+                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
+                            const fromUTC = Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate());
+                            const toUTC = Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate());
+                            if (publishedUTC < fromUTC || publishedUTC > toUTC) return false;
+                        }
+                        break;
+                    case 'days_ago':
+                        if (publishedDaysValue) {
+                            const daysAgo = parseInt(publishedDaysValue);
+                            if (!isNaN(daysAgo)) {
+                                const cutoffDate = new Date(today);
+                                cutoffDate.setDate(cutoffDate.getDate() - daysAgo);
+                                const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
+                                const cutoffUTC = Date.UTC(cutoffDate.getUTCFullYear(), cutoffDate.getUTCMonth(), cutoffDate.getUTCDate());
+                                if (publishedUTC < cutoffUTC) return false;
+                            }
+                        }
+                        break;
+                }
+            } else if (publishedDateFilterType && !el.published) {
+                // If filter is active but vulnerability has no published date, filter it out
+                return false;
+            }
+            
+            if(showCustomSeverityFilter){
+                // Use the max score as this is how the final severity level is determined
+                const maxScore = el.severity.max_score;
+            
+                if (maxScore === null) return false;
+                if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
+            }
+            
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -433,9 +782,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedPackages([]);
+        setPublishedDateFilterType('');
+        setPublishedDateValue('');
+        setPublishedDaysValue('');
+        setPublishedDateFrom('');
+        setPublishedDateTo('');
         setSelectedRows({});
         setHideFixed(false);
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date']);
+        setShowCustomSeverityFilter(false);
+        setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
     }
 
     const handleHideFixedToggle = (enabled: boolean) => {
@@ -456,6 +812,71 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         }
     };
 
+    useEffect(() => {
+        const handleKeyPress = (event: KeyboardEvent) => {
+            // Only trigger if not typing in an input/textarea
+            if (event.target instanceof HTMLInputElement || 
+                event.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            // Bind "/" to focus search input
+            if (event.key === "/") {
+                event.preventDefault();
+                searchInputRef.current?.focus();
+            }
+
+            // Bind "e" to edit focused vulnerability
+            if (event.key === "e" && focusedRowIndex !== null) {
+                event.preventDefault();
+                if (focusedRowIndex >= 0 && focusedRowIndex < searchFilteredData.length) {
+                    const vulnToEdit = searchFilteredData[focusedRowIndex];
+                    handleEditClick(vulnToEdit);
+                    setIsEditing(true);
+                }
+            }
+
+            // Bind "v" to view focused vulnerability details
+            if (event.key === "v" && focusedRowIndex !== null) {
+                event.preventDefault();
+                if (focusedRowIndex >= 0 && focusedRowIndex < searchFilteredData.length) {
+                    const vuln = searchFilteredData[focusedRowIndex];
+                    const index = searchFilteredData.findIndex(v => v.id === vuln.id);
+                    setModalVuln(vuln);
+                    setModalVulnIndex(index >= 0 ? index : undefined);
+                    setModalVulnSnapshot([...searchFilteredData]);
+                    setIsEditing(false);
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyPress);
+        return () => document.removeEventListener('keydown', handleKeyPress);
+    }, [focusedRowIndex, searchFilteredData, handleEditClick]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (
+                shortcutDropdownRef.current &&
+                shortcutButtonRef.current &&
+                !shortcutDropdownRef.current.contains(event.target as Node) &&
+                !shortcutButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowShortcutHelper(false);
+            }
+        };
+
+        if (showShortcutHelper) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showShortcutHelper]);
+
+
+
     return (<>
         {bannerVisible && (
             <MessageBanner
@@ -468,7 +889,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
-            <input onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
 
             <FilterOption
                 label="Columns"
@@ -481,6 +902,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Status',
                     'Estimated Effort',
                     'Last Updated',
+                    'Published Date',
                     'Sources'
                 ]}
                 selected={visibleColumns}
@@ -501,6 +923,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 )}
                 selected={selectedSeverities}
                 setSelected={setSelectedSeverities}
+                CustomFilterComponent={() => (
+                    <RangeSlider
+                        min={SEVERITY_RANGE_MIN}
+                        max={SEVERITY_RANGE_MAX}
+                        initialMin={severityRange.min}
+                        initialMax={severityRange.max}
+                        step={0.1}
+                        onChange={updateCustomSeverityFilter}
+                    />
+                )}
+                customFilterName="by score"
+                showCustomFilterComponent={showCustomSeverityFilter}
+                setShowCustomFilterComponent={setShowCustomSeverityFilter}
             />
 
             <FilterOption
@@ -508,6 +943,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
                 selected={selectedStatuses}
                 setSelected={handleStatusChange}
+            />
+
+            {/* Published Date Filter Dropdown */}
+            <PublishedDateFilter
+                filterType={publishedDateFilterType}
+                dateValue={publishedDateValue}
+                daysValue={publishedDaysValue}
+                dateFrom={publishedDateFrom}
+                dateTo={publishedDateTo}
+                setFilterType={setPublishedDateFilterType}
+                setDateValue={setPublishedDateValue}
+                setDaysValue={setPublishedDaysValue}
+                setDateFrom={setPublishedDateFrom}
+                setDateTo={setPublishedDateTo}
+                nvdProgress={nvdProgress}
             />
 
             {/* Package indicator (no dropdown, just display) */}
@@ -531,12 +981,41 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 label="Hide Fixed"
             />
 
-            <button
-                onClick={resetFilters}
-                className="ml-auto bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
-            >
-                Reset Filters
-            </button>
+            <div className="ml-auto flex items-center gap-2 relative">
+                <button
+                    ref={shortcutButtonRef}
+                    aria-label="shortcut helper"
+                    title="View keyboard shortcuts"
+                    type="button"
+                    className="text-white hover:text-blue-300 transition-colors"
+                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleQuestion} />
+                </button>
+                {showShortcutHelper && (
+                    <div
+                        ref={shortcutDropdownRef}
+                        className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                    >
+                        <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
+                        <div className="space-y-2 text-gray-100">
+                            {keyboardShortcuts.map((shortcut, index) => (
+                                <div key={index} className="flex justify-between">
+                                    <span className="font-semibold text-cyan-300">{shortcut.key}</span>
+                                    <span>{shortcut.description}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                <button
+                    onClick={resetFilters}
+                    className="bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
+                >
+                    Reset Filters
+                </button>
+            </div>
         </div>
 
         <MultiEditBar
@@ -568,6 +1047,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             selected={selectedRows}
             updateSelected={setSelectedRows}
             onFilteredDataChange={setSearchFilteredData}
+            onFocusedRowChange={setFocusedRowIndex}
         />
 
         {modalVuln != undefined && <VulnModal

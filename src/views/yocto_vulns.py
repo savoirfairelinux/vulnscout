@@ -3,6 +3,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import os
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import VulnAssessment
@@ -16,6 +17,14 @@ class YoctoVulns:
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
 
+    def get_last_assessment(self, assessments):
+        if not assessments:
+            return None
+        return max(
+            assessments,
+            key=lambda a: a.last_update or a.timestamp
+        )
+
     def load_from_dict(self, data: dict):
         """Load the yoctoVulns object from a dictionary."""
 
@@ -28,8 +37,9 @@ class YoctoVulns:
             package.generate_generic_purl()
             self.packagesCtrl.add(package)
 
-            for issue in pkg.get("issue", []):
+            skip_patched = os.getenv('CVE_CHECK_EXCLUDE_PATCHED', 'false') == 'true'
 
+            for issue in pkg.get("issue", []):
                 vuln = Vulnerability(
                     issue.get("id").upper(),
                     ["yocto"],
@@ -40,6 +50,8 @@ class YoctoVulns:
                     vuln.add_url(issue.get("link"))
                 if "summary" in issue:
                     vuln.add_text(issue.get("summary"), "summary")
+                if "description" in issue:
+                    vuln.add_text(issue.get("description"), "yocto description")
 
                 if "scorev3" in issue and issue["scorev3"] != "0.0":
                     cvss_item = CVSS(
@@ -96,8 +108,26 @@ class YoctoVulns:
                 assessment = VulnAssessment(vuln.id, [package.id])
 
                 if issue["status"] == "Patched":
-                    assessment.set_status("fixed")
-                    assessment.set_not_affected_reason("Yocto reported vulnerability as Patched")
+                    if skip_patched:
+                        last = self.get_last_assessment(assessments)
+
+                        if last is None:
+                            # remove associated vuln (as this will be last input to be processed)
+                            self.vulnerabilitiesCtrl.remove(vuln.id)
+                            continue
+
+                        if not last.is_compatible_status("fixed"):
+                            assessment.set_status("fixed")
+                            assessment.set_not_affected_reason(
+                                "Yocto reported vulnerability as Patched"
+                            )
+                        else:
+                            continue
+                    else:
+                        assessment.set_status("fixed")
+                        assessment.set_not_affected_reason(
+                            "Yocto reported vulnerability as Patched"
+                        )
                 elif issue["status"] == "Ignored":
                     assessment.set_status("not_affected")
                     assessment.set_justification("vulnerable_code_not_present")

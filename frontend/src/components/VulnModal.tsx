@@ -13,11 +13,11 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 type Props = {
     vuln: Vulnerability;
@@ -51,6 +51,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
+    const [showShortcutHelper, setShowShortcutHelper] = useState(false);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -60,6 +61,41 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("error");
     const [showBanner, setShowBanner] = useState(false);
+
+    const modalRef = useRef<HTMLDivElement>(null);
+    const shortcutButtonRef = useRef<HTMLButtonElement>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && shortcutButtonRef.current &&
+                !dropdownRef.current.contains(event.target as Node) &&
+                !shortcutButtonRef.current.contains(event.target as Node)) {
+                setShowShortcutHelper(false);
+            }
+        };
+
+        if (showShortcutHelper) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showShortcutHelper]);
+
+    useEffect(() => {
+        // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
+        if (modalRef.current) {
+            modalRef.current.focus();
+        }
+    }, []);
+
+    useEffect(() => {
+        // Scroll to top when vulnerability changes
+        if (modalRef.current) {
+            modalRef.current.scrollTop = 0;
+        }
+    }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -82,6 +118,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
+        setClearTimeFields(true);
+        setTimeout(() => setClearTimeFields(false), 100);
         if (pendingNavigation !== null && onNavigate) {
             onNavigate(pendingNavigation);
             setPendingNavigation(null);
@@ -95,7 +133,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         setPendingNavigation(null);
     };
 
-    const navigateTo = (targetIndex: number) => {
+    const navigateTo = useCallback((targetIndex: number) => {
         hideBanner();
         if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
         if (hasUnsavedChanges) {
@@ -104,7 +142,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         } else {
             onNavigate(targetIndex);
         }
-    };
+    }, [vulnerabilities, currentIndex, onNavigate, hasUnsavedChanges]);
 
     const canNavigatePrevious = vulnerabilities && currentIndex !== undefined && currentIndex > 0;
     const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
@@ -241,7 +279,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         setEditingAssessmentId(null);
     };
 
-    // Handle ESC key press
+    // Handle keyboard navigation (ESC to close, arrow keys to navigate)
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -252,6 +290,12 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 } else {
                     onClose();
                 }
+            } else if (event.key === 'ArrowLeft' && canNavigatePrevious) {
+                event.preventDefault();
+                navigateTo(currentIndex! - 1);
+            } else if (event.key === 'ArrowRight' && canNavigateNext) {
+                event.preventDefault();
+                navigateTo(currentIndex! + 1);
             }
         };
 
@@ -259,7 +303,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [hasUnsavedChanges, onClose]);
+    }, [hasUnsavedChanges, onClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
 
     const groupAssessments = (assessments: Assessment[]) => {
         const groups: { [key: string]: Assessment[] } = {};
@@ -428,7 +472,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
             <div className="relative p-16 h-full">
-                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
+                <div
+                    ref={modalRef}
+                    tabIndex={-1}
+                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
 
                     {/* Modal header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
@@ -436,6 +483,38 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             {vuln.id}
                         </h3>
                         <div className="flex items-center space-x-2">
+                            {/* Keyboard Shortcut Helper */}
+                            <div className="px-2 py-2 flex items-center relative">
+                                <button
+                                    ref={shortcutButtonRef}
+                                    aria-label='shortcut helper'
+                                    title='View keyboard shortcuts'
+                                    type='button'
+                                    className='hover:text-blue-400 transition-colors'
+                                    onClick={() => setShowShortcutHelper(!showShortcutHelper)}
+                                >
+                                    <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
+                                </button>
+                                {showShortcutHelper && (
+                                    <div
+                                        ref={dropdownRef}
+                                        className="absolute top-full mt-1 right-0 bg-cyan-900 border border-cyan-700 rounded-lg shadow-lg p-4 z-50 w-[300px] text-sm"
+                                    >
+                                        <h3 className="font-bold text-white mb-3">Keyboard Shortcuts</h3>
+                                        <div className="space-y-2 text-gray-100">
+                                            <div className="flex justify-between">
+                                                <span className="font-semibold text-cyan-300">← / →</span>
+                                                <span>Previous/Next vulnerability</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="font-semibold text-cyan-300">Esc</span>
+                                                <span>Close modal</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
@@ -486,6 +565,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 {vuln.epss?.score !== undefined && vuln.epss.score !== 0 && <li key="epss">
                                     <span className="font-bold mr-1">EPSS Score: </span>
                                     {(vuln.epss.score * 100).toFixed(2)}%
+                                </li>}
+                                {vuln.published && <li key="published">
+                                    <span className="font-bold mr-1">Published:</span>
+                                    {new Date(vuln.published).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
@@ -567,12 +650,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
                         </div>
 
-                        <div className="mb-6">
+                        <div className="mb-6 flex flex-col gap-2">
                             {vuln.texts.map((text) => {
-                                const title = text.title.split('');
                                 return (
                                 <div key={encodeURIComponent(text.title)}>
-                                    <h3 className="font-bold mb-2">{title?.shift()?.toLocaleUpperCase()}{title.join('')}</h3>
+                                    <h3 className="font-bold mb-2">{text.title?.replace(/\b\w/g, c => c.toLocaleUpperCase())}</h3>
                                     <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                                 </div>)
                             })}
@@ -587,7 +669,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             </ul>
                         </div>
 
-                        <div className="mb-6 mt-6">
+                        <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor
                                 progressBar={undefined}
                                 onSaveTimeEstimation={(data) => saveEstimation(data)}
@@ -697,7 +779,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     disabled={!canNavigatePrevious}
                                     type="button"
                                     aria-label="Previous vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
                                 >
                                     <FontAwesomeIcon icon={faChevronLeft} className="w-3 h-3 mr-2" />
                                 </button>
@@ -706,7 +788,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                     disabled={!canNavigateNext}
                                     type="button"
                                     aria-label="Next vulnerability"
-                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800 text-gray-400"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
                                 >
                                     <FontAwesomeIcon icon={faChevronRight} className="w-3 h-3 ml-2" />
                                 </button>
@@ -722,7 +804,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                         <button
                             onClick={handleClose}
                             type="button"
-                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-gray-700 bg-gray-800"
+                            className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800"
                         >
                             Close
                         </button>

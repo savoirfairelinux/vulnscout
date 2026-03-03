@@ -29,6 +29,8 @@ DOCUMENT_URL=${DOCUMENT_URL-"https://spdx.org/spdxdocs/${PRODUCT_NAME}-${PRODUCT
 INTERACTIVE_MODE=${INTERACTIVE_MODE-"true"}
 VERBOSE_MODE=${VERBOSE_MODE-"false"}
 VULNSCOUT_VERSION=${VULNSCOUT_VERSION-"unknown"}
+SKIP_GRYPE_SCAN=${SKIP_GRYPE_SCAN-"false"}
+DEV_MODE=${DEV_MODE-"false"}
 
 echo "VulnScout $VULNSCOUT_VERSION"
 
@@ -56,7 +58,11 @@ function main() {
     # 0. Run server to start page
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         set_status "0" "Server started"
-        (cd "$BASE_DIR/src" && flask --app bin.webapp run) &
+        FLASK_ARGS=(--app bin.webapp run)
+        if [[ "${DEV_MODE}" == "true" ]]; then
+            FLASK_ARGS+=(--debug)
+        fi
+        (cd "$BASE_DIR/src" && flask "${FLASK_ARGS[@]}") &
     fi
 
     python3 -m src.bin.epss_db_builder &
@@ -151,13 +157,19 @@ function full_scan_steps() {
         fi
     fi
 
-    if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
-        set_status "5" "Scanning SPDX with Grype"
-        grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
-    fi
-    if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
-        set_status "5" "Scanning CDX with Grype"
-        grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
+    # 5. Scan SPDX and CDX with Grype
+    if [[ "${SKIP_GRYPE_SCAN}" == "true" ]]; then
+        set_status "5" "Skipping Grype scan"
+    else
+        if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
+            set_status "5" "Scanning SPDX with Grype"
+            grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
+        fi
+
+        if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
+            set_status "5" "Scanning CDX with Grype"
+            grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
+        fi
     fi
 
     set_status "6" "Scanning CDX with OSV (WIP)"

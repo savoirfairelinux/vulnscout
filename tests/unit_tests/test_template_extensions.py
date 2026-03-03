@@ -10,6 +10,7 @@ from src.views.templates import TemplatesExtensions
 class MockEnv:
     def __init__(self):
         self.filters = {}
+        self.globals = {}
 
 
 @pytest.fixture
@@ -207,3 +208,138 @@ def test_filter_last_assessment_date_invalid_timestamp(extensions):
     # Should only include valid dates that match the filter
     result = extensions.filters["last_assessment_date"](vulns, ">=2026-01-01")
     assert result == [a, c]
+
+
+def test_filter_publish_date_greater_than(extensions):
+    """Test filtering with > operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    c = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c]
+    
+    # After 2026-01-01 (exclusive - should not include anything on that day)
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01")
+    assert result == [b]
+    
+    # Test with dict input
+    vulns_dict = {"a": a, "b": b, "c": c}
+    result = extensions.filters["filter_by_publish_date"](vulns_dict, ">2026-01-01")
+    assert result == [b]
+
+
+def test_filter_publish_date_greater_than_or_equal(extensions):
+    """Test filtering with >= operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    c = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c]
+    
+    # After or on 2026-01-01 (inclusive)
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-01")
+    assert result == [a, b]
+
+
+def test_filter_publish_date_less_than(extensions):
+    """Test filtering with < operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    c = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c]
+    
+    # Before 2026-01-02 (exclusive - should not include anything on that day)
+    result = extensions.filters["filter_by_publish_date"](vulns, "<2026-01-02")
+    assert result == [a, c]
+
+
+def test_filter_publish_date_less_than_or_equal(extensions):
+    """Test filtering with <= operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    c = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c]
+    
+    # Before or on 2026-01-01 (inclusive)
+    result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-01-01")
+    assert result == [a, c]
+
+
+def test_filter_publish_date_range(extensions):
+    """Test filtering with date range"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-15T15:00:00"}
+    c = {"published": "2026-01-31T23:59:59"}
+    d = {"published": "2026-02-01T00:00:00"}
+    vulns = [a, b, c, d]
+    
+    # Between 2026-01-01 and 2026-01-31 (inclusive)
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-31")
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_exact(extensions):
+    """Test filtering with exact date"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-01T23:59:59"}
+    c = {"published": "2026-01-02T00:00:00"}
+    d = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c, d]
+    
+    # Exact date 2026-01-01 (includes all times on that day)
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01")
+    assert result == [a, b]
+
+
+def test_filter_publish_date_no_publish_data(extensions):
+    """Test filtering when vulnerabilities have no published field"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}  # None published
+    vulns = [a, b, c]
+    
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2025-12-31")
+    assert result == [a]
+
+
+def test_filter_publish_date_invalid_format(extensions):
+    """Test that invalid date formats return all vulnerabilities"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    vulns = [a, b]
+    
+    # Invalid date format should return all
+    result = extensions.filters["filter_by_publish_date"](vulns, "invalid-date")
+    assert result == vulns
+    
+    # Invalid range format should return all
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-02..2026-01-03")
+    assert result == vulns
+
+
+def test_filter_publish_date_invalid_timestamp(extensions):
+    """Test that invalid timestamps in vulnerabilities are handled gracefully"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "invalid-timestamp"}
+    c = {"published": "2026-01-02T15:00:00"}
+    vulns = [a, b, c]
+    
+    # Should only include valid dates that match the filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-01")
+    assert result == [a, c]
+
+
+def test_filter_publish_date_include_unknown(extensions):
+    """Test filtering with include_unknown parameter"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {"published": "2026-01-02T15:00:00"}
+    c = {}  # No published field
+    d = {"published": None}  # None published
+    e = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c, d, e]
+    
+    # Test without include_unknown (default) - should only include items matching date filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01")
+    assert result == [b]
+    
+    # Test with include_unknown=True - should include matching dates + unknown items
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01", True)
+    assert result == [b, c, d]

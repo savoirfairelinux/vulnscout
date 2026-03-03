@@ -6,8 +6,13 @@
 from ..models.vulnerability import Vulnerability
 from ..controllers.packages import PackagesController
 import time
+import sqlite3
+import os
 from typing import Optional
 from ..controllers.epss_db import EPSS_DB
+
+import json
+import urllib.request
 
 
 class VulnerabilitiesController:
@@ -26,6 +31,7 @@ class VulnerabilitiesController:
         """A dictionary of vulnerabilities, indexed by their id."""
         self.alias_registered: dict[str, str] = {}
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
+        self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
 
     def get(self, vuln_id: str):
         """Return a vulnerability by id (str) or None if not found. Also look for aliases."""
@@ -95,6 +101,51 @@ class VulnerabilitiesController:
                 nb_vuln += 1
 
         print(f"Fetched EPSS data for {nb_vuln} vulnerabilities from local DB in {time.time() - start_time} seconds.")
+
+    def fetch_published_dates(self):
+        """Fetch published dates from NVD database for all vulnerabilities."""
+        nb_vuln = 0
+
+        try:
+            conn = sqlite3.connect(self.nvd_db_path)
+            cursor = conn.cursor()
+
+            for vuln in self.vulnerabilities.values():
+                if "GHSA" in vuln.id:
+                    url = f"https://api.github.com/advisories/{vuln.id}"
+
+                    # Setup request with headers
+                    req = urllib.request.Request(
+                        url,
+                        headers={"Accept": "application/vnd.github+json"}
+                    )
+
+                    try:
+                        with urllib.request.urlopen(req) as response:
+                            # Read and parse JSON data
+                            data = json.loads(response.read().decode('utf-8'))
+                            vuln.published = data["published_at"]
+                            nb_vuln += 1
+                    except urllib.error.HTTPError as e:
+                        print(f"Error for {vuln.id}: {e.code}")
+                        continue
+                    except urllib.error.URLError as e:
+                        print(f"Error for {vuln.id}: {e.reason}")
+                        continue
+
+                    continue
+
+                result = cursor.execute(
+                    "SELECT published FROM nvd_vulns WHERE id = ?;",
+                    (vuln.id,)
+                ).fetchone()
+                if result and result[0]:
+                    vuln.published = result[0]
+                    nb_vuln += 1
+
+            conn.close()
+        except Exception as e:
+            print(f"Error fetching published dates from NVD DB: {e}")
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities as a dictionary of dictionaries."""

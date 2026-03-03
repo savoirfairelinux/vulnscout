@@ -199,6 +199,45 @@ describe('Packages Table', () => {
         expect(pkg_xyz).toBeTruthy();
     })
 
+    test('searching with negation text', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        const rowToRemove = await screen.findByRole('cell', {name: /aaabbbccc/});
+
+        await user.type(search_bar, '-aaabbbccc');
+
+        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        const pkg_def = await screen.getByRole('cell', {name: /dddeeefff/});
+        
+        expect(pkg_xyz).toBeTruthy();
+        expect(pkg_def).toBeTruthy();
+    })
+
+    test('searching with a combination of queries', async () => {
+        // ARRANGE
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const search_bar = await screen.getByRole('searchbox');
+
+        await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
+
+        // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /aaabbbccc/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /dddeeefff/})).toBeNull();
+        }, { timeout: 2000 });
+
+        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
+        expect(pkg_xyz).toBeTruthy();
+    })
+
     test('filter by source', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
@@ -385,5 +424,107 @@ describe('Packages Table', () => {
         const cpeId2 = await screen.getByText(/cpe:2.3:a:another:multi-cpe:1.0.0/);
         expect(cpeId1).toBeTruthy();
         expect(cpeId2).toBeTruthy();
+    });
+
+    test('shortcut helper icon is visible', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        expect(helperBtn).toBeTruthy();
+    });
+
+    test('shortcut helper shows keyboard shortcuts content', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Keyboard Shortcuts')).toBeTruthy();
+        expect(screen.getByText('/')).toBeTruthy();
+        expect(screen.getByText('Focus search bar')).toBeTruthy();
+        expect(screen.getByText('↑ / ↓')).toBeTruthy();
+        expect(screen.getByText('Navigate focused table row')).toBeTruthy();
+        expect(screen.getByText('Home / End')).toBeTruthy();
+        expect(screen.getByText('Navigate to first/last table row')).toBeTruthy();
+    });
+
+    test('pressing / focuses search bar', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
+
+        expect(document.activeElement).not.toBe(searchBar);
+
+        await user.keyboard('/');
+
+        expect(document.activeElement).toBe(searchBar);
+    });
+
+    test('pressing / while search bar is focused types slash in search', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
+
+        searchBar.focus();
+        expect(document.activeElement).toBe(searchBar);
+
+        await user.keyboard('/');
+
+        expect(document.activeElement).toBe(searchBar);
+        expect(searchBar.value).toBe('/');
+    });
+
+    test('ArrowDown and ArrowUp navigate focused table row', async () => {
+        const { container } = render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+
+        firstRow.focus();
+        expect(document.activeElement).toBe(firstRow);
+
+        await user.keyboard('{ArrowDown}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(secondRow);
+        });
+
+        await user.keyboard('{ArrowUp}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
+    });
+
+    test('Home and End navigate to first and last focused table row', async () => {
+        const { container } = render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        expect(rows.length).toBeGreaterThanOrEqual(3);
+
+        const firstRow = rows[0] as HTMLElement;
+        const secondRow = rows[1] as HTMLElement;
+        const lastRow = rows[rows.length - 1] as HTMLElement;
+
+        secondRow.focus();
+        expect(document.activeElement).toBe(secondRow);
+
+        await user.keyboard('{End}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(lastRow);
+        });
+
+        await user.keyboard('{Home}');
+        await waitFor(() => {
+            expect(document.activeElement).toBe(firstRow);
+        });
     });
 });

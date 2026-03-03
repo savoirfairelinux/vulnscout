@@ -28,6 +28,7 @@ import glob
 import json
 import os
 from datetime import date, datetime, timezone
+from typing import Any
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
 OPENVEX_PATH = "/scan/tmp/merged.openvex.json"
@@ -86,7 +87,10 @@ def post_treatment(controllers, files):
     # 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
 
-    # 2. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
+    # 2. fetch published dates from NVD
+    controllers["vulnerabilities"].fetch_published_dates()
+
+    # 3. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
     for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
         assessments = controllers["assessments"].gets_by_vuln(vuln_id)
         already_expired = False
@@ -116,9 +120,9 @@ def post_treatment(controllers, files):
 
 
 def evaluate_condition(controllers, condition):
-    """Evaluate a condition and exit if it's True."""
+    """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
-    have_failed = False
+    failed_vulns = []
     for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
         data = {
             "id": vuln_id,
@@ -145,10 +149,9 @@ def evaluate_condition(controllers, condition):
             data["pending"] = last_assessment.status in ["under_investigation", "in_triage"]
             data["new"] = False
         if parser.evaluate(condition, data):
-            have_failed = True
+            failed_vulns.append(vuln_id)
             print(f"Vulnerability triggered fail condition: {vuln_id}")  # output in stdout to be catched by the CI
-    if have_failed:
-        exit(2)
+    return failed_vulns
 
 
 def read_inputs(controllers):
@@ -269,52 +272,62 @@ def read_inputs(controllers):
     }
 
 
-def output_results(controllers, files):
+def output_results(controllers, files, failed: bool = False, failed_vulns=None):
     """Output the results to files."""
-    spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
-    spdx3 = SPDX3(controllers)
-    output = {
-        "packages": controllers["packages"].to_dict(),
-        "vulnerabilities": controllers["vulnerabilities"].to_dict(),
-        "assessments": controllers["assessments"].to_dict()
-    }
-    verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
-    with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "w") as f:
-        f.write(json.dumps(output))
-    with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "w") as f:
-        f.write(json.dumps(output["packages"]))
-    with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "w") as f:
-        f.write(json.dumps(output["vulnerabilities"]))
-    with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
-        f.write(json.dumps(output["assessments"]))
 
-    verbose(f"merger_ci: Exporting {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
-    with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "w") as f:
-        f.write(json.dumps(files["openvex"].to_dict(), indent=2))
+    fail_condition = os.getenv("FAIL_CONDITION", "")
 
-    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
-    with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
-        f.write(files["cdx"].output_as_json())
+    if not fail_condition:
+        spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
+        spdx3 = SPDX3(controllers)
+        output = {
+            "packages": controllers["packages"].to_dict(),
+            "vulnerabilities": controllers["vulnerabilities"].to_dict(),
+            "assessments": controllers["assessments"].to_dict()
+        }
+        verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
+        with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "w") as f:
+            f.write(json.dumps(output))
+        with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "w") as f:
+            f.write(json.dumps(output["packages"]))
+        with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "w") as f:
+            f.write(json.dumps(output["vulnerabilities"]))
+        with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
+            f.write(json.dumps(output["assessments"]))
 
-    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
-    with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
-        f.write(spdx.output_as_json())
+        verbose(f"merger_ci: Exporting {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
+        with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "w") as f:
+            f.write(json.dumps(files["openvex"].to_dict(), indent=2))
 
-    verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX3_PATH', OUTPUT_SPDX3_PATH)}")
-    with open(os.getenv("OUTPUT_SPDX3_PATH", OUTPUT_SPDX3_PATH), "w") as f:
-        f.write(spdx3.output_as_json())
+        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
+        with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
+            f.write(files["cdx"].output_as_json())
 
-    verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
-    with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
-        f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
+        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
+        with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
+            f.write(spdx.output_as_json())
 
-    list_docs = os.getenv("GENERATE_DOCUMENTS", "").split(",")
-    metadata = {
+        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX3_PATH', OUTPUT_SPDX3_PATH)}")
+        with open(os.getenv("OUTPUT_SPDX3_PATH", OUTPUT_SPDX3_PATH), "w") as f:
+            f.write(spdx3.output_as_json())
+
+        verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
+        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
+            f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
+
+    list_docs = [d.strip() for d in os.getenv("GENERATE_DOCUMENTS", "").split(",") if d.strip()]
+    if not fail_condition and "match_condition.adoc" in list_docs:
+        list_docs.remove("match_condition.adoc")
+    if fail_condition and "match_condition.adoc" in list_docs:
+        list_docs = ["match_condition.adoc"]
+    metadata: dict[str, Any] = {
         "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
         "export_date": date.today().isoformat()
     }
     if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
         metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
+    if failed:
+        metadata["failed_vulns"] = failed_vulns or []
     for doc in list_docs:
         if not doc:
             continue
@@ -345,14 +358,19 @@ def main():
     post_treatment(controllers, files)
     verbose("merger_ci: Finished post-treatment")
 
-    if os.getenv("FAIL_CONDITION", "") != "":
+    fail_condition = os.getenv("FAIL_CONDITION", "")
+    failed_vulns = []
+    if fail_condition:
         verbose("merger_ci: Start evaluating conditions")
-        evaluate_condition(controllers, os.getenv("FAIL_CONDITION"))
+        failed_vulns = evaluate_condition(controllers, fail_condition)
         verbose("merger_ci: Finished evaluating conditions")
 
     verbose("merger_ci: Start exporting results")
-    output_results(controllers, files)
+    output_results(controllers, files, failed=len(failed_vulns) > 0, failed_vulns=failed_vulns)
     verbose("merger_ci: Finished exporting results")
+
+    if len(failed_vulns) > 0:
+        exit(2)
 
 
 if __name__ == "__main__":

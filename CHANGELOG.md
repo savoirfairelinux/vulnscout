@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ---
 
 ## [Unreleased]
+
+---
+
+## [0.11.0] - 2026-03-03
+
+### Added
+- Keyboard shortcuts: navigation and row focus in Packages/Vulnerabilities tables, shortcut helper with tooltip in NavigationBar, and enhanced keyboard navigation in VulnModal.
+- Severity filtering: custom CVSS score range slider; scores displayed in severity column when custom filter is active.
+- Filter vulnerabilities by Published Date in dashboard and templates.
+- `vulnscout.sh`: new arguments to ignore parsing errors and bypass grype scan.
+- `vulnscout.sh`: argument to exclude fixed vulnerabilities in `cve_check`.
+- Enable debug mode in Flask server when using `--dev`.
+- Displaying Yocto vulnerability description
+- Support for environment variables in report templates
+- Adding a report template for match conditions.
+- Check for existing YAML file before building a new one, if arguments remain unchanged.
+- Docker entrypoint to manage permissions.
+- Backend tests and improved test coverage.
+
+### Changed
+- Search: use FuseJS query syntax with `-` as negation prefix, handle exclude patterns, remove unwanted fuse keys.
+- `cve_check`: transition from existing status to fixed.
+- `vulnscout.sh`: use functions instead of env variables; arguments validity check & cleanup; 
+- Change variable names for containers.
+- Capitalize description title text in modal; reorganize example files.
+- Updated `.gitignore` to include VulnScout files and exclude specific directories.
+
+### Fixed
+- Fetch published date for GHSA vulnerabilities; fix timezone handling.
+- `.tar.zst` files no longer cause errors in `vulnscout.sh`
+- Renamed `--sbom` parameter to `--spdx` to match documentation.
+- Fix correct return code with Podman
+- Fix permission in entrypoint tree; chown also the cache folder.
+- VulnModal: scroll to top on vulnerability change; clear unsaved input fields on close.
+
+### Removed
+- Remove `start-example.sh`.
+
 ---
 
 ## [0.10.0] - 2026-02-06
@@ -114,21 +152,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - Custom CVSS scoring support
-- “Reset filters” button in Packages view 
-- New dashboard elements 
+- “Reset filters” button in Packages view
+- New dashboard elements
 - Filtering criteria propagation from pie charts
-- Persistence & instant display in vulnerability popup 
-- Severity sorting + “Hide fixed” toggle in Vulnerabilities tab  
+- Persistence & instant display in vulnerability popup
+- Severity sorting + “Hide fixed” toggle in Vulnerabilities tab
 - ESC-close + confirmation on vuln modal
 - Grouping multiple packages under one assessment
 - Added README section about custom CVSS scoring
 
 ### Changed
-- Refactored dark mode feature 
+- Refactored dark mode feature
 - Export page redesign
-- Removed excess scroll in Vulnerabilities view 
+- Removed excess scroll in Vulnerabilities view
 - Absolute API URLs used across the app
-- Changed OpenVEX “author” field name  
+- Changed OpenVEX “author” field name
 
 ### Removed
 - `status` column from Packages table
@@ -145,7 +183,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - Enforced minimum test coverage threshold
 - Added frontend linting, config updates, updated Vite version
 - CI workflow extended to ARM architecture
-- Dockerfile updated to latest Node.js version 
+- Dockerfile updated to latest Node.js version
 
 ---
 ## [v0.7.1] - 2025-08-20
@@ -284,4 +322,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - Initial repo setup with Python, frontend, and basic documentation.
-
