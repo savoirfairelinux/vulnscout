@@ -7,9 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ---
 
 ## [Unreleased]
-- `vulnscout.sh` (SPDX2): fixed "Read-only file system" error on archived files.
-- `vulnscout.sh`: Renamed `--sbom` to `--spdx`.
-- `vulnscout.sh`: Fixed inaccurate return code when using Podman.
+
+---
+
+## [0.11.0] - 2026-03-03
+
+### Added
+- Keyboard shortcuts: navigation and row focus in Packages/Vulnerabilities tables, shortcut helper with tooltip in NavigationBar, and enhanced keyboard navigation in VulnModal.
+- Severity filtering: custom CVSS score range slider; scores displayed in severity column when custom filter is active.
+- Filter vulnerabilities by Published Date in dashboard and templates.
+- `vulnscout.sh`: new arguments to ignore parsing errors and bypass grype scan.
+- `vulnscout.sh`: argument to exclude fixed vulnerabilities in `cve_check`.
+- Enable debug mode in Flask server when using `--dev`.
+- Displaying Yocto vulnerability description
+- Support for environment variables in report templates
+- Adding a report template for match conditions.
+- Check for existing YAML file before building a new one, if arguments remain unchanged.
+- Docker entrypoint to manage permissions.
+- Backend tests and improved test coverage.
+
+### Changed
+- Search: use FuseJS query syntax with `-` as negation prefix, handle exclude patterns, remove unwanted fuse keys.
+- `cve_check`: transition from existing status to fixed.
+- `vulnscout.sh`: use functions instead of env variables; arguments validity check & cleanup; 
+- Change variable names for containers.
+- Capitalize description title text in modal; reorganize example files.
+- Updated `.gitignore` to include VulnScout files and exclude specific directories.
+
+### Fixed
+- Fetch published date for GHSA vulnerabilities; fix timezone handling.
+- `.tar.zst` files no longer cause errors in `vulnscout.sh`
+- Renamed `--sbom` parameter to `--spdx` to match documentation.
+- Fix correct return code with Podman
+- Fix permission in entrypoint tree; chown also the cache folder.
+- VulnModal: scroll to top on vulnerability change; clear unsaved input fields on close.
+
+### Removed
+- Remove `start-example.sh`.
+
 ---
 
 ## [0.10.0] - 2026-02-06
