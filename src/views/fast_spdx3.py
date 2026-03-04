@@ -229,6 +229,8 @@ class FastSPDX3:
             if element.get('type') != 'security_Vulnerability':
                 continue
 
+            description = element.get('description', None)
+
             ext_ids = element.get('externalIdentifier', [])
             if not isinstance(ext_ids, list):
                 continue
@@ -253,6 +255,9 @@ class FastSPDX3:
                 for locator in locators[1:]:
                     if isinstance(locator, str):
                         vulnerability.add_url(locator)
+
+                if description:
+                    vulnerability.add_text(description, "vulnerability description")
 
                 self.vulnerabilitiesCtrl.add(vulnerability)
 
