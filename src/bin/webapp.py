@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
+from ..extensions import db, migrate
 from ..routes import init_app
 import sys
 import os
@@ -16,6 +17,7 @@ import signal
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
+DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 
 
 def create_app():
@@ -25,6 +27,12 @@ def create_app():
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
     app.config["SCAN_DATE"] = "unknown date"
+
+    if "SQLALCHEMY_DATABASE_URI" not in app.config:
+        app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
+
+    db.init_app(app)
+    migrate.init_app(app, db)
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
