@@ -55,6 +55,7 @@ show_help() {
   echo "  --document_url <url>        Document URL"
   echo ""
   echo "Other options:"
+  echo "  --db-uri <uri>    Custom SQLAlchemy database URI (default: sqlite in cache folder)"
   echo "  --skip-grype-scan Skip the Grype scan which can detect new vulnerabilities"
   echo "  --help, -h        Show this help message and exit"
   echo "  --dev             Use the development version of VulnScout"
@@ -130,6 +131,7 @@ VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 VULNSCOUT_SKIP_GRYPE_SCAN="false"
 VULNSCOUT_DETACH_MODE="false"
 VULNSCOUT_STOP_MODE="false"
+VULNSCOUT_DB_URI=""
 COMPOSE_PROVIDER=""
 YAML_REQUIRES_UPDATE="false"
 
@@ -257,6 +259,12 @@ while [[ $# -gt 0 ]]; do
       YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_INTERACTIVE_MODE="false"
       shift
+      ;;
+    --db-uri)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_DB_URI="$2"
+      shift 2
       ;;
     --skip-grype-scan)
       YAML_REQUIRES_UPDATE="true"
@@ -411,6 +419,9 @@ EOF
     fi
     if [ -n "$VULNSCOUT_DOCUMENT_URL" ]; then
         echo "      - DOCUMENT_URL=$VULNSCOUT_DOCUMENT_URL" >> "$YAML_FILE"
+    fi
+    if [ -n "$VULNSCOUT_DB_URI" ]; then
+        echo "      - FLASK_SQLALCHEMY_DATABASE_URI=$VULNSCOUT_DB_URI" >> "$YAML_FILE"
     fi
     if [ "$VULNSCOUT_SKIP_GRYPE_SCAN" = "true" ]; then
         echo "      - SKIP_GRYPE_SCAN=true" >> "$YAML_FILE"
