@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from ..extensions import db
+from ..extensions import db, Base
 
 
-class Project(db.Model):
+class Project(Base):
     """Represents a project that groups one or more variants."""
 
     __tablename__ = "projects"
