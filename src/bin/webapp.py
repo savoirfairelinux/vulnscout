@@ -10,6 +10,7 @@
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..extensions import db, migrate
 from ..routes import init_app
+from .. import models  # noqa: F401
 import sys
 import os
 from datetime import datetime, timezone
