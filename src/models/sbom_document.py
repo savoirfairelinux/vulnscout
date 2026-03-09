@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from ..extensions import db
+from ..extensions import db, Base
 
 
-class SBOMDocument(db.Model):
+class SBOMDocument(Base):
     """Represents an SBOM document file linked to a scan."""
 
     __tablename__ = "sbom_documents"

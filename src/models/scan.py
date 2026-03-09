@@ -5,10 +5,10 @@
 
 import uuid
 from datetime import datetime, timezone
-from ..extensions import db
+from ..extensions import db, Base
 
 
-class Scan(db.Model):
+class Scan(Base):
     """Represents a single scan run associated with a variant."""
 
     __tablename__ = "scans"

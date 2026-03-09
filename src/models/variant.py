@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from ..extensions import db
+from ..extensions import db, Base
 
 
-class Variant(db.Model):
+class Variant(Base):
     """Represents a named variant (e.g. board configuration) belonging to a project."""
 
     __tablename__ = "variants"
