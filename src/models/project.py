@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+from typing import Optional
 from ..extensions import db, Base
 
 
@@ -19,3 +20,48 @@ class Project(Base):
 
     def __repr__(self) -> str:
         return f"<Project id={self.id} name={self.name!r}>"
+
+    # ------------------------------------------------------------------
+    # CRUD helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def create(name: str) -> "Project":
+        """Create a new project with the given *name*, persist it and return it."""
+        project = Project(name=name)
+        db.session.add(project)
+        db.session.commit()
+        return project
+
+    @staticmethod
+    def get_by_id(project_id: uuid.UUID) -> Optional["Project"]:
+        """Return the project matching *project_id*, or ``None`` if not found."""
+        return db.session.get(Project, project_id)
+
+    @staticmethod
+    def get_all() -> list["Project"]:
+        """Return all projects ordered by name."""
+        return list(db.session.execute(
+            db.select(Project).order_by(Project.name)
+        ).scalars().all())
+
+    @staticmethod
+    def get_or_create(name: str) -> "Project":
+        """Return an existing project by *name*, or create and persist a new one."""
+        project = db.session.execute(
+            db.select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if project is None:
+            project = Project.create(name)
+        return project
+
+    def update(self, name: str) -> "Project":
+        """Update the project's *name* in place, persist the change and return ``self``."""
+        self.name = name
+        db.session.commit()
+        return self
+
+    def delete(self) -> None:
+        """Delete this project (and its variants via cascade) from the database."""
+        db.session.delete(self)
+        db.session.commit()
