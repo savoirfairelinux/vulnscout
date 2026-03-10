@@ -3,6 +3,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from decimal import Decimal
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
@@ -318,7 +319,7 @@ class CycloneDx:
                     cyclonedx.model.vulnerability.VulnerabilityRating(
                         method=CycloneDx.cvss_to_rating_method(cvss),
                         vector=cvss.vector_string,
-                        score=float(cvss.base_score),
+                        score=Decimal(str(cvss.base_score)),
                         source=cyclonedx.model.vulnerability.VulnerabilitySource(
                             name=cvss.author,
                         ),
@@ -330,7 +331,7 @@ class CycloneDx:
                 vuln_obj.ratings.add(
                     cyclonedx.model.vulnerability.VulnerabilityRating(
                         method=cyclonedx.model.vulnerability.VulnerabilityScoreSource.OTHER,
-                        score=float(vuln.severity_max_score),
+                        score=Decimal(str(vuln.severity_max_score)),
                         severity=CycloneDx.str_to_severity(vuln.severity_label)
                     )
                 )
