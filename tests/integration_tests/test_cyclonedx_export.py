@@ -163,7 +163,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
                         "name": "NVD",
                         # "url": "https://nvd.nist.gov/vuln/detail/CVE-2020-35492"
                     },
-                    "score": "7.8",
+                    "score": 7.8,
                     "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
                     "severity": "high"
                 },
@@ -172,7 +172,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
                     "source": {
                         "name": "redhat"
                     },
-                    "score": "5.0",
+                    "score": 5.0,
                     "vector": "AV:L/AC:L/Au:N/C:C/I:C/A:C",
                     "severity": "medium"
                 }
@@ -192,7 +192,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
             "ratings": [
                 {
                     "method": "other",
-                    "score": "9.7",
+                    "score": 9.7,
                     "severity": "critical"
                 },
                 {
@@ -200,7 +200,7 @@ def test_export_vulnerabilities_json(cdx_exporter):
                     "source": {
                         "name": "fake",
                     },
-                    "score": "2.0",
+                    "score": 2.0,
                     "vector": "AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
                     "severity": "low"
                 }
