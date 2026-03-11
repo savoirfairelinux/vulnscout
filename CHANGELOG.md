@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.11.1] - 2026-03-11
+
+### Added
+- SPDX3: Extract vulnerability description and CVSS scores.
+
+### Fixed
+- Fix comma in vulnerabilities.csv template fields breaking CSV output.
+- Ensure no file is created when a fail condition occurs in templates.
+- Fix CycloneDX export: score field was exported as a string instead of a number.
+- VulnModal: Prevent keyboard navigation shortcuts from triggering when editing text.
+
+---
+
 ## [0.11.0] - 2026-03-03
 
 ### Added
