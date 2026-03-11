@@ -276,6 +276,7 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
     """Output the results to files."""
 
     fail_condition = os.getenv("FAIL_CONDITION", "")
+    list_docs = [d.strip() for d in os.getenv("GENERATE_DOCUMENTS", "").split(",") if d.strip()]
 
     if not fail_condition:
         spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
@@ -315,11 +316,14 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
         with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
             f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
 
-    list_docs = [d.strip() for d in os.getenv("GENERATE_DOCUMENTS", "").split(",") if d.strip()]
-    if not fail_condition and "match_condition.adoc" in list_docs:
-        list_docs.remove("match_condition.adoc")
-    if fail_condition and "match_condition.adoc" in list_docs:
-        list_docs = ["match_condition.adoc"]
+        if "match_condition.adoc" in list_docs:
+            list_docs.remove("match_condition.adoc")
+    else:
+        if "match_condition.adoc" in list_docs:
+            list_docs = ["match_condition.adoc"]
+        else:
+            list_docs = []
+
     metadata: dict[str, Any] = {
         "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
         "export_date": date.today().isoformat()

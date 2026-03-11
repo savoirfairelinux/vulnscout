@@ -246,6 +246,7 @@ def test_extract_vulnerabilities(spdx3_parser):
             {
                 "type": "security_Vulnerability",
                 "spdxId": "http://spdx.org/spdxdocs/linux-yocto/vulnerability/CVE-2023-1234",
+                "description": "Inappropriate implementation in Intents in Google Chrome...",
                 "externalIdentifier": [
                     {
                         "type": "ExternalIdentifier",
@@ -286,6 +287,7 @@ def test_extract_vulnerabilities(spdx3_parser):
     assert "https://cveawg.mitre.org/api/cve/CVE-2023-1234" == vuln.datasource
     assert vuln.namespace == "unknown"
     assert "https://www.cve.org/CVERecord?id=CVE-2023-1234" in vuln.urls
+    assert "Inappropriate implementation in Intents in Google Chrome..." in vuln.texts.values()
 
 
 def test_package_vulnerability_relationships(spdx3_parser):
@@ -425,6 +427,234 @@ def test_vulnerability_without_relationship(spdx3_parser):
     # Verify that the vulnerability was not added since there's no hasAssociatedVulnerability relationship
     assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
     assert "CVE-2023-1234" not in spdx3_parser.vulnerabilitiesCtrl
+
+
+def test_package_vulnerability_cvss(spdx3_parser):
+    """Test parsing SPDX files with package-vulnerability-cvss relationships."""
+    spdx3_parser.parse_from_dict({
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "created": "2025-04-08T13:09:06Z",
+                "createdBy": ["http://spdx.org/spdxdocs/bitbake-agent/OpenEmbedded"],
+                "createdUsing": ["http://spdx.org/spdxdocs/bitbake-tool/oe-spdx-creator_1_0"],
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/package/libc6",
+                "creationInfo": "_:CreationInfo1",
+                "description": "GNU C Library",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cpe23Type",
+                        "identifier": "cpe:2.3:a:gnu:glibc:2.38:*:*:*:*:*:*:*"
+                    }
+                ],
+                "name": "libc6",
+                "summary": "GNU C Library",
+                "software_primaryPurpose": "library",
+                "software_homePage": "https://www.gnu.org/software/libc/",
+                "software_packageVersion": "2.38"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2019-1010022",
+                        "identifierLocator": ["https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1010022"]
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/relationship/1",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/glibc/package/libc6",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": [
+                    "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022"
+                ]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/linux-yocto/vex-not-affected/1",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "relationshipType": "doesNotAffect"
+            },
+            {
+                "type": "security_CvssV3VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V3_0/d10b1a11b649d80033c50f2a78e242d6",
+                "comment": "nvd@nist.gov",
+                "creationInfo": "_:CreationInfo323",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.3",
+                "security_severity": "medium",
+                "security_vectorString": "CVSS:3.0/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+            },
+            {
+                "type": "security_CvssV2VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V2_0/d10b1a11b649d80033c50f2a78e242d6",
+                "creationInfo": "_:CreationInfo323",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.2",
+                "security_vectorString": "AV:L/AC:M/Au:N/C:C/I:C/A:C"
+            },
+        ]
+    })
+
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert "libc6@2.38" in spdx3_parser.packagesCtrl
+
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 1
+    assert "CVE-2019-1010022" in spdx3_parser.vulnerabilitiesCtrl
+
+    vuln = spdx3_parser.vulnerabilitiesCtrl.get("CVE-2019-1010022")
+    assert vuln.id == "CVE-2019-1010022"
+    
+    assert len(vuln.severity_cvss) == 2
+    cvss_nist, cvss_other = vuln.severity_cvss
+    
+    assert cvss_nist.base_score == 6.3
+    assert cvss_nist.vector_string == "CVSS:3.0/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+    assert cvss_nist.author == "nvd@nist.gov"
+
+    assert cvss_other.base_score == 6.2
+    assert cvss_other.vector_string == "AV:L/AC:M/Au:N/C:C/I:C/A:C"
+
+
+def test_package_vulnerability_cvss_malformed(spdx3_parser):
+    """Test parsing SPDX files with malformed package-vulnerability-cvss relationships."""
+    spdx3_parser.parse_from_dict({
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "specVersion": "3.0.1",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "created": "2025-04-08T13:09:06Z",
+                "createdBy": ["http://spdx.org/spdxdocs/bitbake-agent/OpenEmbedded"],
+                "createdUsing": ["http://spdx.org/spdxdocs/bitbake-tool/oe-spdx-creator_1_0"],
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/package/libc6",
+                "creationInfo": "_:CreationInfo1",
+                "description": "GNU C Library",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cpe23Type",
+                        "identifier": "cpe:2.3:a:gnu:glibc:2.38:*:*:*:*:*:*:*"
+                    }
+                ],
+                "name": "libc6",
+                "summary": "GNU C Library",
+                "software_primaryPurpose": "library",
+                "software_homePage": "https://www.gnu.org/software/libc/",
+                "software_packageVersion": "2.38"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "externalIdentifier": [
+                    {
+                        "type": "ExternalIdentifier",
+                        "externalIdentifierType": "cve",
+                        "identifier": "CVE-2019-1010022",
+                        "identifierLocator": ["https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-1010022"]
+                    }
+                ]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/glibc/relationship/1",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/glibc/package/libc6",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": [
+                    "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022"
+                ]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/linux-yocto/vex-not-affected/1",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "relationshipType": "doesNotAffect"
+            },
+            {
+                "type": "security_CvssV3VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V3_0/d10b1a11b649d80033c50f2a78e242d6",
+                "comment": "nvd@nist.gov",
+                "creationInfo": "_:CreationInfo323",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.3",
+                "security_severity": "medium",
+                "security_vectorString": "AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N" # missing CVSS version
+            },
+            {
+                "type": "security_CvssV3VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V3_0/d10b1a11b649d80033c50f2a78e242d6",
+                "comment": "nvd@nist.gov",
+                "creationInfo": "_:CreationInfo323",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/CVE-2019-1010022",
+                "relationshipType": "somethingElse", # wrong relationship type
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.3",
+                "security_severity": "medium",
+                "security_vectorString": "AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N" # missing CVSS version
+            },
+            {
+                "type": "security_CvssV2VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V2_0/d10b1a11b649d80033c50f2a78e242d6",
+                "creationInfo": "_:CreationInfo323",
+                "from": "http://spdx.org/spdxdocs/glibc/vulnerability/", # missing CVE
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.2",
+                "security_vectorString": "AV:L/AC:M/Au:N/C:C/I:C/A:C"
+            },
+            {
+                "type": "security_CvssV2VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/008360af-75f7-5c35-aac9-47e538e98f3d/cvss-V2_0/d10b1a11b649d80033c50f2a78e242d6",
+                "creationInfo": "_:CreationInfo323",
+                # missing from
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/glibc/package/libc6"],
+                "security_score": "6.2",
+                "security_vectorString": "AV:L/AC:M/Au:N/C:C/I:C/A:C"
+            },
+        ]
+    })
+
+    assert len(spdx3_parser.packagesCtrl) == 1
+    assert "libc6@2.38" in spdx3_parser.packagesCtrl
+
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 1
+    assert "CVE-2019-1010022" in spdx3_parser.vulnerabilitiesCtrl
+
+    vuln = spdx3_parser.vulnerabilitiesCtrl.get("CVE-2019-1010022")
+    assert vuln.id == "CVE-2019-1010022"
+    
+    assert len(vuln.severity_cvss) == 0
 
 
 def test_graph_as_string_instead_of_list(spdx3_parser):

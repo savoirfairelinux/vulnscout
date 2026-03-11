@@ -7,8 +7,11 @@ from typing import Dict, List, Optional, Any
 import logging
 import re
 from ..models.package import Package
-from ..models.vulnerability import Vulnerability
+from ..models.vulnerability import Vulnerability, CVSS
 from ..models.assessment import VulnAssessment
+from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers.packages import PackagesController
+from ..controllers.assessments import AssessmentsController
 
 
 class FastSPDX3:
@@ -35,6 +38,12 @@ class FastSPDX3:
         "inlineMitigationsAlreadyExist": "inline_mitigations_already_exist",
     }
 
+    CVSS_ASSESSMENT_TYPES = {
+        'security_CvssV2VulnAssessmentRelationship',
+        'security_CvssV3VulnAssessmentRelationship',
+        'security_CvssV4VulnAssessmentRelationship',
+    }
+
     def __init__(self, controllers: Dict[str, Any]):
         """
         Initialize the FastSPDX3 parser with controllers for packages, vulnerabilities, and assessments.
@@ -42,9 +51,9 @@ class FastSPDX3:
         Args:
             controllers: Dictionary containing controllers for packages, vulnerabilities, and assessments
         """
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
         self.uri_to_package: Dict[str, str] = {}
 
     def find_spdx_version(self, spdx: Dict[str, Any]) -> Optional[str]:
@@ -190,6 +199,8 @@ class FastSPDX3:
 
         self._extract_explicit_vulnerabilities(graph)
 
+        self._extract_vulnerabilities_cvss(graph)
+
         self._process_package_vulnerability_relationships(graph)
 
         self._remove_vulnerabilities_without_packages()
@@ -229,6 +240,8 @@ class FastSPDX3:
             if element.get('type') != 'security_Vulnerability':
                 continue
 
+            description = element.get('description', None)
+
             ext_ids = element.get('externalIdentifier', [])
             if not isinstance(ext_ids, list):
                 continue
@@ -254,7 +267,71 @@ class FastSPDX3:
                     if isinstance(locator, str):
                         vulnerability.add_url(locator)
 
+                if description:
+                    vulnerability.add_text(description, "vulnerability description")
+
                 self.vulnerabilitiesCtrl.add(vulnerability)
+
+    CVSS_PATTERN = re.compile(r'CVSS:([\d.]+)')
+
+    def _extract_vulnerabilities_cvss(self, graph: List[Dict]):
+        """
+        Extract CVSS explicitly defined as security_CvssVXVulnAssessmentRelationship elements.
+
+        Structure example:
+        {
+            "type": "security_CvssV3VulnAssessmentRelationship",
+            "spdxId": "http://...",
+            "comment": "secalert@redhat.com",
+            "creationInfo": "_:CreationInfo323",
+            "from": "http://spdx.org/spdxdocs/.../vulnerability/CVE-2024-9407",
+            "relationshipType": "hasAssessmentFor",
+            "to": [
+                "http://.../package/podman"
+            ],
+            "security_score": "4.7",
+            "security_severity": "medium",
+            "security_vectorString": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:L/A:N"
+        }
+        """
+        for element in graph:
+            if not isinstance(element, dict):
+                continue
+            if element.get('type') not in self.CVSS_ASSESSMENT_TYPES:
+                continue
+            if element.get('relationshipType') != 'hasAssessmentFor':
+                continue
+
+            from_value = element.get('from')
+            if not from_value:
+                continue
+            vuln_id = self._extract_cve_id(from_value)
+            if not vuln_id:
+                continue
+
+            vulnerability = self.vulnerabilitiesCtrl.get(vuln_id)
+            if not vulnerability:
+                continue
+
+            vector_string = element.get('security_vectorString', '')
+
+            if element["type"] == "security_CvssV2VulnAssessmentRelationship":
+                cvss_version = "2.0"
+            else:
+                match = self.CVSS_PATTERN.search(vector_string)
+                if not match:
+                    self.logger.warning("Unknown CVSS version in vector string: %s", vector_string)
+                    continue
+                cvss_version = match.group(1)
+
+            vulnerability.register_cvss(CVSS(
+                cvss_version,
+                vector_string,
+                element.get('comment', 'unknown'),
+                float(element.get('security_score', '0')),
+                0.0,
+                0.0,
+            ))
 
     def _process_package_vulnerability_relationships(self, graph: List[Dict]):
         """

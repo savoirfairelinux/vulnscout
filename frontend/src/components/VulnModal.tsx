@@ -282,6 +282,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement;
+            const isInTextField =
+                target.tagName === 'INPUT' ||
+                target.tagName === 'TEXTAREA' ||
+                target.tagName === 'SELECT' ||
+                target.isContentEditable;
+
             if (event.key === 'Escape') {
                 event.preventDefault();
                 if (hasUnsavedChanges) {
@@ -290,10 +297,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
                 } else {
                     onClose();
                 }
-            } else if (event.key === 'ArrowLeft' && canNavigatePrevious) {
+            } else if (event.key === 'ArrowLeft' && canNavigatePrevious && !isInTextField) {
                 event.preventDefault();
                 navigateTo(currentIndex! - 1);
-            } else if (event.key === 'ArrowRight' && canNavigateNext) {
+            } else if (event.key === 'ArrowRight' && canNavigateNext && !isInTextField) {
                 event.preventDefault();
                 navigateTo(currentIndex! + 1);
             }
