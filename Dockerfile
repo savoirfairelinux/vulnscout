@@ -55,6 +55,7 @@ RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
 # Create /scan/src
 RUN mkdir -p src
 COPY src ./src
+COPY migrations ./src/migrations
 RUN chmod +x src/scan.sh
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
