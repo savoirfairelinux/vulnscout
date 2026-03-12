@@ -9,6 +9,7 @@ import os
 import click
 from flask.cli import with_appcontext
 
+from ..extensions import db
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
@@ -30,6 +31,8 @@ def create_project_context(project: str, variant: str | None, sbom_inputs: tuple
     When no variant is given, inputs go into a scan under the 'default' variant.
     """
     variant_name = variant or DEFAULT_VARIANT_NAME
+
+    db.create_all()
 
     project_obj = ProjectController.get_or_create(project)
     variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
