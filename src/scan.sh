@@ -77,6 +77,24 @@ function main() {
         full_scan_steps
     fi
 
+    # All input files belong to a single variant set for this invocation
+    VARIANT_NAME=${VARIANT_NAME:-"default"}
+    INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+    if [[ -d "$SPDX_TMP_PATH" ]]; then
+        for f in "$SPDX_TMP_PATH"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+    fi
+    if [[ -d "$CDX_TMP_PATH" ]]; then
+        for f in "$CDX_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+    fi
+    if [[ -d "$OPENVEX_TMP_PATH" ]]; then
+        for f in "$OPENVEX_TMP_PATH"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+    fi
+    if [[ -d "$YOCTO_CVE_TMP_PATH" ]]; then
+        for f in "$YOCTO_CVE_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+    fi
+    (cd "$BASE_DIR/src" && flask --app bin.webapp db upgrade)
+    (cd "$BASE_DIR/src" && flask --app bin.webapp merge "${INIT_APP_ARGS[@]}")
+
     # 8. Merge all vulnerability from scan results
     set_status "8" "Merging vulnerability results"
 

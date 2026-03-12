@@ -5,6 +5,7 @@
 
 import uuid
 from typing import Optional
+from sqlalchemy.exc import IntegrityError
 from ..extensions import db, Base
 
 
@@ -12,6 +13,9 @@ class Variant(Base):
     """Represents a named variant (e.g. board configuration) belonging to a project."""
 
     __tablename__ = "variants"
+    __table_args__ = (
+        db.UniqueConstraint("name", "project_id", name="uq_variants_name_project"),
+    )
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     name = db.Column(db.String, nullable=False)
@@ -57,12 +61,23 @@ class Variant(Base):
     @staticmethod
     def get_or_create(name: str, project_id: uuid.UUID) -> "Variant":
         """Return an existing variant by *name* under *project_id*, or create and persist a new one."""
-        variant = db.session.execute(
+
+        existing = db.session.execute(
             db.select(Variant).where(Variant.name == name, Variant.project_id == project_id)
         ).scalar_one_or_none()
-        if variant is None:
-            variant = Variant.create(name, project_id)
-        return variant
+        if existing is not None:
+            return existing
+        try:
+            variant = Variant(name=name, project_id=project_id)
+            db.session.add(variant)
+            db.session.flush()
+            db.session.commit()
+            return variant
+        except IntegrityError:
+            db.session.rollback()
+            return db.session.execute(
+                db.select(Variant).where(Variant.name == name, Variant.project_id == project_id)
+            ).scalar_one()
 
     def update(self, name: str) -> "Variant":
         """Update the variant's *name* in place, persist the change and return ``self``."""

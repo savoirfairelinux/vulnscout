@@ -81,6 +81,43 @@ class TestProjectModel:
         p = Project.get_or_create("Brand New")
         assert p.name == "Brand New"
 
+    def test_unique_constraint_raises_on_duplicate_name(self, app):
+        """Direct double-INSERT must be rejected by the unique constraint."""
+        from sqlalchemy.exc import IntegrityError
+        Project.create("DupeName")
+        with pytest.raises(IntegrityError):
+            Project.create("DupeName")
+
+    def test_get_or_create_recovers_from_concurrent_insert(self, app):
+        """
+        Simulate a concurrent INSERT race: the initial SELECT inside
+        get_or_create returns nothing (as if it ran before a concurrent
+        commit), but the subsequent INSERT hits the unique constraint.
+        get_or_create must catch the IntegrityError and re-fetch the winner's
+        row instead of propagating the error.
+        """
+        from unittest.mock import patch, MagicMock
+
+        winner = Project.create("RaceProject")
+        real_execute = _db.session.execute
+
+        call_count = [0]
+
+        def fake_execute(stmt, *args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Pretend the initial guard SELECT found nothing.
+                m = MagicMock()
+                m.scalar_one_or_none.return_value = None
+                return m
+            # All subsequent calls (re-SELECT after rollback) are real.
+            return real_execute(stmt, *args, **kwargs)
+
+        with patch("src.models.project.db.session.execute", side_effect=fake_execute):
+            result = Project.get_or_create("RaceProject")
+
+        assert result.id == winner.id
+
     def test_update(self, project):
         project.update("Renamed")
         assert project.name == "Renamed"
@@ -127,6 +164,47 @@ class TestVariantModel:
     def test_get_or_create_new(self, project):
         v = Variant.get_or_create("NewVariant", project.id)
         assert v.name == "NewVariant"
+
+    def test_unique_constraint_raises_on_duplicate_name_and_project(self, project):
+        """Direct double-INSERT for the same (name, project_id) must fail."""
+        from sqlalchemy.exc import IntegrityError
+        Variant.create("DupeVariant", project.id)
+        with pytest.raises(IntegrityError):
+            Variant.create("DupeVariant", project.id)
+
+    def test_same_name_allowed_across_projects(self, app):
+        """The same variant name is allowed under different projects."""
+        p1 = Project.create("Proj1")
+        p2 = Project.create("Proj2")
+        v1 = Variant.create("shared-name", p1.id)
+        v2 = Variant.create("shared-name", p2.id)
+        assert v1.id != v2.id
+
+    def test_get_or_create_recovers_from_concurrent_insert(self, project):
+        """
+        Simulate a race: the initial SELECT inside Variant.get_or_create
+        returns nothing, but the subsequent INSERT hits the unique constraint.
+        get_or_create must catch the IntegrityError and return the existing row.
+        """
+        from unittest.mock import patch, MagicMock
+
+        winner = Variant.create("RaceVariant", project.id)
+        real_execute = _db.session.execute
+
+        call_count = [0]
+
+        def fake_execute(stmt, *args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                m = MagicMock()
+                m.scalar_one_or_none.return_value = None
+                return m
+            return real_execute(stmt, *args, **kwargs)
+
+        with patch("src.models.variant.db.session.execute", side_effect=fake_execute):
+            result = Variant.get_or_create("RaceVariant", project.id)
+
+        assert result.id == winner.id
 
     def test_update(self, variant):
         variant.update("Updated")

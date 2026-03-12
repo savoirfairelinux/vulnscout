@@ -35,6 +35,7 @@ show_help() {
   echo "  --no-proxy <hosts>   (optional) Comma-separated list of hosts to bypass proxy"
   echo ""
   echo "Sources configuration:"
+  echo "  --variant <name>   variant name for the following input file(s) (default: 'default')"
   echo "  --spdx  <path>     path to the SPDX 2 or SPDX 3 SBOM file/archive"
   echo "  --cdx  <path>      path to the CycloneDX directory"
   echo "  --openvex  <path>      path to the OpenVEX JSON file"
@@ -134,6 +135,7 @@ VULNSCOUT_STOP_MODE="false"
 VULNSCOUT_DB_URI=""
 COMPOSE_PROVIDER=""
 YAML_REQUIRES_UPDATE="false"
+VULNSCOUT_VARIANT_NAME="default"
 
 # Build version string
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -181,6 +183,12 @@ while [[ $# -gt 0 ]]; do
       require_value "$1" "${2:-}"
       YAML_REQUIRES_UPDATE="true"
       VULNSCOUT_TEMPLATE="$2"
+      shift 2
+      ;;
+    --variant)
+      require_value "$1" "${2:-}"
+      YAML_REQUIRES_UPDATE="true"
+      VULNSCOUT_VARIANT_NAME="$2"
       shift 2
       ;;
     --spdx)
@@ -389,6 +397,7 @@ EOF
       - VERBOSE_MODE=$VULNSCOUT_VERBOSE_MODE
       - VULNSCOUT_VERSION=$VULNSCOUT_VERSION
       - DEV_MODE=$VULNSCOUT_DEV_MODE
+      - VARIANT_NAME=$VULNSCOUT_VARIANT_NAME
 EOF
 
     if [ -n "$(id -u)" ] && [ -n "$(id -g)" ]; then
@@ -407,6 +416,9 @@ EOF
 
     if [ -n "$VULNSCOUT_PRODUCT_NAME" ]; then
         echo "      - PRODUCT_NAME=$VULNSCOUT_PRODUCT_NAME" >> "$YAML_FILE"
+    fi
+    if [ -n "$VULNSCOUT_ENTRY_NAME" ]; then
+      echo "      - PROJECT_NAME=$VULNSCOUT_ENTRY_NAME" >> "$YAML_FILE"
     fi
     if [ -n "$VULNSCOUT_PRODUCT_VERSION" ]; then
         echo "      - PRODUCT_VERSION=$VULNSCOUT_PRODUCT_VERSION" >> "$YAML_FILE"
