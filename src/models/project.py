@@ -5,6 +5,7 @@
 
 import uuid
 from typing import Optional
+from sqlalchemy.exc import IntegrityError
 from ..extensions import db, Base
 
 
@@ -12,6 +13,7 @@ class Project(Base):
     """Represents a project that groups one or more variants."""
 
     __tablename__ = "projects"
+    __table_args__ = (db.UniqueConstraint("name", name="uq_projects_name"),)
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     name = db.Column(db.String, nullable=False)
@@ -48,12 +50,23 @@ class Project(Base):
     @staticmethod
     def get_or_create(name: str) -> "Project":
         """Return an existing project by *name*, or create and persist a new one."""
-        project = db.session.execute(
+
+        existing = db.session.execute(
             db.select(Project).where(Project.name == name)
         ).scalar_one_or_none()
-        if project is None:
-            project = Project.create(name)
-        return project
+        if existing is not None:
+            return existing
+        try:
+            project = Project(name=name)
+            db.session.add(project)
+            db.session.flush()
+            db.session.commit()
+            return project
+        except IntegrityError:
+            db.session.rollback()
+            return db.session.execute(
+                db.select(Project).where(Project.name == name)
+            ).scalar_one()
 
     def update(self, name: str) -> "Project":
         """Update the project's *name* in place, persist the change and return ``self``."""

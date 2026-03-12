@@ -89,15 +89,12 @@ class ScanController:
 
         :raises ValueError: if the scan is not found.
         """
-        resolved: Scan
-        if isinstance(scan, Scan):
-            resolved = scan
-        else:
-            found = ScanController.get(scan)
-            if found is None:
+        if not isinstance(scan, Scan):
+            _fetched = ScanController.get(scan)
+            if _fetched is None:
                 raise ValueError("Scan not found.")
-            resolved = found
-        return resolved.update(description)
+            scan = _fetched
+        return scan.update(description)
 
     @staticmethod
     def delete(scan: Scan | uuid.UUID | str) -> None:
@@ -107,12 +104,9 @@ class ScanController:
 
         :raises ValueError: if the scan is not found.
         """
-        resolved: Scan
-        if isinstance(scan, Scan):
-            resolved = scan
-        else:
-            found = ScanController.get(scan)
-            if found is None:
+        if not isinstance(scan, Scan):
+            _fetched = ScanController.get(scan)
+            if _fetched is None:
                 raise ValueError("Scan not found.")
-            resolved = found
-        resolved.delete()
+            scan = _fetched
+        scan.delete()
