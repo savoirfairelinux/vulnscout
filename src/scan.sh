@@ -78,6 +78,7 @@ function main() {
     fi
 
     # All input files belong to a single variant set for this invocation
+    PROJECT_NAME=${PROJECT_NAME:-"$PRODUCT_NAME"}
     VARIANT_NAME=${VARIANT_NAME:-"default"}
     INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
     if [[ -d "$SPDX_TMP_PATH" ]]; then
