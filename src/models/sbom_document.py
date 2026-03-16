@@ -22,6 +22,7 @@ class SBOMDocument(Base):
     scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False)
 
     scan = db.relationship("Scan", back_populates="sbom_documents")
+    sbom_packages = db.relationship("SBOMPackage", back_populates="sbom_document", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<SBOMDocument id={self.id} source_name={self.source_name!r}>"

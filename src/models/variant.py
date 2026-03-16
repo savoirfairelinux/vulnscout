@@ -23,6 +23,8 @@ class Variant(Base):
 
     project = db.relationship("Project", back_populates="variants")
     scans = db.relationship("Scan", back_populates="variant", cascade="all, delete-orphan")
+    assessments = db.relationship("Assessment", back_populates="variant", cascade="all, delete-orphan")
+    time_estimates = db.relationship("TimeEstimate", back_populates="variant", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Variant id={self.id} name={self.name!r}>"

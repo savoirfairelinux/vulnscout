@@ -20,8 +20,8 @@ class TimeEstimate(Base):
     likely = db.Column(db.Integer, nullable=True)
     pessimistic = db.Column(db.Integer, nullable=True)
 
-    finding = db.relationship("Finding", back_populates="time_estimates")
-    variant = db.relationship("Variant")
+    finding = db.relationship("Finding", back_populates="time_estimate")
+    variant = db.relationship("Variant", back_populates="time_estimates")
 
     def __repr__(self) -> str:
         return (
