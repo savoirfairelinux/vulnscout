@@ -127,10 +127,6 @@ class Assessment(Base):
             self._vuln_id = ""
         if not hasattr(self, "_packages"):
             self._packages: list[str] = []
-        if not hasattr(self, "_last_update"):
-            self._last_update = ""
-        if not hasattr(self, "_workaround_timestamp"):
-            self._workaround_timestamp = ""
 
     # ------------------------------------------------------------------
     # vuln_id / packages — transient properties for parsing pipeline
@@ -166,29 +162,6 @@ class Assessment(Base):
     def packages(self, value):
         self._packages = list(value or [])
 
-    @property
-    def last_update(self) -> str:
-        if hasattr(self, "_last_update") and self._last_update:
-            return self._last_update
-        ts = self.timestamp
-        if ts is not None:
-            return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-        return ""
-
-    @last_update.setter
-    def last_update(self, value: str):
-        self._last_update = value
-
-    @property
-    def workaround_timestamp(self) -> str:
-        if hasattr(self, "_workaround_timestamp"):
-            return self._workaround_timestamp
-        return ""
-
-    @workaround_timestamp.setter
-    def workaround_timestamp(self, value: str):
-        self._workaround_timestamp = value or ""
-
     def __repr__(self) -> str:
         return (
             f"<Assessment id={self.id} status={self.status!r}"
@@ -211,8 +184,6 @@ class Assessment(Base):
         obj = cls()
         obj._vuln_id = vuln_id
         obj._packages = []
-        obj._last_update = datetime.now(timezone.utc).isoformat()
-        obj._workaround_timestamp = ""
         obj.id = uuid.uuid4()
         obj.status = "under_investigation"
         obj.status_notes = ""
@@ -346,8 +317,8 @@ class Assessment(Base):
         return False
 
     def set_workaround(self, workaround: str, timestamp: Optional[str] = None):
+        """Set the workaround text. The timestamp argument is accepted for compatibility but not stored."""
         self.workaround = workaround
-        self._workaround_timestamp = timestamp or datetime.now(timezone.utc).isoformat()
 
     # ==================================================================
     # Serialisation
@@ -363,14 +334,13 @@ class Assessment(Base):
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "timestamp": ts,
-            "last_update": self.last_update,
+            "last_update": ts or "",
             "status": self.status or "",
             "status_notes": self.status_notes or "",
             "justification": self.justification or "",
             "impact_statement": self.impact_statement or "",
             "responses": list(self.responses or []),
             "workaround": self.workaround or "",
-            "workaround_timestamp": self.workaround_timestamp,
         }
 
     @staticmethod
@@ -388,8 +358,6 @@ class Assessment(Base):
         obj.impact_statement = data.get("impact_statement", "")
         obj.responses = data.get("responses", [])
         obj.workaround = data.get("workaround", "")
-        obj._workaround_timestamp = data.get("workaround_timestamp", "")
-        obj._last_update = data.get("last_update", "")
         if "timestamp" in data and isinstance(data["timestamp"], str):
             try:
                 obj.timestamp = datetime.fromisoformat(data["timestamp"])
@@ -427,13 +395,12 @@ class Assessment(Base):
             "vulnerability": {"name": self.vuln_id},
             "products": [{"@id": p} for p in self.packages],
             "timestamp": ts,
-            "last_updated": self.last_update,
+            "last_updated": ts or "",
             "status": openvex_status,
             "status_notes": self.status_notes or "",
             "justification": openvex_justif,
             "impact_statement": openvex_impact,
             "action_statement": self.workaround or "",
-            "action_statement_timestamp": self.workaround_timestamp,
         }
 
     def to_cdx_vex_dict(self) -> Optional[dict]:
@@ -474,7 +441,7 @@ class Assessment(Base):
                 "justification": cdx_justif,
                 "response": cdx_response,
                 "firstIssued": ts,
-                "lastUpdated": self.last_update,
+                "lastUpdated": ts or "",
             },
         }
 
@@ -497,8 +464,6 @@ class Assessment(Base):
             if other_ts > self_ts:
                 self.timestamp = other_ts
 
-        if other.last_update and (not self.last_update or other.last_update > self.last_update):
-            self.last_update = other.last_update
         if not self.is_compatible_status(other.status or ""):
             self.set_status(other.status or "")
         if other.status_notes:
@@ -513,11 +478,7 @@ class Assessment(Base):
         for r in (other.responses or []):
             self.add_response(r)
         if other.workaround:
-            if not self.workaround:
-                self.set_workaround(other.workaround, other.workaround_timestamp)
-            elif self.workaround != other.workaround:
-                if (other.workaround_timestamp or "") > (self.workaround_timestamp or ""):
-                    self.set_workaround(other.workaround, other.workaround_timestamp)
+            self.set_workaround(other.workaround)
         return True
 
     # ==================================================================
@@ -581,12 +542,6 @@ class Assessment(Base):
             existing.impact_statement = assess.impact_statement or existing.impact_statement
             existing.workaround = getattr(assess, "workaround", None) or existing.workaround
             existing.responses = list(assess.responses) if assess.responses else existing.responses
-            wt = getattr(assess, "_workaround_timestamp", "") or ""
-            if wt:
-                existing._workaround_timestamp = wt
-            lu = getattr(assess, "_last_update", "") or ""
-            if lu:
-                existing._last_update = lu
             db.session.commit()
             return existing
 
@@ -599,8 +554,6 @@ class Assessment(Base):
             workaround=getattr(assess, "workaround", None),
             responses=list(assess.responses) if assess.responses else [],
         )
-        record._workaround_timestamp = getattr(assess, "_workaround_timestamp", "") or ""
-        record._last_update = getattr(assess, "_last_update", "") or ""
         return record
 
     @staticmethod
@@ -648,6 +601,41 @@ class Assessment(Base):
             )
         ).scalars().all())
 
+    @staticmethod
+    def get_by_vulnerability(vulnerability_id: str) -> list["Assessment"]:
+        """Return all assessments whose finding links to *vulnerability_id*."""
+        from .finding import Finding
+        return list(db.session.execute(
+            db.select(Assessment)
+            .join(Finding, Assessment.finding_id == Finding.id)
+            .where(Finding.vulnerability_id == vulnerability_id.upper())
+            .order_by(Assessment.timestamp)
+        ).scalars().all())
+
+    @staticmethod
+    def get_by_package(package_id: "uuid.UUID | str") -> list["Assessment"]:
+        """Return all assessments whose finding links to *package_id*.
+
+        *package_id* may be a UUID, UUID string, or ``'name@version'`` string.
+        """
+        from .finding import Finding
+        if isinstance(package_id, str):
+            pkg_str: str = package_id
+            try:
+                package_id = uuid.UUID(pkg_str)
+            except ValueError:
+                from .package import Package
+                pkg = Package.get_by_string_id(pkg_str)
+                if pkg is None:
+                    return []
+                package_id = pkg.id
+        return list(db.session.execute(
+            db.select(Assessment)
+            .join(Finding, Assessment.finding_id == Finding.id)
+            .where(Finding.package_id == package_id)
+            .order_by(Assessment.timestamp)
+        ).scalars().all())
+
     def update(
         self,
         status: Optional[str] = None,
@@ -658,8 +646,7 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list] = None,
-        workaround_timestamp: Optional[str] = None,
-        last_update: Optional[str] = None,
+        **_kwargs,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:
@@ -678,10 +665,6 @@ class Assessment(Base):
             self.workaround = workaround
         if responses is not None:
             self.responses = responses
-        if workaround_timestamp is not None:
-            self.workaround_timestamp = workaround_timestamp
-        if last_update is not None:
-            self.last_update = last_update
         db.session.commit()
         return self
 

@@ -56,15 +56,12 @@ def setup_demo_db(app):
         assessment = Assessment(
             id=uuid.UUID("da4d18f0-d89e-4d54-819d-86fc884cc737"),
             status="fixed",
-            vuln_id="CVE-2020-35492",
-            packages=["cairo@1.16.0"],
             timestamp=datetime(2024, 6, 7, 15, 10, 31, tzinfo=timezone.utc),
             status_notes="",
             justification="",
             impact_statement="Yocto reported vulnerability as Patched",
             responses=[],
             workaround="",
-            workaround_timestamp="",
             finding_id=finding.id,
         )
         db.session.add(assessment)

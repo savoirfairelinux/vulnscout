@@ -366,14 +366,10 @@ class TestAssessmentFromVulnAssessment:
             justification="vulnerable_code_not_present",
             impact_statement="no impact",
             workaround="upgrade to 2.0",
-            workaround_timestamp="2025-01-01T00:00:00Z",
             responses=["patched"],
-            last_update="2025-03-01T00:00:00Z",
         )
         assert a.source == "grype"
         assert a.workaround == "upgrade to 2.0"
-        assert a.workaround_timestamp == "2025-01-01T00:00:00Z"
-        assert a.last_update == "2025-03-01T00:00:00Z"
 
 
 # ===========================================================================
