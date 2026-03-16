@@ -343,3 +343,141 @@ def test_filter_publish_date_include_unknown(extensions):
     # Test with include_unknown=True - should include matching dates + unknown items
     result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01", True)
     assert result == [b, c, d]
+
+
+def test_filter_publish_date_include_unknown_gte(extensions):
+    """Test include_unknown=True with >= operator"""
+    a = {"published": "2026-01-02T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_lte(extensions):
+    """Test include_unknown=True with <= operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_lt(extensions):
+    """Test include_unknown=True with < operator"""
+    a = {"published": "2025-12-31T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "<2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_range(extensions):
+    """Test include_unknown=True with range operator"""
+    a = {"published": "2026-01-15T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-02-01T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-31", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_exact(extensions):
+    """Test include_unknown=True with exact date"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T10:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_last_assessment_date_timezone_aware(extensions):
+    """Test filter_last_assessment_date with timezone-aware timestamps (astimezone branch)"""
+    # timezone-aware timestamps (with +HH:MM) hit the else:.astimezone() branch
+    a = {"last_assessment": {"timestamp": "2026-01-01T12:00:00+02:00"}}  # = 2026-01-01T10:00Z
+    b = {"last_assessment": {"timestamp": "2026-01-02T00:00:00+00:00"}}  # = 2026-01-02T00:00Z
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:00:00-01:00"}}  # = 2026-01-01T00:00Z
+    vulns = [a, b, c]
+
+    # range filter
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01..2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # >= filter
+    result = extensions.filters["last_assessment_date"](vulns, ">=2026-01-02")
+    assert result == [b]
+
+    # > filter
+    result = extensions.filters["last_assessment_date"](vulns, ">2026-01-01")
+    assert result == [b]
+
+    # <= filter
+    result = extensions.filters["last_assessment_date"](vulns, "<=2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # < filter
+    result = extensions.filters["last_assessment_date"](vulns, "<2026-01-01")
+    assert result == []
+
+    # exact filter
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+
+def test_filter_publish_date_timezone_aware(extensions):
+    """Test filter_publish_date with timezone-aware published timestamps (astimezone branch)"""
+    a = {"published": "2026-01-01T12:00:00+02:00"}  # = 2026-01-01T10:00Z
+    b = {"published": "2026-01-02T00:00:00+00:00"}  # = 2026-01-02T00:00Z
+    c = {"published": "2025-12-31T23:00:00-01:00"}  # = 2026-01-01T00:00Z
+    vulns = [a, b, c]
+
+    # range filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # >= filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-02")
+    assert result == [b]
+
+    # > filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01")
+    assert result == [b]
+
+    # <= filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # < filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "<2026-01-01")
+    assert result == []
+
+    # exact filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+

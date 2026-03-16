@@ -6,7 +6,7 @@
 import pytest
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
-from src.models.assessment import VulnAssessment
+from src.models.assessment import Assessment
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
@@ -53,17 +53,17 @@ def vuln_controller(pkg_controller, vuln_123, vuln_456):
 
 @pytest.fixture
 def assessment_1(vuln_123, pkg_ABC):
-    return VulnAssessment(vuln_123, [pkg_ABC])
+    return Assessment.new_dto(vuln_123, [pkg_ABC])
 
 
 @pytest.fixture
 def assessment_2(vuln_123, pkg_XYZ):
-    return VulnAssessment(vuln_123, [pkg_XYZ])
+    return Assessment.new_dto(vuln_123, [pkg_XYZ])
 
 
 @pytest.fixture
 def assessment_3(vuln_456, pkg_ABC):
-    return VulnAssessment(vuln_456, [pkg_ABC])
+    return Assessment.new_dto(vuln_456, [pkg_ABC])
 
 
 @pytest.fixture
@@ -116,7 +116,7 @@ def test_get_by_vuln(assessment_controller, vuln_123, vuln_456, assessment_2):
 def test_get_by_pkg(assessment_controller, pkg_ABC, pkg_XYZ, assessment_2):
     assessment_controller.add(assessment_2)
     ssmt_ABC = assessment_controller.gets_by_pkg(pkg_ABC)
-    ssmt_XYZ = assessment_controller.gets_by_pkg(pkg_XYZ.id)
+    ssmt_XYZ = assessment_controller.gets_by_pkg(pkg_XYZ.string_id)
     ssmt_none = assessment_controller.gets_by_pkg(None)
     assert len(ssmt_ABC) == 2
     assert len(ssmt_XYZ) == 1
@@ -129,7 +129,7 @@ def test_get_by_vuln_pkg(assessment_controller, vuln_123, vuln_456, pkg_ABC, pkg
     assessment_controller.add(assessment_2)
     ssmt_123_ABC = assessment_controller.gets_by_vuln_pkg(vuln_123, pkg_ABC)
     ssmt_123_XYZ = assessment_controller.gets_by_vuln_pkg(vuln_123.id, pkg_XYZ)
-    ssmt_456_XYZ = assessment_controller.gets_by_vuln_pkg(vuln_456.id, pkg_XYZ.id)
+    ssmt_456_XYZ = assessment_controller.gets_by_vuln_pkg(vuln_456.id, pkg_XYZ.string_id)
     assert len(ssmt_123_ABC) == 1
     assert len(ssmt_123_XYZ) == 1
     assert len(ssmt_456_XYZ) == 0

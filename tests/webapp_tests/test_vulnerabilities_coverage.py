@@ -6,7 +6,7 @@
 import pytest
 import json
 from src.bin.webapp import create_app
-from . import write_demo_files
+from . import write_demo_files, setup_demo_db
 
 
 @pytest.fixture()
@@ -29,13 +29,11 @@ def app(init_files):
     app.config.update({
         "TESTING": True,
         "SCAN_FILE": init_files["status"],
-        "PKG_FILE": init_files["packages"],
-        "VULNS_FILE": init_files["vulnerabilities"],
-        "ASSESSMENTS_FILE": init_files["assessments"],
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "OPENVEX_FILE": init_files["openvex"],
-        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
         "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
     })
+    setup_demo_db(app)
 
     yield app
 
@@ -65,11 +63,6 @@ def test_patch_vulnerability_with_cvss(client, init_files):
     # Verify CVSS was added
     cvss_scores = data["severity"]["cvss"]
     assert any(cvss["base_score"] == 8.5 for cvss in cvss_scores)
-    
-    # Verify time_estimates file was updated
-    assert init_files["time_estimates"].exists()
-    time_est_content = json.loads(init_files["time_estimates"].read_text())
-    assert "tasks" in time_est_content
 
 
 # Test PATCH vulnerability with missing CVSS fields
@@ -132,10 +125,6 @@ def test_patch_vulnerability_with_effort_and_cvss(client, init_files):
     # Verify CVSS was added (note: base_score might differ due to merging)
     cvss_scores = data["severity"]["cvss"]
     assert len(cvss_scores) >= 1
-    
-    # Verify files were updated
-    assert init_files["vulnerabilities"].exists()
-    assert init_files["time_estimates"].exists()
 
 
 # Test PATCH vulnerability not found
@@ -436,10 +425,6 @@ def test_patch_vulnerabilities_batch_with_effort_and_cvss(client, init_files):
     assert vuln["effort"]["optimistic"] == "PT3H"
     # Check that CVSS scores exist
     assert len(vuln["severity"]["cvss"]) >= 1
-    
-    # Verify files were updated
-    assert init_files["vulnerabilities"].exists()
-    assert init_files["time_estimates"].exists()
 
 
 # Test that files are only written when there are results

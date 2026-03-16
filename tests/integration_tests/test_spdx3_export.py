@@ -49,12 +49,12 @@ def populated_spdx3_exporter():
     
     # Add test vulnerabilities
     vuln1 = Vulnerability("CVE-2023-1234", ["test-scanner"], "test-datasource", "test-namespace")
-    vuln1.add_package(pkg1.id)
+    vuln1.add_package(pkg1.string_id)
     vuln1.add_url("https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-1234")
     exporter.vulnerabilitiesCtrl.add(vuln1)
     
     vuln2 = Vulnerability("CVE-2023-5678", ["test-scanner"], "test-datasource", "test-namespace") 
-    vuln2.add_package(pkg2.id)
+    vuln2.add_package(pkg2.string_id)
     exporter.vulnerabilitiesCtrl.add(vuln2)
     
     return exporter
