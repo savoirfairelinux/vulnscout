@@ -3,78 +3,73 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from flask import request
-import json
-from datetime import datetime, timezone
+from datetime import datetime
+from ..models.assessment import Assessment as DBAssessment
+from ..models.package import Package
+from ..models.finding import Finding
+from ..views.openvex import OpenVex
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
-from ..views.openvex import OpenVex
-from ..models.assessment import VulnAssessment
 
-ASSESSMENTS_FILE = "/scan/tmp/assessments-merged.json"
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 
 def init_app(app):
 
-    if "ASSESSMENTS_FILE" not in app.config:
-        app.config["ASSESSMENTS_FILE"] = ASSESSMENTS_FILE
     if "OPENVEX_FILE" not in app.config:
         app.config["OPENVEX_FILE"] = OPENVEX_FILE
 
-    def get_assessments():
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            return AssessmentsController.from_dict(None, None, json.loads(f.read()))
+    def _get_all_db_assessments():
+        return DBAssessment.get_all()
 
-    def get_all_datas():
-        controllers = {}
-        with open(app.config["PKG_FILE"], "r") as f:
-            controllers["packages"] = PackagesController.from_dict(
-                json.loads(f.read())
-            )
-        with open(app.config["VULNS_FILE"], "r") as f:
-            controllers["vulnerabilities"] = VulnerabilitiesController.from_dict(
-                controllers["packages"],
-                json.loads(f.read())
-            )
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            controllers["assessments"] = AssessmentsController.from_dict(
-                controllers["packages"],
-                controllers["vulnerabilities"],
-                json.loads(f.read())
-            )
-        return controllers
+    def _save_openvex():
+        """Re-generate and save the OpenVEX file from current DB state."""
+        try:
+            from ..models.assessment import Assessment as DBAssessment
+            import json
+
+            pkgCtrl = PackagesController()
+            vulnCtrl = VulnerabilitiesController(pkgCtrl)
+            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+
+            # Populate the in-memory assessment dict from DB for OpenVEX rendering
+            for db_assess in DBAssessment.get_all():
+                va = DBAssessment.from_dict(db_assess.to_dict())
+                assessCtrl.assessments[str(va.id)] = va
+
+            ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
+            vex = OpenVex(ctrls)
+            with open(app.config["OPENVEX_FILE"], "w") as f:
+                f.write(json.dumps(vex.to_dict(), indent=2))
+        except Exception:
+            pass
 
     @app.route('/api/assessments')
     def index_assess():
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
+        assessments = [a.to_dict() for a in _get_all_db_assessments()]
         if request.args.get('format', 'list') == "dict":
-            return assessCtrl.to_dict()
-        return list(assessCtrl.to_dict().values())
+            return {a["id"]: a for a in assessments}
+        return assessments
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
-        item = assessCtrl.get_by_id(assessment_id)
+        item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
         return item.to_dict(), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
     def list_assess_by_vuln(vuln_id: str):
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
+        # Get findings for this vulnerability then load their assessments
+        findings = Finding.get_by_vulnerability(vuln_id)
+        assessments = []
+        for f in findings:
+            for a in DBAssessment.get_by_finding(f.id):
+                assessments.append(a.to_dict())
         if request.args.get('format', 'list') == "dict":
-            return {k: v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id}, 200
-        return [v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id], 200
+            return {a["id"]: a for a in assessments}
+        return assessments, 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str):
@@ -86,27 +81,36 @@ def init_app(app):
             payload_data["vuln_id"] = vuln_id
         elif payload_data["vuln_id"] != vuln_id or not isinstance(payload_data["vuln_id"], str):
             return {"error": "Invalid vuln_id"}, 400
+
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
             return assessment, status
 
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-        ctrls["assessments"].add(assessment)
+        # Persist to DB
+        for pkg_string_id in (assessment.packages or []):
+            try:
+                from ..extensions import db
+                db_pkg = Package.get_by_string_id(pkg_string_id)
+                if db_pkg is None:
+                    # Auto-create the package with minimal info derived from 'name@version'
+                    name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                    db_pkg = Package.find_or_create(name, version)
+                    db.session.commit()
+                finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
+                db.session.commit()
+                _save_openvex()
+                return {"status": "success", "assessment": db_a.to_dict()}, 200
+            except Exception as e:
+                return {"error": f"DB error: {e}"}, 500
 
-        save_assessments_to_files(ctrls)
-        return {"status": "success", "assessment": assessment.to_dict()}, 200
+        return {"error": "No valid package found"}, 400
 
     @app.route("/api/assessments/batch", methods=["POST"])
     def add_assessments_batch():
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
-
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
 
         results = []
         errors = []
@@ -121,22 +125,32 @@ def init_app(app):
                 errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
                 continue
 
-            ctrls["assessments"].add(assessment)
-            results.append(assessment.to_dict())
-
-        if results:
-            save_assessments_to_files(ctrls)
+            vuln_id = assessment.vuln_id
+            for pkg_string_id in (assessment.packages or []):
+                try:
+                    from ..extensions import db
+                    db_pkg = Package.get_by_string_id(pkg_string_id)
+                    if db_pkg is None:
+                        # Auto-create the package with minimal info derived from 'name@version'
+                        name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                        db_pkg = Package.find_or_create(name, version)
+                        db.session.commit()
+                    finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                    db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
+                    db.session.commit()
+                    results.append(db_a.to_dict())
+                    break
+                except Exception as e:
+                    errors.append({"vuln_id": vuln_id, "error": str(e)})
 
         response = {
             "status": "success" if results else "error",
             "assessments": results,
             "count": len(results)
         }
-
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
-
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
@@ -145,88 +159,74 @@ def init_app(app):
         if not payload_data:
             return {"error": "Invalid request data"}, 400
 
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-
-        # Get the existing assessment
-        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
-        if existing_assessment is None:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
             return {"error": "Assessment not found"}, 404
 
-        # Update the assessment fields
+        # Reconstruct Assessment DTO for validation
+        mem_assess = DBAssessment.from_dict(existing.to_dict())
+
         if "status" in payload_data and isinstance(payload_data["status"], str):
-            if not existing_assessment.set_status(payload_data["status"]):
+            if not mem_assess.set_status(payload_data["status"]):
                 return {"error": "Invalid status"}, 400
-            if existing_assessment.status not in ["not_affected", "false_positive"]:
-                existing_assessment.justification = ""
-                existing_assessment.impact_statement = ""
+            if mem_assess.status not in ["not_affected", "false_positive"]:
+                mem_assess.justification = ""
+                mem_assess.impact_statement = ""
 
         if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
-            existing_assessment.set_status_notes(payload_data["status_notes"], False)
+            mem_assess.set_status_notes(payload_data["status_notes"], False)
 
         if "justification" in payload_data and isinstance(payload_data["justification"], str):
             if payload_data["justification"] == "":
-                existing_assessment.justification = ""
-            elif not existing_assessment.set_justification(payload_data["justification"]):
+                mem_assess.justification = ""
+            elif not mem_assess.set_justification(payload_data["justification"]):
                 return {"error": "Invalid justification"}, 400
-        elif existing_assessment.is_justification_required():
+        elif mem_assess.is_justification_required():
             return {"error": "Justification required"}, 400
 
         if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
             if payload_data["impact_statement"] == "":
-                existing_assessment.impact_statement = ""
+                mem_assess.impact_statement = ""
             else:
-                existing_assessment.set_not_affected_reason(payload_data["impact_statement"], False)
+                mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
 
         if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            if "workaround_timestamp" in payload_data and isinstance(payload_data["workaround_timestamp"], str):
-                existing_assessment.set_workaround(payload_data["workaround"], payload_data["workaround_timestamp"])
+            wt = payload_data.get("workaround_timestamp")
+            if isinstance(wt, str) and wt:
+                mem_assess.set_workaround(payload_data["workaround"], wt)
             else:
-                existing_assessment.set_workaround(payload_data["workaround"])
+                mem_assess.set_workaround(payload_data["workaround"])
 
-        # Update last_update timestamp
-        existing_assessment.last_update = datetime.now(timezone.utc).isoformat()
-
-        save_assessments_to_files(ctrls)
-        return {"status": "success", "assessment": existing_assessment.to_dict()}, 200
+        existing.update(
+            status=mem_assess.status,
+            status_notes=mem_assess.status_notes,
+            justification=mem_assess.justification,
+            impact_statement=mem_assess.impact_statement,
+            workaround=getattr(mem_assess, "workaround", None),
+            workaround_timestamp=mem_assess.workaround_timestamp or None,
+            responses=list(mem_assess.responses),
+        )
+        _save_openvex()
+        return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
     def delete_assessment(assessment_id: str):
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-
-        # Check if assessment exists
-        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
-        if existing_assessment is None:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
             return {"error": "Assessment not found"}, 404
-
-        # Remove the assessment
-        if ctrls["assessments"].remove(assessment_id):
-            save_assessments_to_files(ctrls)
-            return {"status": "success", "message": "Assessment deleted successfully"}, 200
-        else:
-            return {"error": "Failed to delete assessment"}, 500
-
-    def save_assessments_to_files(ctrls):
-        with open(app.config["ASSESSMENTS_FILE"], "w") as f:
-            f.write(json.dumps(ctrls["assessments"].to_dict()))
-
-        vex = OpenVex(ctrls)
-        with open(app.config["OPENVEX_FILE"], "w") as f:
-            f.write(json.dumps(vex.to_dict(), indent=2))
+        existing.delete()
+        return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 
 def payload_to_assessment(data):
     """
-    Take an object in input and try to convert it to an VulnAssessment instance.
-    Return either VulnAssessment and 200, or object and http responde code
+    Take an object in input and try to convert it to an Assessment DTO.
+    Return either (Assessment, 200) or (error_dict, http_code).
     """
     if "packages" not in data or not isinstance(data["packages"], list) or len(data["packages"]) < 1:
         return {"error": "Invalid request data"}, 400
 
-    assessment = VulnAssessment(data["vuln_id"], data["packages"])
+    assessment = DBAssessment.new_dto(data["vuln_id"], data["packages"])
 
     if "status" not in data or not isinstance(data["status"], str):
         return {"error": "Invalid request data"}, 400
@@ -240,7 +240,6 @@ def payload_to_assessment(data):
     if "justification" in data and isinstance(data["justification"], str):
         if not assessment.set_justification(data["justification"]):
             return {"error": "Invalid justification"}, 400
-
     elif assessment.is_justification_required():
         return {"error": "Justification required"}, 400
 
@@ -254,7 +253,10 @@ def payload_to_assessment(data):
             assessment.set_workaround(data["workaround"])
 
     if "timestamp" in data and isinstance(data["timestamp"], str):
-        assessment.timestamp = data["timestamp"]
+        try:
+            assessment.timestamp = datetime.fromisoformat(data["timestamp"])
+        except (ValueError, TypeError):
+            pass
     if "last_updated" in data and isinstance(data["last_updated"], str):
         assessment.last_update = data["last_updated"]
 

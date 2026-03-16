@@ -83,7 +83,7 @@ class SPDX3:
     def generate_package_element(self, pkg) -> Dict[str, Any]:
         """Generate SPDX 3.0 package element from Package object."""
 
-        spdx_id = self._get_spdx_id(pkg.id, self.pkg_to_ref)
+        spdx_id = self._get_spdx_id(pkg.string_id, self.pkg_to_ref)
 
         element = {
             "type": "software_Package",
