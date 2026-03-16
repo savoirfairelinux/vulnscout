@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class Metrics(Base):
-    """Stores a CVSS / scoring metric record for a :class:`VulnerabilityRecord`."""
+    """Stores a CVSS / scoring metric record for a :class:`Vulnerability`."""
 
     __tablename__ = "metrics"
 
@@ -23,7 +23,7 @@ class Metrics(Base):
     vector = db.Column(db.Text, nullable=True)
     author = db.Column(db.String, nullable=True)
 
-    vulnerability = db.relationship("VulnerabilityRecord", back_populates="metrics")
+    vulnerability = db.relationship("Vulnerability", back_populates="metrics")
 
     def __repr__(self) -> str:
         return (
