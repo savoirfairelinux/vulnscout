@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch, mock_open
 from src.views.templates import Templates, TemplatesExtensions
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
-from src.models.assessment import VulnAssessment
+from src.models.assessment import Assessment
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
@@ -16,12 +16,14 @@ import subprocess
 
 
 @pytest.fixture
-def templates_instance():
-    controllers = {}
-    controllers["packages"] = PackagesController()
-    controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
-    controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
-    return Templates(controllers)
+def templates_instance(tmp_path):
+    with patch('src.controllers.vulnerabilities.EPSS_DB') as mock_epss:
+        mock_epss.return_value = MagicMock()
+        controllers = {}
+        controllers["packages"] = PackagesController()
+        controllers["vulnerabilities"] = VulnerabilitiesController(controllers["packages"])
+        controllers["assessments"] = AssessmentsController(controllers["packages"], controllers["vulnerabilities"])
+        yield Templates(controllers)
 
 
 @pytest.fixture
@@ -42,7 +44,7 @@ def vuln_123():
 
 @pytest.fixture
 def assesment_123(pkg_ABC, vuln_123):
-    assess = VulnAssessment(vuln_123.id, [pkg_ABC])
+    assess = Assessment.new_dto(vuln_123.id, [pkg_ABC])
     assess.set_status("in_triage")
     return assess
 
@@ -51,7 +53,7 @@ class TestTemplatesRenderExceptions:
     """Test exception handling in render method"""
 
     def test_render_with_invalid_epss_score(self, templates_instance, pkg_ABC, vuln_123, assesment_123):
-        """Test that render handles invalid EPSS scores gracefully (lines 84-85)"""
+        """Test that render handles invalid EPSS scores gracefully (lines 85-86)"""
         templates_instance.packagesCtrl.add(pkg_ABC)
         templates_instance.vulnerabilitiesCtrl.add(vuln_123)
         templates_instance.assessmentsCtrl.add(assesment_123)
@@ -60,23 +62,20 @@ class TestTemplatesRenderExceptions:
         vuln_bad = Vulnerability("CVE-9999-999", ["scanner"], "https://nvd.nist.gov/vuln/detail/CVE-9999-999", "unknown")
         vuln_bad.add_package("abc@1.2.3")
         vuln_bad.severity_without_cvss("high", 7.0, True)
-        
-        # Add an assessment for the bad vulnerability
-        assess_bad = VulnAssessment(vuln_bad.id, [pkg_ABC])
+        # Directly set the EPSS score to an invalid string to trigger exception in float()
+        vuln_bad.epss["score"] = "invalid_score"
+
+        # Add an assessment for the bad vulnerability so it passes the len > 0 check
+        assess_bad = Assessment.new_dto(vuln_bad.id, [pkg_ABC])
         assess_bad.set_status("affected")
-        
+
         templates_instance.vulnerabilitiesCtrl.add(vuln_bad)
         templates_instance.assessmentsCtrl.add(assess_bad)
-        
-        # Mock the vulnerability to have invalid EPSS data
-        vuln_dict = templates_instance.vulnerabilitiesCtrl.to_dict()
-        if vuln_bad.id in vuln_dict:
-            vuln_dict[vuln_bad.id]['epss'] = {'score': 'invalid'}  # This will cause float() to fail
-        
+
         # Create a simple test template
         with patch.object(templates_instance.env, 'get_template') as mock_template:
             mock_template.return_value.render.return_value = "test"
-            
+
             # This should not raise an exception despite invalid EPSS
             result = templates_instance.render("test.jinja2", only_epss_greater=50)
             assert result == "test"

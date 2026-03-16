@@ -51,7 +51,7 @@ def test_adding_packages(controller_with_packages, pkg_ABC, pkg_not_included):
     """
     controller_with_packages.add(pkg_ABC)
     assert len(controller_with_packages) == 2
-    assert controller_with_packages.get(pkg_ABC.id) == pkg_ABC
+    assert controller_with_packages.get(pkg_ABC.string_id) == pkg_ABC
 
     controller_with_packages.add(pkg_not_included)
     assert len(controller_with_packages) == 3
@@ -68,13 +68,13 @@ def test_removing_packages(controller_with_packages, pkg_XYZ, pkg_ABC):
     THEN check the Package is removed
     """
     assert len(controller_with_packages) == 2
-    assert controller_with_packages.remove(pkg_XYZ.id) is True
+    assert controller_with_packages.remove(pkg_XYZ.string_id) is True
 
     assert len(controller_with_packages) == 1
     assert pkg_XYZ not in controller_with_packages
-    assert pkg_ABC.id in controller_with_packages
+    assert pkg_ABC.string_id in controller_with_packages
 
-    assert controller_with_packages.remove(pkg_XYZ.id) is False
+    assert controller_with_packages.remove(pkg_XYZ.string_id) is False
 
 
 def test_export_import_package(controller_with_packages):

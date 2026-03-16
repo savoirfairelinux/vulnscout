@@ -8,7 +8,7 @@ from src.views.cyclonedx import CycloneDx
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.cvss import CVSS
-from src.models.assessment import VulnAssessment, VALID_STATUS_CDX_VEX, VALID_JUSTIFICATION_CDX_VEX
+from src.models.assessment import Assessment, VALID_STATUS_CDX_VEX, VALID_JUSTIFICATION_CDX_VEX
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
@@ -222,13 +222,13 @@ def test_export_assessments_json(cdx_exporter):
     vuln_1.add_package(pkg_1)
     cdx_exporter.vulnerabilitiesCtrl.add(vuln_1)
 
-    assess_1 = VulnAssessment("CVE-2020-35492", ["cairo@1.16.0"])
+    assess_1 = Assessment.new_dto("CVE-2020-35492", ["cairo@1.16.0"])
     assess_1.set_status("under_investigation")
     assess_1.set_status_notes("Our team is analysing source code.")
     assess_1.set_not_affected_reason("Some impact stmt")
     assess_1.timestamp = datetime(2020, 1, 1, 0, 0, 0)
 
-    assess_2 = VulnAssessment("CVE-2020-35492", ["cairo@1.16.0"])
+    assess_2 = Assessment.new_dto("CVE-2020-35492", ["cairo@1.16.0"])
     assess_2.set_status("not_affected")
     assess_2.set_justification("vulnerable_code_not_present")
     assess_2.add_response("update")

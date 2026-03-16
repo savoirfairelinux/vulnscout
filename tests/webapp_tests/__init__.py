@@ -4,6 +4,71 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import uuid
+from datetime import datetime, timezone
+
+
+def setup_demo_db(app):
+    """Create all DB tables and insert demo data into the test in-memory DB."""
+    from src.extensions import db
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+
+        # Demo package: cairo 1.16.0
+        pkg = Package.find_or_create(
+            "cairo",
+            "1.16.0",
+            [
+                "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
+                "cpe:2.3:*:*:cairo:1.16.0:*:*:*:*:*:*:*",
+                "cpe:2.3:a:cairographics:cairo:*:*:*:*:*:*:*:*",
+                "cpe:2.3:a:cairographics:cairo:1.16.0:*:*:*:*:*:*:*",
+            ],
+            ["pkg:generic/cairo@1.16.0"],
+            "",
+        )
+        db.session.commit()
+
+        # Demo vulnerability: CVE-2020-35492
+        vuln = Vulnerability.create_record(
+            id="CVE-2020-35492",
+            description="A flaw was found in cairo's image-compositor.c in all versions prior to 1.17.4 [...]",
+            status="high",
+            epss_score=0.311320,
+            links=[
+                "https://bugzilla.redhat.com/show_bug.cgi?id=1898396",
+                "https://security.gentoo.org/glsa/202305-21",
+                "https://nvd.nist.gov/vuln/detail/CVE-2020-35492",
+            ],
+        )
+        db.session.commit()
+
+        # Link package to vulnerability via Finding
+        finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
+
+        # Demo assessment with known UUID (tests check for this exact ID)
+        assessment = Assessment(
+            id=uuid.UUID("da4d18f0-d89e-4d54-819d-86fc884cc737"),
+            status="fixed",
+            vuln_id="CVE-2020-35492",
+            packages=["cairo@1.16.0"],
+            timestamp=datetime(2024, 6, 7, 15, 10, 31, tzinfo=timezone.utc),
+            status_notes="",
+            justification="",
+            impact_statement="Yocto reported vulnerability as Patched",
+            responses=[],
+            workaround="",
+            workaround_timestamp="",
+            finding_id=finding.id,
+        )
+        db.session.add(assessment)
+        db.session.commit()
 
 
 def write_demo_files(files):

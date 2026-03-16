@@ -3,7 +3,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Coverage tests for the new DB models: VulnerabilityRecord, Finding,
+"""Coverage tests for the new DB models: Vulnerability, Finding,
 Assessment, TimeEstimate, Metrics and their controllers."""
 
 import datetime
@@ -13,12 +13,12 @@ from src.extensions import db as _db
 from src.models.project import Project
 from src.models.variant import Variant
 from src.models.package import Package
-from src.models.vulnerability_record import VulnerabilityRecord
+from src.models.vulnerability import Vulnerability
 from src.models.finding import Finding
-from src.models.assessment_record import Assessment
+from src.models.assessment import Assessment
 from src.models.time_estimate import TimeEstimate
 from src.models.metrics import Metrics
-from src.controllers.vulnerabilities_db import VulnerabilityDBController
+from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.findings import FindingController
 from src.controllers.assessments_db import AssessmentDBController
 from src.controllers.time_estimates import TimeEstimateController
@@ -60,7 +60,7 @@ def package(app):
 
 @pytest.fixture()
 def vuln(app):
-    return VulnerabilityRecord.create(
+    return Vulnerability.create_record(
         id="CVE-2024-1234",
         description="A test vulnerability.",
         status="under_investigation",
@@ -104,54 +104,54 @@ def metrics(app, vuln):
 
 
 # ===========================================================================
-# VulnerabilityRecord model
+# Vulnerability model
 # ===========================================================================
 
-class TestVulnerabilityRecord:
+class TestVulnerability:
     def test_create_and_get(self, app):
-        v = VulnerabilityRecord.create("CVE-2024-9999", description="desc")
-        assert VulnerabilityRecord.get_by_id("CVE-2024-9999") == v
+        v = Vulnerability.create_record("CVE-2024-9999", description="desc")
+        assert Vulnerability.get_by_id("CVE-2024-9999") == v
 
     def test_id_uppercased(self, app):
-        v = VulnerabilityRecord.create("cve-2024-0001")
+        v = Vulnerability.create_record("cve-2024-0001")
         assert v.id == "CVE-2024-0001"
 
     def test_get_all(self, vuln, app):
-        VulnerabilityRecord.create("CVE-2024-0002")
-        records = VulnerabilityRecord.get_all()
+        Vulnerability.create_record("CVE-2024-0002")
+        records = Vulnerability.get_all()
         assert len(records) >= 2
 
     def test_get_or_create_existing(self, vuln):
-        v2 = VulnerabilityRecord.get_or_create(vuln.id)
+        v2 = Vulnerability.get_or_create(vuln.id)
         assert v2.id == vuln.id
 
     def test_get_or_create_new(self, app):
-        v = VulnerabilityRecord.get_or_create("CVE-2024-8888")
+        v = Vulnerability.get_or_create("CVE-2024-8888")
         assert v.id == "CVE-2024-8888"
 
     def test_update(self, vuln):
-        vuln.update(description="updated", status="fixed")
+        vuln.update_record(description="updated", status="fixed")
         assert vuln.description == "updated"
         assert vuln.status == "fixed"
 
     def test_update_publish_date(self, vuln):
         d = datetime.date(2024, 1, 15)
-        vuln.update(publish_date=d)
+        vuln.update_record(publish_date=d)
         assert vuln.publish_date == d
 
     def test_update_epss_score(self, vuln):
-        vuln.update(epss_score=0.85)
+        vuln.update_record(epss_score=0.85)
         assert float(vuln.epss_score) == pytest.approx(0.85)
 
     def test_update_links(self, vuln):
         links = ["https://example.com/cve"]
-        vuln.update(links=links)
+        vuln.update_record(links=links)
         assert vuln.links == links
 
     def test_delete(self, app):
-        v = VulnerabilityRecord.create("CVE-2024-DEL")
-        v.delete()
-        assert VulnerabilityRecord.get_by_id("CVE-2024-DEL") is None
+        v = Vulnerability.create_record("CVE-2024-DEL")
+        v.delete_record()
+        assert Vulnerability.get_by_id("CVE-2024-DEL") is None
 
     def test_repr(self, vuln):
         assert "CVE-2024-1234" in repr(vuln)
@@ -332,71 +332,71 @@ class TestMetricsModel:
 
 
 # ===========================================================================
-# VulnerabilityDBController
+# VulnerabilitiesController (DB helpers)
 # ===========================================================================
 
-class TestVulnerabilityDBController:
+class TestVulnerabilitiesControllerDB:
     def test_serialize(self, vuln):
-        data = VulnerabilityDBController.serialize(vuln)
+        data = VulnerabilitiesController.serialize(vuln)
         assert data["id"] == "CVE-2024-1234"
         assert "description" in data
         assert "epss_score" in data
 
     def test_serialize_list(self, vuln):
-        lst = VulnerabilityDBController.serialize_list([vuln])
+        lst = VulnerabilitiesController.serialize_list([vuln])
         assert len(lst) == 1
 
     def test_get(self, vuln):
-        assert VulnerabilityDBController.get(vuln.id).id == vuln.id
+        assert VulnerabilitiesController.get_db(vuln.id).id == vuln.id
 
     def test_get_all(self, vuln):
-        assert len(VulnerabilityDBController.get_all()) >= 1
+        assert len(VulnerabilitiesController.get_all_db()) >= 1
 
     def test_create(self, app):
-        v = VulnerabilityDBController.create("CVE-2025-0001", description="new")
+        v = VulnerabilitiesController.create_db("CVE-2025-0001", description="new")
         assert v.id == "CVE-2025-0001"
 
     def test_create_empty_raises(self, app):
         with pytest.raises(ValueError):
-            VulnerabilityDBController.create("  ")
+            VulnerabilitiesController.create_db("  ")
 
     def test_create_with_date_string(self, app):
-        v = VulnerabilityDBController.create("CVE-2025-0002", publish_date="2025-01-01")
+        v = VulnerabilitiesController.create_db("CVE-2025-0002", publish_date="2025-01-01")
         assert v.publish_date == datetime.date(2025, 1, 1)
 
     def test_get_or_create(self, vuln):
-        v2 = VulnerabilityDBController.get_or_create(vuln.id)
+        v2 = VulnerabilitiesController.get_or_create_db(vuln.id)
         assert v2.id == vuln.id
 
     def test_get_or_create_empty_raises(self, app):
         with pytest.raises(ValueError):
-            VulnerabilityDBController.get_or_create("")
+            VulnerabilitiesController.get_or_create_db("")
 
     def test_update_by_instance(self, vuln):
-        VulnerabilityDBController.update(vuln, status="fixed")
+        VulnerabilitiesController.update_db(vuln, status="fixed")
         assert vuln.status == "fixed"
 
     def test_update_by_id_string(self, vuln):
-        VulnerabilityDBController.update(vuln.id, description="updated desc")
+        VulnerabilitiesController.update_db(vuln.id, description="updated desc")
         assert vuln.description == "updated desc"
 
     def test_update_not_found_raises(self, app):
         with pytest.raises(ValueError):
-            VulnerabilityDBController.update("CVE-9999-XXXX")
+            VulnerabilitiesController.update_db("CVE-9999-XXXX")
 
     def test_delete_by_instance(self, app):
-        v = VulnerabilityDBController.create("CVE-2025-DEL")
-        VulnerabilityDBController.delete(v)
-        assert VulnerabilityDBController.get("CVE-2025-DEL") is None
+        v = VulnerabilitiesController.create_db("CVE-2025-DEL")
+        VulnerabilitiesController.delete_db(v)
+        assert VulnerabilitiesController.get_db("CVE-2025-DEL") is None
 
     def test_delete_by_id_string(self, app):
-        v = VulnerabilityDBController.create("CVE-2025-DEL2")
-        VulnerabilityDBController.delete(v.id)
-        assert VulnerabilityDBController.get("CVE-2025-DEL2") is None
+        v = VulnerabilitiesController.create_db("CVE-2025-DEL2")
+        VulnerabilitiesController.delete_db(v.id)
+        assert VulnerabilitiesController.get_db("CVE-2025-DEL2") is None
 
     def test_delete_not_found_raises(self, app):
         with pytest.raises(ValueError):
-            VulnerabilityDBController.delete("CVE-NOTEXIST")
+            VulnerabilitiesController.delete_db("CVE-NOTEXIST")
 
 
 # ===========================================================================
