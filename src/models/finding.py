@@ -4,12 +4,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+from sqlalchemy.orm import Mapped, relationship
 from ..extensions import db, Base
+
+if TYPE_CHECKING:
+    from .time_estimate import TimeEstimate  # noqa: F811
 
 
 class Finding(Base):
-    """Links a :class:`Package` to a :class:`VulnerabilityRecord`."""
+    """Links a :class:`Package` to a :class:`Vulnerability`."""
 
     __tablename__ = "findings"
 
@@ -22,10 +26,11 @@ class Finding(Base):
     )
 
     package = db.relationship("Package")
-    vulnerability = db.relationship("VulnerabilityRecord", back_populates="findings")
+    vulnerability = db.relationship("Vulnerability", back_populates="findings")
     observations = db.relationship("Observation", back_populates="finding", cascade="all, delete-orphan")
     assessments = db.relationship("Assessment", back_populates="finding", cascade="all, delete-orphan")
-    time_estimates = db.relationship("TimeEstimate", back_populates="finding", cascade="all, delete-orphan")
+    time_estimate: Mapped[Optional["TimeEstimate"]] = relationship(
+        "TimeEstimate", back_populates="finding", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return (
@@ -53,9 +58,9 @@ class Finding(Base):
                 pass
             # Fall back to "name@version" lookup
             from .package import Package
-            pkg = Package.get_by_id(package_id)
+            pkg = Package.get_by_string_id(package_id)
             if pkg is not None:
-                return pkg.pk
+                return pkg.id
             raise ValueError(f"Cannot resolve package_id {package_id!r}: no matching package found")
         raise TypeError(f"Expected UUID or str, got {type(package_id)!r}")
 

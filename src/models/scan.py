@@ -25,6 +25,7 @@ class Scan(Base):
 
     variant = db.relationship("Variant", back_populates="scans")
     sbom_documents = db.relationship("SBOMDocument", back_populates="scan", cascade="all, delete-orphan")
+    observations = db.relationship("Observation", back_populates="scan", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Scan id={self.id} timestamp={self.timestamp}>"

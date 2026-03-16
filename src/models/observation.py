@@ -14,8 +14,8 @@ class Observation(Base):
     __tablename__ = "observations"
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True)
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=True)
+    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False)
+    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False)
 
     scan = db.relationship("Scan", back_populates="observations")
     finding = db.relationship("Finding", back_populates="observations")
@@ -29,8 +29,8 @@ class Observation(Base):
 
     @staticmethod
     def create(
-        finding_id: Optional[uuid.UUID | str],
-        scan_id: Optional[uuid.UUID | str],
+        finding_id: uuid.UUID | str,
+        scan_id: uuid.UUID | str,
     ) -> "Observation":
         """Create a new observation, persist it and return it."""
         if isinstance(finding_id, str):
