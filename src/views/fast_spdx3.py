@@ -8,7 +8,7 @@ import logging
 import re
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability, CVSS
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.packages import PackagesController
 from ..controllers.assessments import AssessmentsController
@@ -113,7 +113,7 @@ class FastSPDX3:
             # Store mapping from URI to package ID
             spdx_id = component.get('spdxId')
             if spdx_id:
-                self.uri_to_package[spdx_id] = package.id
+                self.uri_to_package[spdx_id] = package.string_id
 
             self.packagesCtrl.add(package)
 
@@ -424,7 +424,7 @@ class FastSPDX3:
             if assessment:
                 self.assessmentsCtrl.add(assessment)
 
-    def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[VulnAssessment]:
+    def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[Assessment]:
         """
         Extract relevant information from VulnAssessmentRelationship element.
         """
@@ -446,7 +446,7 @@ class FastSPDX3:
             self.logger.warning(f"Package URI {package_uri} not found in package mapping for assessment")
             return None
 
-        assessment = VulnAssessment(vuln_id, [package_id])
+        assessment = Assessment.new_dto(vuln_id, [package_id])
 
         # Set status based on relationship type
         relationship_type = element.get('relationshipType', '')

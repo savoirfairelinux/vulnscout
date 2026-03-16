@@ -3,86 +3,90 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from flask import request
-import json
-from ..controllers.packages import PackagesController
-from ..controllers.vulnerabilities import VulnerabilitiesController
-from ..views.time_estimates import TimeEstimates
+from ..models.vulnerability import Vulnerability
+from ..models.metrics import Metrics
 from ..models.cvss import CVSS
+from ..models.iso8601_duration import Iso8601Duration
 
-VULNS_FILE = "/scan/tmp/vulnerabilities-merged.json"
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+
+
+def _parse_effort_hours(value) -> int:
+    """Parse an effort value (ISO 8601 duration string or integer hours) to whole hours."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(Iso8601Duration(value).total_seconds // 3600)
+    raise ValueError(f"Invalid effort value: {value!r}")
 
 
 def init_app(app):
 
-    if "VULNS_FILE" not in app.config:
-        app.config["VULNS_FILE"] = VULNS_FILE
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
 
     @app.route('/api/vulnerabilities')
     def index_vulns():
-        with open(app.config["VULNS_FILE"], "r") as f:
-            vulnsCtrl = VulnerabilitiesController.from_dict(PackagesController(), json.loads(f.read()))
-
-            if request.args.get('format', 'list') == "dict":
-                return vulnsCtrl.to_dict()
-            return list(vulnsCtrl.to_dict().values())
+        records = Vulnerability.get_all()
+        vulns = [r.to_dict() for r in records]
+        if request.args.get('format', 'list') == "dict":
+            return {v["id"]: v for v in vulns}
+        return vulns
 
     @app.route('/api/vulnerabilities/<id>', methods=['GET', 'PATCH'])
     def update_vuln(id):
-        with open(app.config["VULNS_FILE"], "r") as f:
-            vulnsCtrl = VulnerabilitiesController.from_dict(PackagesController(), json.loads(f.read()))
+        record = Vulnerability.get_by_id(id)
+        if not record:
+            return "Not found", 404
 
-        vuln = vulnsCtrl.get(id)
-        if vuln:
-            if request.method == 'PATCH':
-                payload_data = request.get_json()
+        if request.method == 'PATCH':
+            payload_data = request.get_json()
 
-                if "effort" in payload_data:
-                    if not ("optimistic" in payload_data["effort"]
-                       and "likely" in payload_data["effort"]
-                       and "pessimistic" in payload_data["effort"]):
-                        return "Invalid effort values", 400
+            if "effort" in payload_data:
+                # Store effort on the first finding's time-estimate
+                eff = payload_data["effort"]
+                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
+                    return "Invalid effort values", 400
+                try:
+                    opt = _parse_effort_hours(eff["optimistic"])
+                    lik = _parse_effort_hours(eff["likely"])
+                    pes = _parse_effort_hours(eff["pessimistic"])
+                except (ValueError, TypeError):
+                    return "Invalid effort values", 400
+                if not (opt <= lik <= pes):
+                    return "Invalid effort values", 400
+                try:
+                    from ..models.time_estimate import TimeEstimate
+                    for finding in (record.findings or []):
+                        existing = finding.time_estimate
+                        if existing is not None:
+                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
+                        else:
+                            TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
+                        break
+                except Exception:
+                    pass
 
-                    if not vuln.set_effort(
-                        payload_data["effort"]["optimistic"],
-                        payload_data["effort"]["likely"],
-                        payload_data["effort"]["pessimistic"]
-                    ):
-                        return "Invalid effort values", 400
+            if "cvss" in payload_data:
+                new_cvss = payload_data["cvss"]
+                required_keys = {"base_score", "vector_string", "version"}
+                if not required_keys.issubset(new_cvss.keys()):
+                    return "Invalid CVSS data", 400
+                cvss_obj = CVSS.from_dict(new_cvss)
+                try:
+                    Metrics.from_cvss(cvss_obj, record.id)
+                except Exception:
+                    pass
 
-                if "cvss" in payload_data:
-                    new_cvss = payload_data["cvss"]
-                    required_keys = {"base_score", "vector_string", "version"}
-                    if not required_keys.issubset(new_cvss.keys()):
-                        return "Invalid CVSS data", 400
-
-                    cvss_obj = CVSS.from_dict(new_cvss)
-                    vuln.register_cvss(cvss_obj)
-
-                with open(app.config["VULNS_FILE"], "w") as f:
-                    f.write(json.dumps(vulnsCtrl.to_dict()))
-                with open(app.config["TIME_ESTIMATES_PATH"], "w") as f:
-                    f.write(json.dumps(TimeEstimates({
-                        "packages": None,
-                        "vulnerabilities": vulnsCtrl,
-                        "assessments": None
-                    }).to_dict(), indent=2))
-
-            return vuln.to_dict()
-        return "Not found", 404
+        return record.to_dict()
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
     def update_vulns_batch():
         payload_data = request.get_json()
         if (not payload_data
-            or "vulnerabilities" not in payload_data
+                or "vulnerabilities" not in payload_data
                 or not isinstance(payload_data["vulnerabilities"], list)):
             return {"error": "Invalid request data. Expected: {vulnerabilities: [...]}"}, 400
-
-        with open(app.config["VULNS_FILE"], "r") as f:
-            vulnsCtrl = VulnerabilitiesController.from_dict(PackagesController(), json.loads(f.read()))
 
         results = []
         errors = []
@@ -92,25 +96,37 @@ def init_app(app):
                 errors.append({"error": "Invalid vulnerability data", "item": item})
                 continue
 
-            vuln = vulnsCtrl.get(item["id"])
-            if not vuln:
+            record = Vulnerability.get_by_id(item["id"])
+            if not record:
                 errors.append({"id": item["id"], "error": "Vulnerability not found"})
                 continue
 
             if "effort" in item:
-                if not ("optimistic" in item["effort"]
-                   and "likely" in item["effort"]
-                   and "pessimistic" in item["effort"]):
+                eff = item["effort"]
+                if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
                     errors.append({"id": item["id"], "error": "Invalid effort values"})
                     continue
-
-                if not vuln.set_effort(
-                    item["effort"]["optimistic"],
-                    item["effort"]["likely"],
-                    item["effort"]["pessimistic"]
-                ):
+                try:
+                    opt = _parse_effort_hours(eff["optimistic"])
+                    lik = _parse_effort_hours(eff["likely"])
+                    pes = _parse_effort_hours(eff["pessimistic"])
+                except (ValueError, TypeError):
                     errors.append({"id": item["id"], "error": "Invalid effort values"})
                     continue
+                if not (opt <= lik <= pes):
+                    errors.append({"id": item["id"], "error": "Invalid effort values"})
+                    continue
+                try:
+                    from ..models.time_estimate import TimeEstimate
+                    for finding in (record.findings or []):
+                        existing = finding.time_estimate
+                        if existing is not None:
+                            existing.update(optimistic=opt, likely=lik, pessimistic=pes)
+                        else:
+                            TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
+                        break
+                except Exception:
+                    pass
 
             if "cvss" in item:
                 new_cvss = item["cvss"]
@@ -118,30 +134,20 @@ def init_app(app):
                 if not required_keys.issubset(new_cvss.keys()):
                     errors.append({"id": item["id"], "error": "Invalid CVSS data"})
                     continue
-
                 cvss_obj = CVSS.from_dict(new_cvss)
-                vuln.register_cvss(cvss_obj)
+                try:
+                    Metrics.from_cvss(cvss_obj, record.id)
+                except Exception:
+                    pass
 
-            results.append(vuln.to_dict())
-
-        if results:
-            with open(app.config["VULNS_FILE"], "w") as f:
-                f.write(json.dumps(vulnsCtrl.to_dict()))
-            with open(app.config["TIME_ESTIMATES_PATH"], "w") as f:
-                f.write(json.dumps(TimeEstimates({
-                    "packages": None,
-                    "vulnerabilities": vulnsCtrl,
-                    "assessments": None
-                }).to_dict(), indent=2))
+            results.append(record.to_dict())
 
         response = {
             "status": "success" if results else "error",
             "vulnerabilities": results,
             "count": len(results)
         }
-
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
-
         return response, 200 if results else 400

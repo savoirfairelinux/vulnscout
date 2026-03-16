@@ -11,7 +11,7 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..extensions import db, migrate
 from ..routes import init_app
 from .. import models  # noqa: F401
-from .init_app import init_app as init_merger_cli
+from .merger_ci import init_app as init_merger_cli
 import sys
 import os
 from datetime import datetime, timezone

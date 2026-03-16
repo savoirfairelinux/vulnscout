@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-# This python job is to aggregate packages, vulnerabilities and assessments from
-# sources files, aggregate them, enrich them with VEX info and output them to files.
-# Outputs files will be used by web API later. (see scan.sh)
+# This python job aggregates packages, vulnerabilities and assessments from
+# source files, enriches them with VEX info and persists everything to the
+# database.  Output SBOM files are still generated for downstream consumption
+# but packages / vulnerabilities / assessments are no longer written to
+# intermediate JSON files — the DB is the single source of truth.
 #
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
@@ -22,13 +24,21 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..controllers.conditions_parser import ConditionParser
-from ..models.assessment import VulnAssessment
+from ..controllers.projects import ProjectController
+from ..controllers.variants import VariantController
+from ..controllers.scans import ScanController
+from ..controllers.sbom_documents import SBOMDocumentController
+from ..models.assessment import Assessment
 from ..helpers.verbose import verbose
+import click
 import glob
 import json
 import os
 from datetime import date, datetime, timezone
 from typing import Any
+from flask.cli import with_appcontext
+
+DEFAULT_VARIANT_NAME = "default"
 
 CDX_PATH = "/scan/tmp/merged.cdx.json"
 OPENVEX_PATH = "/scan/tmp/merged.openvex.json"
@@ -39,10 +49,6 @@ YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
 LOCAL_USER_DATABASE_PATH = "/scan/outputs/openvex.json"
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
-OUTPUT_PATH = "/scan/tmp/vulns-merged.json"
-OUTPUT_PKG_PATH = "/scan/tmp/packages-merged.json"
-OUTPUT_VULN_PATH = "/scan/tmp/vulnerabilities-merged.json"
-OUTPUT_ASSESSEMENT_PATH = "/scan/tmp/assessments-merged.json"
 OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
@@ -58,7 +64,7 @@ def is_items_only_openvex(scanners: list[str]) -> bool:
 
 def expire_vuln(vuln_id, packages):
     """Expire a vulnerability."""
-    expired = VulnAssessment(vuln_id, packages)
+    expired = Assessment.new_dto(vuln_id, packages)
     expired.set_status("not_affected")
     expired.set_justification("component_not_present")
     expired.set_not_affected_reason("Vulnerable component removed, marking as expired")
@@ -68,7 +74,7 @@ def expire_vuln(vuln_id, packages):
 
 def revert_expiration_vuln(vuln_id, packages, previous_assessment):
     """Expire a vulnerability."""
-    state = VulnAssessment(vuln_id, packages)
+    state = Assessment.new_dto(vuln_id, packages)
     if previous_assessment is None:
         state.set_status("under_investigation")
         state.set_status_notes("Vulnerability was expired but is found again by scanners, setting it in default state")
@@ -138,9 +144,21 @@ def evaluate_condition(controllers, condition):
             "pending": True,
             "new": True
         }
+
+        def _ts_key(ts):
+            """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
+            if ts is None:
+                return ""
+            if isinstance(ts, str):
+                return ts
+            try:
+                return ts.isoformat()
+            except Exception:
+                return str(ts)
+
         last_assessment = None
         for assessment in controllers["assessments"].gets_by_vuln(vuln_id):
-            if last_assessment is None or last_assessment.timestamp < assessment.timestamp:
+            if last_assessment is None or _ts_key(last_assessment.timestamp) < _ts_key(assessment.timestamp):
                 last_assessment = assessment
         if last_assessment:
             data["fixed"] = last_assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
@@ -281,20 +299,6 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
     if not fail_condition:
         spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
         spdx3 = SPDX3(controllers)
-        output = {
-            "packages": controllers["packages"].to_dict(),
-            "vulnerabilities": controllers["vulnerabilities"].to_dict(),
-            "assessments": controllers["assessments"].to_dict()
-        }
-        verbose("merger_ci: Exporting custom-format packages, vulns and assessments")
-        with open(os.getenv("OUTPUT_PATH", OUTPUT_PATH), "w") as f:
-            f.write(json.dumps(output))
-        with open(os.getenv("OUTPUT_PKG_PATH", OUTPUT_PKG_PATH), "w") as f:
-            f.write(json.dumps(output["packages"]))
-        with open(os.getenv("OUTPUT_VULN_PATH", OUTPUT_VULN_PATH), "w") as f:
-            f.write(json.dumps(output["vulnerabilities"]))
-        with open(os.getenv("OUTPUT_ASSESSEMENT_PATH", OUTPUT_ASSESSEMENT_PATH), "w") as f:
-            f.write(json.dumps(output["assessments"]))
 
         verbose(f"merger_ci: Exporting {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
         with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "w") as f:
@@ -315,6 +319,9 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
         verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
         with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
             f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
+
+        # packages / vulnerabilities / assessments are now served from the DB;
+        # no intermediate JSON files are written for those.
 
         if "match_condition.adoc" in list_docs:
             list_docs.remove("match_condition.adoc")
@@ -345,7 +352,40 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
             print(f"Warning: failed to generate document from {doc}: {e}")
 
 
-def main():
+@click.command("merge")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", default=None,
+              help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.argument("sbom_inputs", nargs=-1, type=click.Path(exists=True))
+@with_appcontext
+def create_project_context(project: str, variant: str | None, sbom_inputs: tuple) -> None:
+    """Merge SBOM inputs into the database under a named project/variant scan.
+
+    SBOM_INPUTS is one or more paths to SBOM files.
+    When no variant is given, inputs go into a scan under the 'default' variant.
+    """
+    variant_name = variant or DEFAULT_VARIANT_NAME
+
+    project_obj = ProjectController.get_or_create(project)
+    variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
+    scan = ScanController.create("default", variant_obj.id)
+    click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id}")
+
+    for sbom_file in sbom_inputs:
+        abs_path = os.path.abspath(sbom_file)
+        SBOMDocumentController.create(abs_path, os.path.basename(sbom_file), scan.id)
+        click.echo(f"  + {sbom_file}")
+
+
+@click.command("process")
+@with_appcontext
+def process_command() -> None:
+    """Parse all SBOM inputs, persist results to the DB and generate output files."""
+    _run_main()
+
+
+def _run_main() -> dict:
+    """Core processing logic (usable both from the CLI command and directly)."""
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
@@ -374,7 +414,25 @@ def main():
     verbose("merger_ci: Finished exporting results")
 
     if len(failed_vulns) > 0:
-        exit(2)
+        raise SystemExit(2)
+
+    return controllers
+
+
+def init_app(app) -> None:
+    """Register the ``flask merge`` and ``flask process`` commands with *app*."""
+    app.cli.add_command(create_project_context)
+    app.cli.add_command(process_command)
+
+
+def main() -> dict:
+    """Entry-point for direct invocation (``python -m src.bin.merger_ci``).
+
+    Returns the controllers dict so callers can inspect in-memory state.
+    Prefer running via ``flask --app bin.webapp process`` in production so that
+    the DB session is properly initialised.
+    """
+    return _run_main()
 
 
 if __name__ == "__main__":

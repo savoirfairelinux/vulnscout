@@ -59,7 +59,8 @@ show_help() {
   echo "  --db-uri <uri>    Custom SQLAlchemy database URI (default: sqlite in cache folder)"
   echo "  --skip-grype-scan Skip the Grype scan which can detect new vulnerabilities"
   echo "  --help, -h        Show this help message and exit"
-  echo "  --dev             Use the development version of VulnScout"
+  echo "  --build           Build the Docker image locally (requires --dev)
+  --dev             Use the development version of VulnScout"
   echo "  -d, --detach      Run VulnScout in detached mode"
   echo "  --stop            Stop running VulnScout container"
 }
@@ -132,6 +133,7 @@ VULNSCOUT_CVE_EXCLUDE_PATCHED="false"
 VULNSCOUT_SKIP_GRYPE_SCAN="false"
 VULNSCOUT_DETACH_MODE="false"
 VULNSCOUT_STOP_MODE="false"
+VULNSCOUT_BUILD_LOCAL="false"
 VULNSCOUT_DB_URI=""
 COMPOSE_PROVIDER=""
 YAML_REQUIRES_UPDATE="false"
@@ -289,6 +291,10 @@ while [[ $# -gt 0 ]]; do
       VULNSCOUT_IGNORE_PARSING_ERRORS="true"
       shift
       ;;
+    --build)
+      VULNSCOUT_BUILD_LOCAL="true"
+      shift
+      ;;
     --dev)
       VULNSCOUT_DEV_MODE="true"
       shift
@@ -379,6 +385,7 @@ EOF
     fi
     if [ "$VULNSCOUT_DEV_MODE" = "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
+        echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/migrations:/scan/src/migrations:Z" >> "$YAML_FILE"
     fi
     echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
     echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout:Z" >> "$YAML_FILE"
@@ -526,8 +533,13 @@ start_vulnscout(){
         CONTAINER_ENGINE="docker"
     fi
 
-    # Update the container image if necessary
-    $CONTAINER_ENGINE pull $CONTAINER_IMAGE
+    # Build or pull the container image
+    if [ "$VULNSCOUT_BUILD_LOCAL" = "true" ]; then
+        echo "Building Docker image locally from $SCRIPT_DIR ..."
+        $CONTAINER_ENGINE build -t "$CONTAINER_IMAGE" "$SCRIPT_DIR"
+    else
+        $CONTAINER_ENGINE pull $CONTAINER_IMAGE
+    fi
 
     # Close any existing container processes
     $CONTAINER_ENGINE rm -f vulnscout 2>/dev/null || true
@@ -565,6 +577,11 @@ start_vulnscout(){
     fi
 
 }
+
+if [ "$VULNSCOUT_BUILD_LOCAL" = "true" ] && [ "$VULNSCOUT_DEV_MODE" != "true" ]; then
+    echo "Error: --build requires --dev mode."
+    exit 1
+fi
 
 check_compose_provider_command
 

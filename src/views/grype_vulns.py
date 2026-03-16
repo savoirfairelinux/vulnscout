@@ -5,7 +5,7 @@
 
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
 from ..models.cvss import CVSS
 from typing import Optional
 
@@ -36,7 +36,7 @@ class GrypeVulns:
             package.generate_generic_purl()
 
             self.packagesCtrl.add(package)
-            return package.id
+            return package.string_id
         return None
 
     def parse_match_details(self, match_details: list) -> list[str]:
@@ -67,7 +67,7 @@ class GrypeVulns:
                     package.generate_generic_purl()
 
                     self.packagesCtrl.add(package)
-                    packages.append(package.id)
+                    packages.append(package.string_id)
         return packages
 
     def parse_vulnerability_section(self, vulnerability: dict) -> Vulnerability:
@@ -128,5 +128,5 @@ class GrypeVulns:
 
             assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, packages[0])
             if len(assessment) < 1:
-                assessment = VulnAssessment(vuln_data.id, packages)
+                assessment = Assessment.new_dto(vuln_data.id, packages)
                 self.assessmentsCtrl.add(assessment)

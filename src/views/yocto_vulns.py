@@ -6,7 +6,7 @@
 import os
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
 from ..models.cvss import CVSS
 
 
@@ -74,12 +74,12 @@ class YoctoVulns:
                     )
                     vuln.register_cvss(cvss_item)
 
-                vuln.add_package(package.id)
+                vuln.add_package(package.string_id)
                 vuln = self.vulnerabilitiesCtrl.add(vuln)
 
                 if "status" not in issue:
                     continue
-                assessments = self.assessmentsCtrl.gets_by_vuln_pkg(vuln.id, package.id)
+                assessments = self.assessmentsCtrl.gets_by_vuln_pkg(vuln.id, package.string_id)
 
                 found_corresponding_assessment = False
                 for assessment in assessments:
@@ -105,7 +105,7 @@ class YoctoVulns:
                 if found_corresponding_assessment:
                     continue
 
-                assessment = VulnAssessment(vuln.id, [package.id])
+                assessment = Assessment.new_dto(vuln.id, [package.string_id])
 
                 if issue["status"] == "Patched":
                     if skip_patched:
