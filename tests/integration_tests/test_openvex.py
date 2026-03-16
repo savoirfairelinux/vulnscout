@@ -7,7 +7,7 @@ import pytest
 from src.views.openvex import OpenVex
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
-from src.models.assessment import VulnAssessment
+from src.models.assessment import Assessment
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
@@ -39,7 +39,7 @@ def vuln_123():
 
 @pytest.fixture
 def assesment_123(pkg_ABC, vuln_123):
-    assess = VulnAssessment(vuln_123.id, [pkg_ABC])
+    assess = Assessment.new_dto(vuln_123.id, [pkg_ABC])
     assess.set_status("in_triage")
     return assess
 

@@ -42,36 +42,24 @@ def test_running_script(init_files):
     for key, value in init_files.items():
         os.environ[key] = str(value)
 
-    main()
+    ctrls = main()
 
-    out_all = json.loads(init_files["OUTPUT_PATH"].read_text())
-    out_pkg = json.loads(init_files["OUTPUT_PKG_PATH"].read_text())
-    out_vuln = json.loads(init_files["OUTPUT_VULN_PATH"].read_text())
-    out_assessment = json.loads(init_files["OUTPUT_ASSESSEMENT_PATH"].read_text())
+    out_pkg = ctrls["packages"].to_dict()
+    out_vuln = ctrls["vulnerabilities"].to_dict()
+    out_assessment = ctrls["assessments"].to_dict()
 
     assert "cairo@1.16.0" in out_pkg
-    assert "cairo@1.16.0" in out_all["packages"]
     assert "busybox@1.35.0" in out_pkg
-    assert "busybox@1.35.0" in out_all["packages"]
     assert "c-ares@1.18.1" in out_pkg
-    assert "c-ares@1.18.1" in out_all["packages"]
     assert "curl@7.82.0" in out_pkg
-    assert "curl@7.82.0" in out_all["packages"]
     assert "xyz@rev2.3" in out_pkg
-    assert "xyz@rev2.3" in out_all["packages"]
     assert "linux@6.8.0-40-generic" in out_pkg
-    assert "linux@6.8.0-40-generic" in out_all["packages"]
 
     assert "CVE-2020-35492" in out_vuln
-    assert "CVE-2020-35492" in out_all["vulnerabilities"]
     assert "CVE-2022-30065" in out_vuln
-    assert "CVE-2022-30065" in out_all["vulnerabilities"]
     assert "CVE-2007-3152" in out_vuln
-    assert "CVE-2007-3152" in out_all["vulnerabilities"]
     assert "CVE-2023-31124" in out_vuln
-    assert "CVE-2023-31124" in out_all["vulnerabilities"]
     assert "CVE-2024-2398" in out_vuln
-    assert "CVE-2024-2398" in out_all["vulnerabilities"]
 
     vuln2398 = out_vuln["CVE-2024-2398"]
     assert vuln2398["effort"]["optimistic"] == "P1D"
@@ -79,7 +67,6 @@ def test_running_script(init_files):
     assert vuln2398["effort"]["pessimistic"] == "P1W"
 
     assert len(out_assessment) == 6
-    assert len(out_all["assessments"]) == len(out_assessment)
 
 
 def test_invalid_openvex(init_files):
@@ -224,9 +211,9 @@ def test_expiration_vulnerabilities(init_files):
         ]
     }""")
 
-    main()
+    ctrls = main()
 
-    out_assessment = json.loads(init_files["OUTPUT_ASSESSEMENT_PATH"].read_text())
+    out_assessment = ctrls["assessments"].to_dict()
     found_expiration = False
 
     for assess_id, assessment in out_assessment.items():

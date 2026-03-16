@@ -301,7 +301,7 @@ def test_skip_patched_prior_fixed_assessment_skips(yocto_parser, monkeypatch):
     (but not stamped by Yocto, so deduplication doesn't catch it), no new assessment
     must be created.
     """
-    from src.models.assessment import VulnAssessment
+    from src.models.assessment import Assessment
     from src.models.package import Package
     from src.models.vulnerability import Vulnerability
 
@@ -311,10 +311,10 @@ def test_skip_patched_prior_fixed_assessment_skips(yocto_parser, monkeypatch):
     yocto_parser.packagesCtrl.add(pkg)
 
     vuln = Vulnerability("CVE-2007-3152", ["other-scanner"], "", "unknown")
-    vuln.add_package(pkg.id)
+    vuln.add_package(pkg.string_id)
     vuln = yocto_parser.vulnerabilitiesCtrl.add(vuln)
 
-    prior_assessment = VulnAssessment(vuln.id, [pkg.id])
+    prior_assessment = Assessment.new_dto(vuln.id, [pkg.string_id])
     prior_assessment.set_status("fixed")
     prior_assessment.set_not_affected_reason("Fixed by upstream patch")
     yocto_parser.assessmentsCtrl.add(prior_assessment)

@@ -44,7 +44,7 @@ def test_create_package(generic_pkg):
     WHEN the Package is created
     THEN check the Package id, cpe and purl is correct
     """
-    assert generic_pkg.id == "mypackage@1.0.0"
+    assert generic_pkg.string_id == "mypackage@1.0.0"
     assert generic_pkg.cpe[0] == "cpe:2.3:*:*:mypackage:1.0.0:*:*:*:*:*:*:*"
     assert generic_pkg.purl[0] == "pkg:generic/mypackage@1.0.0"
 
@@ -106,7 +106,7 @@ def test_export_import_package(cairo_pkg):
     """
     cairo_bis = Package.from_dict(cairo_pkg.to_dict())
     assert cairo_pkg == cairo_bis
-    assert cairo_pkg.id == cairo_bis.id
+    assert cairo_pkg.string_id == cairo_bis.string_id
     assert cairo_pkg.name == cairo_bis.name
     assert cairo_pkg.version == cairo_bis.version
     assert len(cairo_pkg.cpe) == len(cairo_bis.cpe)
@@ -133,7 +133,7 @@ def test_merge_same_package():
     pkg2 = Package("demo", "1.0.0", ["cpe:2.3:*:B-corp:demo:1.0.0:*:*:*:*:*:*:*"], ["pkg:B-corp/demo@1.0.0"])
     assert pkg1.merge(pkg2)
     assert pkg1 == pkg2
-    assert pkg1.id == pkg2.id
+    assert pkg1.string_id == pkg2.string_id
     assert len(pkg1.cpe) == 2
     assert len(pkg1.purl) == 2
 
@@ -165,7 +165,7 @@ def test_contains(cairo_pkg, generic_pkg):
     assert "cpe:2.3:a:cairographics:cairo:1.16.0:*:*:*:*:*:*:*" in cairo_pkg
     assert "pkg:deb/debian/cairo@1.16.0" in cairo_pkg
 
-    assert generic_pkg.id not in cairo_pkg
+    assert generic_pkg.string_id not in cairo_pkg
     assert generic_pkg not in cairo_pkg
     assert generic_pkg.cpe[0] not in cairo_pkg
     assert generic_pkg.purl[0] not in cairo_pkg

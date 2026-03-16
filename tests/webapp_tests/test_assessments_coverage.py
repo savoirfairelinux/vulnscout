@@ -6,7 +6,7 @@
 import pytest
 import json
 from src.bin.webapp import create_app
-from . import write_demo_files
+from . import write_demo_files, setup_demo_db
 
 
 @pytest.fixture()
@@ -29,13 +29,11 @@ def app(init_files):
     app.config.update({
         "TESTING": True,
         "SCAN_FILE": init_files["status"],
-        "PKG_FILE": init_files["packages"],
-        "VULNS_FILE": init_files["vulnerabilities"],
-        "ASSESSMENTS_FILE": init_files["assessments"],
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "OPENVEX_FILE": init_files["openvex"],
-        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
         "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
     })
+    setup_demo_db(app)
 
     yield app
 
