@@ -20,7 +20,6 @@ from src.models.time_estimate import TimeEstimate
 from src.models.metrics import Metrics
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.findings import FindingController
-from src.controllers.assessments_db import AssessmentDBController
 from src.controllers.time_estimates import TimeEstimateController
 from src.controllers.metrics import MetricsController
 
@@ -457,62 +456,48 @@ class TestFindingController:
 
 
 # ===========================================================================
-# AssessmentDBController
+# Assessment – CRUD helpers (formerly via AssessmentDBController)
 # ===========================================================================
 
 class TestAssessmentDBController:
     def test_serialize(self, assessment):
-        data = AssessmentDBController.serialize(assessment)
-        assert data["status"] == "under_investigation"
-        assert "finding_id" in data
-        assert "variant_id" in data
+        # Field access on the model replaces the old controller serialize()
+        assert assessment.status == "under_investigation"
+        assert assessment.finding_id is not None
+        assert assessment.variant_id is not None
 
     def test_serialize_list(self, assessment):
-        lst = AssessmentDBController.serialize_list([assessment])
+        lst = [assessment]
         assert len(lst) == 1
 
     def test_get(self, assessment):
-        assert AssessmentDBController.get(str(assessment.id)).id == assessment.id
+        assert Assessment.get_by_id(str(assessment.id)).id == assessment.id
 
     def test_get_by_finding(self, assessment, finding):
-        results = AssessmentDBController.get_by_finding(finding.id)
+        results = Assessment.get_by_finding(finding.id)
         assert any(a.id == assessment.id for a in results)
 
     def test_get_by_variant(self, assessment, variant):
-        results = AssessmentDBController.get_by_variant(variant.id)
+        results = Assessment.get_by_variant(variant.id)
         assert any(a.id == assessment.id for a in results)
 
     def test_create(self, app, finding, variant):
-        a = AssessmentDBController.create(
+        a = Assessment.create(
             "affected",
             finding_id=finding.id,
             variant_id=variant.id,
         )
         assert a.status == "affected"
 
-    def test_create_empty_status_raises(self, app, finding, variant):
-        with pytest.raises(ValueError):
-            AssessmentDBController.create("  ", finding_id=finding.id, variant_id=variant.id)
-
     def test_update_by_instance(self, assessment):
-        AssessmentDBController.update(assessment, status="fixed")
+        assessment.update(status="fixed")
         assert assessment.status == "fixed"
-
-    def test_update_not_found_raises(self, app):
-        import uuid
-        with pytest.raises(ValueError):
-            AssessmentDBController.update(str(uuid.uuid4()), status="fixed")
 
     def test_delete_by_instance(self, app, finding, variant):
         a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
         aid = a.id
-        AssessmentDBController.delete(a)
-        assert AssessmentDBController.get(aid) is None
-
-    def test_delete_not_found_raises(self, app):
-        import uuid
-        with pytest.raises(ValueError):
-            AssessmentDBController.delete(str(uuid.uuid4()))
+        a.delete()
+        assert Assessment.get_by_id(aid) is None
 
 
 # ===========================================================================

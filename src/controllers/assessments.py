@@ -4,24 +4,23 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.assessment import Assessment
-from ..models.vulnerability import Vulnerability
 from ..models.package import Package
 from typing import Optional
 
 
 def _persist_assessment_to_db(assessment: Assessment) -> None:
-    """Silently persist an Assessment DTO to the DB."""
+    """Persist an Assessment DTO to the DB via Finding resolution."""
     try:
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
+        from ..extensions import db
 
         for pkg_string_id in (assessment.packages or []):
             db_pkg = Package.get_by_string_id(pkg_string_id)
             if db_pkg is None:
                 continue
-            finding = Finding.get_by_package_and_vulnerability(db_pkg.id, assessment.vuln_id)
-            if finding is None:
-                continue
+            finding = Finding.get_or_create(db_pkg.id, assessment.vuln_id)
+            db.session.commit()
             DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
     except Exception:
         pass
@@ -51,26 +50,55 @@ class AssessmentsController:
         return None
 
     def gets_by_vuln(self, vuln_id) -> list:
-        """Return a list of assessments by vulnerability id (str) or Vulnerability instance."""
-        if isinstance(vuln_id, str):
-            return [a for a in self.assessments.values() if a.vuln_id == vuln_id]
-        if isinstance(vuln_id, Vulnerability):
-            return [a for a in self.assessments.values() if a.vuln_id == vuln_id.id]
-        return []
+        """Return assessments for a vulnerability, querying DB then supplementing with in-memory."""
+        vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
+        results: dict[str, Assessment] = {}
+        # In-memory first (covers partially-parsed data not yet in DB)
+        for a in self.assessments.values():
+            if a.vuln_id == vuln_str:
+                results[str(a.id)] = a
+        # DB fills any gaps (covers routes context where in-memory is empty)
+        try:
+            for a in Assessment.get_by_vulnerability(vuln_str):
+                if str(a.id) not in results:
+                    results[str(a.id)] = a
+        except Exception:
+            pass
+        return list(results.values())
 
     def gets_by_pkg(self, pkg_id) -> list:
-        """Return a list of assessments by package id (str) or Package instance."""
-        if isinstance(pkg_id, str):
-            return [a for a in self.assessments.values() if pkg_id in a.packages]
-        if isinstance(pkg_id, Package):
-            return [a for a in self.assessments.values() if pkg_id.string_id in a.packages]
-        return []
+        """Return assessments for a package, querying DB then supplementing with in-memory."""
+        pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
+        results: dict[str, Assessment] = {}
+        for a in self.assessments.values():
+            if pkg_str in a.packages:
+                results[str(a.id)] = a
+        try:
+            for a in Assessment.get_by_package(pkg_str):
+                if str(a.id) not in results:
+                    results[str(a.id)] = a
+        except Exception:
+            pass
+        return list(results.values())
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
-        """Return a list of assessments by vulnerability id (str) and package id (str)."""
+        """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
-        return [a for a in self.assessments.values() if a.vuln_id == vuln_str and pkg_str in a.packages]
+        results: dict[str, Assessment] = {}
+        for a in self.assessments.values():
+            if a.vuln_id == vuln_str and pkg_str in a.packages:
+                results[str(a.id)] = a
+        try:
+            from ..models.finding import Finding
+            finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
+            if finding is not None:
+                for a in Assessment.get_by_finding(finding.id):
+                    if str(a.id) not in results:
+                        results[str(a.id)] = a
+        except Exception:
+            pass
+        return list(results.values())
 
     def add(self, assessment: Assessment):
         """Add an assessment to the list, merging it with an existing one if present, and persist to DB."""

@@ -26,17 +26,11 @@ def init_app(app):
     def _save_openvex():
         """Re-generate and save the OpenVEX file from current DB state."""
         try:
-            from ..models.assessment import Assessment as DBAssessment
             import json
 
             pkgCtrl = PackagesController()
             vulnCtrl = VulnerabilitiesController(pkgCtrl)
             assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-
-            # Populate the in-memory assessment dict from DB for OpenVEX rendering
-            for db_assess in DBAssessment.get_all():
-                va = DBAssessment.from_dict(db_assess.to_dict())
-                assessCtrl.assessments[str(va.id)] = va
 
             ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
             vex = OpenVex(ctrls)
@@ -191,11 +185,7 @@ def init_app(app):
                 mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
 
         if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            wt = payload_data.get("workaround_timestamp")
-            if isinstance(wt, str) and wt:
-                mem_assess.set_workaround(payload_data["workaround"], wt)
-            else:
-                mem_assess.set_workaround(payload_data["workaround"])
+            mem_assess.set_workaround(payload_data["workaround"])
 
         existing.update(
             status=mem_assess.status,
@@ -203,7 +193,6 @@ def init_app(app):
             justification=mem_assess.justification,
             impact_statement=mem_assess.impact_statement,
             workaround=getattr(mem_assess, "workaround", None),
-            workaround_timestamp=mem_assess.workaround_timestamp or None,
             responses=list(mem_assess.responses),
         )
         _save_openvex()
@@ -247,19 +236,13 @@ def payload_to_assessment(data):
         assessment.set_not_affected_reason(data["impact_statement"], False)
 
     if "workaround" in data and isinstance(data["workaround"], str):
-        if "workaround_timestamp" in data and isinstance(data["workaround_timestamp"], str):
-            assessment.set_workaround(data["workaround"], data["workaround_timestamp"])
-        else:
-            assessment.set_workaround(data["workaround"])
+        assessment.set_workaround(data["workaround"])
 
     if "timestamp" in data and isinstance(data["timestamp"], str):
         try:
             assessment.timestamp = datetime.fromisoformat(data["timestamp"])
         except (ValueError, TypeError):
             pass
-    if "last_updated" in data and isinstance(data["last_updated"], str):
-        assessment.last_update = data["last_updated"]
-
     if "responses" in data and isinstance(data["responses"], list):
         for response in data["responses"]:
             assessment.add_response(response)

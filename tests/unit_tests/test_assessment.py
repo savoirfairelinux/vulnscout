@@ -242,8 +242,6 @@ def test_export_import_assessment(assessment_not_affected):
     assert new_assessment.impact_statement == assessment_not_affected.impact_statement
     assert new_assessment.workaround == assessment_not_affected.workaround
     assert new_assessment.timestamp == assessment_not_affected.timestamp
-    assert new_assessment.last_update == assessment_not_affected.last_update
-    assert new_assessment.workaround_timestamp == assessment_not_affected.workaround_timestamp
 
 
 def test_specific_handling_false_positive():

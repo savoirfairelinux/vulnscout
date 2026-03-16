@@ -22,7 +22,7 @@ class YoctoVulns:
             return None
         return max(
             assessments,
-            key=lambda a: a.last_update or a.timestamp
+            key=lambda a: a.timestamp
         )
 
     def load_from_dict(self, data: dict):

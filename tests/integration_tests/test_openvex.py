@@ -177,10 +177,8 @@ def test_parse_statement_details(openvex_parser):
     assert assess.justification == "inline_mitigations_already_exist"
     assert assess.impact_statement == "Color red was removed from image before being sent to cairo"
     assert assess.workaround == "Use product version 7.10+"
-    assert assess.workaround_timestamp == "2023-01-08T18:02:03.647787998-06:00"
     assert assess.status_notes == "This vulnerability was mitigated by the use of a color filter in image-pipeline.c"
     assert assess.timestamp == "2023-01-06T15:05:42.647787998Z"
-    assert assess.last_update == "2023-01-08T18:02:03.647787998Z"
 
 def test_parse_statement_details_not_openvex_source(openvex_parser):
     openvex_parser.load_from_dict(json.loads("""{
@@ -223,10 +221,8 @@ def test_parse_statement_details_not_openvex_source(openvex_parser):
     assert assess.justification == "inline_mitigations_already_exist"
     assert assess.impact_statement == "Color red was removed from image before being sent to cairo"
     assert assess.workaround == "Use product version 7.10+"
-    assert assess.workaround_timestamp == "2023-01-08T18:02:03.647787998-06:00"
     assert assess.status_notes == "This vulnerability was mitigated by the use of a color filter in image-pipeline.c"
     assert assess.timestamp == "2023-01-06T15:05:42.647787998Z"
-    assert assess.last_update == "2023-01-08T18:02:03.647787998Z"
 
 def test_encode_empty(openvex_parser):
     output = openvex_parser.to_dict(False, "MY_AUTHOR_NAME")
@@ -281,5 +277,4 @@ def test_encode_detailled_assessment(openvex_parser, assesment_123):
         "justification": "inline_mitigations_already_exist",
         "impact_statement": "Color red was removed from image before being sent to cairo",
         "action_statement": "Use product version 7.10+",
-        "action_statement_timestamp": "2023-01-08T18:02:03.647787998-06:00"
     }.items() <= statement.items()
