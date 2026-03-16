@@ -5,7 +5,7 @@
 
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
@@ -66,7 +66,7 @@ class OpenVex:
                         if "openvex" not in scanner:
                             vuln.add_found_by(scanner)
 
-                assess = VulnAssessment(vuln.id)
+                assess = Assessment.new_dto(vuln.id)
                 if "products" in statement:
                     for product in statement["products"]:
                         pkg = self.parse_package_section(product)

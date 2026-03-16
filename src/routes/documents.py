@@ -40,23 +40,23 @@ def guess_mime_type(doc_name):
 def init_app(app):
 
     def get_all_datas():
-        controllers = {}
-        with open(app.config["PKG_FILE"], "r") as f:
-            controllers["packages"] = PackagesController.from_dict(
-                json.loads(f.read())
-            )
-        with open(app.config["VULNS_FILE"], "r") as f:
-            controllers["vulnerabilities"] = VulnerabilitiesController.from_dict(
-                controllers["packages"],
-                json.loads(f.read())
-            )
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            controllers["assessments"] = AssessmentsController.from_dict(
-                controllers["packages"],
-                controllers["vulnerabilities"],
-                json.loads(f.read())
-            )
-        return controllers
+        # Controllers are now DB-backed; no JSON file loading required.
+        from ..models.assessment import Assessment as DBAssessment
+        pkgCtrl = PackagesController()
+        vulnCtrl = VulnerabilitiesController(pkgCtrl)
+        assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+        # Populate in-memory assessments dict so gets_by_vuln() works in templates
+        try:
+            for db_assess in DBAssessment.get_all():
+                va = DBAssessment.from_dict(db_assess.to_dict())
+                assessCtrl.assessments[str(va.id)] = va
+        except Exception:
+            pass
+        return {
+            "packages": pkgCtrl,
+            "vulnerabilities": vulnCtrl,
+            "assessments": assessCtrl,
+        }
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs():

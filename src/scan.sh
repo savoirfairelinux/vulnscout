@@ -99,7 +99,7 @@ function main() {
     # 8. Merge all vulnerability from scan results
     set_status "8" "Merging vulnerability results"
 
-    python3 -m src.bin.merger_ci
+    (cd "$BASE_DIR/src" && flask --app bin.webapp process)
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 

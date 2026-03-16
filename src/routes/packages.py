@@ -2,23 +2,15 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from flask import request
-import json
-from ..controllers.packages import PackagesController
-
-PKG_FILE = "/scan/tmp/packages-merged.json"
+from ..models.package import Package
 
 
 def init_app(app):
 
-    if "PKG_FILE" not in app.config:
-        app.config["PKG_FILE"] = PKG_FILE
-
     @app.route('/api/packages')
     def index_pkg():
-        with open(app.config["PKG_FILE"], "r") as f:
-            pkgCtrl = PackagesController.from_dict(json.loads(f.read()))
-
-            if request.args.get('format', 'list') == "dict":
-                return pkgCtrl.to_dict()
-            return list(pkgCtrl.to_dict().values())
+        from flask import request
+        pkgs = [pkg.to_dict() for pkg in Package.get_all()]
+        if request.args.get('format', 'list') == "dict":
+            return {p["name"] + "@" + p["version"]: p for p in pkgs}
+        return pkgs
