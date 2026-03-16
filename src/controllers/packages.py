@@ -18,6 +18,11 @@ class PackagesController:
 
     def __init__(self):
         self._cache: dict[str, Package] = {}
+        self._current_sbom_document_id = None
+
+    def set_sbom_document(self, doc_id) -> None:
+        """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""
+        self._current_sbom_document_id = doc_id
 
     # ------------------------------------------------------------------
     # Core mutators
@@ -36,6 +41,7 @@ class PackagesController:
         # Write-through to DB (silently skip when no DB context)
         try:
             from ..extensions import db
+            from ..models.sbom_package import SBOMPackage
             db_pkg = Package.find_or_create(
                 package.name,
                 package.version,
@@ -46,6 +52,12 @@ class PackagesController:
             db.session.commit()
             # Keep cache in sync with DB object
             self._cache[string_id] = db_pkg
+            # Link to the current SBOM document if one is active
+            if self._current_sbom_document_id is not None:
+                try:
+                    SBOMPackage.get_or_create(self._current_sbom_document_id, db_pkg.id)
+                except Exception:
+                    pass
         except Exception:
             pass
 

@@ -45,6 +45,14 @@ class SBOMDocument(Base):
         return db.session.get(SBOMDocument, document_id)
 
     @staticmethod
+    def get_by_path(path: str) -> Optional["SBOMDocument"]:
+        """Return the most-recently-created SBOM document matching *path*, or ``None``."""
+        results = list(db.session.execute(
+            db.select(SBOMDocument).where(SBOMDocument.path == path)
+        ).scalars().all())
+        return results[-1] if results else None
+
+    @staticmethod
     def get_all() -> list["SBOMDocument"]:
         """Return all SBOM documents ordered by path."""
         return list(db.session.execute(
