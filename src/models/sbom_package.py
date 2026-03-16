@@ -64,6 +64,14 @@ class SBOMPackage(Base):
             db.select(SBOMPackage).where(SBOMPackage.package_id == package_id)
         ).scalars().all())
 
+    @staticmethod
+    def get_or_create(sbom_document_id: uuid.UUID | str, package_id: uuid.UUID | str) -> "SBOMPackage":
+        """Return an existing association or create a new one."""
+        existing = SBOMPackage.get(sbom_document_id, package_id)
+        if existing is not None:
+            return existing
+        return SBOMPackage.create(sbom_document_id, package_id)
+
     def delete(self) -> None:
         """Remove this association from the database."""
         db.session.delete(self)

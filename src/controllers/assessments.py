@@ -51,6 +51,8 @@ class AssessmentsController:
 
     def gets_by_vuln(self, vuln_id) -> list:
         """Return assessments for a vulnerability, querying DB then supplementing with in-memory."""
+        if vuln_id is None:
+            return []
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         results: dict[str, Assessment] = {}
         # In-memory first (covers partially-parsed data not yet in DB)
@@ -68,6 +70,8 @@ class AssessmentsController:
 
     def gets_by_pkg(self, pkg_id) -> list:
         """Return assessments for a package, querying DB then supplementing with in-memory."""
+        if pkg_id is None:
+            return []
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
         results: dict[str, Assessment] = {}
         for a in self.assessments.values():

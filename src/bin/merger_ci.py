@@ -29,6 +29,10 @@ from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
 from ..models.assessment import Assessment
+from ..models.sbom_document import SBOMDocument
+from ..models.scan import Scan as ScanModel
+from ..models.finding import Finding as FindingModel
+from ..models.observation import Observation
 from ..helpers.verbose import verbose
 import click
 import glob
@@ -233,9 +237,18 @@ def read_inputs(controllers):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 
+    pkgCtrl = controllers["packages"]
+
     # First try to read the merged SPDX file (created by spdx_merge.py)
     verbose("merger_ci: Merged SPDX file not found, reading individual files")
     for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
+        abs_path = os.path.abspath(file)
+        try:
+            doc = SBOMDocument.get_by_path(abs_path)
+            if doc:
+                pkgCtrl.set_sbom_document(doc.id)
+        except Exception:
+            pass
         try:
             verbose(f"merger_ci: Reading {file}")
             with open(file, "r") as f:
@@ -254,6 +267,8 @@ def read_inputs(controllers):
                 raise e
             else:
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
+        finally:
+            pkgCtrl.set_sbom_document(None)
 
     verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
     try:
@@ -264,9 +279,19 @@ def read_inputs(controllers):
               + " SPDX files, this mean there was an issue when analysing them.")
 
     for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
-        verbose(f"merger_ci: Reading {file}")
-        with open(file, "r") as f:
-            scanYocto.load_from_dict(json.loads(f.read()))
+        abs_path = os.path.abspath(file)
+        try:
+            doc = SBOMDocument.get_by_path(abs_path)
+            if doc:
+                pkgCtrl.set_sbom_document(doc.id)
+        except Exception:
+            pass
+        try:
+            verbose(f"merger_ci: Reading {file}")
+            with open(file, "r") as f:
+                scanYocto.load_from_dict(json.loads(f.read()))
+        finally:
+            pkgCtrl.set_sbom_document(None)
 
     verbose(f"merger_ci: Reading {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
     try:
@@ -412,6 +437,29 @@ def _run_main() -> dict:
     verbose("merger_ci: Start exporting results")
     output_results(controllers, files, failed=len(failed_vulns) > 0, failed_vulns=failed_vulns)
     verbose("merger_ci: Finished exporting results")
+
+    # Populate the observations table: link every finding to the current scan.
+    verbose("merger_ci: Populating observations table")
+    try:
+        latest_scan = ScanModel.get_latest()
+        if latest_scan:
+            from ..extensions import db as _db
+            findings = list(_db.session.execute(_db.select(FindingModel)).scalars().all())
+            existing_pairs = {
+                (obs.finding_id, obs.scan_id)
+                for obs in Observation.get_by_scan(latest_scan.id)
+            }
+            for finding in findings:
+                if (finding.id, latest_scan.id) not in existing_pairs:
+                    try:
+                        Observation.create(finding.id, latest_scan.id)
+                    except Exception:
+                        pass
+            verbose(f"merger_ci: Observations created for scan {latest_scan.id}")
+        else:
+            print("Warning: no scan found in DB — skipping observation creation.")
+    except Exception as e:
+        print(f"Warning: could not populate observations table: {e}")
 
     if len(failed_vulns) > 0:
         raise SystemExit(2)

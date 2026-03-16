@@ -72,6 +72,14 @@ class Scan(Base):
             db.select(Scan).where(Scan.variant_id == variant_id).order_by(Scan.timestamp)
         ).scalars().all())
 
+    @staticmethod
+    def get_latest() -> Optional["Scan"]:
+        """Return the most recently created scan, or ``None`` if no scans exist."""
+        result = db.session.execute(
+            db.select(Scan).order_by(Scan.timestamp.desc()).limit(1)
+        ).scalars().first()
+        return result
+
     def update(self, description: str) -> "Scan":
         """Update the scan's *description* in place, persist the change and return ``self``."""
         self.description = description
