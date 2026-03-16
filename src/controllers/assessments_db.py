@@ -6,7 +6,7 @@
 import uuid
 from typing import Optional
 
-from ..models.assessment_record import Assessment
+from ..models.assessment import Assessment
 
 
 class AssessmentDBController:
