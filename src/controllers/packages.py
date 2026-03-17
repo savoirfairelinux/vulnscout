@@ -21,11 +21,11 @@ class PackagesController:
         self._current_sbom_document_id = None
         # Fast PK lookup: string_id → DB UUID.  Avoids SELECT in
         # get_by_string_id for packages we already persisted.
-        self._db_id_cache: dict[str, "uuid.UUID"] = {}
+        self._db_id_cache: dict = {}
         # Shared (pkg_uuid, vuln_id) → Finding cache.  Populated by
         # _persist_vuln_to_db and reused by _persist_assessment_to_db to
         # avoid redundant Finding.get_or_create SELECTs.
-        self._finding_cache: dict[tuple, "Finding"] = {}
+        self._finding_cache: dict = {}
 
     def set_sbom_document(self, doc_id) -> None:
         """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""

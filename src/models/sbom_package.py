@@ -74,7 +74,7 @@ class SBOMPackage(Base):
             with db.session.begin_nested():
                 return SBOMPackage.create(sbom_document_id, package_id)
         except Exception:
-            return SBOMPackage.get(sbom_document_id, package_id)
+            return SBOMPackage.get(sbom_document_id, package_id)  # type: ignore[return-value]
 
     def delete(self) -> None:
         """Remove this association from the database."""
