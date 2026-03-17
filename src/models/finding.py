@@ -118,7 +118,7 @@ class Finding(Base):
                     existing = Finding.create(package_id, vulnerability_id)
             except Exception:
                 existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)
-        return existing
+        return existing  # type: ignore[return-value]
 
     def delete(self) -> None:
         """Delete this finding from the database."""
