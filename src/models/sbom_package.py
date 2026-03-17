@@ -70,7 +70,11 @@ class SBOMPackage(Base):
         existing = SBOMPackage.get(sbom_document_id, package_id)
         if existing is not None:
             return existing
-        return SBOMPackage.create(sbom_document_id, package_id)
+        try:
+            with db.session.begin_nested():
+                return SBOMPackage.create(sbom_document_id, package_id)
+        except Exception:
+            return SBOMPackage.get(sbom_document_id, package_id)
 
     def delete(self) -> None:
         """Remove this association from the database."""

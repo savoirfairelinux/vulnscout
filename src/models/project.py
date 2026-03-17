@@ -57,13 +57,13 @@ class Project(Base):
         if existing is not None:
             return existing
         try:
-            project = Project(name=name)
-            db.session.add(project)
-            db.session.flush()
+            with db.session.begin_nested():
+                project = Project(name=name)
+                db.session.add(project)
+                db.session.flush()
             db.session.commit()
             return project
         except IntegrityError:
-            db.session.rollback()
             return db.session.execute(
                 db.select(Project).where(Project.name == name)
             ).scalar_one()

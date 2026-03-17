@@ -70,13 +70,13 @@ class Variant(Base):
         if existing is not None:
             return existing
         try:
-            variant = Variant(name=name, project_id=project_id)
-            db.session.add(variant)
-            db.session.flush()
+            with db.session.begin_nested():
+                variant = Variant(name=name, project_id=project_id)
+                db.session.add(variant)
+                db.session.flush()
             db.session.commit()
             return variant
         except IntegrityError:
-            db.session.rollback()
             return db.session.execute(
                 db.select(Variant).where(Variant.name == name, Variant.project_id == project_id)
             ).scalar_one()
