@@ -93,6 +93,15 @@ class Metrics(Base):
         db.session.delete(self)
         db.session.commit()
 
+    # Session-level dedup cache: avoids repeated 3-column SELECTs during
+    # bulk ingestion.  Cleared automatically when the session is reset.
+    _seen: set[tuple] = set()
+
+    @classmethod
+    def reset_cache(cls) -> None:
+        """Clear the dedup cache (call between ingestion runs)."""
+        cls._seen = set()
+
     @classmethod
     def from_cvss(cls, cvss: "CVSS", vulnerability_id: str) -> "Metrics":
         """Create a :class:`Metrics` record from an in-memory :class:`CVSS` object.
@@ -101,6 +110,12 @@ class Metrics(Base):
         returned unchanged; otherwise a new one is persisted.
         """
         vid = vulnerability_id.upper()
+        dedup_key = (vid, cvss.version, float(cvss.base_score) if cvss.base_score is not None else None)
+        if dedup_key in cls._seen:
+            # Already persisted in this session — skip the SELECT entirely.
+            return None  # type: ignore[return-value]
+        cls._seen.add(dedup_key)
+
         existing = db.session.execute(
             db.select(Metrics).where(
                 Metrics.vulnerability_id == vid,
@@ -110,10 +125,20 @@ class Metrics(Base):
         ).scalar_one_or_none()
         if existing is not None:
             return existing
-        return cls.create(
-            vulnerability_id=vid,
-            version=cvss.version,
-            score=cvss.base_score,
-            vector=cvss.vector_string,
-            author=cvss.author,
-        )
+        try:
+            with db.session.begin_nested():
+                return cls.create(
+                    vulnerability_id=vid,
+                    version=cvss.version,
+                    score=cvss.base_score,
+                    vector=cvss.vector_string,
+                    author=cvss.author,
+                )
+        except Exception:
+            return db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == vid,
+                    Metrics.version == cvss.version,
+                    Metrics.score == cvss.base_score,
+                )
+            ).scalar_one()

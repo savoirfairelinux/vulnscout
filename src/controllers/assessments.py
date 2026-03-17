@@ -8,20 +8,45 @@ from ..models.package import Package
 from typing import Optional
 
 
-def _persist_assessment_to_db(assessment: Assessment) -> None:
-    """Persist an Assessment DTO to the DB via Finding resolution."""
+def _persist_assessment_to_db(assessment: Assessment, pkg_id_cache=None, finding_cache=None) -> None:
+    """Persist an Assessment DTO to the DB via Finding resolution.
+
+    Uses a SAVEPOINT so that a failure only rolls back this single
+    assessment instead of the whole ``batch_session()`` transaction.
+
+    *pkg_id_cache* and *finding_cache* are optional dicts from
+    ``PackagesController`` that avoid redundant SELECT queries.
+    """
+    if pkg_id_cache is None:
+        pkg_id_cache = {}
+    if finding_cache is None:
+        finding_cache = {}
     try:
+        from ..extensions import db
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
-        from ..extensions import db
 
-        for pkg_string_id in (assessment.packages or []):
-            db_pkg = Package.get_by_string_id(pkg_string_id)
-            if db_pkg is None:
-                continue
-            finding = Finding.get_or_create(db_pkg.id, assessment.vuln_id)
-            db.session.commit()
-            DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
+        with db.session.begin_nested():
+            for pkg_string_id in (assessment.packages or []):
+                # Resolve package UUID from cache first
+                pkg_uuid = pkg_id_cache.get(pkg_string_id)
+                if pkg_uuid is None:
+                    db_pkg = Package.get_by_string_id(pkg_string_id)
+                    if db_pkg is None:
+                        continue
+                    pkg_uuid = db_pkg.id
+                    pkg_id_cache[pkg_string_id] = pkg_uuid
+                else:
+                    db_pkg = None  # not needed if we have the UUID
+
+                # Resolve Finding from cache first
+                cache_key = (pkg_uuid, assessment.vuln_id)
+                finding = finding_cache.get(cache_key)
+                if finding is None:
+                    finding = Finding.get_or_create(pkg_uuid, assessment.vuln_id)
+                    finding_cache[cache_key] = finding
+
+                DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
     except Exception:
         pass
 
@@ -113,7 +138,11 @@ class AssessmentsController:
             self.assessments[key] = assessment
         else:
             self.assessments[key].merge(assessment)
-        _persist_assessment_to_db(self.assessments[key])
+        _persist_assessment_to_db(
+            self.assessments[key],
+            pkg_id_cache=getattr(self.packagesCtrl, '_db_id_cache', None),
+            finding_cache=getattr(self.packagesCtrl, '_finding_cache', None),
+        )
 
     def remove(self, assess_id) -> bool:
         """Remove an assessment by id (str or UUID) and return True if removed, False if not found."""
@@ -124,12 +153,14 @@ class AssessmentsController:
         return False
 
     def to_dict(self) -> dict:
-        """Return all assessments preferring the DB as source of truth."""
+        """Return all assessments preferring in-memory data when available."""
+        if self.assessments:
+            return {k: v.to_dict() for k, v in self.assessments.items()}
         try:
             from ..models.assessment import Assessment as DBAssessment
             return {str(a.id): a.to_dict() for a in DBAssessment.get_all()}
         except Exception:
-            return {k: v.to_dict() for k, v in self.assessments.items()}
+            return {}
 
     @staticmethod
     def from_dict(pkgCtrl, vulnCtrl, data: dict):

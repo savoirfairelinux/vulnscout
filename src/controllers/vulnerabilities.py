@@ -16,10 +16,24 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 
 
-def _persist_vuln_to_db(vuln: Vulnerability) -> None:
-    """Silently persist a Vulnerability to the DB."""
+def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None) -> None:
+    """Silently persist a Vulnerability to the DB.
+
+    Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
+    back this single entity instead of the whole ``batch_session()``
+    transaction.
+
+    *pkg_id_cache* and *finding_cache* are optional dicts from
+    ``PackagesController`` that avoid redundant SELECT queries.
+    """
     try:
-        Vulnerability.persist_from_transient(vuln)
+        from ..extensions import db
+        with db.session.begin_nested():
+            Vulnerability.persist_from_transient(
+                vuln,
+                pkg_id_cache=pkg_id_cache,
+                finding_cache=finding_cache,
+            )
     except Exception:
         pass
 
@@ -73,13 +87,17 @@ class VulnerabilitiesController:
         """
         if vulnerability is None:
             return
+        _caches = dict(
+            pkg_id_cache=self.packagesCtrl._db_id_cache,
+            finding_cache=self.packagesCtrl._finding_cache,
+        )
         if vulnerability.id in self.vulnerabilities:
             self.vulnerabilities[vulnerability.id].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[vulnerability.id])
+            _persist_vuln_to_db(self.vulnerabilities[vulnerability.id], **_caches)
             return self.vulnerabilities[vulnerability.id]
         if vulnerability.id in self.alias_registered:
             self.vulnerabilities[self.alias_registered[vulnerability.id]].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[vulnerability.id]])
+            _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[vulnerability.id]], **_caches)
             return self.vulnerabilities[self.alias_registered[vulnerability.id]]
 
         for alias in vulnerability.aliases:
@@ -87,18 +105,18 @@ class VulnerabilitiesController:
                 self.register_alias(vulnerability.aliases, alias)
                 self.register_alias([vulnerability.id], alias)
                 self.vulnerabilities[alias].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[alias])
+                _persist_vuln_to_db(self.vulnerabilities[alias], **_caches)
                 return self.vulnerabilities[alias]
             if alias in self.alias_registered:
                 self.register_alias(vulnerability.aliases, self.alias_registered[alias])
                 self.register_alias([vulnerability.id], self.alias_registered[alias])
                 self.vulnerabilities[self.alias_registered[alias]].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[alias]])
+                _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[alias]], **_caches)
                 return self.vulnerabilities[self.alias_registered[alias]]
 
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
-        _persist_vuln_to_db(vulnerability)
+        _persist_vuln_to_db(vulnerability, **_caches)
         return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):
@@ -133,39 +151,47 @@ class VulnerabilitiesController:
 
         print(f"Fetched EPSS data for {nb_vuln} vulnerabilities from local DB in {time.time() - start_time} seconds.")
 
+    @staticmethod
+    def _fetch_ghsa_published(vuln_id: str) -> Optional[str]:
+        """Fetch the published date for a single GHSA advisory (thread-safe)."""
+        url = f"https://api.github.com/advisories/{vuln_id}"
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                return data.get("published_at")
+        except urllib.error.HTTPError as e:
+            print(f"Error for {vuln_id}: {e.code}")
+        except urllib.error.URLError as e:
+            print(f"Error for {vuln_id}: {e.reason}")
+        except Exception as e:
+            print(f"Error for {vuln_id}: {e}")
+        return None
+
     def fetch_published_dates(self):
         """Fetch published dates from NVD database for all vulnerabilities."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        start_time = time.time()
         nb_vuln = 0
 
+        # Separate GHSA vulns (need HTTP) from NVD vulns (local DB lookup)
+        ghsa_vulns = {}
+        nvd_vulns = []
+        for vuln in self.vulnerabilities.values():
+            if "GHSA" in vuln.id:
+                ghsa_vulns[vuln.id] = vuln
+            else:
+                nvd_vulns.append(vuln)
+
+        # Batch NVD lookups from local SQLite DB
         try:
             conn = sqlite3.connect(self.nvd_db_path)
             cursor = conn.cursor()
-
-            for vuln in self.vulnerabilities.values():
-                if "GHSA" in vuln.id:
-                    url = f"https://api.github.com/advisories/{vuln.id}"
-
-                    # Setup request with headers
-                    req = urllib.request.Request(
-                        url,
-                        headers={"Accept": "application/vnd.github+json"}
-                    )
-
-                    try:
-                        with urllib.request.urlopen(req) as response:
-                            # Read and parse JSON data
-                            data = json.loads(response.read().decode('utf-8'))
-                            vuln.published = data["published_at"]
-                            nb_vuln += 1
-                    except urllib.error.HTTPError as e:
-                        print(f"Error for {vuln.id}: {e.code}")
-                        continue
-                    except urllib.error.URLError as e:
-                        print(f"Error for {vuln.id}: {e.reason}")
-                        continue
-
-                    continue
-
+            for vuln in nvd_vulns:
                 result = cursor.execute(
                     "SELECT published FROM nvd_vulns WHERE id = ?;",
                     (vuln.id,)
@@ -173,17 +199,38 @@ class VulnerabilitiesController:
                 if result and result[0]:
                     vuln.published = result[0]
                     nb_vuln += 1
-
             conn.close()
         except Exception as e:
             print(f"Error fetching published dates from NVD DB: {e}")
 
+        # Fetch GHSA dates concurrently with a thread pool and a timeout
+        if ghsa_vulns:
+            max_workers = min(10, len(ghsa_vulns))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {
+                    executor.submit(self._fetch_ghsa_published, vid): vid
+                    for vid in ghsa_vulns
+                }
+                for future in as_completed(future_to_id, timeout=60):
+                    vid = future_to_id[future]
+                    try:
+                        published = future.result(timeout=15)
+                        if published:
+                            ghsa_vulns[vid].published = published
+                            nb_vuln += 1
+                    except Exception as e:
+                        print(f"Error for {vid}: {e}")
+
+        print(f"Fetched published dates for {nb_vuln} vulnerabilities in {time.time() - start_time:.1f}s.")
+
     def to_dict(self) -> dict:
-        """Export the list of vulnerabilities preferring the DB as source of truth."""
+        """Export the list of vulnerabilities preferring in-memory data when available."""
+        if self.vulnerabilities:
+            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
         try:
             return {r.id: r.to_dict() for r in Vulnerability.get_all()}
         except Exception:
-            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
+            return {}
 
     @staticmethod
     def from_dict(pkgCtrl, data: dict):
@@ -227,13 +274,23 @@ class VulnerabilitiesController:
         return len(self.vulnerabilities)
 
     def __iter__(self):
-        """Allow iteration over the list of vulnerabilities, preferring the DB as source of truth."""
+        """Allow iteration over the list of vulnerabilities.
+
+        When the in-memory dict is populated (during scan processing) it is
+        used directly — this avoids the expensive DB round-trip + N+1 lazy
+        loading that killed performance in the output phase.
+        When the in-memory dict is empty (web routes) the DB is queried
+        with eager loading instead.
+        """
+        if self.vulnerabilities:
+            yield from self.vulnerabilities.values()
+            return
         try:
             for record in Vulnerability.get_all():
                 yield Vulnerability.from_dict(record.to_dict())
             return
         except Exception:
-            yield from self.vulnerabilities.values()
+            pass
 
     # ------------------------------------------------------------------
     # DB-level helpers  (merged from VulnerabilityDBController)

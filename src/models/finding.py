@@ -113,7 +113,11 @@ class Finding(Base):
         """Return an existing finding or create a new one."""
         existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)
         if existing is None:
-            existing = Finding.create(package_id, vulnerability_id)
+            try:
+                with db.session.begin_nested():
+                    existing = Finding.create(package_id, vulnerability_id)
+            except Exception:
+                existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)
         return existing
 
     def delete(self) -> None:
