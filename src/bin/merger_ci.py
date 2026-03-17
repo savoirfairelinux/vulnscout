@@ -411,6 +411,9 @@ def process_command() -> None:
 
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
+    from ..extensions import batch_session, db as _db
+    import time as _time
+
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
@@ -420,46 +423,61 @@ def _run_main() -> dict:
         "assessments": assessCtrl
     }
 
-    files = read_inputs(controllers)
-    verbose("merger_ci: Finished reading inputs")
+    _t0 = _time.monotonic()
 
-    verbose("merger_ci: Start Post-treatment")
-    post_treatment(controllers, files)
-    verbose("merger_ci: Finished post-treatment")
+    # Wrap all ingestion + post-treatment inside batch_session so that the
+    # hundreds/thousands of individual model commit() calls are deferred to a
+    # single SQLite transaction at the end of the block.
+    with batch_session():
+        files = read_inputs(controllers)
+        verbose(f"merger_ci: Finished reading inputs ({_time.monotonic() - _t0:.1f}s)")
+
+        _t1 = _time.monotonic()
+        verbose("merger_ci: Start Post-treatment")
+        post_treatment(controllers, files)
+        verbose(f"merger_ci: Finished post-treatment ({_time.monotonic() - _t1:.1f}s)")
+    # ← single COMMIT happens here
+    verbose(f"merger_ci: DB commit done ({_time.monotonic() - _t0:.1f}s total)")
 
     fail_condition = os.getenv("FAIL_CONDITION", "")
     failed_vulns = []
     if fail_condition:
+        _t2 = _time.monotonic()
         verbose("merger_ci: Start evaluating conditions")
         failed_vulns = evaluate_condition(controllers, fail_condition)
-        verbose("merger_ci: Finished evaluating conditions")
+        verbose(f"merger_ci: Finished evaluating conditions ({_time.monotonic() - _t2:.1f}s)")
 
+    _t3 = _time.monotonic()
     verbose("merger_ci: Start exporting results")
     output_results(controllers, files, failed=len(failed_vulns) > 0, failed_vulns=failed_vulns)
-    verbose("merger_ci: Finished exporting results")
+    verbose(f"merger_ci: Finished exporting results ({_time.monotonic() - _t3:.1f}s)")
 
     # Populate the observations table: link every finding to the current scan.
+    _t4 = _time.monotonic()
     verbose("merger_ci: Populating observations table")
     try:
         latest_scan = ScanModel.get_latest()
         if latest_scan:
-            from ..extensions import db as _db
             findings = list(_db.session.execute(_db.select(FindingModel)).scalars().all())
             existing_pairs = {
                 (obs.finding_id, obs.scan_id)
                 for obs in Observation.get_by_scan(latest_scan.id)
             }
-            for finding in findings:
-                if (finding.id, latest_scan.id) not in existing_pairs:
-                    try:
-                        Observation.create(finding.id, latest_scan.id)
-                    except Exception:
-                        pass
-            verbose(f"merger_ci: Observations created for scan {latest_scan.id}")
+            with batch_session():
+                for finding in findings:
+                    if (finding.id, latest_scan.id) not in existing_pairs:
+                        try:
+                            Observation.create(finding.id, latest_scan.id)
+                        except Exception:
+                            pass
+            # ← single COMMIT for all observations
+            verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({_time.monotonic() - _t4:.1f}s)")
         else:
             print("Warning: no scan found in DB — skipping observation creation.")
     except Exception as e:
         print(f"Warning: could not populate observations table: {e}")
+
+    verbose(f"merger_ci: Total processing time: {_time.monotonic() - _t0:.1f}s")
 
     if len(failed_vulns) > 0:
         raise SystemExit(2)
