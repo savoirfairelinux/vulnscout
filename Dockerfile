@@ -31,6 +31,8 @@ RUN apk add --no-cache \
     shadow \
     sudo \
     zstd \
+    postgresql-client \
+    libpq-dev \
     && gem install asciidoctor-pdf --version 2.3.15
 
 # Install OSV Scanner
