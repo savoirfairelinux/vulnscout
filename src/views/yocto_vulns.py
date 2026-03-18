@@ -46,6 +46,7 @@ class YoctoVulns:
                 # the in-memory _by_vuln_pkg index — no DB query per issue.
                 for a in Assessment.get_by_package(package.string_id):
                     self.assessmentsCtrl._index_existing(a)
+                self.assessmentsCtrl._db_queried_pkgs.add(package.string_id)
 
                 for issue in pkg.get("issue", []):
                     vuln = Vulnerability(

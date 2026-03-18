@@ -276,6 +276,7 @@ def _run_main() -> dict:
     from ..extensions import batch_session, db as _db
 
     pkgCtrl = PackagesController()
+    # pkgCtrl._preload_cache()  # bulk-load pkg UUIDs + findings into cache; eliminates per-vuln SELECT queries
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
     controllers = {
