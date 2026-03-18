@@ -564,7 +564,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                     <div className="p-4 md:p-5 space-y-4 text-gray-300 text-justify" id="vulnerability_modal_body">
 
                         <div className="flex flex-row mb-6 ">
-                            <ul className="grow leading-6">
+                            <ul className="flex-[1.5] leading-6">
                                 <li key="severity">
                                     <span className="font-bold mr-1">Severity:</span>
                                     <SeverityTag severity={vuln.severity.severity} className="text-white" />
@@ -609,7 +609,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 </li>
                             </ul>
 
-                            <div className="ml-2">
+                            <div className="ml-2 grow-1">
                                 <div className="flex justify-between items-center mb-2">
                                     <h3 className="text-lg font-bold text-white flex items-center">
                                         CVSS
@@ -646,7 +646,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                         key={encodeURIComponent(
                                         `${cvss.author}-${cvss.version}-${cvss.base_score}`
                                         )}
-                                        className="bg-gray-800 p-2 rounded-xl flex-1 min-w-[150px]"
+                                        className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >
                                         <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
                                         <CvssGauge data={cvss} />
