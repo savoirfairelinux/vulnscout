@@ -66,6 +66,9 @@ class AssessmentsController:
         self.vulnerabilitiesCtrl = vulnCtrl
         self.assessments = {}
         """A dictionary of assessments, indexed by their id."""
+        # Secondary indexes for O(1) lookups in hot ingestion paths.
+        self._by_vuln: dict[str, list[str]] = {}       # vuln_id → [assessment_key, ...]
+        self._by_vuln_pkg: dict[tuple, list[str]] = {} # (vuln_id, pkg_id) → [assessment_key, ...]
 
     def get_by_id(self, assess_id) -> Optional[Assessment]:
         """Return an assessment by id (str or UUID) or None if not found."""
@@ -80,10 +83,11 @@ class AssessmentsController:
             return []
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         results: dict[str, Assessment] = {}
-        # In-memory first (covers partially-parsed data not yet in DB)
-        for a in self.assessments.values():
-            if a.vuln_id == vuln_str:
-                results[str(a.id)] = a
+        # Use secondary index for O(1) in-memory lookup (avoids full scan)
+        for key in self._by_vuln.get(vuln_str, []):
+            a = self.assessments.get(key)
+            if a is not None:
+                results[key] = a
         # DB fills any gaps (covers routes context where in-memory is empty)
         try:
             for a in Assessment.get_by_vulnerability(vuln_str):
@@ -115,9 +119,11 @@ class AssessmentsController:
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
         results: dict[str, Assessment] = {}
-        for a in self.assessments.values():
-            if a.vuln_id == vuln_str and pkg_str in a.packages:
-                results[str(a.id)] = a
+        # Use secondary index for O(1) in-memory lookup (avoids full scan)
+        for key in self._by_vuln_pkg.get((vuln_str, pkg_str), []):
+            a = self.assessments.get(key)
+            if a is not None:
+                results[key] = a
         try:
             from ..models.finding import Finding
             finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
@@ -143,11 +149,38 @@ class AssessmentsController:
             pkg_id_cache=getattr(self.packagesCtrl, '_db_id_cache', None),
             finding_cache=getattr(self.packagesCtrl, '_finding_cache', None),
         )
+        # Maintain secondary indexes
+        stored = self.assessments[key]
+        vuln = stored.vuln_id
+        if vuln:
+            vuln_list = self._by_vuln.setdefault(vuln, [])
+            if key not in vuln_list:
+                vuln_list.append(key)
+            for pkg in stored.packages:
+                vp_list = self._by_vuln_pkg.setdefault((vuln, pkg), [])
+                if key not in vp_list:
+                    vp_list.append(key)
 
     def remove(self, assess_id) -> bool:
         """Remove an assessment by id (str or UUID) and return True if removed, False if not found."""
         key = str(assess_id) if assess_id is not None else None
         if key in self.assessments:
+            a = self.assessments[key]
+            # Clean up secondary indexes
+            vuln = a.vuln_id
+            if vuln:
+                if vuln in self._by_vuln:
+                    try:
+                        self._by_vuln[vuln].remove(key)
+                    except ValueError:
+                        pass
+                for pkg in a.packages:
+                    vp = (vuln, pkg)
+                    if vp in self._by_vuln_pkg:
+                        try:
+                            self._by_vuln_pkg[vp].remove(key)
+                        except ValueError:
+                            pass
             del self.assessments[key]
             return True
         return False
