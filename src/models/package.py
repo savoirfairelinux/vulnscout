@@ -252,6 +252,75 @@ class Package(Base):
         return existing
 
     @staticmethod
+    def bulk_find_or_create(
+        items: list[dict],
+    ) -> dict[str, "Package"]:
+        """Resolve many packages in two queries instead of N.
+
+        *items* is a list of dicts with keys ``name``, ``version`` and
+        optionally ``cpe``, ``purl``, ``licences``.
+
+        Returns a ``{string_id: Package}`` mapping.
+
+        1. One SELECT fetches all existing rows matching the requested
+           ``(name, version)`` pairs.
+        2. Missing packages are bulk-inserted in a single flush.
+        3. CPE/PURL identifiers are merged into existing records.
+        """
+        from sqlalchemy import tuple_
+
+        if not items:
+            return {}
+
+        pairs = [(d["name"], d["version"]) for d in items]
+
+        # Single SELECT for all requested packages
+        existing_rows = list(
+            db.session.execute(
+                db.select(Package).where(
+                    tuple_(Package.name, Package.version).in_(pairs)
+                )
+            ).scalars().all()
+        )
+        by_key: dict[tuple, Package] = {(p.name, p.version): p for p in existing_rows}
+
+        result: dict[str, Package] = {}
+        for d in items:
+            key = (d["name"], d["version"])
+            pkg = by_key.get(key)
+            if pkg is None:
+                pkg = Package(
+                    name=d["name"],
+                    version=d["version"],
+                    cpe=d.get("cpe", []),
+                    purl=d.get("purl", []),
+                    licences=d.get("licences", ""),
+                )
+                db.session.add(pkg)
+                by_key[key] = pkg
+            else:
+                # Merge identifiers
+                for c in (d.get("cpe") or []):
+                    if c not in (pkg.cpe or []):
+                        pkg.add_cpe(c)
+                for p in (d.get("purl") or []):
+                    if p not in (pkg.purl or []):
+                        pkg.add_purl(p)
+            result[pkg.string_id] = pkg
+
+        db.session.flush()
+        return result
+
+    @staticmethod
+    def exists(name: str, version: str) -> bool:
+        """Check whether a package with (name, version) exists — lightweight, no full row load."""
+        return db.session.query(
+            db.session.query(Package).filter(
+                Package.name == name, Package.version == version
+            ).exists()
+        ).scalar()
+
+    @staticmethod
     def get_by_string_id(string_id: str) -> Optional["Package"]:
         """Return a package by ``'name@version'`` string id, or ``None``."""
         if "@" not in string_id:

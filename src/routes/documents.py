@@ -42,6 +42,7 @@ def init_app(app):
     def get_all_datas():
         # Controllers are now DB-backed; gets_by_* queries DB automatically.
         pkgCtrl = PackagesController()
+        pkgCtrl._preload_cache()
         vulnCtrl = VulnerabilitiesController(pkgCtrl)
         assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
         return {
