@@ -472,12 +472,13 @@ class FastSPDX3:
         Remove vulnerabilities that don't have any assessments.
         Because report generation fails for vulnerabilities without assessments.
         """
-        vulnerabilities_to_remove = []
-
-        for vuln in self.vulnerabilitiesCtrl.vulnerabilities.values():
-            assessments = self.assessmentsCtrl.gets_by_vuln(vuln.id)
-            if not assessments:
-                vulnerabilities_to_remove.append(vuln.id)
+        # Use the pre-built _by_vuln index for O(1) lookups instead of a
+        # per-vulnerability gets_by_vuln() call that does a linear scan + DB query.
+        vulns_with_assessments = set(self.assessmentsCtrl._by_vuln.keys())
+        vulnerabilities_to_remove = [
+            vid for vid in list(self.vulnerabilitiesCtrl.vulnerabilities.keys())
+            if vid not in vulns_with_assessments
+        ]
 
         for vuln_id in vulnerabilities_to_remove:
             self.vulnerabilitiesCtrl.remove(vuln_id)
