@@ -19,22 +19,23 @@ class SBOMDocument(Base):
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     path = db.Column(db.Text, nullable=False)
     source_name = db.Column(db.String, nullable=False)
+    format = db.Column(db.String, nullable=True)  # e.g. 'spdx', 'cdx', 'openvex', 'yocto_cve_check'
     scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False)
 
     scan = db.relationship("Scan", back_populates="sbom_documents")
     sbom_packages = db.relationship("SBOMPackage", back_populates="sbom_document", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
-        return f"<SBOMDocument id={self.id} source_name={self.source_name!r}>"
+        return f"<SBOMDocument id={self.id} source_name={self.source_name!r} format={self.format!r}>"
 
     # ------------------------------------------------------------------
     # CRUD helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create(path: str, source_name: str, scan_id: uuid.UUID) -> "SBOMDocument":
-        """Create a new SBOM document with the given path and source_name under scan_id, persist it and return it."""
-        sbomdocument = SBOMDocument(path=path, source_name=source_name, scan_id=scan_id)
+    def create(path: str, source_name: str, scan_id: uuid.UUID, format: Optional[str] = None) -> "SBOMDocument":
+        """Create a new SBOM document with the given path, source_name and optional format under scan_id, persist it and return it."""
+        sbomdocument = SBOMDocument(path=path, source_name=source_name, format=format, scan_id=scan_id)
         db.session.add(sbomdocument)
         db.session.commit()
         return sbomdocument
@@ -89,10 +90,11 @@ class SBOMDocument(Base):
             .order_by(SBOMDocument.path)
         ).scalars().all())
 
-    def update(self, path: str, source_name: str) -> "SBOMDocument":
-        """Update the variant's *name* in place, persist the change and return ``self``."""
+    def update(self, path: str, source_name: str, format: Optional[str] = None) -> "SBOMDocument":
+        """Update path, source_name and optional format in place, persist the change and return ``self``."""
         self.path = path
         self.source_name = source_name
+        self.format = format
         db.session.commit()
         return self
 

@@ -19,6 +19,12 @@ set -euo pipefail # Enable error checking
 set -m # enable job control to allow `fg` command
 #set -x # Enable debugging by writing command which are executed
 
+# Tee all stdout + stderr to /cache/vulnscout/tmp.txt from this point on.
+# The file is truncated at each run so it only contains the latest scan.
+# /cache/vulnscout is mounted from .vulnscout/cache on the host.
+mkdir -p /cache/vulnscout
+exec > >(tee /cache/vulnscout/tmp.txt) 2>&1
+
 
 # Initialize variables
 PRODUCT_NAME=${PRODUCT_NAME-"PRODUCT_NAME"}
@@ -82,24 +88,35 @@ function main() {
     VARIANT_NAME=${VARIANT_NAME:-"default"}
     INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
     if [[ -d "$SPDX_TMP_PATH" ]]; then
-        for f in "$SPDX_TMP_PATH"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+        for f in "$SPDX_TMP_PATH"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f"); done
     fi
     if [[ -d "$CDX_TMP_PATH" ]]; then
-        for f in "$CDX_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+        for f in "$CDX_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--cdx "$f"); done
     fi
     if [[ -d "$OPENVEX_TMP_PATH" ]]; then
-        for f in "$OPENVEX_TMP_PATH"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+        for f in "$OPENVEX_TMP_PATH"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--openvex "$f"); done
     fi
     if [[ -d "$YOCTO_CVE_TMP_PATH" ]]; then
-        for f in "$YOCTO_CVE_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=("$f"); done
+        for f in "$YOCTO_CVE_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f"); done
     fi
+    for f in "$TMP_PATH"/*.grype.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f"); done
     (cd "$BASE_DIR/src" && flask --app bin.webapp db upgrade)
     (cd "$BASE_DIR/src" && flask --app bin.webapp merge "${INIT_APP_ARGS[@]}")
 
     # 8. Merge all vulnerability from scan results
-    set_status "8" "Merging vulnerability results"
-
-    (cd "$BASE_DIR/src" && flask --app bin.webapp process)
+    # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
+    # which are intercepted here to drive set_status; everything else is
+    # passed through to stdout unchanged.
+    # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
+    # triggered fail condition) is still propagated through the pipeline.
+    (cd "$BASE_DIR/src" && flask --app bin.webapp process) | \
+        while IFS= read -r _line; do
+            if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
+                set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+            else
+                echo "$_line"
+            fi
+        done
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
