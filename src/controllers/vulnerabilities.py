@@ -16,7 +16,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 
 
-def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None, use_savepoint: bool = True) -> None:
+def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None, db_record_cache=None, use_savepoint: bool = True) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
@@ -27,10 +27,14 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
 
+    *db_record_cache* (``{vuln_id: record}``) avoids the ``get_by_id``
+    SELECT for vulnerabilities already fetched in this session.
+
     Args:
         vuln: The vulnerability to persist
         pkg_id_cache: Optional cache of package IDs to avoid SELECT queries
         finding_cache: Optional cache of findings
+        db_record_cache: Optional cache of DB Vulnerability records
         use_savepoint: If True (default), use SAVEPOINT. Set False in batch context.
     """
     try:
@@ -41,6 +45,7 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
                     vuln,
                     pkg_id_cache=pkg_id_cache,
                     finding_cache=finding_cache,
+                    db_record_cache=db_record_cache,
                 )
         else:
             # Skip SAVEPOINT for better perf in bulk operations
@@ -48,6 +53,7 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
                 vuln,
                 pkg_id_cache=pkg_id_cache,
                 finding_cache=finding_cache,
+                db_record_cache=db_record_cache,
             )
     except Exception:
         pass
