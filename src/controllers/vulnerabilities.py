@@ -26,7 +26,7 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
 
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
-    
+
     Args:
         vuln: The vulnerability to persist
         pkg_id_cache: Optional cache of package IDs to avoid SELECT queries
@@ -73,6 +73,8 @@ class VulnerabilitiesController:
         self.alias_registered: dict[str, str] = {}
         self.use_savepoints: bool = True
         """Set to False during batch operations inside batch_session() for better performance."""
+        self._persisted_ids: set[str] = set()
+        """IDs of vulnerabilities already persisted to DB — skip re-persist when unchanged."""
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
         self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
         self._preload_cache()
@@ -108,6 +110,8 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
                 self.vulnerabilities[rec.id] = rec
+                self._persisted_ids.add(rec.id)
+                rec._persisted_packages = set(rec.packages)  # track persisted packages to skip redundant DB work
                 # aliases are transient-only and not persisted to the DB;
                 # nothing to register here on a fresh load.
         except Exception:
@@ -138,6 +142,10 @@ class VulnerabilitiesController:
         """
         Add a vulnerability to the list, merging it with an existing one if present.
         Return the vulnerability as is if added, or the merged vulnerability if already existing.
+
+        Persistence is skipped for vulnerabilities that are already persisted
+        and have not gained new packages in this call — avoiding redundant
+        get_by_id SELECTs and update_record commits on every re-encounter.
         """
         if vulnerability is None:
             return
@@ -145,32 +153,64 @@ class VulnerabilitiesController:
             pkg_id_cache=self.packagesCtrl._db_id_cache,
             finding_cache=self.packagesCtrl._finding_cache,
         )
+
+        def _persist_if_needed(stored: Vulnerability, new_packages: set[str]) -> None:
+            """Only persist if this vuln has new packages or hasn't been persisted yet."""
+            canonical_id = stored.id
+            known_pkgs = getattr(stored, '_persisted_packages', None)
+            if known_pkgs is None:
+                # First persist for this vuln
+                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
+                stored._persisted_packages = set(stored.packages)
+                self._persisted_ids.add(canonical_id)
+            elif new_packages - known_pkgs:
+                # New packages were added — need to create new Findings
+                _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
+                stored._persisted_packages = set(stored.packages)
+            # else: already persisted, nothing new — skip DB entirely
+
         if vulnerability.id in self.vulnerabilities:
-            self.vulnerabilities[vulnerability.id].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[vulnerability.id], use_savepoint=self.use_savepoints, **_caches)
-            return self.vulnerabilities[vulnerability.id]
+            stored = self.vulnerabilities[vulnerability.id]
+            old_pkgs = set(stored.packages)
+            stored.merge(vulnerability)
+            new_pkgs = set(vulnerability.packages)
+            _persist_if_needed(stored, new_pkgs - old_pkgs)
+            return stored
+
         if vulnerability.id in self.alias_registered:
-            self.vulnerabilities[self.alias_registered[vulnerability.id]].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[vulnerability.id]], use_savepoint=self.use_savepoints, **_caches)
-            return self.vulnerabilities[self.alias_registered[vulnerability.id]]
+            canonical = self.alias_registered[vulnerability.id]
+            stored = self.vulnerabilities[canonical]
+            old_pkgs = set(stored.packages)
+            stored.merge(vulnerability)
+            new_pkgs = set(vulnerability.packages)
+            _persist_if_needed(stored, new_pkgs - old_pkgs)
+            return stored
 
         for alias in vulnerability.aliases:
             if alias in self.vulnerabilities:
                 self.register_alias(vulnerability.aliases, alias)
                 self.register_alias([vulnerability.id], alias)
-                self.vulnerabilities[alias].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[alias], use_savepoint=self.use_savepoints, **_caches)
-                return self.vulnerabilities[alias]
+                stored = self.vulnerabilities[alias]
+                old_pkgs = set(stored.packages)
+                stored.merge(vulnerability)
+                new_pkgs = set(vulnerability.packages)
+                _persist_if_needed(stored, new_pkgs - old_pkgs)
+                return stored
             if alias in self.alias_registered:
-                self.register_alias(vulnerability.aliases, self.alias_registered[alias])
-                self.register_alias([vulnerability.id], self.alias_registered[alias])
-                self.vulnerabilities[self.alias_registered[alias]].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[alias]], use_savepoint=self.use_savepoints, **_caches)
-                return self.vulnerabilities[self.alias_registered[alias]]
+                canonical = self.alias_registered[alias]
+                self.register_alias(vulnerability.aliases, canonical)
+                self.register_alias([vulnerability.id], canonical)
+                stored = self.vulnerabilities[canonical]
+                old_pkgs = set(stored.packages)
+                stored.merge(vulnerability)
+                new_pkgs = set(vulnerability.packages)
+                _persist_if_needed(stored, new_pkgs - old_pkgs)
+                return stored
 
+        # Genuinely new vulnerability
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
-        _persist_vuln_to_db(vulnerability, use_savepoint=self.use_savepoints, **_caches)
+        _persist_if_needed(vulnerability, set(vulnerability.packages))
         return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):
@@ -183,6 +223,7 @@ class VulnerabilitiesController:
         """Remove a vulnerability by id (str) and return True if removed, False if not found."""
         if vuln_id in self.vulnerabilities:
             del self.vulnerabilities[vuln_id]
+            self._persisted_ids.discard(vuln_id)
             aliases_to_remove = []
             for alias, id in self.alias_registered.items():
                 if id == vuln_id:
