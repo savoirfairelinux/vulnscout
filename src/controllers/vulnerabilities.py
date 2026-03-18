@@ -16,19 +16,34 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 
 
-def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None) -> None:
+def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None, use_savepoint: bool = True) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
     back this single entity instead of the whole ``batch_session()``
-    transaction.
+    transaction. Set use_savepoint=False when already inside batch_session()
+    for better performance during bulk operations.
 
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
+    
+    Args:
+        vuln: The vulnerability to persist
+        pkg_id_cache: Optional cache of package IDs to avoid SELECT queries
+        finding_cache: Optional cache of findings
+        use_savepoint: If True (default), use SAVEPOINT. Set False in batch context.
     """
     try:
         from ..extensions import db
-        with db.session.begin_nested():
+        if use_savepoint:
+            with db.session.begin_nested():
+                Vulnerability.persist_from_transient(
+                    vuln,
+                    pkg_id_cache=pkg_id_cache,
+                    finding_cache=finding_cache,
+                )
+        else:
+            # Skip SAVEPOINT for better perf in bulk operations
             Vulnerability.persist_from_transient(
                 vuln,
                 pkg_id_cache=pkg_id_cache,
@@ -56,6 +71,8 @@ class VulnerabilitiesController:
         self.vulnerabilities: dict[str, Vulnerability] = {}
         """A dictionary of vulnerabilities, indexed by their id."""
         self.alias_registered: dict[str, str] = {}
+        self.use_savepoints: bool = True
+        """Set to False during batch operations inside batch_session() for better performance."""
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
         self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
         self._preload_cache()
@@ -130,11 +147,11 @@ class VulnerabilitiesController:
         )
         if vulnerability.id in self.vulnerabilities:
             self.vulnerabilities[vulnerability.id].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[vulnerability.id], **_caches)
+            _persist_vuln_to_db(self.vulnerabilities[vulnerability.id], use_savepoint=self.use_savepoints, **_caches)
             return self.vulnerabilities[vulnerability.id]
         if vulnerability.id in self.alias_registered:
             self.vulnerabilities[self.alias_registered[vulnerability.id]].merge(vulnerability)
-            _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[vulnerability.id]], **_caches)
+            _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[vulnerability.id]], use_savepoint=self.use_savepoints, **_caches)
             return self.vulnerabilities[self.alias_registered[vulnerability.id]]
 
         for alias in vulnerability.aliases:
@@ -142,18 +159,18 @@ class VulnerabilitiesController:
                 self.register_alias(vulnerability.aliases, alias)
                 self.register_alias([vulnerability.id], alias)
                 self.vulnerabilities[alias].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[alias], **_caches)
+                _persist_vuln_to_db(self.vulnerabilities[alias], use_savepoint=self.use_savepoints, **_caches)
                 return self.vulnerabilities[alias]
             if alias in self.alias_registered:
                 self.register_alias(vulnerability.aliases, self.alias_registered[alias])
                 self.register_alias([vulnerability.id], self.alias_registered[alias])
                 self.vulnerabilities[self.alias_registered[alias]].merge(vulnerability)
-                _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[alias]], **_caches)
+                _persist_vuln_to_db(self.vulnerabilities[self.alias_registered[alias]], use_savepoint=self.use_savepoints, **_caches)
                 return self.vulnerabilities[self.alias_registered[alias]]
 
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
-        _persist_vuln_to_db(vulnerability, **_caches)
+        _persist_vuln_to_db(vulnerability, use_savepoint=self.use_savepoints, **_caches)
         return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):

@@ -135,6 +135,26 @@ class AssessmentsController:
             pass
         return list(results.values())
 
+    def _index_existing(self, assessment: Assessment) -> None:
+        """Register an already-persisted Assessment into the in-memory indexes.
+
+        Unlike :meth:`add`, this does NOT call ``_persist_assessment_to_db`` —
+        it is only for pre-warming the cache from DB records so that subsequent
+        :meth:`gets_by_vuln_pkg` calls hit the in-memory index instead of the DB.
+        """
+        key = str(assessment.id)
+        if key not in self.assessments:
+            self.assessments[key] = assessment
+        vuln = assessment.vuln_id
+        if vuln:
+            vuln_list = self._by_vuln.setdefault(vuln, [])
+            if key not in vuln_list:
+                vuln_list.append(key)
+            for pkg in assessment.packages:
+                vp_list = self._by_vuln_pkg.setdefault((vuln, pkg), [])
+                if key not in vp_list:
+                    vp_list.append(key)
+
     def add(self, assessment: Assessment):
         """Add an assessment to the list, merging it with an existing one if present, and persist to DB."""
         if assessment is None:

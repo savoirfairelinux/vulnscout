@@ -31,15 +31,23 @@ class Observation(Base):
     def create(
         finding_id: uuid.UUID | str,
         scan_id: uuid.UUID | str,
+        commit: bool = True,
     ) -> "Observation":
-        """Create a new observation, persist it and return it."""
+        """Create a new observation, persist it and return it.
+        
+        Args:
+            commit: If True (default), commit immediately. Set False for bulk operations.
+        """
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         if isinstance(scan_id, str):
             scan_id = uuid.UUID(scan_id)
         observation = Observation(finding_id=finding_id, scan_id=scan_id)
         db.session.add(observation)
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
         return observation
 
     @staticmethod
