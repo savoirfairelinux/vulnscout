@@ -16,7 +16,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 
 
-def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None) -> None:
+def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None, is_new: bool = False) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
@@ -25,6 +25,8 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
 
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
+    *is_new* when ``True`` tells ``persist_from_transient`` to skip
+    the ``get_by_id`` SELECT and go straight to INSERT.
     """
     try:
         from ..extensions import db
@@ -33,6 +35,7 @@ def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=No
                 vuln,
                 pkg_id_cache=pkg_id_cache,
                 finding_cache=finding_cache,
+                is_new=is_new,
             )
     except Exception:
         pass
@@ -153,7 +156,7 @@ class VulnerabilitiesController:
 
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
-        _persist_vuln_to_db(vulnerability, **_caches)
+        _persist_vuln_to_db(vulnerability, is_new=True, **_caches)
         return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):
