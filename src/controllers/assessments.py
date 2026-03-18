@@ -69,6 +69,13 @@ class AssessmentsController:
         # Secondary indexes for O(1) lookups in hot ingestion paths.
         self._by_vuln: dict[str, list[str]] = {}       # vuln_id → [assessment_key, ...]
         self._by_vuln_pkg: dict[tuple, list[str]] = {} # (vuln_id, pkg_id) → [assessment_key, ...]
+        # Tracks (vuln_id, pkg_id) pairs already fetched from DB so that
+        # gets_by_vuln_pkg never fires redundant SELECT queries for the same pair.
+        self._db_queried_vuln_pkg: set[tuple] = set()
+        # Tracks package IDs whose full assessment set has been bulk-fetched.
+        # Once a pkg_id is here, gets_by_vuln_pkg skips the DB for ANY vuln
+        # paired with that package — even for (vuln, pkg) pairs with no rows.
+        self._db_queried_pkgs: set[str] = set()
 
     def get_by_id(self, assess_id) -> Optional[Assessment]:
         """Return an assessment by id (str or UUID) or None if not found."""
@@ -124,15 +131,25 @@ class AssessmentsController:
             a = self.assessments.get(key)
             if a is not None:
                 results[key] = a
-        try:
-            from ..models.finding import Finding
-            finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
-            if finding is not None:
-                for a in Assessment.get_by_finding(finding.id):
-                    if str(a.id) not in results:
-                        results[str(a.id)] = a
-        except Exception:
-            pass
+        # Only query DB once per (vuln, pkg) pair — subsequent calls are
+        # served entirely from the in-memory _by_vuln_pkg index.
+        # Also skip if the package was bulk-fetched (covers zero-assessment pairs).
+        pair = (vuln_str, pkg_str)
+        if pair not in self._db_queried_vuln_pkg and pkg_str not in self._db_queried_pkgs:
+            self._db_queried_vuln_pkg.add(pair)
+            try:
+                from ..models.finding import Finding
+                finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
+                if finding is not None:
+                    for a in Assessment.get_by_finding(finding.id):
+                        a_key = str(a.id)
+                        if a_key not in results:
+                            # Populate the in-memory index so future calls hit
+                            # the fast path immediately.
+                            self._index_existing(a)
+                            results[a_key] = a
+            except Exception:
+                pass
         return list(results.values())
 
     def _index_existing(self, assessment: Assessment) -> None:
@@ -154,6 +171,9 @@ class AssessmentsController:
                 vp_list = self._by_vuln_pkg.setdefault((vuln, pkg), [])
                 if key not in vp_list:
                     vp_list.append(key)
+                # Mark this (vuln, pkg) pair as already fetched from DB so
+                # gets_by_vuln_pkg skips the redundant SELECT on the first call.
+                self._db_queried_vuln_pkg.add((vuln, pkg))
 
     def add(self, assessment: Assessment):
         """Add an assessment to the list, merging it with an existing one if present, and persist to DB."""
