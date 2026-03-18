@@ -24,12 +24,14 @@ RUN apk add --no-cache \
     bash \
     curl \
     git \
+    gcompat \
     icu \
     python3 \
     py3-pip \
     ruby \
     shadow \
     sudo \
+    unzip \
     zstd \
     postgresql-client \
     libpq-dev \
@@ -49,6 +51,16 @@ RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CY
 # Install Grype
 ARG GRYPE_VERSION=v0.97.2
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
+
+# Install py-spy from the manylinux wheel via pip.
+# gcompat provides the glibc shim needed to run the glibc-linked binary on Alpine/musl.
+ARG PYSPY_VERSION=0.4.1
+RUN curl -sSfL \
+    "https://github.com/benfred/py-spy/releases/download/v${PYSPY_VERSION}/py_spy-${PYSPY_VERSION}-py2.py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.whl" \
+    -o /tmp/py_spy.whl \
+    && unzip -j /tmp/py_spy.whl "py_spy-${PYSPY_VERSION}.data/scripts/py-spy" -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/py-spy \
+    && rm /tmp/py_spy.whl
 
 # Install dependencies for python backend
 COPY requirements/base.txt ./

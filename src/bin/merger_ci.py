@@ -215,11 +215,59 @@ def create_project_context(
             click.echo(f"  + [{fmt}] {sbom_file}")
 
 
+def _profile_with_pyspy(output: str, format: str) -> None:
+    """Attach py-spy to the current PID and record until the returned handle is closed."""
+    pid = os.getpid()
+    cmd = [
+        "py-spy", "record",
+        "--pid", str(pid),
+        "--output", output,
+        "--format", format,
+        "--subprocesses",
+    ]
+    try:
+        proc = subprocess.Popen(cmd)
+    except FileNotFoundError:
+        click.echo(
+            "Warning: py-spy not found — install it with: pip install py-spy\n"
+            "Continuing without profiling.",
+            err=True,
+        )
+        return None
+    return proc
+
+
 @click.command("process")
+@click.option(
+    "--profile",
+    "profile_output",
+    default=None,
+    metavar="FILE",
+    help="Record a py-spy flamegraph to FILE (e.g. profile.svg).",
+)
+@click.option(
+    "--profile-format",
+    default="flamegraph",
+    show_default=True,
+    type=click.Choice(["flamegraph", "speedscope", "raw"], case_sensitive=False),
+    help="Output format for --profile.",
+)
 @with_appcontext
-def process_command() -> None:
+def process_command(profile_output: str | None, profile_format: str) -> None:
     """Parse all SBOM inputs, persist results to the DB and generate output files."""
-    _run_main()
+    if profile_output:
+        click.echo(f"Profiling with py-spy → {profile_output} (format={profile_format})")
+        pyspy_proc = _profile_with_pyspy(profile_output, profile_format)
+    else:
+        pyspy_proc = None
+
+    try:
+        _run_main()
+    finally:
+        if pyspy_proc is not None:
+            pyspy_proc.terminate()
+            pyspy_proc.wait()
+            click.echo(f"Profile saved to {profile_output}")
 
 
 def _run_main() -> dict:

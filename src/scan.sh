@@ -37,6 +37,7 @@ VERBOSE_MODE=${VERBOSE_MODE-"false"}
 VULNSCOUT_VERSION=${VULNSCOUT_VERSION-"unknown"}
 SKIP_GRYPE_SCAN=${SKIP_GRYPE_SCAN-"false"}
 DEV_MODE=${DEV_MODE-"false"}
+PYSPY_FORMAT=${PYSPY_FORMAT-"flamegraph"}
 
 echo "VulnScout $VULNSCOUT_VERSION"
 
@@ -109,7 +110,12 @@ function main() {
     # passed through to stdout unchanged.
     # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
     # triggered fail condition) is still propagated through the pipeline.
-    (cd "$BASE_DIR/src" && flask --app bin.webapp process) | \
+    PYSPY_OUTPUT="/cache/vulnscout/profile.${PYSPY_FORMAT}.svg"
+    if [[ "${PYSPY_FORMAT}" == "speedscope" ]]; then
+        PYSPY_OUTPUT="/cache/vulnscout/profile.speedscope.json"
+    fi
+    echo "py-spy profiling → $PYSPY_OUTPUT"
+    (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_OUTPUT" --format "$PYSPY_FORMAT" --subprocesses -- flask --app bin.webapp process) | \
         while IFS= read -r _line; do
             if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
                 set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
