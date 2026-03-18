@@ -27,6 +27,32 @@ class PackagesController:
         # avoid redundant Finding.get_or_create SELECTs.
         self._finding_cache: dict = {}
 
+    def _preload_cache(self) -> None:
+        """Bulk-load all packages from the DB into the session caches.
+
+        Call this once when the controller is created for a read-heavy path
+        (e.g. route handlers, document generation) so that subsequent
+        ``get()``, ``get_db_id()``, ``get_or_resolve_db_id()`` and
+        ``__contains__`` calls are pure dict lookups — zero extra SELECTs.
+
+        Also pre-populates ``_finding_cache`` so that
+        :func:`Finding.get_or_create` avoids a SELECT on the first lookup
+        for every known (package, vulnerability) pair.
+        """
+        try:
+            for pkg in Package.get_all():
+                sid = pkg.string_id
+                self._cache[sid] = pkg
+                self._db_id_cache[sid] = pkg.id
+        except Exception:
+            pass
+        try:
+            from ..models.finding import Finding
+            for f in Finding.get_all():
+                self._finding_cache[(f.package_id, f.vulnerability_id)] = f
+        except Exception:
+            pass
+
     def set_sbom_document(self, doc_id) -> None:
         """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""
         self._current_sbom_document_id = doc_id
@@ -175,11 +201,13 @@ class PackagesController:
         return False
 
     def __len__(self) -> int:
+        if self._cache:
+            return len(self._cache)
         try:
             from ..extensions import db
             return db.session.query(Package).count()
         except Exception:
-            return len(self._cache)
+            return 0
 
     def __iter__(self):
         """Iterate over all packages.
