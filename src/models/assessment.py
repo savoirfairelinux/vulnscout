@@ -500,8 +500,13 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list] = None,
+        commit: bool = True,
     ) -> "Assessment":
-        """Create a new assessment, persist it and return it."""
+        """Create a new assessment, persist it and return it.
+
+        Args:
+            commit: If True (default), commit immediately. Set False for bulk operations.
+        """
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         if isinstance(variant_id, str):
@@ -519,7 +524,10 @@ class Assessment(Base):
             responses=responses or [],
         )
         db.session.add(assessment)
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
         return assessment
 
     @staticmethod
@@ -531,7 +539,11 @@ class Assessment(Base):
 
     @staticmethod
     def from_vuln_assessment(assess, finding_id=None) -> "Assessment":
-        """Create or update an ``Assessment`` DB record from an Assessment DTO."""
+        """Create or update an ``Assessment`` DB record from an Assessment DTO.
+
+        Does not commit — callers are expected to be inside batch_session()
+        or to commit themselves after calling this.
+        """
         existing = None
         if finding_id is not None:
             existing = db.session.execute(
@@ -545,7 +557,7 @@ class Assessment(Base):
             existing.impact_statement = assess.impact_statement or existing.impact_statement
             existing.workaround = getattr(assess, "workaround", None) or existing.workaround
             existing.responses = list(assess.responses) if assess.responses else existing.responses
-            db.session.commit()
+            db.session.flush()
             return existing
 
         record = Assessment.create(
@@ -556,6 +568,7 @@ class Assessment(Base):
             impact_statement=assess.impact_statement,
             workaround=getattr(assess, "workaround", None),
             responses=list(assess.responses) if assess.responses else [],
+            commit=False,
         )
         return record
 
@@ -632,10 +645,12 @@ class Assessment(Base):
                 if pkg is None:
                     return []
                 package_id = pkg.id
+        from sqlalchemy.orm import joinedload
         return list(db.session.execute(
             db.select(Assessment)
             .join(Finding, Assessment.finding_id == Finding.id)
             .where(Finding.package_id == package_id)
+            .options(joinedload(Assessment.finding).joinedload(Finding.package))
             .order_by(Assessment.timestamp)
         ).scalars().all())
 

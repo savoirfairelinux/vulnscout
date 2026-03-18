@@ -38,6 +38,7 @@ import os
 from datetime import date, datetime, timezone
 from typing import Any
 from flask.cli import with_appcontext
+from sqlalchemy import and_, not_, exists
 
 DEFAULT_VARIANT_NAME = "default"
 
@@ -287,6 +288,10 @@ def _run_main() -> dict:
     # hundreds/thousands of individual model commit() calls are deferred to a
     # single SQLite transaction at the end of the block.
     with batch_session():
+        # Disable SAVEPOINTs during bulk ingestion for better performance
+        vulnCtrl.use_savepoints = False
+        assessCtrl.use_savepoints = False
+        
         files = read_inputs(controllers)
         verbose("merger_ci: Finished reading inputs")
 
@@ -310,22 +315,31 @@ def _run_main() -> dict:
     verbose("merger_ci: Populating observations table")
     try:
         latest_scan = ScanModel.get_latest()
-        if latest_scan:
-            findings = list(_db.session.execute(_db.select(FindingModel)).scalars().all())
-            existing_pairs = {
-                (obs.finding_id, obs.scan_id)
-                for obs in Observation.get_by_scan(latest_scan.id)
-            }
-            new_observations = [
-                Observation(finding_id=finding.id, scan_id=latest_scan.id)
-                for finding in findings
-                if (finding.id, latest_scan.id) not in existing_pairs
-            ]
-            if new_observations:
+        if latest_scan:          
+            # Find findings without observations for this scan
+            new_finding_ids = list(_db.session.execute(
+                _db.select(FindingModel.id).where(
+                    ~exists(
+                        _db.select(1).select_from(Observation).where(
+                            and_(
+                                Observation.finding_id == FindingModel.id,
+                                Observation.scan_id == latest_scan.id
+                            )
+                        )
+                    )
+                )
+            ).scalars().all())
+            
+            # Create observations in batches to reduce memory usage
+            if new_finding_ids:
+                new_observations = [
+                    Observation(finding_id=fid, scan_id=latest_scan.id)
+                    for fid in new_finding_ids
+                ]
                 with batch_session():
                     _db.session.bulk_save_objects(new_observations)
-            # ← single COMMIT for all observations
-            verbose(f"merger_ci: Observations created for scan {latest_scan.id}")
+                # ← single COMMIT for all observations
+                verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({len(new_observations)} new)")
         else:
             print("Warning: no scan found in DB — skipping observation creation.")
     except Exception as e:
