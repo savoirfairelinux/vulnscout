@@ -65,12 +65,21 @@ class Finding(Base):
         raise TypeError(f"Expected UUID or str, got {type(package_id)!r}")
 
     @staticmethod
-    def create(package_id: "uuid.UUID | str", vulnerability_id: str) -> "Finding":
-        """Create a new finding, persist it and return it."""
+    def create(package_id: "uuid.UUID | str", vulnerability_id: str, commit: bool = True) -> "Finding":
+        """Create a new finding, persist it and return it.
+        
+        Args:
+            package_id: UUID or string identifier of the package
+            vulnerability_id: Vulnerability ID string
+            commit: If True (default), commit immediately. Set False for bulk operations.
+        """
         package_id = Finding._resolve_package_id(package_id)
         finding = Finding(package_id=package_id, vulnerability_id=vulnerability_id.upper())
         db.session.add(finding)
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()  # Make PKs available without committing
         return finding
 
     @staticmethod
