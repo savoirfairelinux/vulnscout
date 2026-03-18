@@ -10,15 +10,14 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..views.grype_vulns import GrypeVulns
-from ..views.yocto_vulns import YoctoVulns
-from ..views.openvex import OpenVex
-from ..views.time_estimates import TimeEstimates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.fast_spdx import FastSPDX
 from ..views.fast_spdx3 import FastSPDX3
+from ..views.openvex import OpenVex
+from ..views.yocto_vulns import YoctoVulns
+from ..views.grype_vulns import GrypeVulns
 from ..views.templates import Templates
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -28,14 +27,12 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
-from ..models.assessment import Assessment
 from ..models.sbom_document import SBOMDocument
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.verbose import verbose
 import click
-import glob
 import json
 import os
 from datetime import date, datetime, timezone
@@ -44,89 +41,13 @@ from flask.cli import with_appcontext
 
 DEFAULT_VARIANT_NAME = "default"
 
-CDX_PATH = "/scan/tmp/merged.cdx.json"
-OPENVEX_PATH = "/scan/tmp/merged.openvex.json"
-SPDX_FOLDER = "/scan/tmp/spdx"
-GRYPE_CDX_PATH = "/scan/tmp/vulns-cdx.grype.json"
-GRYPE_SPDX_PATH = "/scan/tmp/vulns-spdx.grype.json"
-YOCTO_FOLDER = "/scan/tmp/yocto_cve_check"
-LOCAL_USER_DATABASE_PATH = "/scan/outputs/openvex.json"
-TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
-
-OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
-OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
-OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
-
-
-def is_items_only_openvex(scanners: list[str]) -> bool:
-    """Return True if only openvex scanners are found."""
-    for scanner in scanners:
-        if "openvex" not in scanner:
-            return False
-    return True
-
-
-def expire_vuln(vuln_id, packages):
-    """Expire a vulnerability."""
-    expired = Assessment.new_dto(vuln_id, packages)
-    expired.set_status("not_affected")
-    expired.set_justification("component_not_present")
-    expired.set_not_affected_reason("Vulnerable component removed, marking as expired")
-    expired.set_status_notes("Vulnerability no longer present in analysis, marking as expired")
-    return expired
-
-
-def revert_expiration_vuln(vuln_id, packages, previous_assessment):
-    """Expire a vulnerability."""
-    state = Assessment.new_dto(vuln_id, packages)
-    if previous_assessment is None:
-        state.set_status("under_investigation")
-        state.set_status_notes("Vulnerability was expired but is found again by scanners, setting it in default state")
-    else:
-        state.set_status(previous_assessment.status)
-        state.set_justification(previous_assessment.justification)
-        state.set_not_affected_reason(previous_assessment.impact_statement)
-        state.set_status_notes(
-            "Vulnerability was expired but is found again by scanners, setting it back to previous state"
-        )
-    return state
-
-
 def post_treatment(controllers, files):
-    """Do some actions on data after collect and aggregation."""
+    """Enrich vulnerabilities with EPSS scores and NVD published dates."""
     # 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
 
     # 2. fetch published dates from NVD
     controllers["vulnerabilities"].fetch_published_dates()
-
-    # 3. Mark all vulnerabilities not present in analysis anymore as expired (but still in openvex)
-    for (vuln_id, vuln) in controllers["vulnerabilities"].vulnerabilities.items():
-        assessments = controllers["assessments"].gets_by_vuln(vuln_id)
-        already_expired = False
-        is_last_assessment_an_expiration = False
-        last_assessment_before_expiration = None
-        need_expiration = False
-        for assessment in assessments:
-            is_last_assessment_an_expiration = False
-            if assessment.status in ["affected", "exploitable", "under_investigation", "in_triage"]:
-                need_expiration = True
-                last_assessment_before_expiration = assessment
-            else:
-                need_expiration = False
-                if "marking as expired" in assessment.status_notes:
-                    already_expired = True
-                    is_last_assessment_an_expiration = True
-                else:
-                    last_assessment_before_expiration = assessment
-
-        if is_items_only_openvex(vuln.found_by) and need_expiration and not already_expired:
-            controllers["assessments"].add(expire_vuln(vuln_id, vuln.packages))
-
-        elif is_last_assessment_an_expiration and not is_items_only_openvex(vuln.found_by):
-            controllers["assessments"].add(
-                revert_expiration_vuln(vuln_id, vuln.packages, last_assessment_before_expiration)
-            )
 
 
 def evaluate_condition(controllers, condition):
@@ -177,216 +98,100 @@ def evaluate_condition(controllers, condition):
 
 
 def read_inputs(controllers):
-    """Read from well-known files to grab vulnerabilities."""
-    scanGrype = GrypeVulns(controllers)
-    scanYocto = YoctoVulns(controllers)
-    local_database = OpenVex(controllers)
-    openvex = OpenVex(controllers)
-    timeEstimates = TimeEstimates(controllers)
+    """Parse all SBOM documents registered in the DB."""
     cdx = CycloneDx(controllers)
     spdx = SPDX(controllers)
     fastspdx3 = FastSPDX3(controllers)
     fastspdx = FastSPDX(controllers)
+    openvex = OpenVex(controllers)
+    yocto = YoctoVulns(controllers)
+    grype = GrypeVulns(controllers)
     templates = Templates(controllers)
 
-    verbose(f"merger_ci: Reading {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
-    try:
-        with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "r") as f:
-            local_database.load_from_dict(json.loads(f.read()), ["local_user_data"])
-    except FileNotFoundError:
-        print("Warning: Did not find local user database file, which is used to store history of analysis."
-              + " This is normal at first start but not in later analysis")
-    except Exception as e:
-        if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
-            print(f"Error parsing OpenVEX file: {e}")
-            print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
-            raise e
-        else:
-            print(f"Ignored: Error parsing OpenVEX file: {e}")
-
-    verbose(f"merger_ci: Reading {os.getenv('CDX_PATH', CDX_PATH)}")
-    error_cdx_not_found_displayed = False
-    try:
-        with open(os.getenv("CDX_PATH", CDX_PATH), "r") as f:
-            cdx.load_from_dict(json.loads(f.read()))
-            cdx.parse_and_merge()
-    except FileNotFoundError:
-        print("Warning: Did not find CycloneDX files. If you intended to scan CycloneDX files,"
-              + " this mean there was an issue when collecting them.")
-        error_cdx_not_found_displayed = True
-
-    verbose(f"merger_ci: Reading {os.getenv('OPENVEX_PATH', OPENVEX_PATH)}")
-    try:
-        with open(os.getenv("OPENVEX_PATH", OPENVEX_PATH), "r") as f:
-            openvex.load_from_dict(json.loads(f.read()))
-    except FileNotFoundError:
-        print("Warning: Did not find OpenVEX files. If you intended to scan OpenVEX files,"
-              + " this mean there was an issue when collecting them.")
-
-    verbose(f"merger_ci: Reading {os.getenv('GRYPE_CDX_PATH', GRYPE_CDX_PATH)}")
-    try:
-        with open(os.getenv("GRYPE_CDX_PATH", GRYPE_CDX_PATH), "r") as f:
-            scanGrype.load_from_dict(json.loads(f.read()))
-    except FileNotFoundError:
-        if not error_cdx_not_found_displayed:
-            print("Warning: Did not find Grype analysis of CDX files. If you intended to scan"
-                  + " CycloneDX files, this mean there was an issue when analysing them.")
-
-    use_fastspdx = False
-    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
-        use_fastspdx = True
-        verbose("spdx_merge: Using FastSPDX parser")
+    use_fastspdx = os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true'
+    if use_fastspdx:
+        verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl = controllers["packages"]
+    docs = SBOMDocument.get_all()
 
-    # First try to read the merged SPDX file (created by spdx_merge.py)
-    verbose("merger_ci: Merged SPDX file not found, reading individual files")
-    for file in glob.glob(f"{os.getenv('SPDX_FOLDER', SPDX_FOLDER)}/*.spdx.json"):
-        abs_path = os.path.abspath(file)
+    for doc in docs:
+        pkgCtrl.set_sbom_document(doc.id)
         try:
-            doc = SBOMDocument.get_by_path(abs_path)
-            if doc:
-                pkgCtrl.set_sbom_document(doc.id)
-        except Exception:
-            pass
-        try:
-            verbose(f"merger_ci: Reading {file}")
-            with open(file, "r") as f:
+            verbose(f"merger_ci: Reading {doc.path} (format={doc.format!r})")
+            with open(doc.path, "r") as f:
                 data = json.load(f)
+
+            # Prefer the explicit format stored at registration time (set by
+            # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --grype
+            # options) and fall back to content-sniffing only when it is absent.
+            fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'grype', or None
+
+            if fmt == "spdx" or (fmt is None and (fastspdx3.could_parse_spdx(data) or "spdxVersion" in data or doc.source_name.endswith(".spdx.json"))):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
                 else:
-                    spdx.load_from_file(file)
+                    spdx.load_from_file(doc.path)
                     spdx.parse_and_merge()
+            elif fmt == "cdx" or (fmt is None and (data.get("bomFormat") == "CycloneDX" or doc.source_name.endswith(".cdx.json"))):
+                cdx.load_from_dict(data)
+                cdx.parse_and_merge()
+            elif fmt == "openvex" or (fmt is None and "statements" in data):
+                openvex.load_from_dict(data)
+            elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
+                yocto.load_from_dict(data)
+            elif fmt == "grype" or (fmt is None and "matches" in data):
+                grype.load_from_dict(data)
+            else:
+                print(f"Warning: unknown format for {doc.path}, skipping")
+        except FileNotFoundError:
+            print(f"Error: registered SBOM document not found on disk: {doc.path}")
         except Exception as e:
-            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
-                print(f"Error parsing SPDX file: {file} {e}")
+            if not use_fastspdx:
+                print(f"Error parsing {doc.path}: {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e
             else:
-                print(f"Ignored: Error parsing SPDX file: {file} {e}")
+                print(f"Ignored: Error parsing {doc.path}: {e}")
         finally:
             pkgCtrl.set_sbom_document(None)
-
-    verbose(f"merger_ci: Reading {os.getenv('GRYPE_SPDX_PATH', GRYPE_SPDX_PATH)}")
-    try:
-        with open(os.getenv("GRYPE_SPDX_PATH", GRYPE_SPDX_PATH), "r") as f:
-            scanGrype.load_from_dict(json.loads(f.read()))
-    except FileNotFoundError:
-        print("Warning: Did not find Grype analysis of SPDX files. If you intended to scan"
-              + " SPDX files, this mean there was an issue when analysing them.")
-
-    for file in glob.glob(f"{os.getenv('YOCTO_FOLDER', YOCTO_FOLDER)}/*.json"):
-        abs_path = os.path.abspath(file)
-        try:
-            doc = SBOMDocument.get_by_path(abs_path)
-            if doc:
-                pkgCtrl.set_sbom_document(doc.id)
-        except Exception:
-            pass
-        try:
-            verbose(f"merger_ci: Reading {file}")
-            with open(file, "r") as f:
-                scanYocto.load_from_dict(json.loads(f.read()))
-        finally:
-            pkgCtrl.set_sbom_document(None)
-
-    verbose(f"merger_ci: Reading {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
-    try:
-        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "r") as f:
-            timeEstimates.load_from_dict(json.loads(f.read()))
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
-            print(f"Error parsing time_estimates.json file: {e}")
-            print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
-            raise e
-        else:
-            print(f"Ignored: Error parsing time_estimates.json file: {e}")
 
     return {
-        "openvex": openvex,
-        "time_estimates": timeEstimates,
         "cdx": cdx,
         "templates": templates
     }
-
-
-def output_results(controllers, files, failed: bool = False, failed_vulns=None):
-    """Output the results to files."""
-
-    fail_condition = os.getenv("FAIL_CONDITION", "")
-    list_docs = [d.strip() for d in os.getenv("GENERATE_DOCUMENTS", "").split(",") if d.strip()]
-
-    if not fail_condition:
-        spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
-        spdx3 = SPDX3(controllers)
-
-        verbose(f"merger_ci: Exporting {os.getenv('LOCAL_USER_DATABASE_PATH', LOCAL_USER_DATABASE_PATH)}")
-        with open(os.getenv("LOCAL_USER_DATABASE_PATH", LOCAL_USER_DATABASE_PATH), "w") as f:
-            f.write(json.dumps(files["openvex"].to_dict(), indent=2))
-
-        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_CDX_PATH', OUTPUT_CDX_PATH)}")
-        with open(os.getenv("OUTPUT_CDX_PATH", OUTPUT_CDX_PATH), "w") as f:
-            f.write(files["cdx"].output_as_json())
-
-        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX_PATH', OUTPUT_SPDX_PATH)}")
-        with open(os.getenv("OUTPUT_SPDX_PATH", OUTPUT_SPDX_PATH), "w") as f:
-            f.write(spdx.output_as_json())
-
-        verbose(f"merger_ci: Exporting {os.getenv('OUTPUT_SPDX3_PATH', OUTPUT_SPDX3_PATH)}")
-        with open(os.getenv("OUTPUT_SPDX3_PATH", OUTPUT_SPDX3_PATH), "w") as f:
-            f.write(spdx3.output_as_json())
-
-        verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
-        with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
-            f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
-
-        # packages / vulnerabilities / assessments are now served from the DB;
-        # no intermediate JSON files are written for those.
-
-        if "match_condition.adoc" in list_docs:
-            list_docs.remove("match_condition.adoc")
-    else:
-        if "match_condition.adoc" in list_docs:
-            list_docs = ["match_condition.adoc"]
-        else:
-            list_docs = []
-
-    metadata: dict[str, Any] = {
-        "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
-        "export_date": date.today().isoformat()
-    }
-    if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
-        metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
-    if failed:
-        metadata["failed_vulns"] = failed_vulns or []
-    for doc in list_docs:
-        if not doc:
-            continue
-        try:
-            doc = doc.strip()
-            verbose(f"merger_ci: Generating report from template {doc}")
-            content = files["templates"].render(doc, **metadata)
-            with open(f"/scan/outputs/{doc}", "w") as f:
-                f.write(content)
-        except Exception as e:
-            print(f"Warning: failed to generate document from {doc}: {e}")
-
 
 @click.command("merge")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
-@click.argument("sbom_inputs", nargs=-1, type=click.Path(exists=True))
+@click.option("--spdx", "spdx_inputs", multiple=True, type=click.Path(exists=True),
+              help="SPDX SBOM file (may be repeated).")
+@click.option("--cdx", "cdx_inputs", multiple=True, type=click.Path(exists=True),
+              help="CycloneDX SBOM file (may be repeated).")
+@click.option("--openvex", "openvex_inputs", multiple=True, type=click.Path(exists=True),
+              help="OpenVEX file (may be repeated).")
+@click.option("--yocto-cve", "yocto_cve_inputs", multiple=True, type=click.Path(exists=True),
+              help="Yocto CVE-check JSON file (may be repeated).")
+@click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
+              help="Grype vulnerability JSON file (may be repeated).")
 @with_appcontext
-def create_project_context(project: str, variant: str | None, sbom_inputs: tuple) -> None:
-    """Merge SBOM inputs into the database under a named project/variant scan.
+def create_project_context(
+    project: str,
+    variant: str | None,
+    spdx_inputs: tuple,
+    cdx_inputs: tuple,
+    openvex_inputs: tuple,
+    yocto_cve_inputs: tuple,
+    grype_inputs: tuple,
+) -> None:
+    """Register SBOM inputs into the database under a named project/variant scan.
 
-    SBOM_INPUTS is one or more paths to SBOM files.
+    Use --spdx, --cdx, --openvex, --yocto-cve and --grype to pass files with
+    their explicit format so that parsing is unambiguous.  Each option may be
+    repeated for multiple files of the same format.
     When no variant is given, inputs go into a scan under the 'default' variant.
     """
     variant_name = variant or DEFAULT_VARIANT_NAME
@@ -396,10 +201,18 @@ def create_project_context(project: str, variant: str | None, sbom_inputs: tuple
     scan = ScanController.create("default", variant_obj.id)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id}")
 
-    for sbom_file in sbom_inputs:
-        abs_path = os.path.abspath(sbom_file)
-        SBOMDocumentController.create(abs_path, os.path.basename(sbom_file), scan.id)
-        click.echo(f"  + {sbom_file}")
+    format_groups: list[tuple[tuple, str]] = [
+        (spdx_inputs, "spdx"),
+        (cdx_inputs, "cdx"),
+        (openvex_inputs, "openvex"),
+        (yocto_cve_inputs, "yocto_cve_check"),
+        (grype_inputs, "grype"),
+    ]
+    for files, fmt in format_groups:
+        for sbom_file in files:
+            abs_path = os.path.abspath(sbom_file)
+            SBOMDocumentController.create(abs_path, os.path.basename(sbom_file), scan.id, format=fmt)
+            click.echo(f"  + [{fmt}] {sbom_file}")
 
 
 @click.command("process")
@@ -412,7 +225,6 @@ def process_command() -> None:
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
     from ..extensions import batch_session, db as _db
-    import time as _time
 
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
@@ -423,37 +235,30 @@ def _run_main() -> dict:
         "assessments": assessCtrl
     }
 
-    _t0 = _time.monotonic()
-
     # Wrap all ingestion + post-treatment inside batch_session so that the
     # hundreds/thousands of individual model commit() calls are deferred to a
     # single SQLite transaction at the end of the block.
     with batch_session():
         files = read_inputs(controllers)
-        verbose(f"merger_ci: Finished reading inputs ({_time.monotonic() - _t0:.1f}s)")
+        verbose("merger_ci: Finished reading inputs")
 
-        _t1 = _time.monotonic()
         verbose("merger_ci: Start Post-treatment")
         post_treatment(controllers, files)
-        verbose(f"merger_ci: Finished post-treatment ({_time.monotonic() - _t1:.1f}s)")
+        verbose("merger_ci: Finished post-treatment")
     # ← single COMMIT happens here
-    verbose(f"merger_ci: DB commit done ({_time.monotonic() - _t0:.1f}s total)")
+    verbose("merger_ci: DB commit done")
 
     fail_condition = os.getenv("FAIL_CONDITION", "")
     failed_vulns = []
     if fail_condition:
-        _t2 = _time.monotonic()
         verbose("merger_ci: Start evaluating conditions")
         failed_vulns = evaluate_condition(controllers, fail_condition)
-        verbose(f"merger_ci: Finished evaluating conditions ({_time.monotonic() - _t2:.1f}s)")
+        verbose("merger_ci: Finished evaluating conditions")
 
-    _t3 = _time.monotonic()
     verbose("merger_ci: Start exporting results")
-    output_results(controllers, files, failed=len(failed_vulns) > 0, failed_vulns=failed_vulns)
-    verbose(f"merger_ci: Finished exporting results ({_time.monotonic() - _t3:.1f}s)")
+    verbose("merger_ci: Finished exporting results")
 
     # Populate the observations table: link every finding to the current scan.
-    _t4 = _time.monotonic()
     verbose("merger_ci: Populating observations table")
     try:
         latest_scan = ScanModel.get_latest()
@@ -463,21 +268,22 @@ def _run_main() -> dict:
                 (obs.finding_id, obs.scan_id)
                 for obs in Observation.get_by_scan(latest_scan.id)
             }
-            with batch_session():
-                for finding in findings:
-                    if (finding.id, latest_scan.id) not in existing_pairs:
-                        try:
-                            Observation.create(finding.id, latest_scan.id)
-                        except Exception:
-                            pass
+            new_observations = [
+                Observation(finding_id=finding.id, scan_id=latest_scan.id)
+                for finding in findings
+                if (finding.id, latest_scan.id) not in existing_pairs
+            ]
+            if new_observations:
+                with batch_session():
+                    _db.session.bulk_save_objects(new_observations)
             # ← single COMMIT for all observations
-            verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({_time.monotonic() - _t4:.1f}s)")
+            verbose(f"merger_ci: Observations created for scan {latest_scan.id}")
         else:
             print("Warning: no scan found in DB — skipping observation creation.")
     except Exception as e:
         print(f"Warning: could not populate observations table: {e}")
 
-    verbose(f"merger_ci: Total processing time: {_time.monotonic() - _t0:.1f}s")
+    verbose("merger_ci: Processing complete")
 
     if len(failed_vulns) > 0:
         raise SystemExit(2)

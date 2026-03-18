@@ -28,6 +28,7 @@ class SBOMDocumentController:
             "id": str(document.id),
             "path": document.path,
             "source_name": document.source_name,
+            "format": document.format,
             "scan_id": str(document.scan_id),
         }
 
@@ -78,10 +79,11 @@ class SBOMDocumentController:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create(path: str, source_name: str, scan_id: uuid.UUID | str) -> SBOMDocument:
+    def create(path: str, source_name: str, scan_id: uuid.UUID | str, format: Optional[str] = None) -> SBOMDocument:
         """
         Validate inputs and create a new SBOM document linked to *scan_id*.
 
+        :param format: Optional format hint: 'spdx', 'cdx', 'openvex', or 'yocto_cve_check'.
         :raises ValueError: if *path* or *source_name* is empty or blank.
         """
         path = path.strip()
@@ -92,16 +94,17 @@ class SBOMDocumentController:
             raise ValueError("SBOM document source_name must not be empty.")
         if isinstance(scan_id, str):
             scan_id = uuid.UUID(scan_id)
-        return SBOMDocument.create(path, source_name, scan_id)
+        return SBOMDocument.create(path, source_name, scan_id, format=format)
 
     @staticmethod
     def update(
         document: SBOMDocument | uuid.UUID | str,
         path: str,
         source_name: str,
+        format: Optional[str] = None,
     ) -> SBOMDocument:
         """
-        Update *document*'s path and source_name.  *document* may be a
+        Update *document*'s path, source_name and optional format.  *document* may be a
         :class:`SBOMDocument` instance, a UUID object, or a UUID string.
 
         :raises ValueError: if *path* or *source_name* is empty or blank,
@@ -121,7 +124,7 @@ class SBOMDocumentController:
             if found is None:
                 raise ValueError("SBOM document not found.")
             resolved = found
-        return resolved.update(path, source_name)
+        return resolved.update(path, source_name, format=format)
 
     @staticmethod
     def delete(document: SBOMDocument | uuid.UUID | str) -> None:
