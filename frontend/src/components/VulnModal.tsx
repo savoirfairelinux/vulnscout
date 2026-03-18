@@ -610,34 +610,34 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             </ul>
 
                             <div className="ml-2 grow-1">
-                                <div className="flex justify-between items-center mb-2">
+                                <div className="flex gap-3 justify-start items-center mb-2">
                                     <h3 className="text-lg font-bold text-white flex items-center">
                                         CVSS
-                                        {isEditing && (
-                                            <div className="relative ml-3">
-                                                <button
-                                                    onClick={() => setShowCustomCvss(!showCustomCvss)}
-                                                    className="text-blue-400 hover:text-blue-300 transition-colors"
-                                                    title="Add custom CVSS vector"
-                                                    aria-label="Add custom CVSS vector"
-                                                >
-                                                    <FontAwesomeIcon icon={faPlus} className="w-4 h-4" />
-                                                </button>
-
-                                                {showCustomCvss && (
-                                                    <div className="absolute right-0 mt-2 z-50 w-64">
-                                                        <CustomCvss
-                                                            onCancel={() => setShowCustomCvss(false)}
-                                                            onAddCvss={(vector) => {
-                                                                addCvss(vector);
-                                                            }}
-                                                            triggerBanner={showMessage}
-                                                        />
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
                                     </h3>
+                                    {isEditing && (
+                                        <div className="relative">
+                                            <button
+                                                onClick={() => setShowCustomCvss(!showCustomCvss)}
+                                                className="text-blue-400 hover:text-blue-300 transition-colors"
+                                                title="Add custom CVSS vector"
+                                                aria-label="Add custom CVSS vector"
+                                            >
+                                                <FontAwesomeIcon icon={faPlus} className="w-4 h-4" />
+                                            </button>
+
+                                            {showCustomCvss && (
+                                                <div className="absolute right-0 mt-2 z-50 w-64">
+                                                    <CustomCvss
+                                                        onCancel={() => setShowCustomCvss(false)}
+                                                        onAddCvss={(vector) => {
+                                                            addCvss(vector);
+                                                        }}
+                                                        triggerBanner={showMessage}
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="flex flex-wrap gap-2">
