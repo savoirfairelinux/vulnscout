@@ -58,6 +58,22 @@ class VulnerabilitiesController:
         self.alias_registered: dict[str, str] = {}
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
         self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+        self._preload_cache()
+
+    def _preload_cache(self) -> None:
+        """Bulk-load all vulnerabilities from the DB into the in-memory caches.
+
+        Called once at construction time so that subsequent :meth:`get` calls
+        are pure dict lookups — zero extra SELECTs per vulnerability.
+        """
+        try:
+            for rec in Vulnerability.get_all():
+                v = Vulnerability.from_dict(rec.to_dict())
+                self.vulnerabilities[v.id] = v
+                for alias in v.aliases:
+                    self.alias_registered.setdefault(alias, v.id)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # In-memory management  (used by parsers during scan ingestion)

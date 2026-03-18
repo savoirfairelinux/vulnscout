@@ -89,6 +89,11 @@ class Finding(Base):
         ).scalars().all())
 
     @staticmethod
+    def get_all() -> list["Finding"]:
+        """Return all findings in the database."""
+        return list(db.session.execute(db.select(Finding)).scalars().all())
+
+    @staticmethod
     def get_by_vulnerability(vulnerability_id: str) -> list["Finding"]:
         """Return all findings for the given vulnerability id."""
         return list(db.session.execute(

@@ -66,6 +66,7 @@ def output_results(controllers):
 
 def main():
     pkg_ctrl = PackagesController()
+    pkg_ctrl._preload_cache()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
     assess_ctrl = AssessmentsController(pkg_ctrl, vuln_ctrl)
     controllers = {

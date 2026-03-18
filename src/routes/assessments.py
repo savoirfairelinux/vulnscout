@@ -29,6 +29,7 @@ def init_app(app):
             import json
 
             pkgCtrl = PackagesController()
+            pkgCtrl._preload_cache()
             vulnCtrl = VulnerabilitiesController(pkgCtrl)
             assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
 
@@ -84,12 +85,9 @@ def init_app(app):
         for pkg_string_id in (assessment.packages or []):
             try:
                 from ..extensions import db
-                db_pkg = Package.get_by_string_id(pkg_string_id)
-                if db_pkg is None:
-                    # Auto-create the package with minimal info derived from 'name@version'
-                    name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
-                    db_pkg = Package.find_or_create(name, version)
-                    db.session.commit()
+                # find_or_create handles both lookup and creation in one query
+                name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                db_pkg = Package.find_or_create(name, version)
                 finding = Finding.get_or_create(db_pkg.id, vuln_id)
                 db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
                 db.session.commit()
@@ -108,6 +106,9 @@ def init_app(app):
 
         results = []
         errors = []
+        # Cache resolved packages across the batch to avoid repeated SELECTs
+        pkg_cache: dict = {}
+        finding_cache: dict = {}
 
         for item in payload_data["assessments"]:
             if not isinstance(item, dict) or "vuln_id" not in item:
@@ -123,13 +124,18 @@ def init_app(app):
             for pkg_string_id in (assessment.packages or []):
                 try:
                     from ..extensions import db
-                    db_pkg = Package.get_by_string_id(pkg_string_id)
+                    # Resolve package from cache first, then DB
+                    db_pkg = pkg_cache.get(pkg_string_id)
                     if db_pkg is None:
-                        # Auto-create the package with minimal info derived from 'name@version'
                         name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
                         db_pkg = Package.find_or_create(name, version)
-                        db.session.commit()
-                    finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                        pkg_cache[pkg_string_id] = db_pkg
+                    # Resolve finding from cache first, then DB
+                    f_key = (db_pkg.id, vuln_id)
+                    finding = finding_cache.get(f_key)
+                    if finding is None:
+                        finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                        finding_cache[f_key] = finding
                     db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
                     db.session.commit()
                     results.append(db_a.to_dict())
