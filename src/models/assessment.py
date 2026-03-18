@@ -134,8 +134,11 @@ class Assessment(Base):
 
     @property
     def vuln_id(self) -> str:
-        if hasattr(self, "_vuln_id") and self._vuln_id:
-            return self._vuln_id
+        # _vuln_id is always initialised by _init_transient / new_dto; avoid
+        # the repeated hasattr overhead in hot ingestion loops.
+        val = self._vuln_id
+        if val:
+            return val
         try:
             if self.finding:
                 return self.finding.vulnerability_id or ""

@@ -65,13 +65,34 @@ class VulnerabilitiesController:
 
         Called once at construction time so that subsequent :meth:`get` calls
         are pure dict lookups — zero extra SELECTs per vulnerability.
+
+        Populates transient DTO attributes directly from the already
+        eager-loaded ``findings`` and ``metrics`` relationships to avoid the
+        expensive ``to_dict()`` → ``from_dict()`` serialisation round-trip.
         """
+        from ..models.cvss import CVSS
         try:
             for rec in Vulnerability.get_all():
-                v = Vulnerability.from_dict(rec.to_dict())
-                self.vulnerabilities[v.id] = v
-                for alias in v.aliases:
-                    self.alias_registered.setdefault(alias, v.id)
+                # Populate transient package list from eager-loaded findings
+                for f in (rec.findings or []):
+                    if f.package:
+                        rec.add_package(f.package.string_id)
+                # Populate transient CVSS list from eager-loaded metrics
+                for m in (rec.metrics or []):
+                    try:
+                        rec.register_cvss(CVSS(
+                            m.version,
+                            m.vector or "",
+                            m.author or "unknown",
+                            float(m.score) if m.score is not None else 0.0,
+                            0.0,
+                            0.0,
+                        ))
+                    except Exception:
+                        pass
+                self.vulnerabilities[rec.id] = rec
+                # aliases are transient-only and not persisted to the DB;
+                # nothing to register here on a fresh load.
         except Exception:
             pass
 

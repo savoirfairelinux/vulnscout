@@ -114,6 +114,7 @@ function main() {
     if [[ "${PYSPY_FORMAT}" == "speedscope" ]]; then
         PYSPY_OUTPUT="/cache/vulnscout/profile.speedscope.json"
     fi
+    PYSPY_JSON_OUTPUT="/cache/vulnscout/profile.speedscope.json"
     echo "py-spy profiling → $PYSPY_OUTPUT"
     (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_OUTPUT" --format "$PYSPY_FORMAT" --subprocesses -- flask --app bin.webapp process) | \
         while IFS= read -r _line; do
@@ -123,6 +124,11 @@ function main() {
                 echo "$_line"
             fi
         done
+
+    if [[ "${PYSPY_FORMAT}" != "speedscope" ]]; then
+        echo "py-spy profiling (JSON) → $PYSPY_JSON_OUTPUT"
+        (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_JSON_OUTPUT" --format speedscope --subprocesses -- flask --app bin.webapp process) || true
+    fi
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
