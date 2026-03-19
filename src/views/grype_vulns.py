@@ -101,18 +101,36 @@ class GrypeVulns:
 
     def load_from_dict(self, data: dict):
         """Load the GrypeVulns object from a dictionary."""
-        for match in data.get("matches", []):
+        matches = data.get("matches", [])
 
-            packages = []
+        # Single pass: resolve packages, pre-warm the assessment index per
+        # unique package, then process vulnerabilities — all without a second
+        # iteration over `matches` or a second call to parse_artifact_section.
+        resolved: list[tuple[dict, list[str]]] = []  # (match, [pkg_id, ...])
+        seen_pkg_ids: set[str] = set()
+
+        for match in matches:
+            packages: list[str] = []
 
             if "artifact" in match:
                 pkg_id = self.parse_artifact_section(match["artifact"])
                 if pkg_id is not None:
                     packages.append(pkg_id)
+                    if pkg_id not in seen_pkg_ids:
+                        seen_pkg_ids.add(pkg_id)
+                        # Bulk-fetch all existing assessments for this package
+                        # so the in-memory index is complete before we start
+                        # checking for assessments below.
+                        for a in Assessment.get_by_package(pkg_id):
+                            self.assessmentsCtrl._index_existing(a)
+                        self.assessmentsCtrl._db_queried_pkgs.add(pkg_id)
 
             if "matchDetails" in match:
                 packages.extend(self.parse_match_details(match["matchDetails"]))
 
+            resolved.append((match, packages))
+
+        for match, packages in resolved:
             if "vulnerability" not in match:
                 continue
 
@@ -126,7 +144,18 @@ class GrypeVulns:
 
             vuln_data = self.vulnerabilitiesCtrl.add(vuln_data)
 
-            assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, packages[0])
-            if len(assessment) < 1:
-                assessment = Assessment.new_dto(vuln_data.id, packages)
-                self.assessmentsCtrl.add(assessment)
+            pkg0 = packages[0]
+            if pkg0 in self.assessmentsCtrl._db_queried_pkgs:
+                # Package was pre-warmed: all existing assessments are already
+                # in the in-memory index. Consult it directly — no DB query.
+                existing = self.assessmentsCtrl._by_vuln_pkg.get((vuln_data.id, pkg0), [])
+                if not existing:
+                    assessment = Assessment.new_dto(vuln_data.id, packages)
+                    self.assessmentsCtrl.add(assessment)
+            else:
+                # Fallback for packages that came only from matchDetails
+                # (no artifact section), which bypass the pre-warm above.
+                assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, pkg0)
+                if len(assessment) < 1:
+                    assessment = Assessment.new_dto(vuln_data.id, packages)
+                    self.assessmentsCtrl.add(assessment)
