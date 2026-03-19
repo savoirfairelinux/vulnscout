@@ -116,15 +116,9 @@ class Metrics(Base):
             return None  # type: ignore[return-value]
         cls._seen.add(dedup_key)
 
-        existing = db.session.execute(
-            db.select(Metrics).where(
-                Metrics.vulnerability_id == vid,
-                Metrics.version == cvss.version,
-                Metrics.score == cvss.base_score,
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return existing
+        # _seen is pre-populated from the DB at startup for all existing metrics.
+        # Reaching here means this is genuinely new — skip the existence SELECT
+        # and attempt the insert directly. On the rare race/duplicate, fall back.
         try:
             with db.session.begin_nested():
                 return cls.create(
