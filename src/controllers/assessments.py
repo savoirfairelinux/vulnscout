@@ -68,7 +68,7 @@ class AssessmentsController:
         """A dictionary of assessments, indexed by their id."""
         # Secondary indexes for O(1) lookups in hot ingestion paths.
         self._by_vuln: dict[str, list[str]] = {}       # vuln_id → [assessment_key, ...]
-        self._by_vuln_pkg: dict[tuple, list[str]] = {} # (vuln_id, pkg_id) → [assessment_key, ...]
+        self._by_vuln_pkg: dict[tuple, list[str]] = {}  # (vuln_id, pkg_id) → [assessment_key, ...]
         # Tracks (vuln_id, pkg_id) pairs already fetched from DB so that
         # gets_by_vuln_pkg never fires redundant SELECT queries for the same pair.
         self._db_queried_vuln_pkg: set[tuple] = set()
