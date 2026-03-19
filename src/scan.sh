@@ -65,11 +65,11 @@ function main() {
     # 0. Run server to start page
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         set_status "0" "Server started"
-        FLASK_ARGS=(--app bin.webapp run)
+        FLASK_ARGS=(--app src.bin.webapp run)
         if [[ "${DEV_MODE}" == "true" ]]; then
             FLASK_ARGS+=(--debug)
         fi
-        (cd "$BASE_DIR/src" && flask "${FLASK_ARGS[@]}") &
+        (cd "$BASE_DIR" && flask "${FLASK_ARGS[@]}") &
     fi
 
     python3 -m src.bin.epss_db_builder &
@@ -101,8 +101,8 @@ function main() {
         for f in "$YOCTO_CVE_TMP_PATH"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f"); done
     fi
     for f in "$TMP_PATH"/*.grype.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f"); done
-    (cd "$BASE_DIR/src" && flask --app bin.webapp db upgrade)
-    (cd "$BASE_DIR/src" && flask --app bin.webapp merge "${INIT_APP_ARGS[@]}")
+    (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade)
+    (cd "$BASE_DIR" && flask --app src.bin.webapp merge "${INIT_APP_ARGS[@]}")
 
     # 8. Merge all vulnerability from scan results
     # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
@@ -115,8 +115,36 @@ function main() {
         PYSPY_OUTPUT="/cache/vulnscout/profile.speedscope.json"
     fi
     PYSPY_JSON_OUTPUT="/cache/vulnscout/profile.speedscope.json"
+
+    run_pyspy_record() {
+        local out_file="$1"
+        local out_format="$2"
+        set +e
+        local _pyspy_log
+        _pyspy_log=$(mktemp)
+        (cd "$BASE_DIR" && py-spy record --output "$out_file" --format "$out_format" --subprocesses -- flask --app src.bin.webapp process) 2>&1 | tee "$_pyspy_log"
+        local _rc=${PIPESTATUS[0]}
+        set -e
+
+        if [[ $_rc -eq 0 ]]; then
+            rm -f "$_pyspy_log"
+            return 0
+        fi
+
+        if grep -q "No child process (os error 10)" "$_pyspy_log"; then
+            echo "Warning: py-spy reported ECHILD after target exit; ignoring profiler-only error."
+            rm -f "$_pyspy_log"
+            return 0
+        fi
+
+        echo "Error: py-spy record failed with exit code ${_rc}."
+        cat "$_pyspy_log"
+        rm -f "$_pyspy_log"
+        return $_rc
+    }
+
     echo "py-spy profiling → $PYSPY_OUTPUT"
-    (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_OUTPUT" --format "$PYSPY_FORMAT" --subprocesses -- flask --app bin.webapp process) | \
+    run_pyspy_record "$PYSPY_OUTPUT" "$PYSPY_FORMAT" | \
         while IFS= read -r _line; do
             if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
                 set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
@@ -127,7 +155,7 @@ function main() {
 
     if [[ "${PYSPY_FORMAT}" != "speedscope" ]]; then
         echo "py-spy profiling (JSON) → $PYSPY_JSON_OUTPUT"
-        (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_JSON_OUTPUT" --format speedscope --subprocesses -- flask --app bin.webapp process) || true
+        run_pyspy_record "$PYSPY_JSON_OUTPUT" speedscope
     fi
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
