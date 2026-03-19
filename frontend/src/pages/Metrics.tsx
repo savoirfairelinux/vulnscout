@@ -646,13 +646,15 @@ const packageColumns = [
 
             {/* Table Body */}
             <div className="bg-zinc-700 p-4 rounded-b-md">
-              <TableGeneric
-                columns={vulnColumns}
-                data={TopVulns}
-                hoverField="texts"
-                hasPagination={false}
-                tableHeight="auto"
-              />
+              <div className="w-full h-full overflow-y-auto">
+                <TableGeneric
+                  columns={vulnColumns}
+                  data={TopVulns}
+                  hoverField="texts"
+                  hasPagination={false}
+                  tableHeight="auto"
+                />
+              </div>
             </div>
           </div>
 
@@ -673,12 +675,14 @@ const packageColumns = [
 
             {/* Table Body */}
             <div className="bg-zinc-700 p-4 rounded-b-md">
-              <TableGeneric
-                columns={packageColumns}
-                data={topVulnerablePackages}
-                hasPagination={false}
-                tableHeight="auto"
-              />
+              <div className="w-full h-full overflow-y-auto">
+                <TableGeneric
+                  columns={packageColumns}
+                  data={topVulnerablePackages}
+                  hasPagination={false}
+                  tableHeight="auto"
+                />
+              </div>
             </div>
           </div>
 
