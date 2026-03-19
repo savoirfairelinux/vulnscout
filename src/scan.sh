@@ -37,7 +37,7 @@ VERBOSE_MODE=${VERBOSE_MODE-"false"}
 VULNSCOUT_VERSION=${VULNSCOUT_VERSION-"unknown"}
 SKIP_GRYPE_SCAN=${SKIP_GRYPE_SCAN-"false"}
 DEV_MODE=${DEV_MODE-"false"}
-PYSPY_FORMAT=${PYSPY_FORMAT-"speedscope"}
+PYSPY_FORMAT=${PYSPY_FORMAT-"flamegraph"}
 
 echo "VulnScout $VULNSCOUT_VERSION"
 
@@ -110,39 +110,24 @@ function main() {
     # passed through to stdout unchanged.
     # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
     # triggered fail condition) is still propagated through the pipeline.
-    #
-    # py-spy launches flask directly via `--` (no attach race condition).
-    # Only ONE run is performed: flask process is a one-shot command and has
-    # nothing left to do on a second invocation, so py-spy would collect 0
-    # samples and write no file.  PYSPY_FORMAT defaults to "speedscope" which
-    # produces profile.speedscope.json viewable at speedscope.app (it also
-    # supports flamegraph view inside the UI).  Set PYSPY_FORMAT=flamegraph to
-    # get an SVG instead.
+    PYSPY_OUTPUT="/cache/vulnscout/profile.${PYSPY_FORMAT}.svg"
     if [[ "${PYSPY_FORMAT}" == "speedscope" ]]; then
         PYSPY_OUTPUT="/cache/vulnscout/profile.speedscope.json"
-    else
-        PYSPY_OUTPUT="/cache/vulnscout/profile.${PYSPY_FORMAT}.svg"
     fi
-
-    FLASK_OUTPUT_TMP=$(mktemp)
+    PYSPY_JSON_OUTPUT="/cache/vulnscout/profile.speedscope.json"
     echo "py-spy profiling → $PYSPY_OUTPUT"
-    (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_OUTPUT" --format "$PYSPY_FORMAT" --subprocesses -- \
-        flask --app bin.webapp process) > "$FLASK_OUTPUT_TMP" 2>&1 || FLASK_EXIT_CODE=$?
-    FLASK_EXIT_CODE=${FLASK_EXIT_CODE:-0}
+    (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_OUTPUT" --format "$PYSPY_FORMAT" --subprocesses -- flask --app bin.webapp process) | \
+        while IFS= read -r _line; do
+            if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
+                set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+            else
+                echo "$_line"
+            fi
+        done
 
-    # Replay flask output: intercept ::STATUS:: lines and echo the rest.
-    while IFS= read -r _line; do
-        if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
-            set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
-        else
-            echo "$_line"
-        fi
-    done < "$FLASK_OUTPUT_TMP"
-    rm -f "$FLASK_OUTPUT_TMP"
-
-    # Propagate a non-zero flask exit code.
-    if [[ $FLASK_EXIT_CODE -ne 0 ]]; then
-        exit $FLASK_EXIT_CODE
+    if [[ "${PYSPY_FORMAT}" != "speedscope" ]]; then
+        echo "py-spy profiling (JSON) → $PYSPY_JSON_OUTPUT"
+        (cd "$BASE_DIR/src" && py-spy record --output "$PYSPY_JSON_OUTPUT" --format speedscope --subprocesses -- flask --app bin.webapp process) || true
     fi
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"

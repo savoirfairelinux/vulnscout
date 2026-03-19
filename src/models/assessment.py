@@ -530,27 +530,13 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def from_vuln_assessment(assess, finding_id=None, assessment_cache=None, is_new: bool = False) -> "Assessment":
-        """Create or update an ``Assessment`` DB record from an Assessment DTO.
-
-        *assessment_cache* is an optional ``{finding_id: Assessment}`` dict
-        supplied by the ingestion pipeline to avoid a SELECT per call during
-        bulk inserts.  On a cache miss the DB is queried normally and the
-        result is stored in the cache for subsequent calls.
-        *is_new* when ``True`` skips the existence SELECT entirely and goes
-        straight to INSERT (safe when the caller knows the record is brand-new).
-        """
+    def from_vuln_assessment(assess, finding_id=None) -> "Assessment":
+        """Create or update an ``Assessment`` DB record from an Assessment DTO."""
         existing = None
-        if finding_id is not None and not is_new:
-            # Fast path: check the caller-supplied cache before hitting the DB
-            if assessment_cache is not None:
-                existing = assessment_cache.get(finding_id)
-            if existing is None:
-                existing = db.session.execute(
-                    db.select(Assessment).where(Assessment.finding_id == finding_id)
-                ).scalar_one_or_none()
-                if existing is not None and assessment_cache is not None:
-                    assessment_cache[finding_id] = existing
+        if finding_id is not None:
+            existing = db.session.execute(
+                db.select(Assessment).where(Assessment.finding_id == finding_id)
+            ).scalar_one_or_none()
 
         if existing is not None:
             existing.status = assess.status or existing.status
@@ -571,8 +557,6 @@ class Assessment(Base):
             workaround=getattr(assess, "workaround", None),
             responses=list(assess.responses) if assess.responses else [],
         )
-        if assessment_cache is not None and finding_id is not None:
-            assessment_cache[finding_id] = record
         return record
 
     @staticmethod

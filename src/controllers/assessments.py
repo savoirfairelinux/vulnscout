@@ -8,13 +8,7 @@ from ..models.package import Package
 from typing import Optional
 
 
-def _persist_assessment_to_db(
-    assessment: Assessment,
-    pkg_id_cache=None,
-    finding_cache=None,
-    assessment_cache=None,
-    is_new: bool = False,
-) -> None:
+def _persist_assessment_to_db(assessment: Assessment, pkg_id_cache=None, finding_cache=None) -> None:
     """Persist an Assessment DTO to the DB via Finding resolution.
 
     Uses a SAVEPOINT so that a failure only rolls back this single
@@ -22,17 +16,11 @@ def _persist_assessment_to_db(
 
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
-    *assessment_cache* is an optional ``{finding_id: Assessment}`` dict
-    that avoids a redundant SELECT inside ``from_vuln_assessment``.
-    *is_new* when ``True`` tells ``from_vuln_assessment`` to skip the
-    existence SELECT and go straight to INSERT.
     """
     if pkg_id_cache is None:
         pkg_id_cache = {}
     if finding_cache is None:
         finding_cache = {}
-    if assessment_cache is None:
-        assessment_cache = {}
     try:
         from ..extensions import db
         from ..models.assessment import Assessment as DBAssessment
@@ -58,12 +46,7 @@ def _persist_assessment_to_db(
                     finding = Finding.get_or_create(pkg_uuid, assessment.vuln_id)
                     finding_cache[cache_key] = finding
 
-                DBAssessment.from_vuln_assessment(
-                    assessment,
-                    finding_id=finding.id,
-                    assessment_cache=assessment_cache,
-                    is_new=is_new,
-                )
+                DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
     except Exception:
         pass
 
@@ -86,61 +69,6 @@ class AssessmentsController:
         # Secondary indexes for O(1) lookups in hot ingestion paths.
         self._by_vuln: dict[str, list[str]] = {}       # vuln_id → [assessment_key, ...]
         self._by_vuln_pkg: dict[tuple, list[str]] = {} # (vuln_id, pkg_id) → [assessment_key, ...]
-        # finding_id → DB Assessment record cache; avoids SELECT in from_vuln_assessment
-        self._assessment_cache: dict = {}
-        # True once _preload_cache() has warmed all indexes from the DB.
-        self._cache_preloaded: bool = False
-        self._preload_cache()
-
-    def _preload_cache(self) -> None:
-        """Bulk-load all assessments from DB into in-memory caches.
-
-        Mirrors ``VulnerabilitiesController._preload_cache``.  After this runs,
-        ``gets_by_vuln_pkg`` never needs a DB round-trip during ingestion because
-        every existing (vuln, pkg) pair is already in ``_by_vuln_pkg``.
-        """
-        try:
-            from ..extensions import db
-            from ..models.assessment import Assessment as DBAssessment
-            from ..models.finding import Finding as FindingModel
-            from sqlalchemy.orm import selectinload
-
-            records = list(db.session.execute(
-                db.select(DBAssessment)
-                .options(
-                    selectinload(DBAssessment.finding)
-                    .selectinload(FindingModel.package)
-                )
-            ).scalars().all())
-
-            for rec in records:
-                key = str(rec.id)
-                try:
-                    vuln_id = rec.finding.vulnerability_id if rec.finding else None
-                    pkg_sid = (
-                        rec.finding.package.string_id
-                        if rec.finding and rec.finding.package else None
-                    )
-                except Exception:
-                    continue
-                if vuln_id:
-                    rec._vuln_id = vuln_id
-                if pkg_sid:
-                    rec._packages = [pkg_sid]
-                self.assessments[key] = rec
-                self._assessment_cache[rec.finding_id] = rec
-                if vuln_id:
-                    vuln_list = self._by_vuln.setdefault(vuln_id, [])
-                    if key not in vuln_list:
-                        vuln_list.append(key)
-                    if pkg_sid:
-                        vp_list = self._by_vuln_pkg.setdefault((vuln_id, pkg_sid), [])
-                        if key not in vp_list:
-                            vp_list.append(key)
-
-            self._cache_preloaded = True
-        except Exception:
-            pass
 
     def get_by_id(self, assess_id) -> Optional[Assessment]:
         """Return an assessment by id (str or UUID) or None if not found."""
@@ -187,13 +115,7 @@ class AssessmentsController:
         return list(results.values())
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
-        """Return assessments for a (vulnerability, package) pair.
-
-        Uses the in-memory secondary index first — if it has hits, the DB is
-        not queried at all.  When a DB fallback is needed, a single JOIN query
-        (Assessment → Finding → Package) replaces the previous two-query
-        approach (get_by_package_and_vulnerability + get_by_finding).
-        """
+        """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
         results: dict[str, Assessment] = {}
@@ -202,38 +124,13 @@ class AssessmentsController:
             a = self.assessments.get(key)
             if a is not None:
                 results[key] = a
-        # Early exit: in-memory cache already has the data — skip DB entirely.
-        # Also skip when the cache was fully preloaded at init: any (vuln, pkg)
-        # pair absent from _by_vuln_pkg simply has no assessment in the DB.
-        if results or self._cache_preloaded:
-            return list(results.values())
         try:
             from ..models.finding import Finding
-            from ..models.package import Package as PkgModel
-            from ..extensions import db
-            if "@" in pkg_str:
-                # Split "name@version" and do a single three-table JOIN instead
-                # of two separate SELECT round-trips.
-                pkg_name, pkg_version = pkg_str.split("@", 1)
-                for a in db.session.execute(
-                    db.select(Assessment)
-                    .join(Finding, Assessment.finding_id == Finding.id)
-                    .join(PkgModel, Finding.package_id == PkgModel.id)
-                    .where(
-                        Finding.vulnerability_id == vuln_str.upper(),
-                        PkgModel.name == pkg_name,
-                        PkgModel.version == pkg_version,
-                    )
-                ).scalars().all():
+            finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
+            if finding is not None:
+                for a in Assessment.get_by_finding(finding.id):
                     if str(a.id) not in results:
                         results[str(a.id)] = a
-            else:
-                # Fallback for UUID-style package ids
-                finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
-                if finding is not None:
-                    for a in Assessment.get_by_finding(finding.id):
-                        if str(a.id) not in results:
-                            results[str(a.id)] = a
         except Exception:
             pass
         return list(results.values())
@@ -243,8 +140,7 @@ class AssessmentsController:
         if assessment is None:
             return
         key = str(assessment.id)
-        is_new = key not in self.assessments
-        if is_new:
+        if key not in self.assessments:
             self.assessments[key] = assessment
         else:
             self.assessments[key].merge(assessment)
@@ -252,8 +148,6 @@ class AssessmentsController:
             self.assessments[key],
             pkg_id_cache=getattr(self.packagesCtrl, '_db_id_cache', None),
             finding_cache=getattr(self.packagesCtrl, '_finding_cache', None),
-            assessment_cache=self._assessment_cache,
-            is_new=is_new,
         )
         # Maintain secondary indexes
         stored = self.assessments[key]
