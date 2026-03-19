@@ -16,7 +16,9 @@ from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 
 
-def _persist_vuln_to_db(vuln: Vulnerability, pkg_id_cache=None, finding_cache=None, db_record_cache=None, use_savepoint: bool = True) -> None:
+def _persist_vuln_to_db(
+        vuln: Vulnerability, pkg_id_cache=None, finding_cache=None,
+        db_record_cache=None, use_savepoint: bool = True) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls

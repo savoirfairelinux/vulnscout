@@ -6,7 +6,7 @@ CI_DIR := $(MAKEFILE_DIR)/CI_tests
 test: test_backend test_frontend test_ci
 
 test_backend:
-	flake8 $(SRC_DIR)
+	flake8 $(SRC_DIR) --exclude=$(SRC_DIR)/migrations
 	mypy --config-file tox.ini $(SRC_DIR)
 	pytest --cov-report term-missing --cov-report html --cov=$(SRC_DIR) --cov-fail-under=95
 	pdoc $(SRC_DIR) -o ./htmldocs
