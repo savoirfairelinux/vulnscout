@@ -34,7 +34,9 @@ class SBOMDocument(Base):
 
     @staticmethod
     def create(path: str, source_name: str, scan_id: uuid.UUID, format: Optional[str] = None) -> "SBOMDocument":
-        """Create a new SBOM document with the given path, source_name and optional format under scan_id, persist it and return it."""
+        """Create a new SBOM document with the given path, source_name and optional format
+        under scan_id, persist it and return it.
+        """
         sbomdocument = SBOMDocument(path=path, source_name=source_name, format=format, scan_id=scan_id)
         db.session.add(sbomdocument)
         db.session.commit()

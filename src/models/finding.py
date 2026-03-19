@@ -67,7 +67,7 @@ class Finding(Base):
     @staticmethod
     def create(package_id: "uuid.UUID | str", vulnerability_id: str, commit: bool = True) -> "Finding":
         """Create a new finding, persist it and return it.
-        
+
         Args:
             package_id: UUID or string identifier of the package
             vulnerability_id: Vulnerability ID string

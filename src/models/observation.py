@@ -34,7 +34,7 @@ class Observation(Base):
         commit: bool = True,
     ) -> "Observation":
         """Create a new observation, persist it and return it.
-        
+
         Args:
             commit: If True (default), commit immediately. Set False for bulk operations.
         """
