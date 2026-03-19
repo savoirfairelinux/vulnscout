@@ -385,7 +385,6 @@ EOF
     fi
     if [ "$VULNSCOUT_DEV_MODE" = "true" ]; then
         echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/src:/scan/src:Z" >> "$YAML_FILE"
-        echo "      - $( dirname -- "$( readlink -f -- "$0"; )"; )/migrations:/scan/src/migrations:Z" >> "$YAML_FILE"
     fi
     echo "      - $VULNSCOUT_COMBINED_PATH/output:/scan/outputs:Z" >> "$YAML_FILE"
     echo "      - $VULNSCOUT_PATH/cache:/cache/vulnscout:Z" >> "$YAML_FILE"
