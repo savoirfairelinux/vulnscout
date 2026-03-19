@@ -81,6 +81,8 @@ class VulnerabilitiesController:
         """Set to False during batch operations inside batch_session() for better performance."""
         self._persisted_ids: set[str] = set()
         """IDs of vulnerabilities already persisted to DB — skip re-persist when unchanged."""
+        self._db_record_cache: dict = {}
+        """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
         self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
         self._preload_cache()
@@ -118,6 +120,17 @@ class VulnerabilitiesController:
                 self.vulnerabilities[rec.id] = rec
                 self._persisted_ids.add(rec.id)
                 rec._persisted_packages = set(rec.packages)  # track persisted packages to skip redundant DB work
+                # Cache the DB record so persist_from_transient skips get_by_id.
+                self._db_record_cache[rec.id] = rec
+                # Pre-populate Metrics._seen so from_cvss skips the SELECT
+                # for every metric that already exists in the DB.
+                from ..models.metrics import Metrics as MetricsModel
+                for m in (rec.metrics or []):
+                    MetricsModel._seen.add((
+                        rec.id,
+                        m.version,
+                        float(m.score) if m.score is not None else None,
+                    ))
                 # aliases are transient-only and not persisted to the DB;
                 # nothing to register here on a fresh load.
         except Exception:
@@ -158,6 +171,7 @@ class VulnerabilitiesController:
         _caches = dict(
             pkg_id_cache=self.packagesCtrl._db_id_cache,
             finding_cache=self.packagesCtrl._finding_cache,
+            db_record_cache=self._db_record_cache,
         )
 
         def _persist_if_needed(stored: Vulnerability, new_packages: set[str]) -> None:
