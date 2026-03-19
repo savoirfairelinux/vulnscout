@@ -35,10 +35,8 @@ from ..helpers.verbose import verbose
 import click
 import json
 import os
-from datetime import date, datetime, timezone
-from typing import Any
 from flask.cli import with_appcontext
-from sqlalchemy import and_, not_, exists
+from sqlalchemy import and_, exists
 
 DEFAULT_VARIANT_NAME = "default"
 
