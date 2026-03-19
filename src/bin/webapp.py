@@ -34,7 +34,8 @@ def create_app():
         app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
 
     db.init_app(app)
-    migrate.init_app(app, db)
+    _migrations_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
+    migrate.init_app(app, db, directory=_migrations_dir)
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
