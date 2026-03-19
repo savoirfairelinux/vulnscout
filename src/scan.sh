@@ -37,7 +37,6 @@ VERBOSE_MODE=${VERBOSE_MODE-"false"}
 VULNSCOUT_VERSION=${VULNSCOUT_VERSION-"unknown"}
 SKIP_GRYPE_SCAN=${SKIP_GRYPE_SCAN-"false"}
 DEV_MODE=${DEV_MODE-"false"}
-PYSPY_FORMAT=${PYSPY_FORMAT-"flamegraph"}
 
 echo "VulnScout $VULNSCOUT_VERSION"
 
@@ -110,41 +109,7 @@ function main() {
     # passed through to stdout unchanged.
     # With set -o pipefail the non-zero exit code from flask (e.g. 2 for a
     # triggered fail condition) is still propagated through the pipeline.
-    PYSPY_OUTPUT="/cache/vulnscout/profile.${PYSPY_FORMAT}.svg"
-    if [[ "${PYSPY_FORMAT}" == "speedscope" ]]; then
-        PYSPY_OUTPUT="/cache/vulnscout/profile.speedscope.json"
-    fi
-    PYSPY_JSON_OUTPUT="/cache/vulnscout/profile.speedscope.json"
-
-    run_pyspy_record() {
-        local out_file="$1"
-        local out_format="$2"
-        set +e
-        local _pyspy_log
-        _pyspy_log=$(mktemp)
-        (cd "$BASE_DIR" && py-spy record --output "$out_file" --format "$out_format" --subprocesses -- flask --app src.bin.webapp process) 2>&1 | tee "$_pyspy_log"
-        local _rc=${PIPESTATUS[0]}
-        set -e
-
-        if [[ $_rc -eq 0 ]]; then
-            rm -f "$_pyspy_log"
-            return 0
-        fi
-
-        if grep -q "No child process (os error 10)" "$_pyspy_log"; then
-            echo "Warning: py-spy reported ECHILD after target exit; ignoring profiler-only error."
-            rm -f "$_pyspy_log"
-            return 0
-        fi
-
-        echo "Error: py-spy record failed with exit code ${_rc}."
-        cat "$_pyspy_log"
-        rm -f "$_pyspy_log"
-        return $_rc
-    }
-
-    echo "py-spy profiling → $PYSPY_OUTPUT"
-    run_pyspy_record "$PYSPY_OUTPUT" "$PYSPY_FORMAT" | \
+    (cd "$BASE_DIR" && flask --app src.bin.webapp process) | \
         while IFS= read -r _line; do
             if [[ "$_line" =~ ^::STATUS::([0-9]+)::(.*)$ ]]; then
                 set_status "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
@@ -152,11 +117,6 @@ function main() {
                 echo "$_line"
             fi
         done
-
-    if [[ "${PYSPY_FORMAT}" != "speedscope" ]]; then
-        echo "py-spy profiling (JSON) → $PYSPY_JSON_OUTPUT"
-        run_pyspy_record "$PYSPY_JSON_OUTPUT" speedscope
-    fi
 
     set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
