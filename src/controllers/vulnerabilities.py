@@ -14,6 +14,7 @@ from typing import Optional
 from ..models.vulnerability import Vulnerability
 from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
+from ..helpers.verbose import verbose
 
 
 def _persist_vuln_to_db(
@@ -57,8 +58,8 @@ def _persist_vuln_to_db(
                 finding_cache=finding_cache,
                 db_record_cache=db_record_cache,
             )
-    except Exception:
-        pass
+    except Exception as e:
+        verbose(f"[_persist_vuln_to_db {vuln.id!r}] {e}")
 
 
 class VulnerabilitiesController:
@@ -117,8 +118,8 @@ class VulnerabilitiesController:
                             0.0,
                             0.0,
                         ))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        verbose(f"[VulnerabilitiesController._preload_cache register_cvss {rec.id!r}] {e}")
                 self.vulnerabilities[rec.id] = rec
                 self._persisted_ids.add(rec.id)
                 rec._persisted_packages = set(rec.packages)  # track persisted packages to skip redundant DB work
@@ -135,11 +136,8 @@ class VulnerabilitiesController:
                     ))
                 # aliases are transient-only and not persisted to the DB;
                 # nothing to register here on a fresh load.
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # In-memory management  (used by parsers during scan ingestion)
+        except Exception as e:
+            verbose(f"[VulnerabilitiesController._preload_cache] {e}")
     # ------------------------------------------------------------------
 
     def get(self, vuln_id: str):
@@ -155,8 +153,8 @@ class VulnerabilitiesController:
                 vuln = Vulnerability.from_dict(rec.to_dict())
                 self.vulnerabilities[vuln.id] = vuln
                 return vuln
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[VulnerabilitiesController.get {vuln_id!r}] {e}")
         return None
 
     def add(self, vulnerability: Vulnerability) -> Optional[Vulnerability]:
@@ -346,7 +344,8 @@ class VulnerabilitiesController:
             return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
         try:
             return {r.id: r.to_dict() for r in Vulnerability.get_all()}
-        except Exception:
+        except Exception as e:
+            verbose(f"[VulnerabilitiesController.to_dict] {e}")
             return {}
 
     @staticmethod
@@ -406,8 +405,8 @@ class VulnerabilitiesController:
             for record in Vulnerability.get_all():
                 yield Vulnerability.from_dict(record.to_dict())
             return
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[VulnerabilitiesController.__iter__] {e}")
 
     # ------------------------------------------------------------------
     # DB-level helpers  (merged from VulnerabilityDBController)

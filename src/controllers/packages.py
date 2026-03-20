@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
+from ..helpers.verbose import verbose
 
 
 class PackagesController:
@@ -44,14 +45,14 @@ class PackagesController:
                 sid = pkg.string_id
                 self._cache[sid] = pkg
                 self._db_id_cache[sid] = pkg.id
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[PackagesController._preload_cache packages] {e}")
         try:
             from ..models.finding import Finding
             for f in Finding.get_all():
                 self._finding_cache[(f.package_id, f.vulnerability_id)] = f
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[PackagesController._preload_cache findings] {e}")
 
     def set_sbom_document(self, doc_id) -> None:
         """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""
@@ -123,8 +124,8 @@ class PackagesController:
                     # Link to the current SBOM document if one is active
                     if self._current_sbom_document_id is not None:
                         SBOMPackage.get_or_create(self._current_sbom_document_id, db_pkg.id)
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[PackagesController.add {package.string_id!r}] {e}")
 
     def remove(self, package_id: str) -> bool:
         """Remove a package from the session cache and the DB."""
@@ -136,8 +137,8 @@ class PackagesController:
                 if db_pkg:
                     db_pkg.delete()
                     removed = True
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[PackagesController.remove {package_id!r}] {e}")
         return removed
 
     # ------------------------------------------------------------------
@@ -153,7 +154,8 @@ class PackagesController:
             if pkg:
                 self._cache[package_id] = pkg
             return pkg
-        except Exception:
+        except Exception as e:
+            verbose(f"[PackagesController.get {package_id!r}] {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -166,7 +168,8 @@ class PackagesController:
             return {k: v.to_dict() for k, v in self._cache.items()}
         try:
             return {pkg.string_id: pkg.to_dict() for pkg in Package.get_all()}
-        except Exception:
+        except Exception as e:
+            verbose(f"[PackagesController.to_dict] {e}")
             return {}
 
     @staticmethod
@@ -194,7 +197,8 @@ class PackagesController:
                 return True
             try:
                 return Package.get_by_string_id(item) is not None
-            except Exception:
+            except Exception as e:
+                verbose(f"[PackagesController.__contains__ {item!r}] {e}")
                 return False
         elif isinstance(item, Package):
             return self.__contains__(item.string_id)
@@ -206,7 +210,8 @@ class PackagesController:
         try:
             from ..extensions import db
             return db.session.query(Package).count()
-        except Exception:
+        except Exception as e:
+            verbose(f"[PackagesController.__len__] {e}")
             return 0
 
     def __iter__(self):
@@ -220,8 +225,8 @@ class PackagesController:
             return
         try:
             yield from Package.get_all()
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[PackagesController.__iter__] {e}")
 
     # Backward-compat alias used by some older code paths
     @property

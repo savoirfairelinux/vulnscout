@@ -7,6 +7,7 @@ from ..models.vulnerability import Vulnerability
 from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
+from ..helpers.verbose import verbose
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
@@ -41,6 +42,8 @@ def init_app(app):
 
         if request.method == 'PATCH':
             payload_data = request.get_json()
+            if payload_data is None:
+                return {"error": "Invalid request data"}, 400
 
             if "effort" in payload_data:
                 # Store effort on the first finding's time-estimate
@@ -64,8 +67,8 @@ def init_app(app):
                         else:
                             TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose(f"[PATCH /api/vulnerabilities/{record.id} effort] {e}")
 
             if "cvss" in payload_data:
                 new_cvss = payload_data["cvss"]
@@ -75,8 +78,8 @@ def init_app(app):
                 cvss_obj = CVSS.from_dict(new_cvss)
                 try:
                     Metrics.from_cvss(cvss_obj, record.id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose(f"[PATCH /api/vulnerabilities/{record.id} cvss] {e}")
 
         return record.to_dict()
 
@@ -125,8 +128,8 @@ def init_app(app):
                         else:
                             TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} effort] {e}")
 
             if "cvss" in item:
                 new_cvss = item["cvss"]
@@ -137,8 +140,8 @@ def init_app(app):
                 cvss_obj = CVSS.from_dict(new_cvss)
                 try:
                     Metrics.from_cvss(cvss_obj, record.id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} cvss] {e}")
 
             results.append(record.to_dict())
 

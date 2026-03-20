@@ -6,6 +6,7 @@
 from ..models.assessment import Assessment
 from ..models.package import Package
 from typing import Optional
+from ..helpers.verbose import verbose
 
 
 def _persist_assessment_to_db(
@@ -55,8 +56,8 @@ def _persist_assessment_to_db(
                     finding_cache[cache_key] = finding
 
                 DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
-    except Exception:
-        pass
+    except Exception as e:
+        verbose(f"[_persist_assessment_to_db {assessment.vuln_id!r}] {e}")
 
 
 class AssessmentsController:
@@ -109,8 +110,8 @@ class AssessmentsController:
             for a in Assessment.get_by_vulnerability(vuln_str):
                 if str(a.id) not in results:
                     results[str(a.id)] = a
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[AssessmentsController.gets_by_vuln {vuln_str!r}] {e}")
         return list(results.values())
 
     def gets_by_pkg(self, pkg_id) -> list:
@@ -126,8 +127,8 @@ class AssessmentsController:
             for a in Assessment.get_by_package(pkg_str):
                 if str(a.id) not in results:
                     results[str(a.id)] = a
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[AssessmentsController.gets_by_pkg {pkg_str!r}] {e}")
         return list(results.values())
 
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
@@ -153,12 +154,10 @@ class AssessmentsController:
                     for a in Assessment.get_by_finding(finding.id):
                         a_key = str(a.id)
                         if a_key not in results:
-                            # Populate the in-memory index so future calls hit
-                            # the fast path immediately.
                             self._index_existing(a)
                             results[a_key] = a
-            except Exception:
-                pass
+            except Exception as e:
+                verbose(f"[AssessmentsController.gets_by_vuln_pkg {vuln_str!r}/{pkg_str!r}] {e}")
         return list(results.values())
 
     def _index_existing(self, assessment: Assessment) -> None:
@@ -244,7 +243,8 @@ class AssessmentsController:
         try:
             from ..models.assessment import Assessment as DBAssessment
             return {str(a.id): a.to_dict() for a in DBAssessment.get_all()}
-        except Exception:
+        except Exception as e:
+            verbose(f"[AssessmentsController.to_dict] {e}")
             return {}
 
     @staticmethod
