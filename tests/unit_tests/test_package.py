@@ -184,3 +184,33 @@ def test_package_with_vendor():
     assert pkg.cpe[0] == "cpe:2.3:a:vendor:name:1.0.0:*:*:*:*:*:*:*"
     assert len(pkg.purl) == 1
     assert pkg.purl[0] == "pkg:generic/vendor/name@1.0.0"
+
+
+def test_add_empty_cpe_and_purl():
+    """
+    GIVEN a Package
+    WHEN calling add_cpe('') and add_purl('') with empty strings
+    THEN check the operations are no-ops (empty-string early return)
+    """
+    pkg = Package("foo", "1.0.0")
+    initial_cpe = list(pkg.cpe or [])
+    initial_purl = list(pkg.purl or [])
+    pkg.add_cpe("")
+    pkg.add_purl("")
+    assert list(pkg.cpe or []) == initial_cpe
+    assert list(pkg.purl or []) == initial_purl
+
+
+def test_lt_fallback_same_name_invalid_versions():
+    """
+    GIVEN two Packages with the same name but non-semver versions
+    WHEN comparing them with __lt__ (and __gt__)
+    THEN check the fallback string comparison is used
+    """
+    a = Package("same-name", "invalid_version_a")
+    b = Package("same-name", "invalid_version_b")
+    # string comparison: "invalid_version_a" < "invalid_version_b"
+    assert a < b
+    assert not b < a
+    assert b > a
+    assert not a > b

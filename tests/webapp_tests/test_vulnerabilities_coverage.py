@@ -473,3 +473,101 @@ def test_get_vulnerabilities_dict_format(client):
     data = json.loads(response.data)
     assert isinstance(data, dict)
     assert "CVE-2020-35492" in data
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/<id> — effort missing keys / invalid value / ordering
+# ---------------------------------------------------------------------------
+
+def test_patch_vulnerability_effort_missing_key(client):
+    """PATCH effort with missing 'pessimistic' key returns 400 (line 63)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "PT1H",
+            "likely": "PT4H"
+            # missing pessimistic
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+def test_patch_vulnerability_effort_invalid_type(client):
+    """PATCH effort with non-string/int values raises (ValueError) → 400 (lines 67-68)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": None,
+            "likely": None,
+            "pessimistic": None,
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+def test_patch_vulnerability_effort_not_ordered(client):
+    """PATCH effort where optimistic > likely returns 400 (lines 78-79)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "P2D",   # 2 days
+            "likely": "PT1H",      # 1 hour  (optimistic > likely)
+            "pessimistic": "P3D",
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/batch — effort and CVSS error paths
+# ---------------------------------------------------------------------------
+
+def test_patch_batch_effort_invalid_type(client):
+    """Batch PATCH: invalid effort type for a valid vulnerability (line 128-129)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {
+                "optimistic": None,
+                "likely": None,
+                "pessimistic": None,
+            }
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] == 1
+    assert "Invalid effort values" in data["errors"][0]["error"]
+
+
+def test_patch_batch_effort_ordering_error(client):
+    """Batch PATCH: optimistic > likely returns error entry (line 124)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {
+                "optimistic": "P2D",
+                "likely": "PT1H",
+                "pessimistic": "P3D",
+            }
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] == 1
+    assert "Invalid effort values" in data["errors"][0]["error"]
+
+
+def test_patch_batch_cvss_missing_vector_string(client):
+    """Batch PATCH: CVSS missing 'vector_string' appends error entry (lines 140-141)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 7.0,
+                "version": "3.1"
+                # missing vector_string
+            }
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] == 1
+    assert "Invalid CVSS data" in data["errors"][0]["error"]

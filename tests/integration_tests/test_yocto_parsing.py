@@ -327,3 +327,99 @@ def test_skip_patched_prior_fixed_assessment_skips(yocto_parser, monkeypatch):
     # Still only one assessment — the skip branch was taken
     assert len(yocto_parser.assessmentsCtrl) == 1
     assert yocto_parser.assessmentsCtrl.gets_by_vuln("CVE-2007-3152")[0].impact_statement == "Fixed by upstream patch"
+
+
+# ---------------------------------------------------------------------------
+# get_last_assessment branch coverage
+# ---------------------------------------------------------------------------
+
+def test_get_last_assessment_none_timestamp(yocto_parser):
+    """_ts_key returns datetime.min when assessment timestamp is None (line 29)."""
+    from src.models.assessment import Assessment
+    a1 = Assessment.new_dto("CVE-MOCK-1", ["pkg@1.0"])
+    a1.timestamp = None
+    a2 = Assessment.new_dto("CVE-MOCK-1", ["pkg@1.0"])
+    a2.timestamp = "2025-01-01T00:00:00"
+
+    result = yocto_parser.get_last_assessment([a1, a2])
+    assert result is a2  # a2 has a real timestamp, wins
+
+
+def test_get_last_assessment_str_timestamp(yocto_parser):
+    """_ts_key handles ISO string timestamps (lines 31-32)."""
+    from src.models.assessment import Assessment
+    a1 = Assessment.new_dto("CVE-MOCK-2", ["pkg@1.0"])
+    a1.timestamp = "2023-06-01T00:00:00"
+    a2 = Assessment.new_dto("CVE-MOCK-2", ["pkg@1.0"])
+    a2.timestamp = "2024-06-01T00:00:00"
+
+    result = yocto_parser.get_last_assessment([a1, a2])
+    assert result is a2
+
+
+def test_get_last_assessment_invalid_str_timestamp(yocto_parser):
+    """_ts_key returns datetime.min for unparseable string timestamps (lines 33-34)."""
+    from src.models.assessment import Assessment
+    a1 = Assessment.new_dto("CVE-MOCK-3", ["pkg@1.0"])
+    a1.timestamp = "INVALID_DATE"
+    a2 = Assessment.new_dto("CVE-MOCK-3", ["pkg@1.0"])
+    a2.timestamp = "2022-01-01T00:00:00"
+
+    result = yocto_parser.get_last_assessment([a1, a2])
+    assert result is a2  # a1 gets datetime.min, a2 wins
+
+
+def test_get_last_assessment_naive_datetime(yocto_parser):
+    """_ts_key adds UTC tzinfo to naive datetime (line 36)."""
+    from src.models.assessment import Assessment
+    from datetime import datetime
+    a1 = Assessment.new_dto("CVE-MOCK-4", ["pkg@1.0"])
+    a1.timestamp = datetime(2021, 1, 1, 0, 0, 0)  # naive datetime
+    a2 = Assessment.new_dto("CVE-MOCK-4", ["pkg@1.0"])
+    a2.timestamp = datetime(2022, 1, 1, 0, 0, 0)  # naive datetime
+
+    result = yocto_parser.get_last_assessment([a1, a2])
+    assert result is a2
+
+
+def test_load_from_dict_issue_with_description(yocto_parser):
+    """load_from_dict adds 'description' text when present in issue (line 75)."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "desc-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-DESC-1",
+                "status": "Unpatched",
+                "description": "This is a detailed description.",
+                "summary": "A short summary."
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-DESC-1")
+    assert vuln is not None
+    # description text should have been added
+    assert any("detailed description" in (t or "") for t in vuln.texts.values())
+
+
+def test_load_from_dict_issue_without_status(yocto_parser):
+    """load_from_dict skips assessment creation when 'status' is absent (line 102)."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "nostatus-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-NOSTATUS-1",
+                # no "status" key
+                "summary": "Some vulnerability without a status."
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    # Vulnerability is created
+    assert "CVE-NOSTATUS-1" in yocto_parser.vulnerabilitiesCtrl
+    # But no assessment since status was absent
+    assert len(yocto_parser.assessmentsCtrl) == 0
