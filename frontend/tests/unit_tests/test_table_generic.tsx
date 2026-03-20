@@ -257,4 +257,133 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     const row5Cell = await screen.findByRole('cell', { name: /row5/ });
     expect(row5Cell).toBeInTheDocument();
   });
+
+  test('search feature: basic OR syntax with two terms', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row3  |  row7"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    expect(await screen.findByRole('cell', { name: /^row3$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row7$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^row5$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^row0$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR syntax with three pipe-separated groups each independently match', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row1 | row5 | row9"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // All three OR targets should appear
+    expect(await screen.findByRole('cell', { name: /^row1$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row9$/ })).toBeInTheDocument();
+    // A row that matches none of the groups must be absent
+    expect(screen.queryByRole('cell', { name: /^row4$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR syntax with AND terms within a group (space-separated) before the pipe', async () => {
+    // "row row5" ANDs the two terms → only row5 qualifies in that group
+    // "row row9" ANDs → only row9 qualifies in that group
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row row5 | row row9"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row9$/ })).toBeInTheDocument();
+    // row0 matches 'row' in both groups but lacks 'row5' / 'row9', so it must be absent
+    expect(screen.queryByRole('cell', { name: /^row0$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR syntax with one side of the pipe having no match', async () => {
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row5 | zzz"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // The matching side still returns its result
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();
+    // Unrelated rows are absent (the no-match side contributes nothing)
+    expect(screen.queryByRole('cell', { name: /^row0$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR + negation with negation inside an OR group excludes its term while the other group is unaffected', async () => {
+    // group1 "row5"          → only row5
+    // group2 "row -row9"     → everything with 'row' except row9
+    // row5 passes group1; row0 passes group2; row9 fails both groups
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="row5 | row -row9"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row0$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^row9$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR + negation with multiple negations ANDed within one group while the other group is a simple match', async () => {
+    // group1 "-row3 -row7"   → everything except row3 and row7
+    // group2 "row5"          → only row5 (redundant here, but ensures group2 is evaluated)
+    // row3 and row7 fail group1 and group2, so they are absent
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="-row3 -row7 | row5"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    expect(await screen.findByRole('cell', { name: /^row0$/ })).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^row3$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^row7$/ })).not.toBeInTheDocument();
+  });
+
+  test('search feature: OR + negation with a row excluded by negation in one group is rescued by a matching group', async () => {
+    // group1 "-row5"  → everything except row5
+    // group2 "row5"   → only row5
+    // row5 fails group1 but passes group2, so it still appears
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 20)}
+        search="-row5 | row5"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    expect(await screen.findByRole('cell', { name: /^row0$/ })).toBeInTheDocument();  // passes group1
+    expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();  // rescued by group2
+  });
 });

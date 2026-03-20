@@ -60,22 +60,34 @@ function TableGeneric<DataType> ({
     const filteredData = useMemo(() => {
         if (search && search.length > 2) {
             const buildFuseQuery = (raw: string) => {
-                const terms = raw.trim().split(/\s+/);
                 // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
+                const buildTermClause = (term: string) => {
+                    const isNegated = term.startsWith('-');
+                    const bare = isNegated ? term.slice(1) : term;
+                    const value = isNegated ? `!${bare}` : `'${bare}`; // exact (non-fuzzy) match
+
+                    if (fuseKeys.length === 1) {
+                        return { [fuseKeys[0]]: value };
+                    }
+
+                    if (isNegated) {
+                        return { $and: fuseKeys.map(key => ({ [key]: value })) };
+                    }
+                    return { $or: fuseKeys.map(key => ({ [key]: value })) };
+                };
+
+                // Split by | to support OR syntax (e.g. "openssl | libssl")
+                const orGroups = raw.split('|').map(group => group.trim()).filter(Boolean);
+
+                if (orGroups.length === 1) {
+                    const terms = orGroups[0].split(/\s+/).filter(Boolean);
+                    return { $and: terms.map(buildTermClause) };
+                }
+
                 return {
-                    $and: terms.map(term => {
-                        const isNegated = term.startsWith('-');
-                        const raw = isNegated ? term.slice(1) : term;
-                        const value = isNegated ? `!${raw}` : `'${raw}`; // exact (non-fuzzy) match
-
-                        if (fuseKeys.length === 1) {
-                            return { [fuseKeys[0]]: value };
-                        }
-
-                        if (isNegated) {
-                            return { $and: fuseKeys.map(key => ({ [key]: value })) };
-                        }
-                        return { $or: fuseKeys.map(key => ({ [key]: value })) };
+                    $or: orGroups.map(group => {
+                        const terms = group.split(/\s+/).filter(Boolean);
+                        return { $and: terms.map(buildTermClause) };
                     })
                 };
             };
