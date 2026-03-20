@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+/// <reference types="jest" />
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 
@@ -56,13 +57,17 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     const firstIdCell = await screen.findByRole('cell', { name: /row0/ });
     expect(firstIdCell).toBeInTheDocument();
 
-    // Hover panel row (always rendered when hoverField provided in non-virtualized branch)
-    const hoverTitle = await screen.findByText(/Description of row0/i);
-    expect(hoverTitle).toBeInTheDocument();
+    // Tooltip is portal-based: only appears after mouseenter on the row
+    const rows = document.querySelectorAll('tr.row-with-hover-effect');
+    fireEvent.mouseEnter(rows[0]);
 
-    // One of the description contents
-    const descA = await screen.findByText(/Description 0 A/);
-    expect(descA).toBeInTheDocument();
+    await waitFor(() => {
+      const tooltip = document.body.querySelector('[role="tooltip"]');
+      expect(tooltip).toBeInTheDocument();
+      // Title falls back to "Description" when no title field is present
+      expect(tooltip?.textContent).toMatch(/Description of row0/i);
+      expect(tooltip?.textContent).toContain('Description 0 A');
+    });
   });
 
   test('pagination: page number buttons, next/prev/first/last, and ellipsis generation (lines 130-153, 339-346, 360-376, 146)', async () => {

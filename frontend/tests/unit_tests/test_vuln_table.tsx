@@ -216,6 +216,33 @@ describe('Vulnerability Table', () => {
         }
     ];
 
+    const longContent = 'This is a very long description sentence. '.repeat(50);
+
+    const vulnWithLongText: Vulnerability = {
+        id: 'CVE-2099-9999',
+        aliases: [],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2099-9999',
+        packages: ['pkg@1.0.0'],
+        urls: [],
+        texts: [{ title: 'description', content: longContent }],
+        severity: { severity: 'low', min_score: 1, max_score: 1, cvss: [] },
+        epss: { score: 0.1, percentile: 0.5 },
+        effort: {
+            optimistic: new Iso8601Duration(undefined),
+            likely: new Iso8601Duration(undefined),
+            pessimistic: new Iso8601Duration(undefined)
+        },
+        fix: { state: 'unknown' },
+        status: 'affected',
+        simplified_status: 'Exploitable',
+        assessments: [],
+        published: '2024-01-01T00:00:00Z'
+    };
+
+
     Element.prototype.getBoundingClientRect = jest.fn(function () {
         return getDOMRect(500, 500)
     })
@@ -760,19 +787,19 @@ describe('Vulnerability Table', () => {
 
     test('show description when hovering vulnerability', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const user = userEvent.setup();
-        const id_col = await screen.getByRole('cell', {name: vulnerabilities[0].id});
+        const id_col = screen.getByRole('cell', {name: vulnerabilities[0].id});
         expect(id_col).toBeInTheDocument();
-        const description = await screen.getByText(vulnerabilities[0].texts[0].content);
-        expect(description).toBeInTheDocument();
 
-        await user.hover(id_col);
-        expect(description).toBeVisible();
+        // Tooltip is portal-based: content only appears after mouseenter on the row
+        const row = container.querySelector('tr.row-with-hover-effect')!;
+        fireEvent.mouseEnter(row);
 
-        await user.unhover(id_col)
-        // doesn't seem to work : expect(description).not.toBeVisible();
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('[role="tooltip"]');
+            expect(tooltip?.textContent).toContain(vulnerabilities[0].texts[0].content);
+        });
     })
 
     test('filter by severity', async () => {
@@ -2103,6 +2130,49 @@ describe('Vulnerability Table', () => {
 
         await waitFor(() => {
             expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(1);
+        });
+    });
+
+    test('tooltip portal behaviour: appears on hover with correct content and styles, disappears on mouseleave', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+        const scrollContainer = container.querySelector('.overflow-auto');
+
+        // No tooltip before hovering
+        expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
+
+        fireEvent.mouseEnter(rows[0]);
+
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+            // Rendered into document.body via portal — not clipped by overflow-auto
+            expect(tooltip).toBeInTheDocument();
+            expect(scrollContainer?.contains(tooltip)).toBe(false);
+            // Content and sizing constraints
+            expect(tooltip.textContent).toContain('authentification process');
+            expect(tooltip.style.maxHeight).toBe('300px');
+        });
+
+        fireEvent.mouseLeave(rows[0]);
+        await waitFor(() => {
+            expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
+        });
+    });
+
+    test('tooltip truncates long descriptions via overflow-hidden and webkit line-clamp', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={[vulnWithLongText]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        fireEvent.mouseEnter(rows[0]);
+
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('[role="tooltip"]');
+            const contentDiv = tooltip?.querySelector('div') as HTMLElement;
+            expect(contentDiv).toBeInTheDocument();
+            expect(contentDiv.style.overflow).toBe('hidden');
+            // JSDOM drops unknown vendor-prefixed properties (WebkitLineClamp),
+            // so we verify the companion display value that enables line-clamp behaviour.
+            expect(contentDiv.getAttribute('style')).toContain('-webkit-box');
         });
     });
 });
