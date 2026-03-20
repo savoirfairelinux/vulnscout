@@ -12,7 +12,6 @@
 
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
-from ..views.spdx3 import SPDX3
 from ..views.fast_spdx import FastSPDX
 from ..views.fast_spdx3 import FastSPDX3
 from ..views.openvex import OpenVex
@@ -39,6 +38,7 @@ from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 
 DEFAULT_VARIANT_NAME = "default"
+
 
 def post_treatment(controllers, files):
     """Enrich vulnerabilities with EPSS scores and NVD published dates."""
@@ -126,7 +126,11 @@ def read_inputs(controllers):
             # options) and fall back to content-sniffing only when it is absent.
             fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'grype', or None
 
-            if fmt == "spdx" or (fmt is None and (fastspdx3.could_parse_spdx(data) or "spdxVersion" in data or doc.source_name.endswith(".spdx.json"))):
+            if fmt == "spdx" or (
+                fmt is None and (
+                    fastspdx3.could_parse_spdx(data) or "spdxVersion" in data or doc.source_name.endswith(".spdx.json")
+                )
+            ):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
                 elif use_fastspdx:
@@ -134,7 +138,12 @@ def read_inputs(controllers):
                 else:
                     spdx.load_from_file(doc.path)
                     spdx.parse_and_merge()
-            elif fmt == "cdx" or (fmt is None and (data.get("bomFormat") == "CycloneDX" or doc.source_name.endswith(".cdx.json"))):
+            elif fmt == "cdx" or (
+                fmt is None and (
+                    data.get("bomFormat") == "CycloneDX"
+                    or doc.source_name.endswith(".cdx.json")
+                )
+            ):
                 cdx.load_from_dict(data)
                 cdx.parse_and_merge()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
@@ -161,6 +170,7 @@ def read_inputs(controllers):
         "cdx": cdx,
         "templates": templates
     }
+
 
 @click.command("merge")
 @click.option("--project", "-p", required=True, help="Project name.")
@@ -242,7 +252,7 @@ def _run_main() -> dict:
         # Disable SAVEPOINTs during bulk ingestion for better performance
         vulnCtrl.use_savepoints = False
         assessCtrl.use_savepoints = False
-        
+
         files = read_inputs(controllers)
         verbose("merger_ci: Finished reading inputs")
 
@@ -266,7 +276,7 @@ def _run_main() -> dict:
     verbose("merger_ci: Populating observations table")
     try:
         latest_scan = ScanModel.get_latest()
-        if latest_scan:          
+        if latest_scan:
             # Find findings without observations for this scan
             new_finding_ids = list(_db.session.execute(
                 _db.select(FindingModel.id).where(
@@ -280,7 +290,7 @@ def _run_main() -> dict:
                     )
                 )
             ).scalars().all())
-            
+
             # Create observations in batches to reduce memory usage
             if new_finding_ids:
                 new_observations = [

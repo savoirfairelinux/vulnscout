@@ -179,7 +179,7 @@ class VulnerabilitiesController:
         def _persist_if_needed(stored: Vulnerability, new_packages: set[str]) -> None:
             """Only persist if this vuln has new packages or hasn't been persisted yet."""
             canonical_id = stored.id
-            known_pkgs = getattr(stored, '_persisted_packages', None)
+            known_pkgs = stored._persisted_packages
             if known_pkgs is None:
                 # First persist for this vuln
                 _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
