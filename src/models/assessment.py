@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, relationship
 from ..extensions import db, Base
+from ..helpers.verbose import verbose
 
 if TYPE_CHECKING:
     from .finding import Finding
@@ -147,8 +148,8 @@ class Assessment(Base):
         try:
             if self.finding:
                 return self.finding.vulnerability_id or ""
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[Assessment.vuln_id {self.id!r}] {e}")
         return ""
 
     @vuln_id.setter
@@ -162,8 +163,8 @@ class Assessment(Base):
         try:
             if self.finding and self.finding.package:
                 return [self.finding.package.string_id]
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[Assessment.packages {self.id!r}] {e}")
         return []
 
     @packages.setter
@@ -226,8 +227,8 @@ class Assessment(Base):
                 if sid not in self._packages:
                     self._packages.append(sid)
                 return True
-        except Exception:
-            pass
+        except AttributeError as e:
+            verbose(f"[Assessment.add_package {self.id!r}] {e}")
         return False
 
     def set_status(self, status: str) -> bool:

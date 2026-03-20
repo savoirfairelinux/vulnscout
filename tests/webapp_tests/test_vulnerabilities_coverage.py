@@ -144,6 +144,18 @@ def test_patch_vulnerability_not_found(client):
     assert response.data == b"Not found"
 
 
+def test_patch_vulnerability_no_body(client):
+    """PATCH with no JSON body returns 400/415 instead of 500 (None payload guard)."""
+    # Wrong content-type → Flask returns 415; empty JSON body → our guard returns 400
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492",
+                            data=b"", content_type="text/plain")
+    assert response.status_code in (400, 415)
+
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492",
+                            data=b"null", content_type="application/json")
+    assert response.status_code == 400
+
+
 # Test GET vulnerability by id (existing tests may not cover all paths)
 def test_get_vulnerability_by_id_success(client):
     """Test GET for an existing vulnerability"""

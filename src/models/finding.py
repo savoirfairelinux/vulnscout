@@ -7,6 +7,7 @@ import uuid
 from typing import Optional, TYPE_CHECKING
 from sqlalchemy.orm import Mapped, relationship
 from ..extensions import db, Base
+from ..helpers.verbose import verbose
 
 if TYPE_CHECKING:
     from .time_estimate import TimeEstimate  # noqa: F811
@@ -136,7 +137,8 @@ class Finding(Base):
             try:
                 with db.session.begin_nested():
                     existing = Finding.create(package_id, vulnerability_id)
-            except Exception:
+            except Exception as e:
+                verbose(f"[Finding.get_or_create race {vulnerability_id!r}] {e}")
                 existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)
         return existing  # type: ignore[return-value]
 
