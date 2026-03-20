@@ -85,9 +85,12 @@ def init_app(app):
         for pkg_string_id in (assessment.packages or []):
             try:
                 from ..extensions import db
+                from ..models.vulnerability import Vulnerability as DBVuln
                 # find_or_create handles both lookup and creation in one query
                 name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
                 db_pkg = Package.find_or_create(name, version)
+                # Ensure vulnerability record exists before creating Finding (FK constraint)
+                DBVuln.get_or_create(vuln_id)
                 finding = Finding.get_or_create(db_pkg.id, vuln_id)
                 db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
                 db.session.commit()
@@ -124,12 +127,15 @@ def init_app(app):
             for pkg_string_id in (assessment.packages or []):
                 try:
                     from ..extensions import db
+                    from ..models.vulnerability import Vulnerability as DBVuln
                     # Resolve package from cache first, then DB
                     db_pkg = pkg_cache.get(pkg_string_id)
                     if db_pkg is None:
                         name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
                         db_pkg = Package.find_or_create(name, version)
                         pkg_cache[pkg_string_id] = db_pkg
+                    # Ensure vulnerability record exists before creating Finding (FK constraint)
+                    DBVuln.get_or_create(vuln_id)
                     # Resolve finding from cache first, then DB
                     f_key = (db_pkg.id, vuln_id)
                     finding = finding_cache.get(f_key)

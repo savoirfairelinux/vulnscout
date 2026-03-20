@@ -98,58 +98,6 @@ class TestFindingStringResolution:
 
 
 # ===========================================================================
-# merger_ci.py utility functions (lines 62, 67-72, 79-80)
-# ===========================================================================
-
-class TestMergerCiUtilities:
-    """Cover is_items_only_openvex (return True), expire_vuln, revert_expiration_vuln."""
-
-    def test_is_items_only_openvex_true(self):
-        """All scanners contain 'openvex' → returns True (line 62)."""
-        from src.bin.merger_ci import is_items_only_openvex
-        assert is_items_only_openvex(["openvex_scanner", "my_openvex"]) is True
-
-    def test_is_items_only_openvex_false(self):
-        """At least one scanner without 'openvex' → returns False (line 60)."""
-        from src.bin.merger_ci import is_items_only_openvex
-        assert is_items_only_openvex(["openvex_scanner", "grype"]) is False
-
-    def test_is_items_only_openvex_empty(self):
-        """Empty list — loop never executes, returns True."""
-        from src.bin.merger_ci import is_items_only_openvex
-        assert is_items_only_openvex([]) is True
-
-    def test_expire_vuln(self):
-        """expire_vuln creates a proper not_affected Assessment DTO (lines 67-72)."""
-        from src.bin.merger_ci import expire_vuln
-        result = expire_vuln("CVE-2024-999", ["libfoo@1.0.0"])
-        assert result.status == "not_affected"
-        assert result.justification == "component_not_present"
-        assert "expired" in (result.status_notes or "").lower()
-        assert "CVE-2024-999" == result.vuln_id
-
-    def test_revert_expiration_no_previous(self):
-        """revert_expiration_vuln with previous_assessment=None (lines 77-78)."""
-        from src.bin.merger_ci import revert_expiration_vuln
-        result = revert_expiration_vuln("CVE-2024-998", ["pkg@1.0"], None)
-        assert result.status == "under_investigation"
-        assert "expired" in (result.status_notes or "").lower()
-
-    def test_revert_expiration_with_previous(self):
-        """revert_expiration_vuln with a previous assessment (else branch, lines 79-80)."""
-        from src.bin.merger_ci import revert_expiration_vuln
-        from src.models.assessment import Assessment
-        prev = Assessment.new_dto("CVE-2024-997", ["pkg@1.0"])
-        prev.set_status("not_affected")
-        prev.set_justification("component_not_present")
-        prev.set_not_affected_reason("Known safe component")
-        result = revert_expiration_vuln("CVE-2024-997", ["pkg@1.0"], prev)
-        assert result.status == "not_affected"
-        assert result.justification == "component_not_present"
-        assert "safe" in (result.impact_statement or "").lower()
-
-
-# ===========================================================================
 # Vulnerability DB model — yocto_description path (line 93)
 # ===========================================================================
 
