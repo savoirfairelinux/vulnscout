@@ -10,6 +10,10 @@ from ..extensions import db, Base
 
 if TYPE_CHECKING:
     from .time_estimate import TimeEstimate  # noqa: F811
+    from .package import Package
+    from .vulnerability import Vulnerability
+    from .observation import Observation
+    from .assessment import Assessment
 
 
 class Finding(Base):
@@ -25,10 +29,12 @@ class Finding(Base):
         db.UniqueConstraint("package_id", "vulnerability_id", name="uq_finding_package_vulnerability"),
     )
 
-    package = db.relationship("Package")
-    vulnerability = db.relationship("Vulnerability", back_populates="findings")
-    observations = db.relationship("Observation", back_populates="finding", cascade="all, delete-orphan")
-    assessments = db.relationship("Assessment", back_populates="finding", cascade="all, delete-orphan")
+    package: Mapped["Package"] = relationship("Package")
+    vulnerability: Mapped["Vulnerability"] = relationship("Vulnerability", back_populates="findings")
+    observations: Mapped[list["Observation"]] = relationship(
+        "Observation", back_populates="finding", cascade="all, delete-orphan")
+    assessments: Mapped[list["Assessment"]] = relationship(
+        "Assessment", back_populates="finding", cascade="all, delete-orphan")
     time_estimate: Mapped[Optional["TimeEstimate"]] = relationship(
         "TimeEstimate", back_populates="finding", uselist=False, cascade="all, delete-orphan")
 

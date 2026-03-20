@@ -8,11 +8,18 @@ from ..models.package import Package
 from typing import Optional
 
 
-def _persist_assessment_to_db(assessment: Assessment, pkg_id_cache=None, finding_cache=None) -> None:
+def _persist_assessment_to_db(
+    assessment: Assessment,
+    pkg_id_cache=None,
+    finding_cache=None,
+    use_savepoint: bool = True,
+) -> None:
     """Persist an Assessment DTO to the DB via Finding resolution.
 
     Uses a SAVEPOINT so that a failure only rolls back this single
     assessment instead of the whole ``batch_session()`` transaction.
+    Set use_savepoint=False when already inside batch_session() to skip
+    the nested transaction overhead.
 
     *pkg_id_cache* and *finding_cache* are optional dicts from
     ``PackagesController`` that avoid redundant SELECT queries.
@@ -26,7 +33,8 @@ def _persist_assessment_to_db(assessment: Assessment, pkg_id_cache=None, finding
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
 
-        with db.session.begin_nested():
+        ctx = db.session.begin_nested() if use_savepoint else db.session.no_autoflush
+        with ctx:
             for pkg_string_id in (assessment.packages or []):
                 # Resolve package UUID from cache first
                 pkg_uuid = pkg_id_cache.get(pkg_string_id)
@@ -76,6 +84,7 @@ class AssessmentsController:
         # Once a pkg_id is here, gets_by_vuln_pkg skips the DB for ANY vuln
         # paired with that package — even for (vuln, pkg) pairs with no rows.
         self._db_queried_pkgs: set[str] = set()
+        self.use_savepoints: bool = True
 
     def get_by_id(self, assess_id) -> Optional[Assessment]:
         """Return an assessment by id (str or UUID) or None if not found."""
@@ -188,6 +197,7 @@ class AssessmentsController:
             self.assessments[key],
             pkg_id_cache=getattr(self.packagesCtrl, '_db_id_cache', None),
             finding_cache=getattr(self.packagesCtrl, '_finding_cache', None),
+            use_savepoint=self.use_savepoints,
         )
         # Maintain secondary indexes
         stored = self.assessments[key]
@@ -203,7 +213,9 @@ class AssessmentsController:
 
     def remove(self, assess_id) -> bool:
         """Remove an assessment by id (str or UUID) and return True if removed, False if not found."""
-        key = str(assess_id) if assess_id is not None else None
+        if assess_id is None:
+            return False
+        key = str(assess_id)
         if key in self.assessments:
             a = self.assessments[key]
             # Clean up secondary indexes

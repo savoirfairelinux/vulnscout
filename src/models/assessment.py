@@ -5,9 +5,14 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from sqlalchemy import orm
+from sqlalchemy.orm import Mapped, relationship
 from ..extensions import db, Base
+
+if TYPE_CHECKING:
+    from .finding import Finding
+    from .variant import Variant
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +115,8 @@ class Assessment(Base):
     finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True)
     variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True)
 
-    finding = db.relationship("Finding", back_populates="assessments")
-    variant = db.relationship("Variant", back_populates="assessments")
+    finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
+    variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)

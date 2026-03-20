@@ -155,7 +155,7 @@ class GrypeVulns:
             else:
                 # Fallback for packages that came only from matchDetails
                 # (no artifact section), which bypass the pre-warm above.
-                assessment = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, pkg0)
-                if len(assessment) < 1:
+                existing_assessments = self.assessmentsCtrl.gets_by_vuln_pkg(vuln_data.id, pkg0)
+                if len(existing_assessments) < 1:
                     assessment = Assessment.new_dto(vuln_data.id, packages)
                     self.assessmentsCtrl.add(assessment)
