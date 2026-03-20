@@ -5,6 +5,15 @@
 
 import json
 
+_EMPTY_OPENVEX = {
+    "@context": "https://openvex.dev/ns/v0.2.0",
+    "@id": "https://openvex.dev/docs/example/vex-empty-test",
+    "author": "Tests",
+    "timestamp": "2024-01-01T00:00:00Z",
+    "version": 1,
+    "statements": [],
+}
+
 
 def write_demo_files(files):
     """Write files with an real-life example issued fron cairo vulnerability."""
@@ -32,5 +41,8 @@ def write_demo_files(files):
     if "TIME_ESTIMATES_PATH" in files:
         with open("end_to_end_tests/time_estimates.json", "r") as f:
             files["TIME_ESTIMATES_PATH"].write_text(f.read())
+
+    if "LOCAL_USER_DATABASE_PATH" in files:
+        files["LOCAL_USER_DATABASE_PATH"].write_text(json.dumps(_EMPTY_OPENVEX))
 
     return files

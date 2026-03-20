@@ -23,16 +23,19 @@ def init_files(tmp_path):
 
 @pytest.fixture()
 def app(init_files):
-    app = create_app()
-    app.config.update({
-        "TESTING": True,
-        "SCAN_FILE": init_files["status"],
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
-    })
-    setup_demo_db(app)
-
-    yield app
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": init_files["status"],
+            "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
+        })
+        setup_demo_db(application)
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
     # clean up / reset resources here
     # tmp_file are automatically deleted by pytest
@@ -227,8 +230,12 @@ def test_render_document_with_filter(client):
 
 
 def test_render_document_pdf(client):
+    import shutil
     response = client.get("/api/documents/summary.adoc?ext=pdf")
-    assert response.status_code == 200
+    if shutil.which("asciidoctor-pdf") is None:
+        assert response.status_code == 503
+    else:
+        assert response.status_code == 200
 
 def test_render_document_html(client):
     response = client.get("/api/documents/summary.adoc?ext=html")

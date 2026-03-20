@@ -28,17 +28,21 @@ from src.extensions import db as _db
 
 @pytest.fixture()
 def app():
-    application = create_app()
-    application.config.update({
-        "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "SCAN_FILE": "/dev/null",
-    })
-    with application.app_context():
-        _db.create_all()
-        yield application
-        _db.session.remove()
-        _db.drop_all()
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": "/dev/null",
+        })
+        with application.app_context():
+            _db.create_all()
+            yield application
+            _db.session.remove()
+            _db.drop_all()
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
 @pytest.fixture()
@@ -381,8 +385,11 @@ class TestTimeEstimatesDB:
         from src.controllers.packages import PackagesController
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.controllers.assessments import AssessmentsController
+        from unittest.mock import patch, MagicMock
         pkg = PackagesController()
-        vuln = VulnerabilitiesController(pkg)
+        with patch("src.controllers.vulnerabilities.EPSS_DB") as mock_epss:
+            mock_epss.return_value = MagicMock()
+            vuln = VulnerabilitiesController(pkg)
         assess = AssessmentsController(pkg, vuln)
         return {"packages": pkg, "vulnerabilities": vuln, "assessments": assess}
 
@@ -473,7 +480,7 @@ class TestNewMergerCLI:
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=["merge", "--project", "CLIProject",
-                                     "--variant", "CLIVariant", str(sbom)])
+                                     "--variant", "CLIVariant", "--spdx", str(sbom)])
         assert result.exit_code == 0, result.output
 
         proj = Project.get_or_create("CLIProject")
@@ -601,8 +608,9 @@ class TestVulnRoutesEffort:
         data = _json.loads(response.data)
         assert "errors" in data
 
-    def test_get_nvd_progress(self, client):
+    def test_get_nvd_progress(self, client, tmp_path, monkeypatch):
         """GET /api/nvd/progress should return 200 with progress data."""
+        monkeypatch.setenv("NVD_DB_PATH", str(tmp_path / "nvd.db"))
         response = client.get("/api/nvd/progress")
         assert response.status_code == 200
         import json as _json
