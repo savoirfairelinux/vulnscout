@@ -2175,4 +2175,46 @@ describe('Vulnerability Table', () => {
             expect(contentDiv.getAttribute('style')).toContain('-webkit-box');
         });
     });
+
+     test('filter buttons have no active border by default', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
+        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
+        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+
+        expect(sourceBtn).toHaveClass('border-transparent');
+        expect(sourceBtn).not.toHaveClass('border-cyan-400');
+        expect(severityBtn).toHaveClass('border-transparent');
+        expect(severityBtn).not.toHaveClass('border-cyan-400');
+        expect(statusBtn).toHaveClass('border-transparent');
+        expect(statusBtn).not.toHaveClass('border-cyan-400');
+    });
+
+    test('filter buttons show active border when a filter option is selected', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Source filter
+        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
+        await user.click(sourceBtn);
+        await user.click(screen.getByRole('checkbox', { name: 'hardcoded' }));
+        expect(sourceBtn).toHaveClass('border-cyan-400');
+        expect(sourceBtn).not.toHaveClass('border-transparent');
+
+        // Severity filter
+        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
+        await user.click(severityBtn);
+        await user.click(screen.getByRole('checkbox', { name: 'low' }));
+        expect(severityBtn).toHaveClass('border-cyan-400');
+        expect(severityBtn).not.toHaveClass('border-transparent');
+
+        // Status filter
+        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+        await user.click(statusBtn);
+        await user.click(screen.getByRole('checkbox', { name: /exploitable/i }));
+        expect(statusBtn).toHaveClass('border-cyan-400');
+        expect(statusBtn).not.toHaveClass('border-transparent');
+    });
 });
