@@ -124,7 +124,6 @@ class TestVulnerabilityPersistUpdate:
     def test_persist_from_transient_update_existing(self, app):
         """persist_from_transient when the record already exists (update path)."""
         from src.models.vulnerability import Vulnerability
-        from src.models.vulnerability_inmemory_backup import Vulnerability as InMemVuln
         from src.models.cvss import CVSS
 
         # Create a DB record first
@@ -135,7 +134,7 @@ class TestVulnerabilityPersistUpdate:
         )
 
         # Now build a transient DTO with updated data
-        transient = InMemVuln("CVE-2099-UPDATE", ["scanner"], "https://nvd.nist.gov", "nvd")
+        transient = Vulnerability("CVE-2099-UPDATE", ["scanner"], "https://nvd.nist.gov", "nvd")
         transient.add_text("Updated description", "description")
         transient.severity_without_cvss("high", 7.5)
         cvss = CVSS("3.1", "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "NVD", 7.5, 3.9, 4.0)
@@ -149,10 +148,9 @@ class TestVulnerabilityPersistUpdate:
         """persist_from_transient creates Findings when packages are known in DB."""
         from src.models.vulnerability import Vulnerability
         from src.models.package import Package
-        from src.models.vulnerability_inmemory_backup import Vulnerability as InMemVuln
 
         pkg = Package.create("patchlib", "1.2.3")
-        transient = InMemVuln("CVE-2099-PKGS", ["scanner"], "ds", "ns")
+        transient = Vulnerability("CVE-2099-PKGS", ["scanner"], "ds", "ns")
         transient.add_package(pkg.string_id)
         transient.severity_without_cvss("medium", 5.0)
 
