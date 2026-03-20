@@ -1,6 +1,9 @@
 name: Publish Docker Hub image
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -18,7 +21,7 @@ permissions:
 
 env:
   IMAGE_NAME: sflinux/vulnscout
-  IMAGE_TAG: ${{ inputs.tag }}
+  IMAGE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build-and-push:
