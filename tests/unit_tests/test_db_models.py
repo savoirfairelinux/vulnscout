@@ -594,3 +594,98 @@ class TestSBOMDocumentController:
         import uuid
         with pytest.raises(ValueError):
             SBOMDocumentController.delete(str(uuid.uuid4()))
+
+
+# ===========================================================================
+# Observation model
+# ===========================================================================
+
+class TestObservationModel:
+    def test_create_with_str_ids_and_flush(self, app, scan):
+        """Observation.create with string UUID arguments (lines 42, 44) and commit=False (line 50)."""
+        from src.models.observation import Observation
+        from src.models.finding import Finding
+        from src.models.vulnerability import Vulnerability as VulnModel
+        from src.models.package import Package as PkgModel
+
+        pkg = PkgModel.create("obs-test-pkg", "1.0")
+        vuln = VulnModel.create_record("CVE-OBS-TEST-1")
+        finding = Finding.get_or_create(pkg.id, vuln.id)
+
+        # str UUIDs trigger lines 42 and 44
+        obs1 = Observation.create(str(finding.id), str(scan.id))
+        assert obs1.finding_id == finding.id
+        assert obs1.scan_id == scan.id
+
+        # commit=False triggers line 50 (db.session.flush())
+        obs2 = Observation.create(finding.id, scan.id, commit=False)
+        assert obs2 is not None
+
+
+# ===========================================================================
+# Metrics model
+# ===========================================================================
+
+class TestMetricsModel:
+    def test_get_by_vulnerability(self, app):
+        """Metrics.get_by_vulnerability returns list (line 62)."""
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability as VulnModel
+
+        VulnModel.create_record("CVE-METRICS-1")
+        results = Metrics.get_by_vulnerability("CVE-METRICS-1")
+        assert isinstance(results, list)
+        assert len(results) == 0  # no metrics created yet
+
+    def test_update_and_delete(self, app):
+        """Metrics.update (line 81) and .delete (line 85)."""
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability as VulnModel
+
+        VulnModel.create_record("CVE-METRICS-2")
+        m = Metrics.create("CVE-METRICS-2", version="3.1", score=7.5,
+                           vector="AV:N/AC:L", author="tester")
+        m.update(score=8.0, vector="AV:N/AC:H", author="updated")
+        assert float(m.score) == 8.0
+        assert m.vector == "AV:N/AC:H"
+
+        mid = m.id
+        m.delete()
+        assert Metrics.get_by_id(mid) is None
+
+    def test_from_cvss_dedup_cache_hit(self, app):
+        """Second call with same CVSS hits _seen cache and returns None (line 103)."""
+        from src.models.metrics import Metrics
+        from src.models.cvss import CVSS
+        from src.models.vulnerability import Vulnerability as VulnModel
+
+        VulnModel.create_record("CVE-METRICS-3")
+        Metrics.reset_cache()
+        cvss = CVSS("3.1",
+                    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                    "auto", 9.8, 0.0, 0.0)
+        m1 = Metrics.from_cvss(cvss, "CVE-METRICS-3")
+        m2 = Metrics.from_cvss(cvss, "CVE-METRICS-3")  # dedup cache hit
+        assert m1 is not None
+        assert m2 is None  # returned None due to _seen dedup
+
+
+# ===========================================================================
+# batch_session edge cases
+# ===========================================================================
+
+def test_batch_session_without_app_context():
+    """batch_session yields None when there is no Flask app context (lines 40-43)."""
+    from src.extensions import batch_session
+    # No 'app' fixture here — no Flask context is active
+    with batch_session() as session:
+        assert session is None
+
+
+def test_batch_session_exception_propagates(app):
+    """batch_session re-raises an exception raised inside the block (lines 52-57)."""
+    from src.extensions import batch_session
+
+    with pytest.raises(ValueError, match="test error"):
+        with batch_session():
+            raise ValueError("test error")
