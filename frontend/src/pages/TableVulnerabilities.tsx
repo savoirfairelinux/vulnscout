@@ -15,7 +15,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faCaretDown, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faCaretDown, faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -293,10 +293,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
     const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showSearchHelper, setShowSearchHelper] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
+    const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -304,6 +307,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         { key: 'v', description: 'View vulnerability details' },
         { key: '↑ / ↓', description: 'Navigate focused table row' },
         { key: 'Home / End', description: 'Navigate to first/last table row' },
+    ];
+
+    const searchSyntaxHelp = [
+        { syntax: 'term', description: 'Match rows containing term' },
+        { syntax: 'term1 term2', description: 'AND: both terms must match' },
+        { syntax: 'term1 | term2', description: 'OR: either term matches' },
+        { syntax: '-term', description: 'NOT: exclude rows with term' },
     ];
 
 
@@ -864,16 +874,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ) {
                 setShowShortcutHelper(false);
             }
+            if (
+                searchHelperDropdownRef.current &&
+                searchHelperButtonRef.current &&
+                !searchHelperDropdownRef.current.contains(event.target as Node) &&
+                !searchHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowSearchHelper(false);
+            }
         };
 
-        if (showShortcutHelper) {
+        if (showShortcutHelper || showSearchHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper]);
+    }, [showShortcutHelper, showSearchHelper]);
 
 
 
@@ -890,6 +908,35 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+
+            <div className="relative">
+                <button
+                    ref={searchHelperButtonRef}
+                    aria-label="search syntax helper"
+                    title="View search syntax"
+                    type="button"
+                    className="text-white hover:text-blue-300 transition-colors"
+                    onClick={() => setShowSearchHelper(!showSearchHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleInfo} />
+                </button>
+                {showSearchHelper && (
+                    <div
+                        ref={searchHelperDropdownRef}
+                        className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                    >
+                        <h3 className="font-bold text-white mb-3">Search Syntax</h3>
+                        <div className="space-y-2">
+                            {searchSyntaxHelp.map((item, index) => (
+                                <div key={index} className="flex justify-between gap-4">
+                                    <code className="text-cyan-300 min-w-[100px]">{item.syntax}</code>
+                                    <span className="text-gray-100">{item.description}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
 
             <FilterOption
                 label="Columns"

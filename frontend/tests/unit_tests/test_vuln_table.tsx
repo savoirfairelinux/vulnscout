@@ -2024,6 +2024,22 @@ describe('Vulnerability Table', () => {
         expect(screen.getByText('Navigate to first/last table row')).toBeInTheDocument();
     });
 
+    test('search syntax helper is visible and shows syntax content when clicked', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        expect(helperBtn).toBeInTheDocument();
+
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeInTheDocument();
+        expect(screen.getByText('Match rows containing term')).toBeInTheDocument();
+        expect(screen.getByText('AND: both terms must match')).toBeInTheDocument();
+        expect(screen.getByText('OR: either term matches')).toBeInTheDocument();
+        expect(screen.getByText('NOT: exclude rows with term')).toBeInTheDocument();
+    });
+
     test('pressing / focuses vulnerability search bar', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
