@@ -496,6 +496,7 @@ class Assessment(Base):
     @staticmethod
     def create(
         status: str,
+        assessment_id: Optional[uuid.UUID] = None,
         finding_id: Optional[uuid.UUID | str] = None,
         variant_id: Optional[uuid.UUID | str] = None,
         source: Optional[str] = None,
@@ -510,6 +511,10 @@ class Assessment(Base):
         """Create a new assessment, persist it and return it.
 
         Args:
+            assessment_id: Optional UUID to use for the new record. When
+                supplied (e.g. from an in-memory DTO), the DB row gets the
+                same UUID so that ``gets_by_vuln`` / ``gets_by_pkg`` can
+                deduplicate results from DB queries against in-memory ones.
             commit: If True (default), commit immediately. Set False for bulk operations.
         """
         if isinstance(finding_id, str):
@@ -528,6 +533,9 @@ class Assessment(Base):
             workaround=workaround,
             responses=responses or [],
         )
+        if assessment_id is not None:
+            assessment.id = assessment_id
+        assessment._init_transient()  # ensure transient attrs initialised on new objects
         db.session.add(assessment)
         if commit:
             db.session.commit()
@@ -566,6 +574,7 @@ class Assessment(Base):
             return existing
 
         record = Assessment.create(
+            assessment_id=getattr(assess, "id", None),
             status=assess.status or "under_investigation",
             finding_id=finding_id,
             status_notes=assess.status_notes,
@@ -575,6 +584,10 @@ class Assessment(Base):
             responses=list(assess.responses) if assess.responses else [],
             commit=False,
         )
+        # Propagate transient fields so callers can call to_dict() immediately
+        # without waiting for DB lazy-loads.
+        record._vuln_id = assess.vuln_id or ""
+        record._packages = list(assess.packages or [])
         return record
 
     @staticmethod

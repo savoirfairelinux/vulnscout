@@ -21,10 +21,22 @@ class YoctoVulns:
     def get_last_assessment(self, assessments):
         if not assessments:
             return None
-        return max(
-            assessments,
-            key=lambda a: a.timestamp
-        )
+        from datetime import datetime, timezone
+
+        def _ts_key(a):
+            ts = a.timestamp
+            if ts is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if isinstance(ts, str):
+                try:
+                    ts = datetime.fromisoformat(ts)
+                except (ValueError, TypeError):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+            if hasattr(ts, 'tzinfo') and ts.tzinfo is None:
+                return ts.replace(tzinfo=timezone.utc)
+            return ts
+
+        return max(assessments, key=_ts_key)
 
     def load_from_dict(self, data: dict):
         """Load the yoctoVulns object from a dictionary."""

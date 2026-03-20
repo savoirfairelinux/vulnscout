@@ -30,16 +30,20 @@ from src.controllers.metrics import MetricsController
 
 @pytest.fixture()
 def app():
-    application = create_app()
-    application.config.update({
-        "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "SCAN_FILE": "/dev/null",
-    })
-    with application.app_context():
-        _db.create_all()
-        yield application
-        _db.drop_all()
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": "/dev/null",
+        })
+        with application.app_context():
+            _db.create_all()
+            yield application
+            _db.drop_all()
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
 @pytest.fixture()

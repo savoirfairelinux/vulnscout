@@ -131,6 +131,9 @@ def init_app(app):
                 return resp
 
             return {"error": f"Cannot convert {base_mime} to {expected_mime}"}, 400
+        except FileNotFoundError as e:
+            print(e, flush=True)
+            return {"error": f"Required conversion tool not found: {e.filename}"}, 503
         except Exception as e:
             print(e, traceback.format_exc(), flush=True)
             return {"error": str(e)}, 500
