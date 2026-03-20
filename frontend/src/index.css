@@ -31,10 +31,12 @@
 }
 
 .row-with-hover-effect + .show-on-row-hover {
+    display: none;
     visibility: hidden;
     opacity: 0;
 }
 
 .row-with-hover-effect:hover + .show-on-row-hover, .show-on-row-hover:hover {
+    display: block;
     animation: 0.15s linear 0.5s forwards delayedShow;
 }
