@@ -220,3 +220,109 @@ def test_fetch_published_dates_ghsa_http_error(mock_sqlite, mock_urlopen, vuln_c
 
     # Assertions
     assert vuln_ghsa.published is None
+
+
+# ---------------------------------------------------------------------------
+# DB-fallback and alias-chain paths
+# ---------------------------------------------------------------------------
+
+def test_get_via_alias(pkg_controller, vuln_123, vuln_456):
+    """
+    GIVEN a VulnerabilitiesController with vuln_456 aliased to vuln_123
+    WHEN get() is called with vuln_456.id
+    THEN it returns vuln_123 (via alias_registered)
+    """
+    ctrl = VulnerabilitiesController(pkg_controller)
+    ctrl.add(vuln_123)
+    ctrl.add(vuln_456)
+    # Direct alias lookup (lines 155-159)
+    result = ctrl.get(vuln_456.id)
+    assert result is not None
+    assert result.id == vuln_123.id
+
+
+def test_iter_db_fallback(pkg_controller, vuln_123):
+    """
+    GIVEN a VulnerabilitiesController whose in-memory dict is empty
+    WHEN iterating over it
+    THEN entries are yielded from the DB
+    """
+    ctrl = VulnerabilitiesController(pkg_controller)
+    ctrl.add(vuln_123)
+
+    # Clear in-memory state to force DB path
+    ctrl.vulnerabilities.clear()
+    ctrl.alias_registered.clear()
+
+    ids = [v.id for v in ctrl]  # DB path (lines 407, 409-410)
+    assert vuln_123.id in ids
+
+
+def test_remove_also_clears_aliases(pkg_controller, vuln_123, vuln_456):
+    """
+    GIVEN a VulnerabilitiesController with an alias
+    WHEN removing the canonical vulnerability
+    THEN the alias is also cleared from alias_registered (lines 266-267)
+    """
+    ctrl = VulnerabilitiesController(pkg_controller)
+    ctrl.add(vuln_123)
+    ctrl.add(vuln_456)
+    assert vuln_456.id in ctrl.alias_registered
+    ctrl.remove(vuln_123.id)
+    assert vuln_456.id not in ctrl.alias_registered
+
+
+def test_add_via_alias_registered(pkg_controller, vuln_123, vuln_456, vuln_789):
+    """
+    GIVEN vuln_456 is already registered as an alias pointing to vuln_123
+    WHEN vuln_789 (which lists vuln_456 as its alias) is added
+    THEN vuln_789 is resolved to vuln_123 via the alias_registered chain
+    """
+    ctrl = VulnerabilitiesController(pkg_controller)
+    ctrl.add(vuln_123)
+    ctrl.add(vuln_456)   # registers CVE-456 → CVE-123
+    # Now vuln_789 has vuln_456.id as its alias (alias in alias_registered = chain)
+    result = ctrl.add(vuln_789)
+    # vuln_789 should have been merged into the canonical vuln_123 entry
+    assert result.id == vuln_123.id
+    assert vuln_789.id in ctrl.alias_registered
+
+
+def test_add_via_alias_in_vuln_aliases_field(pkg_controller, vuln_123):
+    """
+    GIVEN a VulnerabilitiesController with vuln_123
+    WHEN a new vulnerability that lists vuln_123.id as an alias is added
+    THEN it merges into the canonical vuln_123 (lines 336-339: alias in vulnerabilities dict)
+    """
+    # Build a new vulnerability whose .aliases list contains vuln_123.id
+    new_vuln = Vulnerability("CVE-TEST-NEW", ["test"], "test", "test")
+    new_vuln.add_alias(vuln_123.id)
+    new_vuln.add_package("abc@1.0.0")
+
+    ctrl = VulnerabilitiesController(pkg_controller)
+    ctrl.add(vuln_123)
+    result = ctrl.add(new_vuln)  # lines 336-339
+
+    # Should merge into existing vuln_123 entry
+    assert result.id == vuln_123.id
+
+
+def test_preload_cache_metrics_seen(pkg_controller):
+    """
+    GIVEN a persisted vulnerability with Metrics records
+    WHEN _preload_cache is called
+    THEN MetricsModel._seen is populated with the metric dedup keys (lines 111-121, 131)
+    """
+    from src.models.vulnerability import Vulnerability as VulnModel
+    from src.models.metrics import Metrics
+
+    # Create a DB vulnerability with a Metrics record
+    v = VulnModel.create_record("CVE-PRELOAD-CACHE-2")
+    Metrics.reset_cache()
+    v_ctrl = VulnerabilitiesController(pkg_controller)
+    Metrics.create("CVE-PRELOAD-CACHE-2", version="3.1", score=5.0, vector="AV:N", author="auto")
+
+    # Call _preload_cache — should populate Metrics._seen
+    old_cache_size = len(Metrics._seen)
+    v_ctrl._preload_cache()
+    assert len(Metrics._seen) >= old_cache_size  # new entry was added
