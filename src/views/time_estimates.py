@@ -5,6 +5,7 @@
 
 from datetime import datetime, timezone
 from typing import Optional
+from ..helpers.verbose import verbose
 
 
 class TimeEstimates:
@@ -41,7 +42,8 @@ class TimeEstimates:
         try:
             from ..models.iso8601_duration import Iso8601Duration
             return int(Iso8601Duration(iso_str).total_seconds // 3600)
-        except Exception:
+        except (ValueError, TypeError) as e:
+            verbose(f"[TimeEstimates._iso_to_hours {iso_str!r}] {e}")
             return None
 
     @staticmethod
@@ -76,9 +78,9 @@ class TimeEstimates:
                     likely=likely,
                     pessimistic=pessimistic,
                 )
-        except Exception:
+        except Exception as e:
             # No DB context available – skip silently.
-            pass
+            verbose(f"[TimeEstimates._persist_db_estimate {finding_id!r}] {e}")
 
     # ------------------------------------------------------------------
     # Public interface
@@ -127,8 +129,8 @@ class TimeEstimates:
                             self._persist_db_estimate(
                                 str(finding.id), hours_opt, hours_lik, hours_pes  # type: ignore[arg-type]
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        verbose(f"[TimeEstimates.load_from_dict finding lookup {task_id!r}] {e}")
 
     def to_dict(self) -> dict:
         """Serialise current in-memory effort data to the legacy JSON format."""
