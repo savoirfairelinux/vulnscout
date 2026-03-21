@@ -43,6 +43,7 @@ describe('Exports Page', () => {
     test('handles fetch error gracefully', async () => {
         fetchMock.resetMocks();
         fetchMock.mockRejectOnce(new Error('Network error'));
+        const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
         // ARRANGE & ACT
         render(<Exports />);
@@ -50,6 +51,7 @@ describe('Exports Page', () => {
         // ASSERT - Component should still render without crashing
         const exportTitle = await screen.findByText(/export/i);
         expect(exportTitle).toBeInTheDocument();
+        consoleSpy.mockRestore();
     })
 
     test('handles invalid document data gracefully', async () => {

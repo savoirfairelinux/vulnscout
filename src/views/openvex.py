@@ -6,6 +6,7 @@
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
+from ..helpers.verbose import verbose
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
@@ -103,8 +104,8 @@ class OpenVex:
             for assess in Assessment.get_all():
                 if str(assess.id) not in seen:
                     seen[str(assess.id)] = assess
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[OpenVex._get_all_assessments] {e}")
         return list(seen.values())
 
     def to_dict(self, strict_export=False, author=None) -> dict:
