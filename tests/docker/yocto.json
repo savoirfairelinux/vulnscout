@@ -2,6 +2,28 @@
     "version": "1",
     "package": [
       {
+        "name": "busybox",
+        "layer": "meta",
+        "version": "1.35.0",
+        "products": [
+          {
+            "product": "busybox",
+            "cvesInRecord": "Yes"
+          }
+        ],
+        "issue": [
+          {
+            "id": "CVE-2022-28391",
+            "summary": "BusyBox through 1.35.0 allows remote attackers to execute arbitrary code if netstat is used to print a DNS PTR record's value to a VT compatible terminal. Alternatively, a printed value may have terminal escape sequences that have unexpected visual consequences.",
+            "scorev2": "6.8",
+            "scorev3": "9.8",
+            "vector": "NETWORK",
+            "status": "Patched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2022-28391"
+          }
+        ]
+      },
+      {
         "name": "c-ares",
         "layer": "meta-oe",
         "version": "1.18.1",

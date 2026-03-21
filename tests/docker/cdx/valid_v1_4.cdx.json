@@ -14,10 +14,33 @@
     "components": [
       {
         "type": "library",
+        "bom-ref": "cairo-1.16.0",
         "name": "cairo",
         "version": "1.16.0",
         "cpe": "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
         "purl": "pkg:generic/cairo@1.16.0"
+      }
+    ],
+    "vulnerabilities": [
+      {
+        "id": "CVE-2018-19876",
+        "source": {
+          "name": "NVD",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2018-19876"
+        },
+        "ratings": [
+          {
+            "source": { "name": "NVD" },
+            "score": 4.3,
+            "severity": "medium",
+            "method": "CVSSv2",
+            "vector": "AV:N/AC:M/Au:N/C:N/I:N/A:P"
+          }
+        ],
+        "description": "cairo 1.16.0, in cairo_ft_apply_variations() in cairo-ft-font.c, would free an uninitialized pointer, leading to a crash.",
+        "affects": [
+          { "ref": "cairo-1.16.0" }
+        ]
       }
     ]
   }
