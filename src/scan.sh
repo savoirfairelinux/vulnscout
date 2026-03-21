@@ -118,7 +118,7 @@ function main() {
             fi
         done
 
-    set_status "8" "<!-- __END_OF_SCAN_SCRIPT__ -->"
+    set_status "6" "<!-- __END_OF_SCAN_SCRIPT__ -->"
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
         echo "------------------------------------------------------------------------------"
@@ -148,9 +148,6 @@ function full_scan_steps() {
         mkdir -p $SPDX_TMP_PATH
 
         copy_spdx_files $SPDX_INPUTS_PATH $SPDX_TMP_PATH
-
-        set_status "2" "Merging $((SPDX_FILE_COUNTER-1)) SPDX files"
-        INPUT_SPDX_FOLDER="$SPDX_TMP_PATH" OUTPUT_SPDX_FILE="$TMP_PATH/merged.spdx.json" python3 -m src.bin.spdx_merge
     else
         set_status "2" "No SPDX files found, skipping"
     fi
@@ -163,9 +160,6 @@ function full_scan_steps() {
         mkdir -p $OPENVEX_TMP_PATH
 
         copy_openvex_files $OPENVEX_INPUTS_PATH $OPENVEX_TMP_PATH
-
-        set_status "3" "Merging $((OPENVEX_FILE_COUNTER-1)) OPENVEX files"
-        INPUT_OPENVEX_FOLDER="$OPENVEX_TMP_PATH" OUTPUT_OPENVEX_FILE="$TMP_PATH/merged.openvex.json" python3 -m src.bin.openvex_merge
     else
         set_status "3" "No OPENVEX files found, skipping"
     fi
@@ -178,53 +172,19 @@ function full_scan_steps() {
         mkdir -p $CDX_TMP_PATH
 
         copy_cdx_files $CDX_INPUTS_PATH $CDX_TMP_PATH
-
-        if [[ ${#CDX_FILE_LIST[@]} -ge 1 ]]; then
-            set_status "4" "Merging ${#CDX_FILE_LIST[@]} CDX files"
-
-            cyclonedx-cli merge \
-                --output-file "$TMP_PATH/merged.cdx.json" \
-                --output-format json \
-                --name "$PRODUCT_NAME" \
-                --version "$PRODUCT_VERSION" \
-                --input-files "${CDX_FILE_LIST[@]}"
-        else
-            set_status "4" "No CDX files found, skipping"
-        fi
-    fi
-
-    # 5. Scan SPDX and CDX with Grype
-    if [[ "${SKIP_GRYPE_SCAN}" == "true" ]]; then
-        set_status "5" "Skipping Grype scan"
-    else
-        if [[ -f "$TMP_PATH/merged.spdx.json" ]]; then
-            set_status "5" "Scanning SPDX with Grype"
-            grype --add-cpes-if-none "sbom:$TMP_PATH/merged.spdx.json" -o json > "$TMP_PATH/vulns-spdx.grype.json"
-        fi
-
-        if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
-            set_status "5" "Scanning CDX with Grype"
-            grype --add-cpes-if-none "sbom:$TMP_PATH/merged.cdx.json" -o json > "$TMP_PATH/vulns-cdx.grype.json"
-        fi
-    fi
-
-    set_status "6" "Scanning CDX with OSV (WIP)"
-    if [[ -f "$TMP_PATH/merged.cdx.json" ]]; then
-        osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format json --output "$TMP_PATH/vulns-cdx.osv.json" || true
-        osv-scanner --offline-vulnerabilities --download-offline-databases /cache/vulnscout/osv/ --sbom="$TMP_PATH/merged.cdx.json" --format sarif --output "$TMP_PATH/vulns-cdx.osv.sarif.json" || true
     fi
 
     if [[ -e "$YOCTO_CVE_INPUTS_PATH" ]]; then
-        set_status "7" "Copy CVE-check result from Yocto"
+        set_status "5" "Copy CVE-check result from Yocto"
 
         rm -Rf $YOCTO_CVE_TMP_PATH
         mkdir -p $YOCTO_CVE_TMP_PATH
 
         copy_yocto_cve_files $YOCTO_CVE_INPUTS_PATH $YOCTO_CVE_TMP_PATH
 
-        set_status "7" "Found $((YOCTO_CVE_FILE_COUNTER-1)) CVE files issued by Yocto CVE check"
+        set_status "5" "Found $((YOCTO_CVE_FILE_COUNTER-1)) CVE files issued by Yocto CVE check"
     else
-        set_status "7" "No CVE check result found from Yocto"
+        set_status "5" "No CVE check result found from Yocto"
     fi
 }
 
@@ -244,7 +204,7 @@ function set_status() {
     local message=$2
 
     echo "$step $message" >> "$BASE_DIR/status.txt"
-    echo "Step ($step/8): $message"
+    echo "Step ($step/6): $message"
 }
 
 
