@@ -616,3 +616,473 @@ class TestVulnRoutesEffort:
         import json as _json
         data = _json.loads(response.data)
         assert "in_progress" in data
+
+    def test_patch_effort_update_existing_time_estimate(self, client):
+        """Sending effort when the finding already has a TimeEstimate hits the
+        existing.update() path (line 66) instead of creating a new one."""
+        import json as _json
+        # First PATCH creates a TimeEstimate
+        r1 = client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+            "effort": {"optimistic": 1, "likely": 2, "pessimistic": 4}
+        })
+        assert r1.status_code == 200
+        # Second PATCH should update the existing one (line 66)
+        r2 = client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+            "effort": {"optimistic": 2, "likely": 3, "pessimistic": 6}
+        })
+        assert r2.status_code == 200
+
+    def test_batch_effort_update_existing_time_estimate(self, client):
+        """Batch: sending effort when a TimeEstimate already exists hits line 127."""
+        import json as _json
+        # First create a TimeEstimate via single endpoint
+        client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+            "effort": {"optimistic": 1, "likely": 2, "pessimistic": 4}
+        })
+        # Second batch PATCH should update existing (line 127)
+        r = client.patch("/api/vulnerabilities/batch", json={
+            "vulnerabilities": [
+                {"id": "CVE-2025-ROUTE", "effort": {"optimistic": 2, "likely": 3, "pessimistic": 6}}
+            ]
+        })
+        assert r.status_code == 200
+
+    def test_patch_cvss_metrics_exception(self, client):
+        """PATCH /api/vulnerabilities/<id> with valid CVSS dict where Metrics.from_cvss
+        raises covers the except block (lines 81-82)."""
+        from unittest.mock import patch as mock_patch
+        with mock_patch("src.routes.vulnerabilities.Metrics.from_cvss", side_effect=RuntimeError("db fail")):
+            r = client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+                "cvss": {
+                    "base_score": 7.5,
+                    "vector_string": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                    "version": "3.1",
+                    "exploitability_score": 3.9,
+                    "impact_score": 3.6,
+                    "author": "NVD",
+                }
+            })
+        # Should still return the vuln dict (exception is swallowed)
+        assert r.status_code == 200
+
+    def test_batch_cvss_metrics_exception(self, client):
+        """Batch: valid CVSS but Metrics.from_cvss raises covers lines 143-144."""
+        from unittest.mock import patch as mock_patch
+        with mock_patch("src.routes.vulnerabilities.Metrics.from_cvss", side_effect=RuntimeError("db fail")):
+            r = client.patch("/api/vulnerabilities/batch", json={
+                "vulnerabilities": [{
+                    "id": "CVE-2025-ROUTE",
+                    "cvss": {
+                        "base_score": 7.5,
+                        "vector_string": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                        "version": "3.1",
+                        "exploitability_score": 3.9,
+                        "impact_score": 3.6,
+                        "author": "NVD",
+                    }
+                }]
+            })
+        import json as _json
+        data = _json.loads(r.data)
+        assert "vulnerabilities" in data
+
+
+# ===========================================================================
+# PackagesController — coverage gaps
+# ===========================================================================
+
+class TestPackagesController:
+    """Cover PackagesController branches not yet tested."""
+
+    def test_from_dict_populates_controller(self, app):
+        """from_dict() with valid data creates packages (lines 213-215)."""
+        from src.controllers.packages import PackagesController
+        data = {
+            "libfoo@1.0": {"name": "libfoo", "version": "1.0", "cpe": [], "purl": [], "licences": ""},
+            "libbar@2.0": {"name": "libbar", "version": "2.0"},
+        }
+        ctrl = PackagesController.from_dict(data)
+        assert isinstance(ctrl, PackagesController)
+
+    def test_contains_non_package_type_returns_false(self, app):
+        """__contains__ with non-str/non-Package returns False (lines 228-229)."""
+        from src.controllers.packages import PackagesController
+        ctrl = PackagesController()
+        assert (42 in ctrl) is False
+        assert (None in ctrl) is False
+
+    def test_remove_pkg_in_db(self, app):
+        """remove() when the package exists in the DB triggers db_pkg.delete() (line 155)."""
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        pkg = Package.create("remove-me", "1.0.0")
+        ctrl = PackagesController()
+        removed = ctrl.remove(pkg.string_id)
+        assert removed is True
+
+    def test_to_dict_db_fallback(self, app):
+        """to_dict() when cache is empty queries the DB (lines 200-202)."""
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        Package.create("pkgfallback", "3.0")
+        ctrl = PackagesController()
+        result = ctrl.to_dict()
+        assert isinstance(result, dict)
+        assert "pkgfallback@3.0" in result
+
+    def test_preload_cache_exception_packages(self, app):
+        """_preload_cache silently catches Package.get_all() exceptions (lines 48-49)."""
+        from src.controllers.packages import PackagesController
+        from unittest.mock import patch as mock_patch
+        ctrl = PackagesController()
+        with mock_patch("src.controllers.packages.Package.get_all", side_effect=RuntimeError("db down")):
+            ctrl._preload_cache()  # should not raise
+        assert ctrl._cache == {}
+
+    def test_preload_cache_exception_findings(self, app):
+        """_preload_cache silently catches Finding.get_all() exceptions (lines 54-55)."""
+        from src.controllers.packages import PackagesController
+        from unittest.mock import patch as mock_patch
+        ctrl = PackagesController()
+        with mock_patch("src.controllers.packages.Package.get_all", return_value=[]):
+            with mock_patch("src.models.finding.Finding.get_all", side_effect=RuntimeError("db down")):
+                ctrl._preload_cache()  # should not raise
+
+    def test_get_populates_cache(self, app):
+        """get() stores the result in _cache when found in DB (line 155)."""
+        from src.controllers.packages import PackagesController
+        from src.models.package import Package
+        pkg = Package.create("getcache-test", "1.0")
+        ctrl = PackagesController()
+        result = ctrl.get(pkg.string_id)
+        assert result is not None
+        assert pkg.string_id in ctrl._cache
+
+    def test_to_dict_db_exception(self, app):
+        """to_dict() returns {} when DB raises (lines 171-173)."""
+        from unittest.mock import patch as mock_patch
+        from src.controllers.packages import PackagesController
+        ctrl = PackagesController()
+        with mock_patch("src.controllers.packages.Package.get_all", side_effect=RuntimeError("db fail")):
+            result = ctrl.to_dict()
+        assert result == {}
+
+    def test_contains_db_exception(self, app):
+        """__contains__ returns False when DB raises (lines 200-202)."""
+        from unittest.mock import patch as mock_patch
+        from src.controllers.packages import PackagesController
+        ctrl = PackagesController()
+        with mock_patch("src.controllers.packages.Package.get_by_string_id", side_effect=RuntimeError("db fail")):
+            result = "nopkg@1.0" in ctrl
+        assert result is False
+
+    def test_len_db_exception(self, app):
+        """__len__ returns 0 when DB raises (lines 213-215)."""
+        from unittest.mock import patch as mock_patch
+        from src.controllers.packages import PackagesController
+        ctrl = PackagesController()
+        with mock_patch("src.extensions.db.session") as mock_session:
+            mock_session.query.side_effect = RuntimeError("fail")
+            result = len(ctrl)
+        assert result == 0
+
+    def test_iter_db_exception(self, app):
+        """__iter__ swallows DB exception (lines 228-229)."""
+        from unittest.mock import patch as mock_patch
+        from src.controllers.packages import PackagesController
+        ctrl = PackagesController()
+        with mock_patch("src.controllers.packages.Package.get_all", side_effect=RuntimeError("fail")):
+            result = list(ctrl)
+        assert result == []
+
+
+# ===========================================================================
+# AssessmentsController — coverage gaps
+# ===========================================================================
+
+class TestAssessmentsController:
+    """Cover AssessmentsController branches not yet tested."""
+
+    def test_remove_none_returns_false(self, app):
+        """remove(None) should return False immediately (line 216)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        assert ctrl.remove(None) is False
+
+    def test_remove_existing_assessment(self, app):
+        """remove() on an assessment that is in the in-memory dict succeeds (lines 235-236)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from src.models.assessment import Assessment
+        from unittest.mock import MagicMock
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        a = Assessment.new_dto("CVE-2099-REM", ["pkg@1.0"])
+        ctrl.add(a)
+        removed = ctrl.remove(str(a.id))
+        assert removed is True
+        assert str(a.id) not in ctrl.assessments
+
+    def test_contains_str(self, app):
+        """__contains__ with a string key covers line 261."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        assert ("nonexistent-uuid" in ctrl) is False
+
+    def test_gets_by_pkg_db_path(self, app):
+        """gets_by_pkg queries the DB when no in-memory match (lines 127-132 in assessments)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        result = ctrl.gets_by_pkg("pkg@1.0")
+        assert isinstance(result, list)
+
+    def test_gets_by_vuln_pkg_with_db_finding(self, app):
+        """gets_by_vuln_pkg hits the DB finding+assessment path (lines 157-160)."""
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+
+        v = Vulnerability.create_record("CVE-2099-VPAIR")
+        p = Package.create("vpair-lib", "1.0")
+        f = Finding.create(p.id, v.id)
+        # Create a persisted assessment linked to the finding
+        DBAssessment.create(status="affected", finding_id=f.id)
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        result = ctrl.gets_by_vuln_pkg(v.id, p.string_id)
+        assert len(result) >= 1
+
+    def test_gets_by_pkg_db_hit_adds_to_results(self, app):
+        """gets_by_pkg() DB path adds assessments to results (line 129 in assessments controller)."""
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+
+        v = Vulnerability.create_record("CVE-2099-PKG2")
+        p = Package.create("pkgctl2-test", "1.0")
+        f = Finding.create(p.id, v.id)
+        DBAssessment.create(status="affected", finding_id=f.id)
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        result = ctrl.gets_by_pkg(p.string_id)
+        assert len(result) >= 1
+
+    def test_to_dict_db_fallback(self, app):
+        """to_dict() falls back to DB when in-memory dict is empty."""
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment as DBAssessment
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from unittest.mock import MagicMock
+
+        v = Vulnerability.create_record("CVE-2099-TODICT2")
+        p = Package.create("todictpkg", "1.0")
+        f = Finding.create(p.id, v.id)
+        DBAssessment.create(status="not_affected", finding_id=f.id)
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        # ctrl.assessments is empty (not pre-loaded from DB), so to_dict queries DB
+        result = ctrl.to_dict()
+        assert isinstance(result, dict)
+        assert len(result) >= 1
+
+    def test_to_dict_db_exception(self, app):
+        """to_dict() returns {} when DB raises (lines 246-248)."""
+        from unittest.mock import patch as mock_patch, MagicMock
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        with mock_patch("src.models.assessment.Assessment.get_all", side_effect=RuntimeError("fail")):
+            result = ctrl.to_dict()
+        assert result == {}
+
+    def test_remove_byVuln_valueerror(self, app):
+        """remove() recovers from ValueError when key not in _by_vuln list (lines 226-227)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from src.models.assessment import Assessment
+        from unittest.mock import MagicMock
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        a = Assessment.new_dto("CVE-2099-VUERR", ["pkg@1.0"])
+        ctrl.add(a)
+        key = str(a.id)
+        # Manually empty the _by_vuln list to trigger ValueError in remove()
+        ctrl._by_vuln["CVE-2099-VUERR"].clear()
+        removed = ctrl.remove(key)
+        assert removed is True
+
+    def test_remove_byVulnPkg_valueerror(self, app):
+        """remove() recovers from ValueError when key not in _by_vuln_pkg list (lines 233-234)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.assessments import AssessmentsController
+        from src.models.assessment import Assessment
+        from unittest.mock import MagicMock
+
+        ctrl = AssessmentsController(PackagesController(), MagicMock())
+        a = Assessment.new_dto("CVE-2099-VPERR", ["pkg@1.0"])
+        ctrl.add(a)
+        key = str(a.id)
+        # Manually empty the _by_vuln_pkg list to trigger ValueError in remove()
+        ctrl._by_vuln_pkg[("CVE-2099-VPERR", "pkg@1.0")].clear()
+        removed = ctrl.remove(key)
+        assert removed is True
+
+
+# ===========================================================================
+# VulnerabilitiesController — coverage gaps
+# ===========================================================================
+
+class TestVulnerabilitiesController:
+    """Cover VulnerabilitiesController branches not yet tested."""
+
+    def test_iter_db_fallback(self, app, monkeypatch):
+        """__iter__ with empty in-memory dict queries the DB (lines 405-407)."""
+        from unittest.mock import MagicMock
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        # Create the vuln AFTER init so it is not in the in-memory dict
+        Vulnerability.create_record("CVE-2099-ITER")
+        ctrl.vulnerabilities.clear()  # ensure cache is empty to force DB path
+        results = list(ctrl)
+        assert any(v.id == "CVE-2099-ITER" for v in results)
+
+    def test_to_dict_db_fallback(self, app, monkeypatch):
+        """to_dict() with empty in-memory dict queries the DB (lines 345-349)."""
+        from unittest.mock import MagicMock
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        # Create the vuln AFTER init then clear memory so to_dict uses the DB
+        Vulnerability.create_record("CVE-2099-TODICT")
+        ctrl.vulnerabilities.clear()
+        result = ctrl.to_dict()
+        assert isinstance(result, dict)
+        assert "CVE-2099-TODICT" in result
+
+    def test_fetch_epss_scores_hit(self, app, monkeypatch):
+        """fetch_epss_scores counts a match when epss_db.get_score returns data (lines 264-265)."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        v = Vulnerability("CVE-2099-EPSS", [], "", "NVD")
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        ctrl.vulnerabilities["CVE-2099-EPSS"] = v
+        ctrl.epss_db = MagicMock()
+        ctrl.epss_db.get_score.return_value = {"score": 0.05, "percentile": 50.0}
+        ctrl.fetch_epss_scores()
+        assert v.epss["score"] == 0.05
+
+    def test_fetch_ghsa_published_success(self):
+        """_fetch_ghsa_published returns the published_at value on success (lines 279-280)."""
+        import json
+        from unittest.mock import patch as mock_patch, MagicMock
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"published_at": "2024-03-01T00:00:00Z"}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with mock_patch("urllib.request.urlopen", return_value=mock_resp):
+            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx-xxxx-xxxx")
+        assert result == "2024-03-01T00:00:00Z"
+
+    def test_fetch_ghsa_published_http_error(self):
+        """_fetch_ghsa_published returns None on HTTPError (line 283)."""
+        import urllib.error
+        from unittest.mock import patch as mock_patch
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        err = urllib.error.HTTPError("url", 404, "Not Found", {}, None)
+        with mock_patch("urllib.request.urlopen", side_effect=err):
+            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
+        assert result is None
+
+    def test_fetch_ghsa_published_url_error(self):
+        """_fetch_ghsa_published returns None on URLError (line 285)."""
+        import urllib.error
+        from unittest.mock import patch as mock_patch
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        err = urllib.error.URLError("timeout")
+        with mock_patch("urllib.request.urlopen", side_effect=err):
+            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
+        assert result is None
+
+    def test_fetch_ghsa_published_generic_error(self):
+        """_fetch_ghsa_published returns None on generic Exception (line 286)."""
+        from unittest.mock import patch as mock_patch
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+
+        with mock_patch("urllib.request.urlopen", side_effect=OSError("socket")):
+            result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
+        assert result is None
+
+    def test_fetch_published_dates_ghsa(self, app, monkeypatch):
+        """fetch_published_dates processes a GHSA vuln and sets its published date (lines 334-337)."""
+        import json
+        from unittest.mock import patch as mock_patch, MagicMock
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        v = Vulnerability("GHSA-xxxx-test-0001", [], "", "github")
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        ctrl.vulnerabilities["GHSA-xxxx-test-0001"] = v
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"published_at": "2024-06-01T00:00:00Z"}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with mock_patch("urllib.request.urlopen", return_value=mock_resp):
+            ctrl.fetch_published_dates()
+        assert v.published == "2024-06-01T00:00:00Z"
+
+    def test_get_vuln_db_fallback(self, app, monkeypatch):
+        """get() falls back to the DB when vuln not in memory (lines 153-155)."""
+        from unittest.mock import MagicMock
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        # Create the record AFTER init so _preload_cache did not pre-fill it
+        Vulnerability.create_record("CVE-2099-DBGET")
+        result = ctrl.get("CVE-2099-DBGET")
+        assert result is not None
+        assert result.id == "CVE-2099-DBGET"

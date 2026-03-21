@@ -1208,3 +1208,161 @@ def test_external_identifier_with_multiple_locators(spdx3_parser):
     # Secondary and tertiary URLs should be in the URLs list
     assert "https://secondary.datasource.com/CVE-2023-5678" in vuln.urls
     assert "https://tertiary.datasource.com/CVE-2023-5678" in vuln.urls
+
+
+def test_merge_components_non_dict(spdx3_parser):
+    """merge_components_into_controller with a non-dict input returns early (line 89)."""
+    spdx3_parser.merge_components_into_controller("not-a-dict")
+    spdx3_parser.merge_components_into_controller(42)
+    spdx3_parser.merge_components_into_controller(None)
+    assert len(spdx3_parser.packagesCtrl) == 0
+
+
+def test_convert_to_package_with_cpe_and_purl(spdx3_parser):
+    """_convert_to_package stores CPEs (line 142) and PURL (line 147) when present."""
+    component = {
+        "type": "software_Package",
+        "spdxId": "http://example.com/pkg/libfoo",
+        "name": "libfoo",
+        "versionInfo": "1.2.3",
+        "packageUrl": "pkg:deb/debian/libfoo@1.2.3",
+        "externalIdentifier": [
+            {
+                "externalIdentifierType": "cpe23",
+                "identifier": "cpe:2.3:a:libfoo:libfoo:1.2.3:*:*:*:*:*:*:*"
+            }
+        ]
+    }
+    pkg = spdx3_parser._convert_to_package(component)
+    assert pkg is not None
+    assert any("libfoo" in c for c in pkg.cpe)
+    assert any("libfoo" in p for p in pkg.purl)
+
+
+def test_merge_vulnerabilities_non_dict(spdx3_parser):
+    """merge_vulnerabilities_into_controller with a non-dict returns early (lines 189-190)."""
+    spdx3_parser.merge_vulnerabilities_into_controller("not-a-dict")
+    spdx3_parser.merge_vulnerabilities_into_controller(42)
+    assert len(spdx3_parser.vulnerabilitiesCtrl) == 0
+
+
+def test_extract_explicit_vulns_edge_cases(spdx3_parser):
+    """_extract_explicit_vulnerabilities handles various bad externalIdentifier formats (lines 247-260)."""
+    graph = [
+        # externalIdentifier is not a list → line 247
+        {
+            "type": "security_Vulnerability",
+            "externalIdentifier": "not-a-list"
+        },
+        # ext_id is not a dict → line 250
+        {
+            "type": "security_Vulnerability",
+            "externalIdentifier": ["just-a-string"]
+        },
+        # identifier type != 'cve' → line 252
+        {
+            "type": "security_Vulnerability",
+            "externalIdentifier": [
+                {"externalIdentifierType": "cwe", "identifier": "CWE-79"}
+            ]
+        },
+        # identifier is empty → line 256
+        {
+            "type": "security_Vulnerability",
+            "externalIdentifier": [
+                {"externalIdentifierType": "cve", "identifier": ""}
+            ]
+        },
+        # locators is not a list → line 260 (locators = [])
+        {
+            "type": "security_Vulnerability",
+            "externalIdentifier": [
+                {
+                    "externalIdentifierType": "cve",
+                    "identifier": "CVE-2099-EDGEX",
+                    "identifierLocator": "not-a-list"
+                }
+            ]
+        },
+    ]
+    spdx3_parser._extract_explicit_vulnerabilities(graph)
+    # Only CVE-2099-EDGEX should have been added (locators fall back to [])
+    assert spdx3_parser.vulnerabilitiesCtrl.get("CVE-2099-EDGEX") is not None
+
+
+def test_extract_cvss_with_unknown_vuln(spdx3_parser):
+    """_extract_vulnerabilities_cvss skips elements where vulnerability is not found (line 314)."""
+    graph = [
+        {
+            "type": "security_CvssV3VulnAssessmentRelationship",
+            "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-9999-77777",
+            "relationshipType": "hasAssessmentFor",
+            "to": ["http://example.com/pkg/foo"],
+            "security_vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "security_score": "9.8",
+        }
+    ]
+    # Should not raise even though CVE-9999-77777 is not registered in the controller
+    spdx3_parser._extract_vulnerabilities_cvss(graph)
+
+
+def test_process_pkg_vuln_relationships_edge_cases(spdx3_parser):
+    """_process_package_vulnerability_relationships handles missing fields (lines 356, 360, 369-370, 375)."""
+    graph = [
+        # type=Relationship but wrong relationshipType → line 356
+        {
+            "type": "Relationship",
+            "from": "http://example.com/pkg/foo",
+            "relationshipType": "contains",
+            "to": ["http://example.com/vuln/CVE-2099-X"]
+        },
+        # correct type/relationshipType but no 'from' → line 360
+        {
+            "type": "Relationship",
+            "relationshipType": "hasAssociatedVulnerability",
+            "to": ["http://example.com/vuln/CVE-2099-X"]
+        },
+        # 'from' not in uri_to_package map → lines 369-370
+        {
+            "type": "Relationship",
+            "from": "http://example.com/pkg/UNKNOWN-PACKAGE",
+            "relationshipType": "hasAssociatedVulnerability",
+            "to": ["http://example.com/vuln/CVE-2099-X"]
+        },
+        # vuln_uri has no CVE pattern → line 375
+        {
+            "type": "Relationship",
+            "from": "http://example.com/pkg/foo",
+            "relationshipType": "hasAssociatedVulnerability",
+            "to": ["http://example.com/some-non-cve-path"]
+        },
+    ]
+    # Register "foo" package so the 'from' lookup works for the last element
+    spdx3_parser.uri_to_package["http://example.com/pkg/foo"] = "libfoo@1.0"
+    # Should not raise regardless
+    spdx3_parser._process_package_vulnerability_relationships(graph)
+
+
+def test_extract_cve_id_empty_text(spdx3_parser):
+    """_extract_cve_id returns None when text is empty/None (line 386)."""
+    assert spdx3_parser._extract_cve_id("") is None
+    assert spdx3_parser._extract_cve_id(None) is None
+
+
+def test_process_vex_non_dict(spdx3_parser):
+    """process_vex_relationships with non-dict input returns early (lines 406-407)."""
+    spdx3_parser.process_vex_relationships("not-a-dict")
+    spdx3_parser.process_vex_relationships(42)
+    assert len(spdx3_parser.assessmentsCtrl.assessments) == 0
+
+
+def test_parse_vex_relationship_no_cve_in_from(spdx3_parser):
+    """_parse_vex_relationship returns None when 'from' has no CVE ID (line 442)."""
+    element = {
+        "type": "security_VexNotAffectedVulnAssessmentRelationship",
+        "from": "http://example.com/advisory/GHSA-1234",  # no CVE pattern
+        "to": ["http://example.com/pkg/libbar"],
+        "relationshipType": "doesNotAffect"
+    }
+    result = spdx3_parser._parse_vex_relationship(element)
+    assert result is None

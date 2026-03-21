@@ -615,3 +615,222 @@ class TestMetricsController:
         import uuid
         with pytest.raises(ValueError):
             MetricsController.delete(str(uuid.uuid4()))
+
+
+# ===========================================================================
+# Additional model coverage — string UUID paths and edge cases
+# ===========================================================================
+
+class TestAssessmentModelExtra:
+    """Cover Assessment model paths not exercised by the main TestAssessmentModel."""
+
+    def test_create_with_string_finding_and_variant_ids(self, app, finding, variant):
+        """Assessment.create() with string finding_id and variant_id (lines 522, 524)."""
+        a = Assessment.create(
+            status="affected",
+            finding_id=str(finding.id),
+            variant_id=str(variant.id),
+        )
+        assert a is not None
+        assert a.finding_id == finding.id
+
+    def test_from_dict_invalid_uuid_id(self):
+        """from_dict() with an unparseable id falls back gracefully (lines 362-363)."""
+        a = Assessment.from_dict({"id": "not-a-valid-uuid", "vuln_id": "CVE-X", "packages": []})
+        assert a is not None
+
+    def test_from_dict_invalid_timestamp(self):
+        """from_dict() with an unparseable timestamp falls back (lines 373-374)."""
+        a = Assessment.from_dict({
+            "vuln_id": "CVE-X",
+            "packages": [],
+            "timestamp": "not-a-timestamp",
+        })
+        assert a is not None
+        # timestamp keeps its default value from new_dto (datetime.now), not None
+        assert isinstance(a.timestamp, datetime.datetime)
+
+    def test_get_by_finding_with_string_id(self, app, assessment, finding):
+        """get_by_finding() accepts a string UUID (line 608)."""
+        results = Assessment.get_by_finding(str(finding.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_variant_with_string_id(self, app, assessment, variant):
+        """get_by_variant() accepts a string UUID (line 617)."""
+        results = Assessment.get_by_variant(str(variant.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_finding_and_variant_with_string_ids(self, app, assessment, finding, variant):
+        """get_by_finding_and_variant() accepts string UUIDs (lines 629, 631)."""
+        results = Assessment.get_by_finding_and_variant(str(finding.id), str(variant.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_add_response_when_responses_none(self):
+        """add_response() when self.responses is None initialises the list (line 316)."""
+        a = Assessment.new_dto("CVE-RESP", [])
+        a.responses = None
+        added = a.add_response("can_not_fix")
+        assert added is True
+        assert a.responses == ["can_not_fix"]
+
+    def test_merge_string_timestamps_other_newer(self):
+        """merge() with string timestamps: other > self updates self.timestamp (lines 470-471)."""
+        a1 = Assessment.new_dto("CVE-M", [])
+        a2 = Assessment.new_dto("CVE-M", [])
+        # Merge requires identical IDs; use the same ID to allow merge to proceed
+        a2.id = a1.id
+        a1.timestamp = "2023-01-01T00:00:00"
+        a2.timestamp = "2024-01-01T00:00:00"
+        a1.merge(a2)
+        assert a1.timestamp == "2024-01-01T00:00:00"
+
+    def test_packages_setter(self):
+        """packages setter converts any iterable to a list (line 172)."""
+        a = Assessment.new_dto("CVE-SET", [])
+        a.packages = ("pkg1@1.0", "pkg2@2.0")
+        assert a._packages == ["pkg1@1.0", "pkg2@2.0"]
+
+    def test_vuln_id_db_fallback(self, app, assessment):
+        """vuln_id property falls back to finding.vulnerability_id when _vuln_id
+        is empty (lines 151-153)."""
+        # Re-fetch from DB — reconstructor sets _vuln_id = "" (falsy), so the
+        # property must fall back to finding.vulnerability_id.
+        from src.models.assessment import Assessment as DBAssessment
+        db_a = DBAssessment.get_by_id(assessment.id)
+        db_a._vuln_id = ""  # ensure the transient value is empty
+        assert db_a.vuln_id == "CVE-2024-1234"
+
+    def test_packages_db_fallback(self, app, assessment):
+        """packages property falls back to finding.package when _packages is empty
+        (lines 166-167)."""
+        from src.models.assessment import Assessment as DBAssessment
+        db_a = DBAssessment.get_by_id(assessment.id)
+        db_a._packages = []  # ensure the transient list is empty
+        pkgs = db_a.packages
+        assert "libfoo@1.0.0" in pkgs
+
+
+class TestFindingModelExtra:
+    """Cover Finding paths not in the main TestFindingModel."""
+
+    def test_create_with_commit_false_uses_flush(self, app, package, vuln):
+        """create(..., commit=False) calls flush instead of commit (line 89)."""
+        from src.extensions import db as _db
+        f = Finding.create(package.id, vuln.id, commit=False)
+        assert f.id is not None  # PK available after flush
+        _db.session.rollback()  # clean up without persisting
+
+
+class TestMetricsModelExtra:
+    """Cover Metrics model paths not in the main TestMetricsModel."""
+
+    def test_get_by_id_with_string_uuid(self, app, metrics):
+        """get_by_id() accepts a string UUID (line 62)."""
+        result = Metrics.get_by_id(str(metrics.id))
+        assert result is not None
+        assert result.id == metrics.id
+
+    def test_update_version_field(self, app, metrics):
+        """update() with the version kwarg covers line 81."""
+        metrics.update(version="2.0")
+        assert metrics.version == "2.0"
+
+    def test_from_cvss_duplicate_fallback(self, app, vuln, metrics):
+        """from_cvss() falls back to SELECT when INSERT raises (lines 131-132)."""
+        from src.models.cvss import CVSS
+        from sqlalchemy.exc import IntegrityError
+        from unittest.mock import patch as mock_patch
+        # Build a CVSS matching the existing metrics fixture
+        cvss = CVSS(
+            version=metrics.version,
+            vector_string=metrics.vector or "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author=metrics.author or "NVD",
+            base_score=float(metrics.score),
+            exploitability_score=0.0,
+            impact_score=0.0,
+        )
+        # Clear _seen so from_cvss attempts the INSERT path
+        Metrics._seen.discard((vuln.id, cvss.version, float(cvss.base_score)))
+        # Mock create() to raise IntegrityError, forcing the SELECT fallback (lines 131-132)
+        with mock_patch.object(Metrics, "create", side_effect=IntegrityError("stmt", {}, None)):
+            result = Metrics.from_cvss(cvss, vuln.id)
+        assert result is not None
+        assert result.id == metrics.id
+
+
+class TestTimeEstimateModelExtra:
+    """Cover TimeEstimate model paths not in the main TestTimeEstimateModel."""
+
+    def test_get_by_id_with_string_uuid(self, app, time_estimate):
+        """get_by_id() accepts a string UUID (line 64)."""
+        from src.models.time_estimate import TimeEstimate
+        result = TimeEstimate.get_by_id(str(time_estimate.id))
+        assert result is not None
+        assert result.id == time_estimate.id
+
+    def test_get_by_finding_with_string_uuid(self, app, time_estimate, finding):
+        """get_by_finding() accepts a string UUID (line 71)."""
+        from src.models.time_estimate import TimeEstimate
+        results = TimeEstimate.get_by_finding(str(finding.id))
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_get_by_variant_with_string_uuid(self, app, time_estimate, variant):
+        """get_by_variant() accepts a string UUID (line 80)."""
+        from src.models.time_estimate import TimeEstimate
+        results = TimeEstimate.get_by_variant(str(variant.id))
+        assert any(e.id == time_estimate.id for e in results)
+
+
+class TestPackageModelExtra:
+    """Cover Package model paths not elsewhere tested."""
+
+    def test_eq_with_non_package_returns_not_implemented(self, app):
+        """__eq__ returns NotImplemented for non-Package objects (line 129)."""
+        pkg = Package.create("testpkg", "1.0.0")
+        result = pkg.__eq__("notapackage")
+        assert result is NotImplemented
+
+    def test_repr_contains_string_id(self, app):
+        """__repr__ (line 142) returns a string with the package string_id."""
+        pkg = Package.create("reprpkg", "2.0.0")
+        assert "reprpkg@2.0.0" in repr(pkg)
+
+    def test_bulk_find_or_create_purl_merge(self, app):
+        """bulk_find_or_create() when a package already exists merges purl (lines 307-308)."""
+        # First creation
+        Package.find_or_create("bulkpkg", "1.0", [], ["pkg:generic/bulkpkg@1.0"], "")
+        # Second call with same name/version but a new purl — triggers the merge branch
+        result = Package.bulk_find_or_create([
+            {
+                "name": "bulkpkg",
+                "version": "1.0",
+                "cpe": [],
+                "purl": ["pkg:pypi/bulkpkg@1.0"],
+                "licences": "",
+            }
+        ])
+        pkg = result.get("bulkpkg@1.0")
+        assert pkg is not None
+        assert "pkg:pypi/bulkpkg@1.0" in (pkg.purl or [])
+
+
+class TestVulnerabilityModelExtra:
+    """Cover Vulnerability model paths not elsewhere tested."""
+
+    def test_update_record_yocto_description(self, app, vuln):
+        """update_record() with yocto_description kwarg (line 542)."""
+        from src.models.vulnerability import Vulnerability
+        v = Vulnerability.get_by_id(vuln.id)
+        v.update_record(yocto_description="Yocto notes")
+        assert v.yocto_description == "Yocto notes"
+
+    def test_persist_from_transient_bad_publish_date(self, app):
+        """persist_from_transient() with an unparseable published date falls back
+        gracefully (lines 610-611)."""
+        from src.models.vulnerability import Vulnerability
+        transient = Vulnerability("CVE-2099-BADDATE", ["scanner"], "ds", "ns")
+        transient.published = "not-a-date"
+        transient.add_text("Some description", "description")
+        record = Vulnerability.persist_from_transient(transient)
+        assert record is not None
+        assert record.publish_date is None

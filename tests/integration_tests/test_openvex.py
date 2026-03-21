@@ -278,3 +278,99 @@ def test_encode_detailled_assessment(openvex_parser, assesment_123):
         "impact_statement": "Color red was removed from image before being sent to cairo",
         "action_statement": "Use product version 7.10+",
     }.items() <= statement.items()
+
+
+def test_load_from_dict_pkg_none_is_skipped(openvex_parser):
+    """parse_package_section returns None for unrecognised products → continue (line 75)."""
+    openvex_parser.load_from_dict({
+        "statements": [
+            {
+                "vulnerability": {"name": "CVE-9999-PKGSKIP"},
+                "products": [
+                    # No identifiers, no '@id' with name@version pattern
+                    {"@id": "http://example.com/some-product-without-version"}
+                ],
+                "status": "affected"
+            }
+        ]
+    })
+    # Vuln is added but assessment has no packages because pkg was None
+    vuln = openvex_parser.vulnerabilitiesCtrl.get("CVE-9999-PKGSKIP")
+    assert vuln is not None
+    # No packages linked to the assessment
+    assessments = list(openvex_parser.assessmentsCtrl.assessments.values())
+    pkgs_across = [p for a in assessments if a.vuln_id == "CVE-9999-PKGSKIP" for p in a.packages]
+    assert pkgs_across == []
+
+
+def test_load_from_dict_no_status_skips_assessment(openvex_parser):
+    """Statement without 'status' adds vuln but not assessment (line 83 continue)."""
+    openvex_parser.load_from_dict({
+        "statements": [
+            {
+                "vulnerability": {"name": "CVE-9999-NOSTATUS"},
+                "products": [],
+            }
+        ]
+    })
+    vuln = openvex_parser.vulnerabilitiesCtrl.get("CVE-9999-NOSTATUS")
+    assert vuln is not None
+    assessments = [a for a in openvex_parser.assessmentsCtrl.assessments.values()
+                   if a.vuln_id == "CVE-9999-NOSTATUS"]
+    assert assessments == []
+
+
+def test_all_assessments_db_exception(openvex_parser, assesment_123, vuln_123):
+    """_all_assessments() silently catches DB exception (lines 107-108)."""
+    from unittest.mock import patch as mock_patch
+    openvex_parser.assessmentsCtrl.add(assesment_123)
+    with mock_patch("src.views.openvex.Assessment.get_all", side_effect=RuntimeError("db fail")):
+        result = openvex_parser._all_assessments()
+    # In-memory assessment still returned
+    assert any(str(a.id) == str(assesment_123.id) for a in result)
+
+
+def test_to_dict_stmt_none_is_skipped(openvex_parser, pkg_ABC, vuln_123):
+    """to_dict() skips assessment when to_openvex_dict() returns None (line 124)."""
+    # A not_affected status without justification or impact_statement causes to_openvex_dict → None
+    assess = Assessment.new_dto(vuln_123.id, [pkg_ABC.string_id])
+    assess.set_status("not_affected")
+    # No justification and no impact_statement → to_openvex_dict returns None
+    openvex_parser.assessmentsCtrl.add(assess)
+    output = openvex_parser.to_dict()
+    assert len(output["statements"]) == 0
+
+
+def test_to_dict_vuln_summary_used_as_description(openvex_parser, pkg_ABC):
+    """to_dict() uses 'summary' when no 'description' text is available (line 133)."""
+    vuln = Vulnerability("CVE-9999-SUMM", ["scanner"], "unknown", "unknown")
+    vuln.add_text("This is a summary", "summary")
+    vuln.add_package(pkg_ABC)
+    assess = Assessment.new_dto(vuln.id, [pkg_ABC.string_id])
+    assess.set_status("affected")
+    openvex_parser.vulnerabilitiesCtrl.add(vuln)
+    openvex_parser.assessmentsCtrl.add(assess)
+    output = openvex_parser.to_dict()
+    stmts = [s for s in output["statements"] if s.get("vulnerability", {}).get("name") == "CVE-9999-SUMM"
+             or str(s.get("vulnerability", {})) == str({"name": "CVE-9999-SUMM"})]
+    # Find the right statement
+    vuln_stmts = [s for s in output["statements"]
+                  if s.get("vulnerability", {}).get("description") == "This is a summary"]
+    assert len(vuln_stmts) >= 1
+
+
+def test_to_dict_vuln_non_http_datasource_no_id(openvex_parser, pkg_ABC):
+    """to_dict() skips '@id' on vuln when datasource does not start with http (line 129 skipped)."""
+    vuln = Vulnerability("CVE-9999-NODS", ["scanner"], "NVD", "unknown")
+    vuln.add_text("Some issue", "description")
+    vuln.add_package(pkg_ABC)
+    assess = Assessment.new_dto(vuln.id, [pkg_ABC.string_id])
+    assess.set_status("affected")
+    openvex_parser.vulnerabilitiesCtrl.add(vuln)
+    openvex_parser.assessmentsCtrl.add(assess)
+    output = openvex_parser.to_dict()
+    for stmt in output["statements"]:
+        v = stmt.get("vulnerability", {})
+        if v.get("name") == "CVE-9999-NODS":
+            assert "@id" not in v
+            break
