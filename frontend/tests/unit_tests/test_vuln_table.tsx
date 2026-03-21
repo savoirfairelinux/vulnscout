@@ -16,13 +16,7 @@ import Iso8601Duration from '../../src/handlers/iso8601duration';
 jest.mock('../../src/handlers/nvd_progress', () => ({
     __esModule: true,
     default: {
-        getProgress: jest.fn().mockResolvedValue({
-            in_progress: false,
-            phase: 'idle',
-            current: 0,
-            total: 0,
-            message: '',
-        }),
+        getProgress: jest.fn().mockImplementation(() => new Promise(() => {})),
         getProgressPercentage: jest.fn().mockReturnValue(0),
     },
 }));
@@ -811,8 +805,6 @@ describe('Vulnerability Table', () => {
         await user.click(customCheckbox as HTMLElement);
 
         const [minSlider, maxSlider] = await screen.findAllByRole('slider');
-
-        console.log(minSlider, maxSlider);
 
         expect(minSlider).toBeInTheDocument();
         expect(maxSlider).toBeInTheDocument();

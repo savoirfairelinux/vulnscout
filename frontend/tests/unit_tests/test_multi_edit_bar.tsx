@@ -137,7 +137,7 @@ describe('MultiEditBar', () => {
 
         const { getByText } = render(<MultiEditBar {...props} />);
         const changeStatusButton = getByText('Change status');
-        changeStatusButton.click();
+        act(() => { changeStatusButton.click(); });
 
         // StatusEditor should be visible (check by finding the select element)
         const statusEditor = document.querySelector('[name="new_assessment_status"]');
@@ -152,7 +152,7 @@ describe('MultiEditBar', () => {
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
         const changeTimeButton = getByText('Change estimated time');
-        changeTimeButton.click();
+        act(() => { changeTimeButton.click(); });
 
         // TimeEstimateEditor should be visible (check by finding an input with its placeholder)
         const timeEditor = getByPlaceholderText('shortest estimate [eg: 5h]');

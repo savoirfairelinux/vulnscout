@@ -11,6 +11,7 @@ from ..views.openvex import OpenVex
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from ..helpers.verbose import verbose
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
@@ -37,8 +38,8 @@ def init_app(app):
             vex = OpenVex(ctrls)
             with open(app.config["OPENVEX_FILE"], "w") as f:
                 f.write(json.dumps(vex.to_dict(), indent=2))
-        except Exception:
-            pass
+        except Exception as e:
+            verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
     def index_assess():

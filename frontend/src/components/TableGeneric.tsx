@@ -2,7 +2,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable,
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback, Fragment } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
@@ -373,11 +373,11 @@ function TableGeneric<DataType> ({
                                     >
                                         <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
                                             {(row.original as any)?.[hoverField]?.length > 0 ?(row.original as any)?.[hoverField]?.map((a: any, index: number) => {
-                                            return <>
+                                            return <Fragment key={index}>
                                                 <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, c => c.toUpperCase()))} of {row.id}</b><br/>
                                                 {a?.content ?? "N/A"}
                                                 {index < (row.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
-                                                </>
+                                                </Fragment>
                                         }) : "No description was provided"}
                                         </td>
                                     </tr>
