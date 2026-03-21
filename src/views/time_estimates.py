@@ -5,7 +5,10 @@
 
 from datetime import datetime, timezone
 from typing import Optional
+from ..models.finding import Finding
 from ..helpers.verbose import verbose
+from ..models.time_estimate import TimeEstimate
+from ..models.iso8601_duration import Iso8601Duration
 
 
 class TimeEstimates:
@@ -40,7 +43,6 @@ class TimeEstimates:
         if not iso_str:
             return None
         try:
-            from ..models.iso8601_duration import Iso8601Duration
             return int(Iso8601Duration(iso_str).total_seconds // 3600)
         except (ValueError, TypeError) as e:
             verbose(f"[TimeEstimates._iso_to_hours {iso_str!r}] {e}")
@@ -60,7 +62,6 @@ class TimeEstimates:
         available so that the parser can still be used outside of a web request.
         """
         try:
-            from ..models.time_estimate import TimeEstimate
             existing = TimeEstimate.get_by_finding_and_variant(
                 finding_id, variant_id
             ) if variant_id else None
@@ -124,7 +125,6 @@ class TimeEstimates:
                 if all(v is not None for v in [hours_opt, hours_lik, hours_pes]):
                     # Try to find the corresponding finding(s) and persist
                     try:
-                        from ..models.finding import Finding
                         for finding in Finding.get_by_vulnerability(vuln.id):
                             self._persist_db_estimate(
                                 str(finding.id), hours_opt, hours_lik, hours_pes  # type: ignore[arg-type]

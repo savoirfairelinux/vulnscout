@@ -7,6 +7,9 @@ from ..models.assessment import Assessment
 from ..models.package import Package
 from typing import Optional
 from ..helpers.verbose import verbose
+from ..extensions import db
+from ..models.assessment import Assessment as DBAssessment
+from ..models.finding import Finding
 
 
 def _persist_assessment_to_db(
@@ -30,10 +33,6 @@ def _persist_assessment_to_db(
     if finding_cache is None:
         finding_cache = {}
     try:
-        from ..extensions import db
-        from ..models.assessment import Assessment as DBAssessment
-        from ..models.finding import Finding
-
         ctx = db.session.begin_nested() if use_savepoint else db.session.no_autoflush
         with ctx:
             for pkg_string_id in (assessment.packages or []):
@@ -148,7 +147,6 @@ class AssessmentsController:
         if pair not in self._db_queried_vuln_pkg and pkg_str not in self._db_queried_pkgs:
             self._db_queried_vuln_pkg.add(pair)
             try:
-                from ..models.finding import Finding
                 finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
                 if finding is not None:
                     for a in Assessment.get_by_finding(finding.id):
@@ -241,7 +239,6 @@ class AssessmentsController:
         if self.assessments:
             return {k: v.to_dict() for k, v in self.assessments.items()}
         try:
-            from ..models.assessment import Assessment as DBAssessment
             return {str(a.id): a.to_dict() for a in DBAssessment.get_all()}
         except Exception as e:
             verbose(f"[AssessmentsController.to_dict] {e}")

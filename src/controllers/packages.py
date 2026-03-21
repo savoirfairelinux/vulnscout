@@ -5,6 +5,9 @@
 
 from ..models.package import Package
 from ..helpers.verbose import verbose
+from ..models.finding import Finding
+from ..extensions import db
+from ..models.sbom_package import SBOMPackage
 
 
 class PackagesController:
@@ -48,7 +51,6 @@ class PackagesController:
         except Exception as e:
             verbose(f"[PackagesController._preload_cache packages] {e}")
         try:
-            from ..models.finding import Finding
             for f in Finding.get_all():
                 self._finding_cache[(f.package_id, f.vulnerability_id)] = f
         except Exception as e:
@@ -96,21 +98,18 @@ class PackagesController:
         # Uses a SAVEPOINT so that a failure only rolls back this single
         # package instead of the whole ``batch_session()`` transaction.
         try:
-            from ..extensions import db as _db
-            from ..models.sbom_package import SBOMPackage
-
             if already_persisted:
                 # Package already in DB — skip the expensive find_or_create
                 # SELECT.  Dirty-tracking will flush in-memory CPE/PURL
                 # changes automatically.  Only handle the SBOMPackage link.
                 if self._current_sbom_document_id is not None:
-                    with _db.session.begin_nested():
+                    with db.session.begin_nested():
                         SBOMPackage.get_or_create(
                             self._current_sbom_document_id,
                             self._db_id_cache[string_id],
                         )
             else:
-                with _db.session.begin_nested():
+                with db.session.begin_nested():
                     db_pkg = Package.find_or_create(
                         package.name,
                         package.version,
@@ -131,8 +130,7 @@ class PackagesController:
         """Remove a package from the session cache and the DB."""
         removed = self._cache.pop(package_id, None) is not None
         try:
-            from ..extensions import db as _db
-            with _db.session.begin_nested():
+            with db.session.begin_nested():
                 db_pkg = Package.get_by_string_id(package_id)
                 if db_pkg:
                     db_pkg.delete()
@@ -208,7 +206,6 @@ class PackagesController:
         if self._cache:
             return len(self._cache)
         try:
-            from ..extensions import db
             return db.session.query(Package).count()
         except Exception as e:
             verbose(f"[PackagesController.__len__] {e}")
