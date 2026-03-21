@@ -8,10 +8,10 @@ from typing import Optional, TYPE_CHECKING
 from sqlalchemy.orm import Mapped, relationship
 from ..extensions import db, Base
 from ..helpers.verbose import verbose
+from .package import Package
 
 if TYPE_CHECKING:
     from .time_estimate import TimeEstimate  # noqa: F811
-    from .package import Package
     from .vulnerability import Vulnerability
     from .observation import Observation
     from .assessment import Assessment
@@ -64,7 +64,6 @@ class Finding(Base):
             except ValueError:
                 pass
             # Fall back to "name@version" lookup
-            from .package import Package
             pkg = Package.get_by_string_id(package_id)
             if pkg is not None:
                 return pkg.id

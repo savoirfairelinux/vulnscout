@@ -5,15 +5,15 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy.orm import Mapped, relationship, joinedload
 from ..extensions import db, Base
 from ..helpers.verbose import verbose
-
-if TYPE_CHECKING:
-    from .finding import Finding
-    from .variant import Variant
+from .vulnerability import Vulnerability
+from .package import Package
+from .finding import Finding
+from .variant import Variant
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,6 @@ class Assessment(Base):
 
         This replaces the former ``VulnAssessment(vuln_id, packages)`` constructor.
         """
-        from .vulnerability import Vulnerability
         if isinstance(vuln_id, Vulnerability):
             vuln_id = vuln_id.id
         obj = cls()
@@ -221,7 +220,6 @@ class Assessment(Base):
                 self._packages.append(package)
             return True
         try:
-            from .package import Package
             if isinstance(package, Package):
                 sid = package.string_id
                 if sid not in self._packages:
@@ -639,7 +637,6 @@ class Assessment(Base):
     @staticmethod
     def get_by_vulnerability(vulnerability_id: str) -> list["Assessment"]:
         """Return all assessments whose finding links to *vulnerability_id*."""
-        from .finding import Finding
         return list(db.session.execute(
             db.select(Assessment)
             .join(Finding, Assessment.finding_id == Finding.id)
@@ -653,18 +650,15 @@ class Assessment(Base):
 
         *package_id* may be a UUID, UUID string, or ``'name@version'`` string.
         """
-        from .finding import Finding
         if isinstance(package_id, str):
             pkg_str: str = package_id
             try:
                 package_id = uuid.UUID(pkg_str)
             except ValueError:
-                from .package import Package
                 pkg = Package.get_by_string_id(pkg_str)
                 if pkg is None:
                     return []
                 package_id = pkg.id
-        from sqlalchemy.orm import joinedload
         return list(db.session.execute(
             db.select(Assessment)
             .join(Finding, Assessment.finding_id == Finding.id)
