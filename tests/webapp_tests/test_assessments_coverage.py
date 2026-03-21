@@ -516,3 +516,33 @@ def test_update_assessment_updates_openvex_file(client, init_files):
     assert init_files["openvex"].exists()
     openvex_content = json.loads(init_files["openvex"].read_text())
     assert "statements" in openvex_content
+
+
+def test_post_assessment_invalid_timestamp(client):
+    """POST with an unparseable timestamp string falls back silently (lines 257-258)."""
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "affected",
+        "timestamp": "not-a-valid-timestamp",
+    })
+    assert response.status_code == 200
+
+
+def test_save_openvex_exception_is_silenced(client, monkeypatch):
+    """_save_openvex silently ignores write errors (lines 41-42)."""
+    import builtins
+    real_open = builtins.open
+
+    def fail_on_write(path, mode="r", **kwargs):
+        # path can be str or pathlib.Path — use str() for consistent matching
+        if "openvex" in str(path) and "w" in str(mode):
+            raise PermissionError("no write access")
+        return real_open(path, mode, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fail_on_write)
+
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
+        "packages": ["cairo@1.16.0"], "status": "affected"
+    })
+    # Despite the write failure, the API should still succeed
+    assert response.status_code == 200

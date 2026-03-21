@@ -97,3 +97,49 @@ def test_needs_update_paths(tmp_path):
     db.conn.commit()
     assert db.needs_update(1) is True
     assert db.needs_update(5) is False
+
+
+def test_update_epss_with_http_proxy(monkeypatch, tmp_path):
+    """update_epss() sets up a proxy handler when HTTP_PROXY env var is set (lines 40, 45-47)."""
+    import urllib.request as _urllib_request
+
+    installed_opener = []
+
+    def fake_install_opener(opener):
+        installed_opener.append(opener)
+
+    def fake_urlretrieve(url, filename):
+        _write_gz(filename, "cve,epss,percentile\nCVE-2024-1111,0.1,0.5\n")
+        return (filename, None)
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.com:3128")
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.install_opener", fake_install_opener)
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlretrieve", fake_urlretrieve)
+
+    db = EPSS_DB(str(tmp_path / "epss_proxy.db"))
+    db.update_epss()
+
+    assert len(installed_opener) == 1
+    monkeypatch.delenv("HTTP_PROXY")
+
+
+def test_update_epss_with_https_proxy(monkeypatch, tmp_path):
+    """update_epss() sets up a proxy handler when HTTPS_PROXY env var is set (lines 42, 45-47)."""
+    installed_opener = []
+
+    def fake_install_opener(opener):
+        installed_opener.append(opener)
+
+    def fake_urlretrieve(url, filename):
+        _write_gz(filename, "cve,epss,percentile\nCVE-2024-2222,0.2,0.6\n")
+        return (filename, None)
+
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example.com:3128")
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.install_opener", fake_install_opener)
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlretrieve", fake_urlretrieve)
+
+    db = EPSS_DB(str(tmp_path / "epss_https_proxy.db"))
+    db.update_epss()
+
+    assert len(installed_opener) == 1
+    monkeypatch.delenv("HTTPS_PROXY")

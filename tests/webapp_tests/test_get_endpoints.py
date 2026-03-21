@@ -369,3 +369,65 @@ def test_render_document_invalid_conversion(client):
     assert response.status_code >= 400
     data = json.loads(response.data)
     assert data["error"]
+
+
+def test_render_spdx3_json(client):
+    """GET /api/documents/SPDX 3.0?ext=json returns a valid SPDX 3.0 JSON document (lines 180-186)."""
+    response = client.get("/api/documents/SPDX 3.0?ext=json")
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type") == "application/json"
+    cd = response.headers.get("Content-Disposition", "")
+    assert "attachment" in cd
+    assert "spdx_v3_0.json" in cd
+    data = json.loads(response.data)
+    assert "@context" in data or "@graph" in data
+
+
+def test_documents_list_categories_enrichment(monkeypatch, client):
+    """Documents list applies CategoriesDictionary categories to template docs (lines 77-79)."""
+    def fake_list_documents(self):
+        # Return a template doc with no 'extension' key and an id that maps to CategoriesDictionary
+        return [{"id": "my_report.adoc", "is_template": True, "category": ["misc"]}]
+
+    monkeypatch.setattr("src.routes.documents.Templates.list_documents", fake_list_documents)
+    monkeypatch.setattr("src.routes.documents.CategoriesDictionary", {"my_report.adoc": ["vex", "misc"]})
+
+    response = client.get("/api/documents")
+    assert response.status_code == 200
+    docs = json.loads(response.data)
+    item = next((d for d in docs if d["id"] == "my_report.adoc"), None)
+    assert item is not None
+    # "vex" should have been appended, "misc" was already present (not duplicated)
+    assert "vex" in item["category"]
+    assert item["category"].count("misc") == 1
+
+
+def test_patch_finder_scan_non_list_payload(client):
+    """POST /api/patch-finder/scan with a non-list payload returns 400 (line 45)."""
+    response = client.post("/api/patch-finder/scan", json={"not": "a list"})
+    assert response.status_code == 400
+
+
+def test_patch_finder_scan_db_version_mismatch(client, monkeypatch):
+    """POST /api/patch-finder/scan returns 500 when DB version does not match (line 52)."""
+    import sqlite3 as _sqlite3
+    real_connect = _sqlite3.connect
+
+    class FakeCursor:
+        def execute(self, query, *args):
+            self._query = query
+            return self
+        def fetchone(self):
+            if 'version' in self._query:
+                return ("wrong-version",)
+            return None
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.routes.patch_finder.sqlite3.connect", lambda path: FakeConn())
+    response = client.post("/api/patch-finder/scan", json=["CVE-2020-35492"])
+    assert response.status_code == 500

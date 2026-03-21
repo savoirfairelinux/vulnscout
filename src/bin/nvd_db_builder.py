@@ -5,6 +5,7 @@
 
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_progress import NVDProgressTracker
+from ..helpers.verbose import verbose
 import os
 
 
@@ -15,7 +16,7 @@ def fetch_db_updates():
     progress_tracker = NVDProgressTracker()
 
     if not nvd_api_key:
-        print("NVD API key not found, this may slow down db update. See NVD_API_KEY configuration")
+        verbose("NVD API key not found, this may slow down db update. See NVD_API_KEY configuration")
     else:
         nvd_db.nvd_api_key = nvd_api_key
 
@@ -27,7 +28,7 @@ def fetch_db_updates():
         for step, total in nvd_db.build_initial_db():
             percentage = round((step / total) * 100)
             message = f"NVD update: {step} / {total} [{percentage}%]"
-            print(message, flush=True)
+            verbose(message)
             progress_tracker.update("initial_build", step, total, message)
 
         progress_tracker.update("incremental_update", 0, 1, "Starting incremental update")
