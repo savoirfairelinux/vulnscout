@@ -59,7 +59,6 @@ class CVSS:
                         self.attack_vector_long = "Unknown"
 
             if part.startswith("AC:"):
-                self.attack_complexity = part
                 match part:
                     case "AC:L":
                         self.attack_complexity_long = "Low"
@@ -71,7 +70,6 @@ class CVSS:
                         self.attack_complexity_long = "Unknown"
 
             if part.startswith("Au:"):
-                self.authentication = part
                 match part:
                     case "Au:N":
                         self.authentication_long = "None"
@@ -83,7 +81,6 @@ class CVSS:
                         self.authentication_long = "Unknown"
 
             if part.startswith("PR:"):
-                self.privileges_required = part
                 match part:
                     case "PR:N":
                         self.privileges_required_long = "None"
@@ -95,7 +92,6 @@ class CVSS:
                         self.privileges_required_long = "Unknown"
 
             if part.startswith("UI:"):
-                self.user_interaction = part
                 match part:
                     case "UI:N":
                         self.user_interaction_long = "None"
@@ -105,7 +101,6 @@ class CVSS:
                         self.user_interaction_long = "Unknown"
 
             if part.startswith("S:"):
-                self.scope = part
                 match part:
                     case "S:C":
                         self.scope_long = "Changed"
@@ -115,7 +110,6 @@ class CVSS:
                         self.scope_long = "Unknown"
 
             if part.startswith("C:"):
-                self.confidentiality_impact = part
                 match part:
                     case "C:N":
                         self.confidentiality_impact_long = "None"
@@ -131,7 +125,6 @@ class CVSS:
                         self.confidentiality_impact_long = "Unknown"
 
             if part.startswith("I:"):
-                self.integrity_impact = part
                 match part:
                     case "I:N":
                         self.integrity_impact_long = "None"
@@ -147,7 +140,6 @@ class CVSS:
                         self.integrity_impact_long = "Unknown"
 
             if part.startswith("A:"):
-                self.availability_impact = part
                 match part:
                     case "A:N":
                         self.availability_impact_long = "None"
