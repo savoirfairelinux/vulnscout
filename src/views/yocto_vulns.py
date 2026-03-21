@@ -9,6 +9,7 @@ from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
 from ..models.cvss import CVSS
 from ..extensions import batch_session
+from datetime import datetime, timezone
 
 
 class YoctoVulns:
@@ -21,7 +22,6 @@ class YoctoVulns:
     def get_last_assessment(self, assessments):
         if not assessments:
             return None
-        from datetime import datetime, timezone
 
         def _ts_key(a):
             ts = a.timestamp

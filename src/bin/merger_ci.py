@@ -31,6 +31,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.verbose import verbose
+from ..extensions import batch_session, db as _db
 import click
 import json
 import os
@@ -38,6 +39,18 @@ from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 
 DEFAULT_VARIANT_NAME = "default"
+
+
+def _ts_key(ts) -> str:
+    """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
+    if ts is None:
+        return ""
+    if isinstance(ts, str):
+        return ts
+    try:
+        return ts.isoformat()
+    except Exception:
+        return str(ts)
 
 
 def post_treatment(controllers, files):
@@ -68,17 +81,6 @@ def evaluate_condition(controllers, condition):
             "pending": True,
             "new": True
         }
-
-        def _ts_key(ts):
-            """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
-            if ts is None:
-                return ""
-            if isinstance(ts, str):
-                return ts
-            try:
-                return ts.isoformat()
-            except Exception:
-                return str(ts)
 
         last_assessment = None
         for assessment in controllers["assessments"].gets_by_vuln(vuln_id):
@@ -233,8 +235,6 @@ def process_command() -> None:
 
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
-    from ..extensions import batch_session, db as _db
-
     pkgCtrl = PackagesController()
     # pkgCtrl._preload_cache()  # bulk-load pkg UUIDs + findings into cache; eliminates per-vuln SELECT queries
     vulnCtrl = VulnerabilitiesController(pkgCtrl)

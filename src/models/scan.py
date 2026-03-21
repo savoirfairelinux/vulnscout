@@ -7,6 +7,7 @@ from typing import Optional
 import uuid
 from datetime import datetime, timezone
 from ..extensions import db, Base
+from .variant import Variant
 
 
 class Scan(Base):
@@ -57,7 +58,6 @@ class Scan(Base):
     @staticmethod
     def get_by_project(project_id: uuid.UUID) -> list["Scan"]:
         """Return all scans belonging to *project_id* (across all its variants), ordered by timestamp."""
-        from .variant import Variant
         return list(db.session.execute(
             db.select(Scan)
             .join(Variant, Scan.variant_id == Variant.id)

@@ -77,7 +77,7 @@ class TestPersistDbEstimate:
     def test_creates_when_no_existing(self):
         fid = str(uuid.uuid4())
         vid = str(uuid.uuid4())
-        with patch("src.models.time_estimate.TimeEstimate") as MockTE:
+        with patch("src.views.time_estimates.TimeEstimate") as MockTE:
             MockTE.get_by_finding_and_variant.return_value = None
             TimeEstimates._persist_db_estimate(fid, 1, 2, 3, vid)
             MockTE.create.assert_called_once()
@@ -86,14 +86,14 @@ class TestPersistDbEstimate:
         fid = str(uuid.uuid4())
         vid = str(uuid.uuid4())
         existing = MagicMock()
-        with patch("src.models.time_estimate.TimeEstimate") as MockTE:
+        with patch("src.views.time_estimates.TimeEstimate") as MockTE:
             MockTE.get_by_finding_and_variant.return_value = existing
             TimeEstimates._persist_db_estimate(fid, 1, 2, 3, vid)
             existing.update.assert_called_once_with(optimistic=1, likely=2, pessimistic=3)
 
     def test_creates_when_no_variant(self):
         fid = str(uuid.uuid4())
-        with patch("src.models.time_estimate.TimeEstimate") as MockTE:
+        with patch("src.views.time_estimates.TimeEstimate") as MockTE:
             TimeEstimates._persist_db_estimate(fid, 1, 2, 3)
             MockTE.create.assert_called_once()
             MockTE.get_by_finding_and_variant.assert_not_called()

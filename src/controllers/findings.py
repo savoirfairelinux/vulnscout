@@ -5,7 +5,6 @@
 
 import uuid
 from typing import Optional
-
 from ..models.finding import Finding
 
 

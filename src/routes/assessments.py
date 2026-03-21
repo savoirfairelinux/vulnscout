@@ -12,6 +12,8 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
+from ..extensions import db
+from ..models.vulnerability import Vulnerability as DBVuln
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
@@ -85,8 +87,6 @@ def init_app(app):
         # Persist to DB
         for pkg_string_id in (assessment.packages or []):
             try:
-                from ..extensions import db
-                from ..models.vulnerability import Vulnerability as DBVuln
                 # find_or_create handles both lookup and creation in one query
                 name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
                 db_pkg = Package.find_or_create(name, version)
@@ -127,8 +127,6 @@ def init_app(app):
             vuln_id = assessment.vuln_id
             for pkg_string_id in (assessment.packages or []):
                 try:
-                    from ..extensions import db
-                    from ..models.vulnerability import Vulnerability as DBVuln
                     # Resolve package from cache first, then DB
                     db_pkg = pkg_cache.get(pkg_string_id)
                     if db_pkg is None:

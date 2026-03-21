@@ -15,6 +15,8 @@ from ..models.vulnerability import Vulnerability
 from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
 from ..helpers.verbose import verbose
+from ..models.cvss import CVSS
+from ..models.metrics import Metrics as MetricsModel
 
 
 def _persist_vuln_to_db(
@@ -100,7 +102,6 @@ class VulnerabilitiesController:
         eager-loaded ``findings`` and ``metrics`` relationships to avoid the
         expensive ``to_dict()`` → ``from_dict()`` serialisation round-trip.
         """
-        from ..models.cvss import CVSS
         try:
             for rec in Vulnerability.get_all():
                 # Populate transient package list from eager-loaded findings
@@ -127,7 +128,6 @@ class VulnerabilitiesController:
                 self._db_record_cache[rec.id] = rec
                 # Pre-populate Metrics._seen so from_cvss skips the SELECT
                 # for every metric that already exists in the DB.
-                from ..models.metrics import Metrics as MetricsModel
                 for m in (rec.metrics or []):
                     MetricsModel._seen.add((
                         rec.id,
