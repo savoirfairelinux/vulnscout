@@ -366,7 +366,7 @@ class CycloneDx:
             return ts
         try:
             return ts.isoformat()
-        except Exception:
+        except AttributeError:
             return str(ts)
 
     def register_assessment(self, vuln_obj: cyclonedx.model.vulnerability.Vulnerability):

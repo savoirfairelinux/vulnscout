@@ -82,7 +82,7 @@ class Templates:
                     epss_score = float((vuln_obj.get("epss", {}).get("score")) or 0.0)
                     if (filter_epss is None or epss_score >= filter_epss):
                         kwargs["vulnerabilities"][vuln_obj['id']] = vuln_obj
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         if filter_date is not None:
@@ -108,7 +108,7 @@ class Templates:
                 os.remove(f"{random_name}.adoc")
                 os.remove(f"{random_name}.pdf")
             finally:
-                raise Exception("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
+                raise RuntimeError("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
 
         with open(f"{random_name}.pdf", "rb") as f:
             pdf = f.read()
@@ -134,7 +134,7 @@ class Templates:
                 if os.path.exists(html_path):
                     os.remove(html_path)
             finally:
-                raise Exception("Error converting adoc to html: asciidoctor returned non-zero exit code")
+                raise RuntimeError("Error converting adoc to html: asciidoctor returned non-zero exit code")
 
         with open(html_path, "rb") as f:
             html = f.read()
@@ -252,7 +252,7 @@ class TemplatesExtensions:
             try:
                 epss_raw = (v.get("epss") or {}).get("score")
                 score = float(epss_raw or 0.0) * 100
-            except Exception:
+            except (ValueError, TypeError):
                 score = 0.0
             if score >= minimum:
                 result.append(v)
@@ -332,9 +332,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if start_date <= assess_date <= end_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals  # Invalid date format, return all
 
         elif date_filter.startswith(">="):
@@ -352,9 +352,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date >= filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith(">"):
@@ -372,9 +372,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date > filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith("<="):
@@ -392,9 +392,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date <= filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith("<"):
@@ -412,9 +412,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if assess_date < filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals
 
         else:
@@ -434,9 +434,9 @@ class TemplatesExtensions:
                                 assess_date = assess_date.astimezone(timezone.utc)
                             if filter_date_start <= assess_date <= filter_date_end:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
-            except Exception:
+            except ValueError:
                 return vals
 
         return result
@@ -496,13 +496,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if start_date <= publish_date <= end_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals  # Invalid date format, return all
 
         elif date_filter.startswith(">="):
@@ -520,13 +520,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date >= filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith(">"):
@@ -544,13 +544,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date > filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith("<="):
@@ -568,13 +568,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date <= filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals
 
         elif date_filter.startswith("<"):
@@ -592,13 +592,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if publish_date < filter_date:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals
 
         else:
@@ -618,13 +618,13 @@ class TemplatesExtensions:
                                 publish_date = publish_date.astimezone(timezone.utc)
                             if filter_date_start <= publish_date <= filter_date_end:
                                 result.append(v)
-                        except Exception:
+                        except ValueError:
                             pass
                     elif include_unknown and (
                         "published" not in v or not v["published"]
                     ):
                         result.append(v)
-            except Exception:
+            except ValueError:
                 return vals
 
         return result

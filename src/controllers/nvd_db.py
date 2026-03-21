@@ -62,7 +62,7 @@ class NVD_DB:
         elif res[0] != DB_MODEL_VERSION:
             # incompatible database version
             print("DB version mismatch, please update or reset the DB")
-            raise Exception(f"DB version mismatch, expected {DB_MODEL_VERSION}, got {res[0]}")
+            raise RuntimeError(f"DB version mismatch, expected {DB_MODEL_VERSION}, got {res[0]}")
         else:
             # database was existing before and with correct version, restore metadata
             res = self.cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_index';").fetchone()
@@ -162,7 +162,7 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(
+        raise ConnectionError(
             f"Failed to call NVD API after 3 retries (status: {status}, cveId: {cve_id}).\n"
             "Providing an NVD API key may help prevent this error.\n"
             "If the issue persists after adding the API key, it may have been invalidated."
@@ -181,7 +181,7 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(
+        raise ConnectionError(
             f"Failed to call NVD API (retry = 3, status = {status}, startIndex = {start_index})\n"
             "Providing an NVD API key may help prevent this error.\n"
             "If the issue persists after adding the API key, it may have been invalidated."
@@ -204,7 +204,7 @@ class NVD_DB:
                 return status, data
             else:
                 retry += 1
-        raise Exception(
+        raise ConnectionError(
             f"Failed to call NVD API (retry = 3, status = {status}"
             + f", startIndex = {index}, lastModStartDate = {start}, lastModEndDate = {end})\n"
             "Providing an NVD API key may help prevent this error.\n"
@@ -272,7 +272,7 @@ class NVD_DB:
         while not reached_end:
             status, data = self.api_get_from_index(self.last_index)
             if status != 200:
-                raise Exception(f"Failed to fetch data from NVD API [{status}]", data)
+                raise ConnectionError(f"Failed to fetch data from NVD API [{status}]", data)
             if self.write_result_to_db(data):
                 self.last_index += len(data["vulnerabilities"])
                 self.cursor.execute(
@@ -304,7 +304,7 @@ class NVD_DB:
         Writing the result to the local DB and yielding the start and end time range pulled.
         """
         if self.last_modified == "":
-            raise Exception("No last_modified date found in metadata, cannot update DB")
+            raise RuntimeError("No last_modified date found in metadata, cannot update DB")
         reached_end = False
         while not reached_end:
             today = datetime.now(timezone.utc).isoformat()
@@ -315,7 +315,7 @@ class NVD_DB:
             while not reached_end_range:
                 status, data = self.api_get_by_date(start, end, current_index)
                 if status != 200:
-                    raise Exception(f"Failed to fetch data from NVD API [{status}]", data)
+                    raise ConnectionError(f"Failed to fetch data from NVD API [{status}]", data)
 
                 if self.write_result_to_db(data):
                     current_index += len(data["vulnerabilities"])

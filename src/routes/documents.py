@@ -100,7 +100,7 @@ def init_app(app):
             }
             try:
                 metadata["only_epss_greater"] = float(request.args.get("only_epss_greater") or "0.0")
-            except Exception:
+            except ValueError:
                 pass
 
             if (
