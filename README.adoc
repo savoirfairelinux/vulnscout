@@ -51,17 +51,8 @@ This project contains default examples of VulnScout.
 To run VulnScout demo in interactive mode, you can simply run the command:
 [source,shell]
 ----
-./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
-----
-
-Or, if you prefer to run another example based on SPDX2, you can use the following command:
-
-[source,shell]
-----
-./vulnscout.sh --name example --spdx .vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
---cve-check .vulnscout/example/spdx2/example.rootfs.json \
---cdx .vulnscout/example/spdx2/cyclonedx-export
+./vulnscout serve --add-spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 Then open your browser to view the results:
@@ -71,13 +62,18 @@ Then open your browser to view the results:
 http://localhost:7275
 ----
 
-These commands will dynamically generate and use docker-compose configuration files.
-
-If you don't need additional settings after the first configuration, VulnScout can be rerun directly without any additional arguments:
+If you don't need additional source files, VulnScout can be rerun directly without any additional arguments:
 
 [source,shell]
 ----
-./vulnscout.sh --name example
+./vulnscout serve
+----
+
+It is also possible to add sources files on a specific project and variant with the `--project` and `--variant` arguments:
+[source,shell]
+----
+./vulnscout --project demo --variant x86 --add-spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 ===  Run VulnScout with Yocto
@@ -92,23 +88,18 @@ The vulnscout web interface can be started with a `bitbake <image-recipe> -c vul
 
 === Run VulnScout in non-interactive mode
 
-If you want to use the non-interactive mode, without the web interface, you can the command with the `--fail_condition` argument:
+If you want to use the non-interactive mode, without the web interface, you can the command with the `--match-condition` argument:
 
 [source,shell]
 ----
-./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
---fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
+./vulnscout --project demo --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ----
 
 You can obtain the report of vulnerabilities matching the condition by including the proper report remplate:
 
 [source,shell]
 ----
-./vulnscout.sh --name demo --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
---fail_condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)" \
---report-template match_condition.adoc
+./vulnscout --project demo --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)" --report-template match_condition.adoc
 ----
 
 ==== Configuration tips for other projects

@@ -1,0 +1,361 @@
+#!/bin/bash
+set -euo pipefail
+
+CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:latest}"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")" 
+VULNSCOUT_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vulnscout/config.env"
+VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$SCRIPT_DIR/.vulnscout/cache}"
+VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$SCRIPT_DIR/.vulnscout/outputs}"
+
+# Source config early so stored values (e.g. VULNSCOUT_CACHE_DIR) take effect
+if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$VULNSCOUT_CONFIG_FILE"
+fi
+
+VULNSCOUT_VERSION="$(docker inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+VARIANT="default"
+PROJECT="default"
+MATCH_CONDITION=""
+PENDING_ARGS=()
+DEV_MODE=false
+
+declare -A INPUT_PATHS=(
+    [add-spdx]="spdx"
+    [add-cve-check]="yocto_cve_check"
+    [add-openvex]="openvex"
+    [add-cdx]="cdx"
+)
+
+show_help() {
+    cat <<EOF
+VulnScout - Vulnerability Scanner
+Usage: vulnscout [--project <name>] [--variant <name>] <command> [options]
+
+Container lifecycle:
+  start                           Start VulnScout container
+  stop                            Stop and remove VulnScout container
+  restart                         Restart VulnScout container
+  --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
+
+Global flags:
+  --project <name>                Set project name (default: 'default')
+  --variant <name>                Set variant name (default: 'default')
+
+Input commands (can be chained, triggers scan automatically):
+  --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
+  --add-cve-check <path>          Add a Yocto CVE check JSON file
+  --add-openvex <path>            Add an OpenVEX JSON file
+  --add-cdx <path>                Add a CycloneDX file
+  --add-report-template <path>    Add a custom report template (.adoc)
+  --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
+
+Clear inputs:
+  clear-inputs [--project <name>] [--variant <name>]   Clear inputs for a project/variant (defaults to current)
+
+Scan & output commands:
+  --match-condition <expr>        Run vulnerability scan
+  serve                           Run scan then start web UI (port 7275)
+  report <template>               Generate a report from a template
+  --export-spdx                   Export project as SPDX 3.0 SBOM
+  --export-cdx                    Export project as CycloneDX 1.6 SBOM
+  --export-openvex                Export project as OpenVEX document
+
+Configuration:
+  config <key> <value>            Set a config value
+  config-list                     Show current configuration
+  config-clear <key>              Remove a config key
+
+Environment variables:
+  VULNSCOUT_CONTAINER   Container name (default: vulnscout)
+  VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:latest)
+  VULNSCOUT_OUTPUTS_DIR Output directory (default: ./.vulnscout/outputs)
+  VULNSCOUT_CACHE_DIR        Cache base dir (default: ./.vulnscout/cache)
+  XDG_CONFIG_HOME       Config base dir (default: ~/.config)
+
+Examples:
+  vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
+  vulnscout --project test --match-condition "cvss >= 9.0"
+  vulnscout serve --project test
+  vulnscout serve
+  vulnscout report summary.adoc
+  vulnscout config NVD_API_KEY abc123
+
+Exit codes:
+  0   Success
+  1   Execution error
+  2   Match condition triggered
+EOF
+}
+
+exec_container() {
+    docker exec "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
+}
+
+ensure_running() {
+    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "Container not running, starting..."
+        do_start
+    fi
+}
+
+add_input() {
+    local cmd="$1"
+    local file
+    file="$(readlink -f "$2")"
+    local staged="/tmp/vulnscout_stage_$(basename "$file")"
+
+    docker cp "$file" "$CONTAINER_NAME:$staged"
+    PENDING_ARGS+=("--${cmd}" "$staged")
+}
+
+add_report_template() {
+    local file
+    file="$(readlink -f "$1")"
+    local staged="/tmp/vulnscout_stage_$(basename "$file")"
+    docker cp "$file" "$CONTAINER_NAME:$staged"
+    exec_container --add-report-template "$staged"
+}
+
+do_match_condition() {
+    local -a scan_args=()
+    [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
+    exec_container --project "$PROJECT" --variant "$VARIANT" "${scan_args[@]}"
+}
+
+config_set() {
+    local key="$1"
+    local value="$2"
+    mkdir -p "$(dirname "$VULNSCOUT_CONFIG_FILE")"
+    touch "$VULNSCOUT_CONFIG_FILE"
+    local tmp
+    tmp=$(mktemp)
+    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
+    echo "${key}=${value}" >> "$tmp"
+    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
+    rm -f "$tmp"
+    echo "Config set: $key=$value"
+    # Restart the container so volume mounts reflect the new cache dir
+    if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
+        VULNSCOUT_CACHE_DIR="$value"
+        do_start
+    fi
+}
+
+config_clear() {
+    local key="$1"
+    touch "$VULNSCOUT_CONFIG_FILE"
+    local tmp
+    tmp=$(mktemp)
+    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
+    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
+    rm -f "$tmp"
+    echo "Config cleared: $key"
+}
+
+do_start() {
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
+    if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
+        cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
+FLASK_RUN_PORT=7275
+FLASK_RUN_HOST=0.0.0.0
+IGNORE_PARSING_ERRORS=false
+VERBOSE_MODE=false
+USER_UID=$(id -u)
+USER_GID=$(id -g)
+VULNSCOUT_VERSION=$VULNSCOUT_VERSION
+VULNSCOUT_CACHE_DIR=$VULNSCOUT_CACHE_DIR
+EOF
+        echo "Created default config at $VULNSCOUT_CONFIG_FILE"
+    fi
+    local -a env_args=()
+    while IFS='=' read -r key value; do
+        [ -z "$key" ] && continue
+        [ "${key#\#}" = "$key" ] || continue
+        env_args+=(-e "${key}=${value}")
+    done < "$VULNSCOUT_CONFIG_FILE"
+    local -a vol_args=(
+        -v "$VULNSCOUT_CACHE_DIR":/cache/vulnscout
+        -v "$VULNSCOUT_OUTPUTS_DIR":/scan/outputs
+        -v "$VULNSCOUT_CONFIG_FILE":/etc/vulnscout/config.env
+    )
+    if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
+        vol_args+=(-v "$SCRIPT_DIR/src":/scan/src)
+        env_args+=(-e DEV_MODE=true)
+        echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
+    fi
+
+    docker run -d --name "$CONTAINER_NAME" \
+        -p 7275:7275 \
+        "${env_args[@]}" \
+        "${vol_args[@]}" \
+        "$DOCKER_IMAGE" daemon
+    # Wait for the container process to be ready to accept exec calls
+    local retries=15
+    until docker exec "$CONTAINER_NAME" true 2>/dev/null; do
+        retries=$((retries - 1))
+        if [ "$retries" -le 0 ]; then
+            echo "Error: container failed to start. Check 'docker logs $CONTAINER_NAME'."
+            exit 1
+        fi
+        sleep 1
+    done
+}
+
+start_frontend_dev() {
+    if ! command -v npm &>/dev/null; then
+        echo "Error: npm is not installed or not in PATH."
+        exit 1
+    fi
+
+    local frontend_dir="$SCRIPT_DIR/frontend"
+    if [ ! -d "$frontend_dir" ]; then
+        echo "Warning: frontend/ not found at $frontend_dir, skipping dev server."
+        return
+    fi
+
+    if [ ! -f "$frontend_dir/.env" ]; then
+        echo 'VITE_API_URL="http://localhost:7275"' > "$frontend_dir/.env"
+    fi
+
+    if [ ! -d "$frontend_dir/node_modules" ]; then
+        echo "node_modules not found. Running npm install..."
+        (cd "$frontend_dir" && npm install)
+    fi
+
+    echo "Starting frontend dev server..."
+    (cd "$frontend_dir" && npm run dev) &
+    local npm_pid=$!
+    echo "$npm_pid" > "$SCRIPT_DIR/.vulnscout-npm.pid"
+    echo "Frontend dev server started (PID $npm_pid)"
+
+    _cleanup_frontend() {
+        if [ -f "$SCRIPT_DIR/.vulnscout-npm.pid" ]; then
+            local pid
+            pid=$(cat "$SCRIPT_DIR/.vulnscout-npm.pid")
+            echo "Stopping frontend dev server (PID $pid)..."
+            kill -- -$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ') 2>/dev/null || kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            rm -f "$SCRIPT_DIR/.vulnscout-npm.pid"
+        fi
+    }
+    trap _cleanup_frontend SIGINT SIGTERM EXIT
+}
+
+parse_and_run() {
+    # Pre-scan args for --dev so it takes effect regardless of position
+    for _arg in "$@"; do
+        [ "$_arg" = "--dev" ] && DEV_MODE=true
+    done
+    local SERVE_REQUESTED=false
+    local REPORT_ARGS=()
+    local EXPORT_ARGS=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dev)
+                DEV_MODE=true; shift ;;
+            --project)
+                PROJECT="$2"; shift 2 ;;
+            --variant)
+                VARIANT="$2"; shift 2 ;;
+            --match-condition)
+                MATCH_CONDITION="$2"; shift 2 ;;
+            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-openvex|--add-openvex|add-cdx|--add-cdx)
+                ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
+            perform-grype-scan|--perform-grype-scan)
+                ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
+            add-report-template|--add-report-template)
+                ensure_running; add_report_template "$2"; shift 2 ;;
+            export-spdx|--export-spdx)
+                ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
+            export-cdx|--export-cdx)
+                ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
+            export-openvex|--export-openvex)
+                ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
+            clear-inputs)
+                ensure_running
+                exec_container --clear-inputs "$PROJECT" "$VARIANT"
+                shift ;;
+            serve|--serve)
+                SERVE_REQUESTED=true; shift ;;
+            report|--report)
+                ensure_running
+                local tpl="$2"
+                # If it's an existing local file, stage it and use its basename as template name
+                if [ -f "$tpl" ]; then
+                    local tpl_staged="/tmp/vulnscout_stage_$(basename "$tpl")"
+                    docker cp "$tpl" "$CONTAINER_NAME:$tpl_staged"
+                    exec_container --add-report-template "$tpl_staged"
+                    tpl="$(basename "$tpl")"
+                fi
+                REPORT_ARGS+=(--report "$tpl")
+                shift 2 ;;
+            start)
+                do_start
+                if [ "$DEV_MODE" = true ]; then
+                    start_frontend_dev
+                fi
+                shift ;;
+            stop)
+                docker rm -f "$CONTAINER_NAME"; shift ;;
+            restart)
+                docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+                do_start
+                if [ "$DEV_MODE" = true ]; then
+                    start_frontend_dev
+                fi
+                shift ;;
+            config)
+                config_set "$2" "$3"; shift 3 ;;
+            config-list)
+                cat "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || echo "No config file found."
+                shift ;;
+            config-clear)
+                config_clear "$2"; shift 2 ;;
+            help|--help|-h)
+                show_help; shift ;;
+            *)
+                echo "Unknown command: $1"
+                echo "Run 'vulnscout help' for usage."
+                exit 1 ;;
+        esac
+    done
+
+    # Auto-trigger scan if inputs were staged: one entrypoint call handles move + scan
+    if [ "$SERVE_REQUESTED" = true ]; then
+        if [ ${#PENDING_ARGS[@]} -gt 0 ]; then
+            # Files already staged — keep container alive, just free port 7275
+            ensure_running
+            docker exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
+            sleep 1
+        else
+            # No staged files: full restart to ensure clean state
+            docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+            do_start
+        fi
+        if [ "$DEV_MODE" = true ]; then
+            start_frontend_dev
+        fi
+        exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]:-}" --serve
+    elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
+        local -a scan_args=()
+        [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
+        exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}"
+    elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
+        # No new inputs but a match-condition, report, or export was given: run against existing DB data
+        ensure_running
+        local -a mc_args=(--project "$PROJECT" --variant "$VARIANT")
+        [ -n "$MATCH_CONDITION" ] && mc_args+=(--match-condition "$MATCH_CONDITION")
+        exec_container "${mc_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}"
+    fi
+}
+
+if [ $# -eq 0 ]; then
+    show_help
+    exit 0
+fi
+
+parse_and_run "$@"
