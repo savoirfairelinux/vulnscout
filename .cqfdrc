@@ -5,7 +5,7 @@ build_context=.
 
 [build]
 command="make -C tests"
-flavors="test test_backend test_frontend"
+flavors="test test_backend test_frontend test_ci"
 
 [test]
 command="make -C tests test"

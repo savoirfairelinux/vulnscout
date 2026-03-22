@@ -77,7 +77,7 @@ class Templates:
                 vuln_obj['last_assessment'] = vuln_assessments[0]
                 vuln_obj['status'] = vuln_assessments[0]['status']
 
-            if len(vuln_obj['assessments']) > 0:
+            if len(vuln_obj.get('assessments', [])) > 0:
                 try:
                     epss_score = float((vuln_obj.get("epss", {}).get("score")) or 0.0)
                     if (filter_epss is None or epss_score >= filter_epss):

@@ -126,25 +126,25 @@ def test_generate_docs(app):
 
 
 def test_ci_mode(app):
-    os.environ["FAIL_CONDITION"] = "false == true"
+    os.environ["MATCH_CONDITION"] = "false == true"
     _run_main()
 
-    os.environ["FAIL_CONDITION"] = "true == true"
+    os.environ["MATCH_CONDITION"] = "true == true"
     with pytest.raises(SystemExit) as e:
         _run_main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["FAIL_CONDITION"] = "cvss >= 8"
+    os.environ["MATCH_CONDITION"] = "cvss >= 8"
     with pytest.raises(SystemExit) as e:
         _run_main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["FAIL_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
+    os.environ["MATCH_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
     _run_main()
 
-    os.environ["FAIL_CONDITION"] = ""
+    os.environ["MATCH_CONDITION"] = ""
 
 
 def test_spdx_output_completeness(app):
