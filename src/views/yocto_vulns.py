@@ -70,7 +70,7 @@ class YoctoVulns:
                     if "link" in issue:
                         vuln.add_url(issue.get("link"))
                     if "summary" in issue:
-                        vuln.add_text(issue.get("summary"), "summary")
+                        vuln.add_text(issue.get("summary"), "description")
                     if "description" in issue:
                         vuln.add_text(issue.get("description"), "yocto description")
 
