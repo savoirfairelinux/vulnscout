@@ -29,6 +29,7 @@ type Props = {
     vulnerabilities?: Vulnerability[];
     currentIndex?: number;
     onNavigate?: (index: number) => void;
+    variantId?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -40,7 +41,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate } = props;
+    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -439,17 +440,21 @@ const dt_options: Intl.DateTimeFormatOptions = {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
+        const body: Record<string, unknown> = {
+            effort: {
+                optimistic: content.optimistic.formatAsIso8601(),
+                likely: content.likely.formatAsIso8601(),
+                pessimistic: content.pessimistic.formatAsIso8601()
+            }
+        };
+        if (variantId) body.variant_id = variantId;
         const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({effort: {
-                optimistic: content.optimistic.formatAsIso8601(),
-                likely: content.likely.formatAsIso8601(),
-                pessimistic: content.pessimistic.formatAsIso8601()
-            }})
+            body: JSON.stringify(body)
         })
         if (response.status == 200) {
             const data = await response.json()

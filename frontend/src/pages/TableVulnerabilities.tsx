@@ -25,6 +25,7 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
+    variantId?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -262,7 +263,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
@@ -1026,6 +1027,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             patchVuln={patchVuln}
             triggerBanner={triggerBanner}
             hideBanner={closeBanner}
+            variantId={variantId}
         />
 
         <TableGeneric
@@ -1065,6 +1067,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             vulnerabilities={modalVulnSnapshot}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
+            variantId={variantId}
         ></VulnModal>}
     </>)
 }

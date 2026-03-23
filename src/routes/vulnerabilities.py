@@ -106,14 +106,26 @@ def init_app(app):
                     return "Invalid effort values", 400
                 if not (opt <= lik <= pes):
                     return "Invalid effort values", 400
+                variant_id = payload_data.get("variant_id")
+                if variant_id is not None:
+                    try:
+                        variant_id = uuid.UUID(variant_id)
+                    except (ValueError, AttributeError):
+                        return {"error": "Invalid variant_id"}, 400
                 try:
                     from ..models.time_estimate import TimeEstimate
                     for finding in (record.findings or []):
-                        existing = finding.time_estimate
+                        if variant_id is not None:
+                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
+                        else:
+                            existing = finding.time_estimate
                         if existing is not None:
                             existing.update(optimistic=opt, likely=lik, pessimistic=pes)
                         else:
-                            TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
+                            TimeEstimate.create(
+                                finding_id=finding.id, variant_id=variant_id,
+                                optimistic=opt, likely=lik, pessimistic=pes
+                            )
                         break
                 except Exception as e:
                     verbose(f"[PATCH /api/vulnerabilities/{record.id} effort] {e}")
@@ -167,14 +179,27 @@ def init_app(app):
                 if not (opt <= lik <= pes):
                     errors.append({"id": item["id"], "error": "Invalid effort values"})
                     continue
+                item_variant_id = item.get("variant_id")
+                if item_variant_id is not None:
+                    try:
+                        item_variant_id = uuid.UUID(item_variant_id)
+                    except (ValueError, AttributeError):
+                        errors.append({"id": item["id"], "error": "Invalid variant_id"})
+                        continue
                 try:
                     from ..models.time_estimate import TimeEstimate
                     for finding in (record.findings or []):
-                        existing = finding.time_estimate
+                        if item_variant_id is not None:
+                            existing = TimeEstimate.get_by_finding_and_variant(finding.id, item_variant_id)
+                        else:
+                            existing = finding.time_estimate
                         if existing is not None:
                             existing.update(optimistic=opt, likely=lik, pessimistic=pes)
                         else:
-                            TimeEstimate.create(finding_id=finding.id, optimistic=opt, likely=lik, pessimistic=pes)
+                            TimeEstimate.create(
+                                finding_id=finding.id, variant_id=item_variant_id,
+                                optimistic=opt, likely=lik, pessimistic=pes
+                            )
                         break
                 except Exception as e:
                     verbose(f"[PATCH /api/vulnerabilities/batch {item['id']!r} effort] {e}")
