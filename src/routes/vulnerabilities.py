@@ -2,11 +2,19 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import uuid
+
 from flask import request
+from sqlalchemy.orm import selectinload
 from ..models.vulnerability import Vulnerability
+from ..models.finding import Finding
+from ..models.observation import Observation
+from ..models.scan import Scan
+from ..models.variant import Variant
 from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
+from ..extensions import db
 from ..helpers.verbose import verbose
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
@@ -28,7 +36,47 @@ def init_app(app):
 
     @app.route('/api/vulnerabilities')
     def index_vulns():
-        records = Vulnerability.get_all()
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+        if variant_id:
+            try:
+                variant_uuid = uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+            records = list(db.session.execute(
+                db.select(Vulnerability)
+                .options(
+                    selectinload(Vulnerability.findings).selectinload(Finding.package),
+                    selectinload(Vulnerability.metrics),
+                )
+                .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                .join(Observation, Finding.id == Observation.finding_id)
+                .join(Scan, Observation.scan_id == Scan.id)
+                .where(Scan.variant_id == variant_uuid)
+                .distinct()
+                .order_by(Vulnerability.id)
+            ).scalars().all())
+        elif project_id:
+            try:
+                project_uuid = uuid.UUID(project_id)
+            except ValueError:
+                return {"error": "Invalid project_id"}, 400
+            records = list(db.session.execute(
+                db.select(Vulnerability)
+                .options(
+                    selectinload(Vulnerability.findings).selectinload(Finding.package),
+                    selectinload(Vulnerability.metrics),
+                )
+                .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                .join(Observation, Finding.id == Observation.finding_id)
+                .join(Scan, Observation.scan_id == Scan.id)
+                .join(Variant, Scan.variant_id == Variant.id)
+                .where(Variant.project_id == project_uuid)
+                .distinct()
+                .order_by(Vulnerability.id)
+            ).scalars().all())
+        else:
+            records = Vulnerability.get_all()
         vulns = [r.to_dict() for r in records]
         if request.args.get('format', 'list') == "dict":
             return {v["id"]: v for v in vulns}
