@@ -38,6 +38,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
+    const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -110,12 +111,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         Config.get()
             .then(config => {
                 setDefaultConfig(config);
+                setCurrentVariantId(config.variant?.id || undefined);
                 loadData(config.variant?.id);
             })
             .catch(() => loadData(undefined));
     }, [loadData]);
 
     const handleApply = useCallback((projectId: string, variantId: string) => {
+        setCurrentVariantId(variantId || undefined);
         loadData(variantId || undefined, variantId ? undefined : projectId || undefined);
     }, [loadData]);
 
@@ -236,6 +239,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     vulnerabilities={vulns}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
+                    variantId={currentVariantId}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab == 'exports' && <Exports />}
