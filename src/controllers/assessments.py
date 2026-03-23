@@ -17,6 +17,7 @@ def _persist_assessment_to_db(
     pkg_id_cache=None,
     finding_cache=None,
     use_savepoint: bool = True,
+    variant_id=None,
 ) -> None:
     """Persist an Assessment DTO to the DB via Finding resolution.
 
@@ -54,7 +55,7 @@ def _persist_assessment_to_db(
                     finding = Finding.get_or_create(pkg_uuid, assessment.vuln_id)
                     finding_cache[cache_key] = finding
 
-                DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
+                DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
     except Exception as e:
         verbose(f"[_persist_assessment_to_db {assessment.vuln_id!r}] {e}")
 
@@ -73,6 +74,7 @@ class AssessmentsController:
         self.packagesCtrl = pkgCtrl
         self.vulnerabilitiesCtrl = vulnCtrl
         self.assessments = {}
+        self.current_variant_id = None
         """A dictionary of assessments, indexed by their id."""
         # Secondary indexes for O(1) lookups in hot ingestion paths.
         self._by_vuln: dict[str, list[str]] = {}       # vuln_id → [assessment_key, ...]
@@ -195,6 +197,7 @@ class AssessmentsController:
             pkg_id_cache=getattr(self.packagesCtrl, '_db_id_cache', None),
             finding_cache=getattr(self.packagesCtrl, '_finding_cache', None),
             use_savepoint=self.use_savepoints,
+            variant_id=self.current_variant_id,
         )
         # Maintain secondary indexes
         stored = self.assessments[key]
