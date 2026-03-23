@@ -1,5 +1,6 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
+import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-cyan-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -11,9 +12,12 @@ type Props = {
   changeTab: (tab: string) => void;
   darkMode: boolean;
   setDarkMode: (mode: boolean) => void;
+  defaultProject?: { id: string; name: string } | null;
+  defaultVariant?: { id: string; name: string } | null;
+  onApply: (projectId: string, variantId: string) => void;
 };
 
-function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props>) {
+function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, onApply }: Readonly<Props>) {
   return (
   <nav>
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -83,6 +87,20 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
 
       {/* Spacer */}
       <li className="grow"></li>
+
+      {/* === Project / Variant Selector === */}
+      <li className="flex items-stretch">
+        <ProjectVariantSelector
+          defaultProject={defaultProject}
+          defaultVariant={defaultVariant}
+          onApply={onApply}
+        />
+      </li>
+
+      {/* === Divider === */}
+      <li className="flex items-center mx-3">
+        <div className="border-l h-8 dark:border-neutral-300"></div>
+      </li>
 
       {/* === Dark Mode Toggle === */}
       <li className="px-4 py-2">

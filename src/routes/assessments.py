@@ -45,7 +45,32 @@ def init_app(app):
 
     @app.route('/api/assessments')
     def index_assess():
-        assessments = [a.to_dict() for a in _get_all_db_assessments()]
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+        if variant_id:
+            import uuid
+            try:
+                variant_uuid = uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+            assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
+        elif project_id:
+            import uuid
+            from ..models.variant import Variant as DBVariant
+            try:
+                project_uuid = uuid.UUID(project_id)
+            except ValueError:
+                return {"error": "Invalid project_id"}, 400
+            variants = DBVariant.get_by_project(project_uuid)
+            variant_ids = [v.id for v in variants]
+            if variant_ids:
+                assessments = []
+                for vid in variant_ids:
+                    assessments.extend(a.to_dict() for a in DBAssessment.get_by_variant(vid))
+            else:
+                assessments = []
+        else:
+            assessments = [a.to_dict() for a in _get_all_db_assessments()]
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments

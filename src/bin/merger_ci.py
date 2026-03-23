@@ -272,35 +272,52 @@ def _run_main() -> dict:
     verbose("merger_ci: Start exporting results")
     verbose("merger_ci: Finished exporting results")
 
-    # Populate the observations table: link every finding to the current scan.
+    # Populate the observations table: link findings to the scan they were
+    # discovered in.  Only findings whose package appears in one of this scan's
+    # SBOM documents are eligible — linking ALL global findings would break
+    # variant-scoped filtering when multiple scans/variants exist in the DB.
     verbose("merger_ci: Populating observations table")
     try:
+        from ..models.sbom_package import SBOMPackage as SBOMPkg
+        from ..models.sbom_document import SBOMDocument as SBOMDoc
+
         latest_scan = ScanModel.get_latest()
         if latest_scan:
-            # Find findings without observations for this scan
-            new_finding_ids = list(_db.session.execute(
-                _db.select(FindingModel.id).where(
-                    ~exists(
-                        _db.select(1).select_from(Observation).where(
-                            and_(
-                                Observation.finding_id == FindingModel.id,
-                                Observation.scan_id == latest_scan.id
+            # 1. Collect package_ids referenced by this scan's SBOM documents
+            package_ids_in_scan = list(_db.session.execute(
+                _db.select(SBOMPkg.package_id)
+                .join(SBOMDoc, SBOMPkg.sbom_document_id == SBOMDoc.id)
+                .where(SBOMDoc.scan_id == latest_scan.id)
+                .distinct()
+            ).scalars().all())
+
+            if package_ids_in_scan:
+                # 2. Find findings for those packages that are not yet observed in this scan
+                new_finding_ids = list(_db.session.execute(
+                    _db.select(FindingModel.id)
+                    .where(FindingModel.package_id.in_(package_ids_in_scan))
+                    .where(
+                        ~exists(
+                            _db.select(1).select_from(Observation).where(
+                                and_(
+                                    Observation.finding_id == FindingModel.id,
+                                    Observation.scan_id == latest_scan.id
+                                )
                             )
                         )
                     )
-                )
-            ).scalars().all())
+                ).scalars().all())
 
-            # Create observations in batches to reduce memory usage
-            if new_finding_ids:
-                new_observations = [
-                    Observation(finding_id=fid, scan_id=latest_scan.id)
-                    for fid in new_finding_ids
-                ]
-                with batch_session():
-                    _db.session.bulk_save_objects(new_observations)
-                # ← single COMMIT for all observations
-                verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({len(new_observations)} new)")
+                if new_finding_ids:
+                    new_observations = [
+                        Observation(finding_id=fid, scan_id=latest_scan.id)
+                        for fid in new_finding_ids
+                    ]
+                    with batch_session():
+                        _db.session.bulk_save_objects(new_observations)
+                    verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({len(new_observations)} new)")
+            else:
+                verbose("merger_ci: No packages found for this scan's SBOM documents — skipping observation creation.")
         else:
             print("Warning: no scan found in DB — skipping observation creation.")
     except Exception as e:
