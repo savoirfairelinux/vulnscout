@@ -15,9 +15,10 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     triggerBanner: (message: string, type: 'error' | 'success') => void;
     hideBanner: () => void;
+    variantId?: string;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -120,6 +121,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         // Prepare batch request payload
         const vulnerabilityUpdates = selectedVulns.map(vuln_id => ({
             id: vuln_id,
+            ...(variantId ? { variant_id: variantId } : {}),
             effort: {
                 optimistic: content.optimistic.formatAsIso8601(),
                 likely: content.likely.formatAsIso8601(),
