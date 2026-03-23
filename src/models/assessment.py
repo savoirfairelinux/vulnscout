@@ -38,6 +38,18 @@ STATUS_OPENVEX_TO_CDX_VEX = {
     "fixed": "resolved"
 }
 
+STATUS_TO_SIMPLIFIED = {
+    "under_investigation": "Pending Assessment",
+    "in_triage": "Pending Assessment",
+    "false_positive": "Not affected",
+    "not_affected": "Not affected",
+    "exploitable": "Exploitable",
+    "affected": "Exploitable",
+    "resolved": "Fixed",
+    "fixed": "Fixed",
+    "resolved_with_pedigree": "Fixed",
+}
+
 VALID_JUSTIFICATION_OPENVEX = [
     "component_not_present",
     "vulnerable_code_not_present",
@@ -550,7 +562,7 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def from_vuln_assessment(assess, finding_id=None) -> "Assessment":
+    def from_vuln_assessment(assess, finding_id=None, variant_id=None) -> "Assessment":
         """Create or update an ``Assessment`` DB record from an Assessment DTO.
 
         Does not commit — callers are expected to be inside batch_session()
@@ -564,17 +576,23 @@ class Assessment(Base):
 
         if existing is not None:
             existing.status = assess.status or existing.status
+            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
             existing.justification = assess.justification or existing.justification
             existing.impact_statement = assess.impact_statement or existing.impact_statement
             existing.workaround = getattr(assess, "workaround", None) or existing.workaround
             existing.responses = list(assess.responses) if assess.responses else existing.responses
+            if variant_id is not None and existing.variant_id is None:
+                existing.variant_id = variant_id
             db.session.flush()
             return existing
 
+        new_status = assess.status or "under_investigation"
         record = Assessment.create(
             assessment_id=getattr(assess, "id", None),
-            status=assess.status or "under_investigation",
+            status=new_status,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
+            variant_id=variant_id,
             finding_id=finding_id,
             status_notes=assess.status_notes,
             justification=assess.justification,
