@@ -239,6 +239,9 @@ def _run_main() -> dict:
     # pkgCtrl._preload_cache()  # bulk-load pkg UUIDs + findings into cache; eliminates per-vuln SELECT queries
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+    latest_scan = ScanModel.get_latest()
+    if latest_scan:
+        assessCtrl.current_variant_id = latest_scan.variant_id
     controllers = {
         "packages": pkgCtrl,
         "vulnerabilities": vulnCtrl,
