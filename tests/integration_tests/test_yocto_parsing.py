@@ -423,3 +423,31 @@ def test_load_from_dict_issue_without_status(yocto_parser):
     assert "CVE-NOSTATUS-1" in yocto_parser.vulnerabilitiesCtrl
     # But no assessment since status was absent
     assert len(yocto_parser.assessmentsCtrl) == 0
+
+
+def test_yocto_summary_stored_as_description(yocto_parser):
+    """
+    GIVEN a Yocto issue that has a 'summary' field
+    WHEN the JSON is parsed
+    THEN the summary text should be stored under the 'description' key,
+         not under 'summary'
+    """
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "libfoo",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2024-SUMMARY",
+                "status": "Unpatched",
+                "summary": "This is the vulnerability summary text.",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2024-SUMMARY"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2024-SUMMARY")
+    assert vuln is not None
+    assert "description" in vuln.texts
+    assert vuln.texts["description"] == "This is the vulnerability summary text."
+    assert "summary" not in vuln.texts

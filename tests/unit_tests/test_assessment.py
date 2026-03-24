@@ -327,3 +327,25 @@ def test_merge_same_assessment(assessment_initial, assessment_active, assessment
 
     assert assessment_not_affected.merge(assessment_not_affected) is True
     assert assessment_not_affected.impact_statement == "package XYZ does not contain the vulnerable code"
+
+
+def test_status_to_simplified_mapping():
+    """
+    GIVEN the STATUS_TO_SIMPLIFIED mapping
+    WHEN checking each known status key
+    THEN the simplified label should match the expected value
+    """
+    from src.models.assessment import STATUS_TO_SIMPLIFIED
+
+    assert STATUS_TO_SIMPLIFIED["under_investigation"] == "Pending Assessment"
+    assert STATUS_TO_SIMPLIFIED["in_triage"] == "Pending Assessment"
+    assert STATUS_TO_SIMPLIFIED["false_positive"] == "Not affected"
+    assert STATUS_TO_SIMPLIFIED["not_affected"] == "Not affected"
+    assert STATUS_TO_SIMPLIFIED["exploitable"] == "Exploitable"
+    assert STATUS_TO_SIMPLIFIED["affected"] == "Exploitable"
+    assert STATUS_TO_SIMPLIFIED["resolved"] == "Fixed"
+    assert STATUS_TO_SIMPLIFIED["fixed"] == "Fixed"
+    assert STATUS_TO_SIMPLIFIED["resolved_with_pedigree"] == "Fixed"
+    # No unknown status should be present
+    for key in STATUS_TO_SIMPLIFIED:
+        assert STATUS_TO_SIMPLIFIED[key] in ("Pending Assessment", "Not affected", "Exploitable", "Fixed")
