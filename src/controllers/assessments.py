@@ -51,7 +51,11 @@ class AssessmentsController:
         """Return a list of assessments by vulnerability id (str) and package id (str)."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.id
-        return [a for a in self.assessments.values() if a.vuln_id == vuln_str and pkg_str in a.packages]
+        pkg_name = pkg_str.split("@")[0]
+        return [
+            a for a in self.assessments.values()
+            if a.vuln_id == vuln_str and any(p.split("@")[0] == pkg_name for p in a.packages)
+        ]
 
     def add(self, assessment: VulnAssessment):
         """Add an assessment to the list, merging it with an existing one if present."""
