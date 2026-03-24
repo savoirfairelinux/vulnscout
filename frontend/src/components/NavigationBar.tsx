@@ -14,7 +14,7 @@ type Props = {
   setDarkMode: (mode: boolean) => void;
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
-  onApply: (projectId: string, variantId: string) => void;
+  onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string) => void;
 };
 
 function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, onApply }: Readonly<Props>) {

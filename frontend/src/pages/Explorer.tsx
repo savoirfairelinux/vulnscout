@@ -86,12 +86,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         })
     }, [loadPatchData]);
 
-    const loadData = useCallback((variantId?: string, projectId?: string) => {
+    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
+        // When compare is active, packages/assessments are scoped to the compare variant
+        const activeVariantId = compareVariantId || variantId;
         setIsLoadingData(true);
         Promise.allSettled([
-            Packages.list(variantId, projectId),
-            Vulnerabilities.list(variantId, projectId),
-            Assessments.list(variantId, projectId)
+            Packages.list(activeVariantId, projectId),
+            Vulnerabilities.list(variantId, projectId, compareVariantId, operation),
+            Assessments.list(activeVariantId, projectId)
         ]).then(([pkgsResult, vulnsResult, assessResult]) => {
             setIsLoadingData(false);
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
@@ -117,9 +119,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             .catch(() => loadData(undefined));
     }, [loadData]);
 
-    const handleApply = useCallback((projectId: string, variantId: string) => {
-        setCurrentVariantId(variantId || undefined);
-        loadData(variantId || undefined, variantId ? undefined : projectId || undefined);
+    const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
+        const effectiveVariantId = compareVariantId || variantId || undefined;
+        setCurrentVariantId(effectiveVariantId);
+        loadData(
+            variantId || undefined,
+            variantId ? undefined : projectId || undefined,
+            compareVariantId || undefined,
+            operation || undefined,
+        );
     }, [loadData]);
 
 

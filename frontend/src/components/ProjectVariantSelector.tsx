@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faLayerGroup, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+import { faLayerGroup, faChevronDown, faArrowsRotate } from '@fortawesome/free-solid-svg-icons';
 import Projects from '../handlers/project';
 import type { Project } from '../handlers/project';
 import Variants from '../handlers/variant';
@@ -14,7 +14,7 @@ const bgActiveColor = greenTheme ? 'bg-cyan-900' : 'dark:bg-neutral-800';
 type Props = {
     defaultProject?: { id: string; name: string } | null;
     defaultVariant?: { id: string; name: string } | null;
-    onApply: (projectId: string, variantId: string) => void;
+    onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string) => void;
 };
 
 function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Readonly<Props>) {
@@ -27,9 +27,16 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
     const [selectedVariantId, setSelectedVariantId] = useState<string>('');
 
+    // Compare variants state
+    const [compareEnabled, setCompareEnabled] = useState<boolean>(false);
+    const [compareOperation, setCompareOperation] = useState<'difference' | 'intersection'>('difference');
+    const [selectedCompareVariantId, setSelectedCompareVariantId] = useState<string>('');
+
     // Applied (display) state — initialised from props when they arrive
     const [appliedProject, setAppliedProject] = useState<string>('');
     const [appliedVariant, setAppliedVariant] = useState<string>('');
+    const [appliedCompareVariant, setAppliedCompareVariant] = useState<string>('');
+    const [appliedOperation, setAppliedOperation] = useState<string>('');
 
     // Sync display state when default config arrives from the server
     useEffect(() => {
@@ -109,9 +116,13 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
     const handleApply = () => {
         const project = projects.find(p => p.id === selectedProjectId);
         const variant = variants.find(v => v.id === selectedVariantId);
+        const compareVariant = variants.find(v => v.id === selectedCompareVariantId);
+        const activeCompare = compareEnabled && selectedCompareVariantId;
         setAppliedProject(project?.name ?? '');
         setAppliedVariant(selectedVariantId ? (variant?.name ?? '') : (selectedProjectId ? 'All variants' : ''));
-        onApply(selectedProjectId, selectedVariantId);
+        setAppliedCompareVariant(activeCompare ? (compareVariant?.name ?? '') : '');
+        setAppliedOperation(activeCompare ? compareOperation : '');
+        onApply(selectedProjectId, selectedVariantId, compareEnabled ? selectedCompareVariantId : '', compareEnabled ? compareOperation : '');
         setIsOpen(false);
     };
 
@@ -135,7 +146,9 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                         {appliedProject || 'Select Project'}
                     </span>
                     <span className="text-xs font-normal opacity-75 max-w-[160px] truncate">
-                        {appliedVariant || (appliedProject ? 'All variants' : 'No variant')}
+                        {appliedCompareVariant
+                            ? `${appliedVariant || 'All'} ${{ difference: '∖', intersection: '∩' }[appliedOperation] ?? '∖'} ${appliedCompareVariant}`
+                            : (appliedVariant || (appliedProject ? 'All variants' : 'No variant'))}
                     </span>
                 </div>
                 <FontAwesomeIcon icon={faChevronDown} className="text-xs" />
@@ -178,10 +191,76 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                         ))}
                     </select>
 
+                    {/* Compare variants section */}
+                    <div className="border-t border-cyan-700 pt-3 mb-4">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
+                            <input
+                                type="checkbox"
+                                checked={compareEnabled}
+                                onChange={e => {
+                                    setCompareEnabled(e.target.checked);
+                                    if (!e.target.checked) setSelectedCompareVariantId('');
+                                }}
+                                className="accent-cyan-400"
+                            />
+                            <span className="font-semibold">Compare variants</span>
+                        </label>
+                        {compareEnabled && (
+                            <>
+                                <div className="flex flex-col gap-1.5 mb-3">
+                                    {([
+                                        { value: 'difference',   symbol: 'Exclusion', desc: 'Present in B, not in A' },
+
+                                        { value: 'intersection', symbol: 'Intersection', desc: 'common to both' },
+                                    ] as { value: 'difference' | 'intersection'; symbol: string; desc: string }[]).map(op => (
+                                        <label key={op.value} className="flex items-center gap-2 text-sm cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name="compare-operation"
+                                                value={op.value}
+                                                checked={compareOperation === op.value}
+                                                onChange={() => setCompareOperation(op.value)}
+                                                className="accent-cyan-400 shrink-0"
+                                            />
+                                            <span className="font-mono text-xs">{op.symbol}</span>
+                                            <span className="text-xs text-cyan-300">— {op.desc}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <label className="block text-sm mb-1">Compare variant (B)</label>
+                                <select
+                                    value={selectedCompareVariantId}
+                                    onChange={e => setSelectedCompareVariantId(e.target.value)}
+                                    disabled={!selectedVariantId}
+                                    className="w-full rounded px-2 py-1 text-sm bg-cyan-800 border border-cyan-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <option value="">— select a compare variant —</option>
+                                    {variants.filter(v => v.id !== selectedVariantId).map(v => (
+                                        <option key={v.id} value={v.id}>{v.name}</option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const tmp = selectedVariantId;
+                                        setSelectedVariantId(selectedCompareVariantId);
+                                        setSelectedCompareVariantId(tmp);
+                                    }}
+                                    disabled={!selectedVariantId || !selectedCompareVariantId}
+                                    title="Swap variants"
+                                    className="mt-2 w-full flex items-center justify-center gap-2 py-1 rounded border border-cyan-600 text-xs text-cyan-300 hover:bg-cyan-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                                >
+                                    <FontAwesomeIcon icon={faArrowsRotate} />
+                                    Swap A ↔ B
+                                </button>
+                            </>
+                        )}
+                    </div>
+
                     {/* Apply button */}
                     <button
                         onClick={handleApply}
-                        disabled={!selectedProjectId}
+                        disabled={!selectedProjectId || (compareEnabled && !selectedCompareVariantId)}
                         className="w-full py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold transition-colors duration-150"
                         type="button"
                     >

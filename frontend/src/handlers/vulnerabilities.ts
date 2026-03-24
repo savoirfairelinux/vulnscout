@@ -140,11 +140,18 @@ const asVulnerability = (data: any): Vulnerability | [] => {
 }
 
 class Vulnerabilities {
-    static async list(variantId?: string, projectId?: string): Promise<Vulnerability[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities");
         url.searchParams.set('format', 'list');
-        if (variantId) url.searchParams.set('variant_id', variantId);
-        else if (projectId) url.searchParams.set('project_id', projectId);
+        if (variantId && compareVariantId) {
+            url.searchParams.set('variant_id', variantId);
+            url.searchParams.set('compare_variant_id', compareVariantId);
+            if (operation) url.searchParams.set('operation', operation);
+        } else if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
         const response = await fetch(url.toString(), {
             mode: "cors",
         });

@@ -429,6 +429,142 @@ class TestVulnerabilitiesFiltering:
         response = client.get("/api/vulnerabilities?project_id=bad-uuid&format=list")
         assert response.status_code == 400
 
+    # Compare-filtering tests use the existing fixture:
+    # VariantA has CVE-2020-35492, VariantB has no vulnerabilities.
+
+    def test_vulnerabilities_compare_difference_returns_compare_unique_vulns(self, client_and_data):
+        """difference(base=VB, compare=VA): vulns in VA but NOT in VB → CVE-2020-35492."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_b_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=difference"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        ids = [v["id"] for v in body]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_compare_difference_empty_when_compare_has_no_unique(self, client_and_data):
+        """difference(base=VA, compare=VB): vulns in VB but NOT in VA → empty (VB has none)."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_b_id}"
+            f"&operation=difference"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body == []
+
+    def test_vulnerabilities_compare_intersection_empty_when_no_common(self, client_and_data):
+        """intersection(VA, VB): no common vulns → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_b_id}"
+            f"&operation=intersection"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body == []
+
+    def test_vulnerabilities_compare_intersection_same_variant(self, client_and_data):
+        """intersection(VA, VA): both sides identical → all of VA's vulns returned."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=intersection"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        ids = [v["id"] for v in body]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_compare_difference_same_variant_empty(self, client_and_data):
+        """difference(VA, VA): base and compare identical → nothing unique to compare → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=difference"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body == []
+
+    def test_vulnerabilities_compare_default_operation_is_difference(self, client_and_data):
+        """Omitting operation defaults to difference."""
+        client, data = client_and_data
+        variant_b_id = data["variant_b_id"]
+        variant_a_id = data["variant_a_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_b_id}"
+            f"&compare_variant_id={variant_a_id}"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        ids = [v["id"] for v in body]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_compare_unknown_operation_falls_back_to_difference(self, client_and_data):
+        """An unrecognised operation value is treated as difference."""
+        client, data = client_and_data
+        variant_b_id = data["variant_b_id"]
+        variant_a_id = data["variant_a_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_b_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=bogus"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        body = response.get_json()
+        ids = [v["id"] for v in body]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_compare_invalid_variant_uuid(self, client_and_data):
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id={variant_a_id}"
+            f"&compare_variant_id=not-a-uuid"
+        )
+        assert response.status_code == 400
+
+    def test_vulnerabilities_compare_invalid_base_uuid(self, client_and_data):
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/vulnerabilities?format=list"
+            f"&variant_id=not-a-uuid"
+            f"&compare_variant_id={variant_a_id}"
+        )
+        assert response.status_code == 400
+
 
 # ===========================================================================
 # /api/assessments  — variant / project filtering
