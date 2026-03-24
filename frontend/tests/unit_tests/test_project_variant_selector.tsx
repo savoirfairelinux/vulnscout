@@ -234,7 +234,7 @@ describe('ProjectVariantSelector', () => {
         const applyButton = screen.getByRole('button', { name: 'Apply' });
         await act(async () => { fireEvent.click(applyButton); });
 
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', '', '');
     });
 
     test('Apply with no variant selected calls onApply with empty variant id', async () => {
@@ -258,7 +258,7 @@ describe('ProjectVariantSelector', () => {
         const applyButton = screen.getByRole('button', { name: 'Apply' });
         await act(async () => { fireEvent.click(applyButton); });
 
-        expect(onApply).toHaveBeenCalledWith('proj-1', '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '');
     });
 
     test('Apply closes the dropdown panel', async () => {
@@ -284,6 +284,221 @@ describe('ProjectVariantSelector', () => {
         await act(async () => { fireEvent.click(applyButton); });
 
         expect(screen.queryByText('Project & Variant')).not.toBeInTheDocument();
+    });
+
+    // -----------------------------------------------------------------------
+    // Compare variants feature
+    // -----------------------------------------------------------------------
+
+    test('compare variants checkbox is not visible when panel is closed', () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    });
+
+    test('compare variants label is present when panel is open', async () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+        expect(screen.getByText('Compare variants')).toBeInTheDocument();
+    });
+
+    test('compare section is hidden by default', async () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+        expect(screen.queryByText('Compare variant (B)')).not.toBeInTheDocument();
+    });
+
+    test('checking Compare checkbox shows the compare section', async () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+
+        expect(screen.getByText('Compare variant (B)')).toBeInTheDocument();
+    });
+
+    test('unchecking Compare hides the compare section again', async () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+        expect(screen.getByText('Compare variant (B)')).toBeInTheDocument();
+
+        await act(async () => { fireEvent.click(checkbox); });
+        expect(screen.queryByText('Compare variant (B)')).not.toBeInTheDocument();
+    });
+
+    test('Apply is disabled when compare enabled but no compare variant selected', async () => {
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const [projectSelect] = screen.getAllByRole('combobox');
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+
+        const applyButton = screen.getByRole('button', { name: 'Apply' });
+        expect(applyButton).toBeDisabled();
+    });
+
+    test('Apply with compare calls onApply with compareVariantId and default operation', async () => {
+        const onApply = jest.fn();
+        render(<ProjectVariantSelector onApply={onApply} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const [projectSelect, variantSelect] = screen.getAllByRole('combobox');
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'default' })).toBeInTheDocument();
+        });
+        await act(async () => {
+            fireEvent.change(variantSelect, { target: { value: 'var-1' } });
+        });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+
+        // Compare select is the last combobox; var-1 is filtered out, so var-2 is available
+        await waitFor(() => {
+            expect(screen.getAllByRole('combobox').length).toBe(3);
+        });
+        const compareSelect = screen.getAllByRole('combobox')[2];
+        await act(async () => {
+            fireEvent.change(compareSelect, { target: { value: 'var-2' } });
+        });
+
+        const applyButton = screen.getByRole('button', { name: 'Apply' });
+        await act(async () => { fireEvent.click(applyButton); });
+
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'difference');
+    });
+
+    test('Apply with compare and intersection operation passes correct args', async () => {
+        const onApply = jest.fn();
+        render(<ProjectVariantSelector onApply={onApply} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const [projectSelect, variantSelect] = screen.getAllByRole('combobox');
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'default' })).toBeInTheDocument();
+        });
+        await act(async () => {
+            fireEvent.change(variantSelect, { target: { value: 'var-1' } });
+        });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+
+        // Switch to intersection
+        const intersectionRadio = screen.getByRole('radio', { name: /intersection/i });
+        await act(async () => { fireEvent.click(intersectionRadio); });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('combobox').length).toBe(3);
+        });
+        const compareSelect = screen.getAllByRole('combobox')[2];
+        await act(async () => {
+            fireEvent.change(compareSelect, { target: { value: 'var-2' } });
+        });
+
+        const applyButton = screen.getByRole('button', { name: 'Apply' });
+        await act(async () => { fireEvent.click(applyButton); });
+
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'intersection');
+    });
+
+    test('unchecking compare passes empty compareVariantId to onApply', async () => {
+        const onApply = jest.fn();
+        render(<ProjectVariantSelector onApply={onApply} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const [projectSelect] = screen.getAllByRole('combobox');
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+        await act(async () => { fireEvent.click(checkbox); });
+
+        const applyButton = screen.getByRole('button', { name: 'Apply' });
+        await act(async () => { fireEvent.click(applyButton); });
+
+        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '');
+    });
+
+    test('swap button swaps variant A and compare variant B', async () => {
+        const onApply = jest.fn();
+        render(<ProjectVariantSelector onApply={onApply} />);
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const [projectSelect, variantSelect] = screen.getAllByRole('combobox');
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'default' })).toBeInTheDocument();
+        });
+        await act(async () => {
+            fireEvent.change(variantSelect, { target: { value: 'var-1' } });
+        });
+
+        const checkbox = screen.getByRole('checkbox');
+        await act(async () => { fireEvent.click(checkbox); });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('combobox').length).toBe(3);
+        });
+        const compareSelect = screen.getAllByRole('combobox')[2];
+        await act(async () => {
+            fireEvent.change(compareSelect, { target: { value: 'var-2' } });
+        });
+
+        const swapButton = screen.getByTitle('Swap variants');
+        await act(async () => { fireEvent.click(swapButton); });
+
+        const applyButton = screen.getByRole('button', { name: 'Apply' });
+        await act(async () => { fireEvent.click(applyButton); });
+
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', 'var-1', 'difference');
     });
 
     // -----------------------------------------------------------------------
