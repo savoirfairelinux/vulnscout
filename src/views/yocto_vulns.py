@@ -53,11 +53,16 @@ class YoctoVulns:
                 package.generate_generic_purl()
                 self.packagesCtrl.add(package)
 
-                # Pre-warm the in-memory index with all DB assessments for this
+                # Pre-warm the in-memory index with DB assessments for this
                 # package in one query. After this, gets_by_vuln_pkg hits only
                 # the in-memory _by_vuln_pkg index — no DB query per issue.
+                # Only index assessments that belong to the current variant (or
+                # have no variant) so that a different variant's records do not
+                # fool the deduplication check below.
+                _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
                 for a in Assessment.get_by_package(package.string_id):
-                    self.assessmentsCtrl._index_existing(a)
+                    if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                        self.assessmentsCtrl._index_existing(a)
                 self.assessmentsCtrl._db_queried_pkgs.add(package.string_id)
 
                 for issue in pkg.get("issue", []):

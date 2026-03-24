@@ -98,8 +98,13 @@ def evaluate_condition(controllers, condition):
     return failed_vulns
 
 
-def read_inputs(controllers):
-    """Parse all SBOM documents registered in the DB."""
+def read_inputs(controllers, scan_id=None):
+    """Parse all SBOM documents registered in the DB.
+
+    When *scan_id* is provided only the documents that belong to that scan
+    are parsed.  This prevents reprocessing older scans' assessment files
+    under the wrong variant when multiple scans/variants exist in the DB.
+    """
     cdx = CycloneDx(controllers)
     spdx = SPDX(controllers)
     fastspdx3 = FastSPDX3(controllers)
@@ -114,7 +119,7 @@ def read_inputs(controllers):
         verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl = controllers["packages"]
-    docs = SBOMDocument.get_all()
+    docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
 
     for doc in docs:
         pkgCtrl.set_sbom_document(doc.id)
@@ -256,7 +261,8 @@ def _run_main() -> dict:
         vulnCtrl.use_savepoints = False
         assessCtrl.use_savepoints = False
 
-        files = read_inputs(controllers)
+        scan_id = latest_scan.id if latest_scan else None
+        files = read_inputs(controllers, scan_id=scan_id)
         verbose("merger_ci: Finished reading inputs")
 
         verbose("merger_ci: Start Post-treatment")

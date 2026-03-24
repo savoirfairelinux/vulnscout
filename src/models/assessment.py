@@ -570,9 +570,18 @@ class Assessment(Base):
         """
         existing = None
         if finding_id is not None:
-            existing = db.session.execute(
-                db.select(Assessment).where(Assessment.finding_id == finding_id)
-            ).scalar_one_or_none()
+            if variant_id is not None:
+                # assessment is linked to (finding, variant)
+                existing = db.session.execute(
+                    db.select(Assessment).where(
+                        Assessment.finding_id == finding_id,
+                        Assessment.variant_id == variant_id,
+                    )
+                ).scalar_one_or_none()
+            else:
+                existing = db.session.execute(
+                    db.select(Assessment).where(Assessment.finding_id == finding_id)
+                ).scalar_one_or_none()
 
         if existing is not None:
             existing.status = assess.status or existing.status
@@ -582,8 +591,6 @@ class Assessment(Base):
             existing.impact_statement = assess.impact_statement or existing.impact_statement
             existing.workaround = getattr(assess, "workaround", None) or existing.workaround
             existing.responses = list(assess.responses) if assess.responses else existing.responses
-            if variant_id is not None and existing.variant_id is None:
-                existing.variant_id = variant_id
             db.session.flush()
             return existing
 
