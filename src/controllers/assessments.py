@@ -132,15 +132,30 @@ class AssessmentsController:
             verbose(f"[AssessmentsController.gets_by_pkg {pkg_str!r}] {e}")
         return list(results.values())
 
+    def _matches_current_variant(self, assessment: Assessment) -> bool:
+        """Return True if *assessment* is compatible with the current ingestion variant.
+
+        When ``current_variant_id`` is set (i.e. during a ``process`` run) we
+        only want assessments that belong to that specific variant or that
+        have no variant at all (legacy / API-created records).  This prevents
+        deduplication logic in parsers (yocto, grype, …) from mistakenly
+        treating another variant's assessment as an existing one and skipping
+        creation of the correct variant-scoped record.
+        """
+        if self.current_variant_id is None:
+            return True
+        return assessment.variant_id is None or assessment.variant_id == self.current_variant_id
+
     def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
         results: dict[str, Assessment] = {}
-        # Use secondary index for O(1) in-memory lookup (avoids full scan)
+        # Use secondary index for O(1) in-memory lookup (avoids full scan).
+        # When ingesting for a specific variant, skip cross-variant records.
         for key in self._by_vuln_pkg.get((vuln_str, pkg_str), []):
             a = self.assessments.get(key)
-            if a is not None:
+            if a is not None and self._matches_current_variant(a):
                 results[key] = a
         # Only query DB once per (vuln, pkg) pair — subsequent calls are
         # served entirely from the in-memory _by_vuln_pkg index.
@@ -152,6 +167,8 @@ class AssessmentsController:
                 finding = Finding.get_by_package_and_vulnerability(pkg_str, vuln_str)
                 if finding is not None:
                     for a in Assessment.get_by_finding(finding.id):
+                        if not self._matches_current_variant(a):
+                            continue
                         a_key = str(a.id)
                         if a_key not in results:
                             self._index_existing(a)

@@ -415,20 +415,22 @@ class TestAssessmentFromVulnAssessment:
         a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=variant.id)
         assert a2.variant_id == variant.id
 
-    def test_from_vuln_assessment_update_preserves_existing_variant_id(self, app, finding, variant, project):
-        """from_vuln_assessment update path must not overwrite an already-set variant_id."""
+    def test_from_vuln_assessment_separate_record_per_variant(self, app, finding, variant, project):
+        """Each variant must get its own assessment row for the same finding."""
         from src.models.assessment import Assessment
         from src.models.variant import Variant
         va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va1.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va1, finding_id=finding.id, variant_id=variant.id)
+        a1 = Assessment.from_vuln_assessment(va1, finding_id=finding.id, variant_id=variant.id)
 
         other_variant = Variant.create("OtherVariant", project.id)
         va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
         va2.set_status("fixed")
         a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=other_variant.id)
-        # Original variant_id must be preserved
-        assert a2.variant_id == variant.id
+        # Each variant should have its own assessment with its own variant_id
+        assert a1.variant_id == variant.id
+        assert a2.variant_id == other_variant.id
+        assert a1.id != a2.id
 
 
 # ===========================================================================
