@@ -146,3 +146,25 @@ def test_export_import_assessments(assessment_controller, pkg_controller, vuln_c
     assert assessment_1 in new_controller
     for assess in assessment_controller:
         assert assess in new_controller
+
+
+def test_assessments_controller_current_variant_id_default(assessment_controller):
+    """
+    GIVEN a freshly created AssessmentsController
+    WHEN reading current_variant_id
+    THEN it should default to None
+    """
+    assert assessment_controller.current_variant_id is None
+
+
+def test_assessments_controller_current_variant_id_can_be_set(pkg_controller, vuln_controller):
+    """
+    GIVEN an AssessmentsController
+    WHEN setting current_variant_id to a UUID
+    THEN the attribute should reflect the new value
+    """
+    import uuid
+    ctrl = AssessmentsController(pkg_controller, vuln_controller)
+    test_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    ctrl.current_variant_id = test_id
+    assert ctrl.current_variant_id == test_id

@@ -375,6 +375,61 @@ class TestAssessmentFromVulnAssessment:
         assert a.source == "grype"
         assert a.workaround == "upgrade to 2.0"
 
+    def test_from_vuln_assessment_create_sets_simplified_status(self, app, finding):
+        """from_vuln_assessment create path should populate simplified_status via STATUS_TO_SIMPLIFIED."""
+        from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
+        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va.set_status("exploitable")
+        a = Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        assert a.simplified_status == STATUS_TO_SIMPLIFIED["exploitable"]
+
+    def test_from_vuln_assessment_update_sets_simplified_status(self, app, finding):
+        """from_vuln_assessment update path should refresh simplified_status when status changes."""
+        from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
+        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va1.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va1, finding_id=finding.id)
+
+        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va2.set_status("fixed")
+        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id)
+        assert a2.simplified_status == STATUS_TO_SIMPLIFIED["fixed"]
+
+    def test_from_vuln_assessment_create_with_variant_id(self, app, finding, variant):
+        """from_vuln_assessment create path should assign the supplied variant_id."""
+        from src.models.assessment import Assessment
+        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va.set_status("in_triage")
+        a = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
+        assert a.variant_id == variant.id
+
+    def test_from_vuln_assessment_update_sets_variant_id_if_none(self, app, finding, variant):
+        """from_vuln_assessment update path should set variant_id when the existing record has none."""
+        from src.models.assessment import Assessment
+        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va1.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va1, finding_id=finding.id)  # no variant_id
+
+        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va2.set_status("fixed")
+        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=variant.id)
+        assert a2.variant_id == variant.id
+
+    def test_from_vuln_assessment_update_preserves_existing_variant_id(self, app, finding, variant, project):
+        """from_vuln_assessment update path must not overwrite an already-set variant_id."""
+        from src.models.assessment import Assessment
+        from src.models.variant import Variant
+        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va1.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va1, finding_id=finding.id, variant_id=variant.id)
+
+        other_variant = Variant.create("OtherVariant", project.id)
+        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va2.set_status("fixed")
+        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=other_variant.id)
+        # Original variant_id must be preserved
+        assert a2.variant_id == variant.id
+
 
 # ===========================================================================
 # TimeEstimates: DB integer format + _iso_to_hours
@@ -685,6 +740,63 @@ class TestVulnRoutesEffort:
         import json as _json
         data = _json.loads(r.data)
         assert "vulnerabilities" in data
+
+    def test_patch_effort_with_valid_variant_id(self, client, app):
+        """A valid UUID variant_id should be accepted and produce a 200 response."""
+        from src.models.project import Project
+        from src.models.variant import Variant
+        with app.app_context():
+            proj = Project.create("EffortProject")
+            var = Variant.create("EffortVariant", proj.id)
+            vid = str(var.id)
+        response = client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+            "effort": {"optimistic": 1, "likely": 4, "pessimistic": 8},
+            "variant_id": vid,
+        })
+        assert response.status_code == 200
+
+    def test_patch_effort_with_invalid_variant_id(self, client):
+        """An unparseable variant_id string should return 400."""
+        response = client.patch("/api/vulnerabilities/CVE-2025-ROUTE", json={
+            "effort": {"optimistic": 1, "likely": 4, "pessimistic": 8},
+            "variant_id": "not-a-valid-uuid",
+        })
+        assert response.status_code == 400
+
+    def test_batch_effort_with_invalid_variant_id(self, client):
+        """Batch: an invalid variant_id should append an error for that item."""
+        import json as _json
+        response = client.patch("/api/vulnerabilities/batch", json={
+            "vulnerabilities": [{
+                "id": "CVE-2025-ROUTE",
+                "effort": {"optimistic": 1, "likely": 4, "pessimistic": 8},
+                "variant_id": "not-a-valid-uuid",
+            }]
+        })
+        data = _json.loads(response.data)
+        assert "errors" in data
+        assert any(e.get("id") == "CVE-2025-ROUTE" for e in data["errors"])
+
+    def test_batch_effort_with_valid_variant_id(self, client, app):
+        """Batch: a valid UUID variant_id is accepted and the item appears in results."""
+        import json as _json
+        from src.models.project import Project
+        from src.models.variant import Variant
+        with app.app_context():
+            proj = Project.create("BatchEffortProject")
+            var = Variant.create("BatchEffortVariant", proj.id)
+            vid = str(var.id)
+        response = client.patch("/api/vulnerabilities/batch", json={
+            "vulnerabilities": [{
+                "id": "CVE-2025-ROUTE",
+                "effort": {"optimistic": 1, "likely": 4, "pessimistic": 8},
+                "variant_id": vid,
+            }]
+        })
+        assert response.status_code == 200
+        data = _json.loads(response.data)
+        assert "vulnerabilities" in data
+        assert any(v["id"] == "CVE-2025-ROUTE" for v in data["vulnerabilities"])
 
 
 # ===========================================================================
