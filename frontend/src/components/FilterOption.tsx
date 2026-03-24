@@ -18,6 +18,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
     const [isOpen, setIsOpen] = useState(false);
     const [maxHeight, setMaxHeight] = useState<string>('2500px'); 
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const isActive = selected.length > 0 || showCustomFilterComponent;
 
     const toggleOption = (value: string) => {
         if (selected.includes(value)) {
@@ -56,8 +57,10 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
         <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className={`py-1 px-2 rounded flex items-center gap-1 ${
+                className={`py-1 px-2 rounded flex items-center gap-1 border ${
                     isOpen ? 'bg-sky-950' : 'bg-sky-900'
+                } ${
+                    isActive ? 'border-cyan-400' : 'border-transparent'
                 } text-white hover:bg-sky-950`}
             >
                 {label}
