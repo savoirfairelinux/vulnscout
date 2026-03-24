@@ -38,7 +38,65 @@ def init_app(app):
     def index_vulns():
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
-        if variant_id:
+        compare_variant_id = request.args.get('compare_variant_id')
+        if variant_id and compare_variant_id:
+            try:
+                base_uuid = uuid.UUID(variant_id)
+                compare_uuid = uuid.UUID(compare_variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            operation = request.args.get('operation', 'difference')
+            opts = (
+                selectinload(Vulnerability.findings).selectinload(Finding.package),
+                selectinload(Vulnerability.metrics),
+            )
+            if operation == 'intersection':
+                base_ids = set(db.session.execute(
+                    db.select(Vulnerability.id)
+                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == base_uuid)
+                    .distinct()
+                ).scalars().all())
+                compare_ids = set(db.session.execute(
+                    db.select(Vulnerability.id)
+                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == compare_uuid)
+                    .distinct()
+                ).scalars().all())
+                intersection_ids = list(base_ids & compare_ids)
+                records = list(db.session.execute(
+                    db.select(Vulnerability)
+                    .options(*opts)
+                    .where(Vulnerability.id.in_(intersection_ids))
+                    .order_by(Vulnerability.id)
+                ).scalars().all()) if intersection_ids else []
+            else:  # difference (default): vulns in compare but NOT in base
+                exclude_ids = list(db.session.execute(
+                    db.select(Vulnerability.id)
+                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == base_uuid)
+                    .distinct()
+                ).scalars().all())
+                query = (
+                    db.select(Vulnerability)
+                    .options(*opts)
+                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == compare_uuid)
+                    .distinct()
+                    .order_by(Vulnerability.id)
+                )
+                if exclude_ids:
+                    query = query.where(~Vulnerability.id.in_(exclude_ids))
+                records = list(db.session.execute(query).scalars().all())
+        elif variant_id:
             try:
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:
