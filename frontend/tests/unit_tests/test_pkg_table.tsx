@@ -449,6 +449,22 @@ describe('Packages Table', () => {
         expect(screen.getByText('Navigate to first/last table row')).toBeTruthy();
     });
 
+    test('search syntax helper is visible and shows syntax content when clicked', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        expect(helperBtn).toBeTruthy();
+
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeTruthy();
+        expect(screen.getByText('Match rows containing term')).toBeTruthy();
+        expect(screen.getByText('AND: both terms must match')).toBeTruthy();
+        expect(screen.getByText('OR: either term matches')).toBeTruthy();
+        expect(screen.getByText('NOT: exclude rows with term')).toBeTruthy();
+    });
+
     test('pressing / focuses search bar', async () => {
         render(<TablePackages packages={packages} />);
 
