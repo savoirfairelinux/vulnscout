@@ -86,6 +86,11 @@ class VulnerabilitiesController:
         """Set to False during batch operations inside batch_session() for better performance."""
         self._persisted_ids: set[str] = set()
         """IDs of vulnerabilities already persisted to DB — skip re-persist when unchanged."""
+        self._encountered_this_run: set[str] = set()
+        """Canonical IDs of vulnerabilities encountered (added/merged) during the current
+        processing run.  Used by merger_ci to scope observation creation so that only
+        findings for vulns actually present in this run's input files receive an
+        observation for the new scan — preventing cross-variant observation leakage."""
         self._db_record_cache: dict = {}
         """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
         self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
@@ -195,6 +200,7 @@ class VulnerabilitiesController:
             stored.merge(vulnerability)
             new_pkgs = set(vulnerability.packages)
             _persist_if_needed(stored, new_pkgs - old_pkgs)
+            self._encountered_this_run.add(stored.id)
             return stored
 
         if vulnerability.id in self.alias_registered:
@@ -204,6 +210,7 @@ class VulnerabilitiesController:
             stored.merge(vulnerability)
             new_pkgs = set(vulnerability.packages)
             _persist_if_needed(stored, new_pkgs - old_pkgs)
+            self._encountered_this_run.add(stored.id)
             return stored
 
         for alias in vulnerability.aliases:
@@ -215,6 +222,7 @@ class VulnerabilitiesController:
                 stored.merge(vulnerability)
                 new_pkgs = set(vulnerability.packages)
                 _persist_if_needed(stored, new_pkgs - old_pkgs)
+                self._encountered_this_run.add(stored.id)
                 return stored
             if alias in self.alias_registered:
                 canonical = self.alias_registered[alias]
@@ -225,12 +233,14 @@ class VulnerabilitiesController:
                 stored.merge(vulnerability)
                 new_pkgs = set(vulnerability.packages)
                 _persist_if_needed(stored, new_pkgs - old_pkgs)
+                self._encountered_this_run.add(stored.id)
                 return stored
 
         # Genuinely new vulnerability
         self.register_alias(vulnerability.aliases, vulnerability.id)
         self.vulnerabilities[vulnerability.id] = vulnerability
         _persist_if_needed(vulnerability, set(vulnerability.packages))
+        self._encountered_this_run.add(vulnerability.id)
         return self.vulnerabilities[vulnerability.id]
 
     def register_alias(self, alias: list, vuln_id: str):

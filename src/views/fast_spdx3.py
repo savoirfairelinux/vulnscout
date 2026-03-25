@@ -414,6 +414,17 @@ class FastSPDX3:
         if not graph:
             return
 
+        # Pre-warm the in-memory assessment index for all packages in this document,
+        # filtered to the current variant, so that the deduplication check below is
+        # variant-scoped and does not treat another variant's assessments as matches.
+        _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
+        for pkg_string_id in self.uri_to_package.values():
+            if pkg_string_id not in self.assessmentsCtrl._db_queried_pkgs:
+                for a in Assessment.get_by_package(pkg_string_id):
+                    if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                        self.assessmentsCtrl._index_existing(a)
+                self.assessmentsCtrl._db_queried_pkgs.add(pkg_string_id)
+
         for rel in graph:
             if not isinstance(rel, dict):
                 continue
@@ -422,7 +433,19 @@ class FastSPDX3:
 
             assessment = self._parse_vex_relationship(rel)
             if assessment:
-                self.assessmentsCtrl.add(assessment)
+                # Skip if a compatible assessment already exists for this (vuln, pkg) pair
+                # and the current variant — avoids overwriting re-processed or manually
+                # updated assessments, matching the deduplication behaviour in YoctoVulns.
+                found = False
+                for pkg_id in assessment.packages:
+                    for existing in self.assessmentsCtrl.gets_by_vuln_pkg(assessment.vuln_id, pkg_id):
+                        if existing.is_compatible_status(assessment.status or ""):
+                            found = True
+                            break
+                    if found:
+                        break
+                if not found:
+                    self.assessmentsCtrl.add(assessment)
 
     def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[Assessment]:
         """
