@@ -164,6 +164,16 @@ def test_spdx_output_completeness(init_files):
     assert found_linux and found_cairo
 
 
+def test_dont_generate_outputs(init_files, monkeypatch):
+    for key, value in init_files.items():
+        os.environ[key] = str(value)
+
+    monkeypatch.setenv("GENERATE_OUTPUTS", "false")
+    main()
+
+    assert not init_files["OUTPUT_SPDX_PATH"].exists()
+
+
 def test_expiration_vulnerabilities(init_files):
     for key, value in init_files.items():
         os.environ[key] = str(value)

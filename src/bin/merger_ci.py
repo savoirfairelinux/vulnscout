@@ -276,10 +276,9 @@ def read_inputs(controllers):
 def output_results(controllers, files, failed: bool = False, failed_vulns=None):
     """Output the results to files."""
 
-    fail_condition = os.getenv("FAIL_CONDITION", "")
     list_docs = [d.strip() for d in os.getenv("GENERATE_DOCUMENTS", "").split(",") if d.strip()]
 
-    if not fail_condition:
+    if get_bool_env("GENERATE_OUTPUTS", True):
         spdx = SPDX(controllers)  # regenerate, don't re-use reader SPDX to avoid validation errors
         spdx3 = SPDX3(controllers)
         output = {
@@ -316,14 +315,6 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
         verbose(f"merger_ci: Exporting {os.getenv('TIME_ESTIMATES_PATH', TIME_ESTIMATES_PATH)}")
         with open(os.getenv("TIME_ESTIMATES_PATH", TIME_ESTIMATES_PATH), "w") as f:
             f.write(json.dumps(files["time_estimates"].to_dict(), indent=2))
-
-        if "match_condition.adoc" in list_docs:
-            list_docs.remove("match_condition.adoc")
-    else:
-        if "match_condition.adoc" in list_docs:
-            list_docs = ["match_condition.adoc"]
-        else:
-            list_docs = []
 
     metadata: dict[str, Any] = {
         "author": os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
