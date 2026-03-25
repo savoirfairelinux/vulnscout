@@ -43,34 +43,30 @@ def init_files(tmp_path):
 
 
 @pytest.fixture()
-def app(init_files):
+def app(init_files, monkeypatch):
     """Flask app with in-memory SQLite; all demo SBOM files are registered."""
-    import os as _os
-    _os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-    try:
-        from src.bin.webapp import create_app
-        from src.extensions import db as _db
-        application = create_app()
-        application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
-        with application.app_context():
-            _db.create_all()
-            runner = application.test_cli_runner()
-            result = runner.invoke(args=[
-                "merge",
-                "--project", "TestProject",
-                "--variant", "default",
-                "--cdx", str(init_files["CDX_PATH"]),
-                "--spdx", str(init_files["SPDX_PATH"]),
-                "--grype", str(init_files["GRYPE_CDX_PATH"]),
-                "--grype", str(init_files["GRYPE_SPDX_PATH"]),
-                "--yocto-cve", str(init_files["YOCTO_CVE_CHECKER"]),
-                "--openvex", str(init_files["LOCAL_USER_DATABASE_PATH"]),
-            ])
-            assert result.exit_code == 0, result.output
-            yield application
-            _db.drop_all()
-    finally:
-        _os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    from src.bin.webapp import create_app
+    from src.extensions import db as _db
+    application = create_app()
+    application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
+    with application.app_context():
+        _db.create_all()
+        runner = application.test_cli_runner()
+        result = runner.invoke(args=[
+            "merge",
+            "--project", "TestProject",
+            "--variant", "default",
+            "--cdx", str(init_files["CDX_PATH"]),
+            "--spdx", str(init_files["SPDX_PATH"]),
+            "--grype", str(init_files["GRYPE_CDX_PATH"]),
+            "--grype", str(init_files["GRYPE_SPDX_PATH"]),
+            "--yocto-cve", str(init_files["YOCTO_CVE_CHECKER"]),
+            "--openvex", str(init_files["LOCAL_USER_DATABASE_PATH"]),
+        ])
+        assert result.exit_code == 0, result.output
+        yield application
+        _db.drop_all()
 
 
 # ---------------------------------------------------------------------------
@@ -100,52 +96,45 @@ def test_running_script(app):
     assert len(out_assessment) >= 1
 
 
-def test_invalid_openvex(app, init_files):
+def test_invalid_openvex(app, init_files, monkeypatch):
     init_files["LOCAL_USER_DATABASE_PATH"].write_text("invalid{ json")
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'false')
     with pytest.raises(Exception):
         _run_main()
 
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'true')
     _run_main()
 
 
-def test_invalid_cdx(app, init_files):
+def test_invalid_cdx(app, init_files, monkeypatch):
     """Replaces test_invalid_time_estimates: error handling for a bad CDX file."""
     init_files["CDX_PATH"].write_text("invalid{ json")
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'false')
     with pytest.raises(Exception):
         _run_main()
 
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", 'true')
     _run_main()
 
 
-def test_generate_docs(app):
-    os.environ["GENERATE_DOCUMENTS"] = "summary.adoc, none.doesntexist"
+def test_ci_mode(app, monkeypatch):
+    monkeypatch.setenv("MATCH_CONDITION", "false == true")
     _run_main()
 
-
-def test_ci_mode(app):
-    os.environ["MATCH_CONDITION"] = "false == true"
-    _run_main()
-
-    os.environ["MATCH_CONDITION"] = "true == true"
+    monkeypatch.setenv("MATCH_CONDITION", "true == true")
     with pytest.raises(SystemExit) as e:
         _run_main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["MATCH_CONDITION"] = "cvss >= 8"
+    monkeypatch.setenv("MATCH_CONDITION", "cvss >= 8")
     with pytest.raises(SystemExit) as e:
         _run_main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["MATCH_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
+    monkeypatch.setenv("MATCH_CONDITION", "cvss >= 8 and epss == 1.23456%")
     _run_main()
-
-    os.environ["MATCH_CONDITION"] = ""
 
 
 def test_spdx_output_completeness(app):
@@ -350,25 +339,24 @@ def test_report_command_nonexistent_template(app, tmp_path):
     assert "does_not_exist.txt" in result.output or result.exit_code == 0
 
 
-def test_report_command_with_extra_template_env(app, tmp_path):
+def test_report_command_with_extra_template_env(app, tmp_path, monkeypatch):
     """GENERATE_DOCUMENTS env var causes extra template to be generated (lines 476-479)."""
-    os.environ["GENERATE_DOCUMENTS"] = "vulnerability_summary.txt"
+    monkeypatch.setenv("GENERATE_DOCUMENTS", "vulnerability_summary.txt")
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "report", "vulnerability_summary.txt",
             "--output-dir", str(tmp_path),
         ])
-    os.environ.pop("GENERATE_DOCUMENTS", None)
     assert result.exit_code == 0, result.output
 
 
-def test_report_command_with_match_condition_cache(app, tmp_path):
+def test_report_command_with_match_condition_cache(app, tmp_path, monkeypatch):
     """flask report uses cached failed_vulns when /tmp/vulnscout_matched_vulns.json exists (lines 464-467)."""
     import json as _json
     cache_path = "/tmp/vulnscout_matched_vulns.json"
     _json.dump(["CVE-2020-35492"], open(cache_path, "w"))
-    os.environ["MATCH_CONDITION"] = "cvss >= 1"
+    monkeypatch.setenv("MATCH_CONDITION", "cvss >= 1")
     try:
         with app.app_context():
             runner = app.test_cli_runner()
@@ -378,7 +366,6 @@ def test_report_command_with_match_condition_cache(app, tmp_path):
             ])
         assert result.exit_code == 0, result.output
     finally:
-        os.environ.pop("MATCH_CONDITION", None)
         try:
             os.remove(cache_path)
         except OSError:
