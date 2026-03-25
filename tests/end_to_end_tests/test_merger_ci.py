@@ -12,7 +12,7 @@ from . import write_demo_files
 
 
 @pytest.fixture()
-def init_files(tmp_path) -> dict[str, pathlib.Path]:
+def init_files(tmp_path, monkeypatch) -> dict[str, pathlib.Path]:
     files = {
         "CDX_PATH": tmp_path / "input.cdx.json",
         "OPENVEX_PATH": tmp_path / "merged.openvex.json",
@@ -37,13 +37,12 @@ def init_files(tmp_path) -> dict[str, pathlib.Path]:
     files["YOCTO_FOLDER"].mkdir()
     files["SPDX_FOLDER"].mkdir()
     write_demo_files(files)
+    for name, file in files.items():
+        monkeypatch.setenv(name, str(file))
     return files
 
 
 def test_running_script(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
     main()
 
     out_all = json.loads(init_files["OUTPUT_PATH"].read_text())
@@ -84,29 +83,23 @@ def test_running_script(init_files):
     assert len(out_all["assessments"]) == len(out_assessment)
 
 
-def test_invalid_openvex(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
+def test_invalid_openvex(init_files, monkeypatch):
     init_files["LOCAL_USER_DATABASE_PATH"].write_text("invalid{ json")
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", "false")
     with pytest.raises(Exception):
         main()
 
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
     main()
 
 
-def test_invalid_time_estimates(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
+def test_invalid_time_estimates(init_files, monkeypatch):
     init_files["TIME_ESTIMATES_PATH"].write_text("invalid{ json")
-    os.environ["IGNORE_PARSING_ERRORS"] = 'false'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", "false")
     with pytest.raises(Exception):
         main()
 
-    os.environ["IGNORE_PARSING_ERRORS"] = 'true'
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
     main()
 
     # test with deleted file
@@ -114,46 +107,39 @@ def test_invalid_time_estimates(init_files):
     main()
 
 
-def test_generate_docs(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
-    os.environ["GENERATE_DOCUMENTS"] = "summary.adoc, none.doesntexist"
+def test_generate_docs(init_files, monkeypatch):
+    monkeypatch.setenv("GENERATE_DOCUMENTS", "summary.adoc, none.doesntexist")
     main()
 
     assert (init_files["OUTPUT_DOCUMENTS_PATH"] / "summary.adoc").exists()
     assert not (init_files["OUTPUT_DOCUMENTS_PATH"] / "none.doesntexist").exists()
 
 
-def test_ci_mode(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
-    os.environ["FAIL_CONDITION"] = "false == true"
+def test_ci_mode_exit_status_not_failed(init_files, monkeypatch):
+    monkeypatch.setenv("FAIL_CONDITION", "false == true")
     main()
 
-    os.environ["FAIL_CONDITION"] = "true == true"
+
+def test_ci_mode_exit_status_failed(init_files, monkeypatch):
+    monkeypatch.setenv("FAIL_CONDITION", "true == true")
     with pytest.raises(SystemExit) as e:
         main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["FAIL_CONDITION"] = "cvss >= 8"
+
+def test_ci_mode_conditions(init_files, monkeypatch):
+    monkeypatch.setenv("FAIL_CONDITION", "cvss >= 8")
     with pytest.raises(SystemExit) as e:
         main()
     assert e.type == SystemExit
     assert e.value.code == 2
 
-    os.environ["FAIL_CONDITION"] = "cvss >= 8 and epss == 1.23456%"
+    monkeypatch.setenv("FAIL_CONDITION", "cvss >= 8 and epss == 1.23456%")
     main()
-
-    os.environ["FAIL_CONDITION"] = ""
 
 
 def test_spdx_output_completeness(init_files):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
     main()
 
     out_spdx = json.loads(init_files["OUTPUT_SPDX_PATH"].read_text())
@@ -170,9 +156,6 @@ def test_spdx_output_completeness(init_files):
 
 
 def test_dont_generate_outputs(init_files, monkeypatch):
-    for key, value in init_files.items():
-        os.environ[key] = str(value)
-
     monkeypatch.setenv("GENERATE_OUTPUTS", "false")
     main()
 
