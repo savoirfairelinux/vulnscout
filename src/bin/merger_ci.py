@@ -28,6 +28,7 @@ from ..helpers.env_vars import get_bool_env
 import glob
 import json
 import os
+import pathlib
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -47,6 +48,7 @@ OUTPUT_ASSESSEMENT_PATH = "/scan/tmp/assessments-merged.json"
 OUTPUT_CDX_PATH = "/scan/outputs/sbom.cdx.json"
 OUTPUT_SPDX_PATH = "/scan/outputs/sbom.spdx.json"
 OUTPUT_SPDX3_PATH = "/scan/outputs/sbom.spdx3.json"
+OUTPUT_DOCUMENTS_PATH = "/scan/outputs"
 
 
 def is_items_only_openvex(scanners: list[str]) -> bool:
@@ -324,6 +326,7 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
         metadata["scan_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
     if failed:
         metadata["failed_vulns"] = failed_vulns or []
+    doc_export_dir = pathlib.Path(os.getenv("OUTPUT_DOCUMENTS_PATH", OUTPUT_DOCUMENTS_PATH))
     for doc in list_docs:
         if not doc:
             continue
@@ -331,7 +334,7 @@ def output_results(controllers, files, failed: bool = False, failed_vulns=None):
             doc = doc.strip()
             verbose(f"merger_ci: Generating report from template {doc}")
             content = files["templates"].render(doc, **metadata)
-            with open(f"/scan/outputs/{doc}", "w") as f:
+            with open(doc_export_dir / doc, "w") as f:
                 f.write(content)
         except Exception as e:
             print(f"Warning: failed to generate document from {doc}: {e}")

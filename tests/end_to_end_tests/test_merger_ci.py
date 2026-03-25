@@ -6,12 +6,13 @@
 import pytest
 import json
 import os
+import pathlib
 from src.bin.merger_ci import main
 from . import write_demo_files
 
 
 @pytest.fixture()
-def init_files(tmp_path):
+def init_files(tmp_path) -> dict[str, pathlib.Path]:
     files = {
         "CDX_PATH": tmp_path / "input.cdx.json",
         "OPENVEX_PATH": tmp_path / "merged.openvex.json",
@@ -30,7 +31,8 @@ def init_files(tmp_path):
         "OUTPUT_PKG_PATH": tmp_path / "packages-merged.json",
         "OUTPUT_VULN_PATH": tmp_path / "vulnerabilities-merged.json",
         "OUTPUT_ASSESSEMENT_PATH": tmp_path / "assessments-merged.json",
-        "OUTPUT_OPENVEX_PATH": tmp_path / "openvex.json"
+        "OUTPUT_OPENVEX_PATH": tmp_path / "openvex.json",
+        "OUTPUT_DOCUMENTS_PATH": tmp_path
     }
     files["YOCTO_FOLDER"].mkdir()
     files["SPDX_FOLDER"].mkdir()
@@ -118,6 +120,9 @@ def test_generate_docs(init_files):
 
     os.environ["GENERATE_DOCUMENTS"] = "summary.adoc, none.doesntexist"
     main()
+
+    assert (init_files["OUTPUT_DOCUMENTS_PATH"] / "summary.adoc").exists()
+    assert not (init_files["OUTPUT_DOCUMENTS_PATH"] / "none.doesntexist").exists()
 
 
 def test_ci_mode(init_files):
@@ -246,5 +251,5 @@ def test_expiration_vulnerabilities(init_files):
                 assert assessment["impact_statement"] == "Vulnerable component removed, marking as expired"
                 assert assessment["status_notes"] == "Vulnerability no longer present in analysis, marking as expired"
                 found_expiration = True
-    
+
     assert found_expiration
