@@ -306,7 +306,7 @@ describe('ProjectVariantSelector', () => {
         render(<ProjectVariantSelector onApply={jest.fn()} />);
         const button = screen.getByRole('button');
         await act(async () => { fireEvent.click(button); });
-        expect(screen.queryByText('Compare variant (B)')).not.toBeInTheDocument();
+        expect(screen.queryByText('Compare variant')).not.toBeInTheDocument();
     });
 
     test('checking Compare checkbox shows the compare section', async () => {
@@ -317,7 +317,7 @@ describe('ProjectVariantSelector', () => {
         const checkbox = screen.getByRole('checkbox');
         await act(async () => { fireEvent.click(checkbox); });
 
-        expect(screen.getByText('Compare variant (B)')).toBeInTheDocument();
+        expect(screen.getByText('Compare variant')).toBeInTheDocument();
     });
 
     test('unchecking Compare hides the compare section again', async () => {
@@ -327,10 +327,10 @@ describe('ProjectVariantSelector', () => {
 
         const checkbox = screen.getByRole('checkbox');
         await act(async () => { fireEvent.click(checkbox); });
-        expect(screen.getByText('Compare variant (B)')).toBeInTheDocument();
+        expect(screen.getByText('Compare variant')).toBeInTheDocument();
 
         await act(async () => { fireEvent.click(checkbox); });
-        expect(screen.queryByText('Compare variant (B)')).not.toBeInTheDocument();
+        expect(screen.queryByText('Compare variant')).not.toBeInTheDocument();
     });
 
     test('Apply is disabled when compare enabled but no compare variant selected', async () => {

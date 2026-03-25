@@ -228,3 +228,107 @@ def test_observations_not_duplicated_on_second_run(app):
             f"Expected {count_first} observations after second run, "
             f"got {count_second}"
         )
+
+
+def test_cross_variant_observation_scoping(tmp_path):
+    """Observations for a scan must only cover findings for vulnerabilities
+    present in *that variant's* input files — not those from a prior variant.
+
+    Scenario
+    --------
+    - ``var_a`` processes Package-P with CVE-2100-00001 and CVE-2100-00002.
+    - ``var_b`` processes Package-P with CVE-2100-00001 only.
+
+    Expected
+    --------
+    - ``var_a``'s scan has 2 observations.
+    - ``var_b``'s scan has exactly 1 observation (CVE-2100-00002 must NOT leak
+      from var_a into var_b's scan).
+    """
+    import json
+    import os
+
+    yocto_var_a = {
+        "package": [{
+            "name": "pkg-cross-variant",
+            "version": "1.0",
+            "issue": [
+                {"id": "CVE-2100-00001", "status": "Unpatched"},
+                {"id": "CVE-2100-00002", "status": "Unpatched"},
+            ],
+        }]
+    }
+    yocto_var_b = {
+        "package": [{
+            "name": "pkg-cross-variant",
+            "version": "1.0",
+            "issue": [
+                {"id": "CVE-2100-00001", "status": "Unpatched"},
+            ],
+        }]
+    }
+
+    file_a = tmp_path / "var_a.json"
+    file_b = tmp_path / "var_b.json"
+    file_a.write_text(json.dumps(yocto_var_a))
+    file_b.write_text(json.dumps(yocto_var_b))
+
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        from src.bin.webapp import create_app
+        from src.extensions import db as _db
+
+        application = create_app()
+        application.config.update({"TESTING": True})
+
+        with application.app_context():
+            _db.create_all()
+
+            runner = application.test_cli_runner()
+
+            # --- Register and process var_a ---
+            r = runner.invoke(args=[
+                "merge", "--project", "CrossVariantProject", "--variant", "var_a",
+                "--yocto-cve", str(file_a),
+            ])
+            assert r.exit_code == 0, f"merge var_a failed: {r.output}"
+
+            from src.bin.merger_ci import _run_main
+            from src.models.scan import Scan
+            from src.models.observation import Observation
+
+            _run_main()
+
+            var_a_scan = Scan.get_latest()
+            assert var_a_scan is not None
+            var_a_obs_count = len(Observation.get_by_scan(var_a_scan.id))
+            assert var_a_obs_count == 2, (
+                f"var_a should have 2 observations (one per CVE), got {var_a_obs_count}"
+            )
+
+            # --- Register and process var_b ---
+            r = runner.invoke(args=[
+                "merge", "--project", "CrossVariantProject", "--variant", "var_b",
+                "--yocto-cve", str(file_b),
+            ])
+            assert r.exit_code == 0, f"merge var_b failed: {r.output}"
+
+            _run_main()
+
+            var_b_scan = Scan.get_latest()
+            assert var_b_scan.id != var_a_scan.id, "var_b must have its own scan"
+            var_b_obs_count = len(Observation.get_by_scan(var_b_scan.id))
+            assert var_b_obs_count == 1, (
+                f"var_b should have exactly 1 observation (CVE-2100-00001 only) "
+                f"but got {var_b_obs_count} — CVE-2100-00002 from var_a must not leak"
+            )
+
+            # var_a must be unchanged
+            var_a_obs_after = len(Observation.get_by_scan(var_a_scan.id))
+            assert var_a_obs_after == 2, (
+                f"var_a observations changed unexpectedly: {var_a_obs_after}"
+            )
+
+            _db.drop_all()
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
