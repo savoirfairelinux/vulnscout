@@ -300,11 +300,17 @@ def _run_main() -> dict:
                 .distinct()
             ).scalars().all())
 
-            if package_ids_in_scan:
-                # 2. Find findings for those packages that are not yet observed in this scan
+            # 2. Collect vuln IDs that were actually encountered in this run's
+            #    input files (populated by VulnerabilitiesController.add()).
+            encountered_vuln_ids = list(vulnCtrl._encountered_this_run)
+
+            if package_ids_in_scan and encountered_vuln_ids:
+                # 3. Find findings for (packages in scan) × (vulns in this run)
+                #    that are not yet observed in this scan.
                 new_finding_ids = list(_db.session.execute(
                     _db.select(FindingModel.id)
                     .where(FindingModel.package_id.in_(package_ids_in_scan))
+                    .where(FindingModel.vulnerability_id.in_(encountered_vuln_ids))
                     .where(
                         ~exists(
                             _db.select(1).select_from(Observation).where(
@@ -326,7 +332,10 @@ def _run_main() -> dict:
                         _db.session.bulk_save_objects(new_observations)
                     verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({len(new_observations)} new)")
             else:
-                verbose("merger_ci: No packages found for this scan's SBOM documents — skipping observation creation.")
+                verbose(
+                    "merger_ci: No packages or no vulnerabilities encountered this run"
+                    " — skipping observation creation."
+                )
         else:
             print("Warning: no scan found in DB — skipping observation creation.")
     except Exception as e:

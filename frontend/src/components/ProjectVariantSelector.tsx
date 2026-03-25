@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faLayerGroup, faChevronDown, faArrowsRotate } from '@fortawesome/free-solid-svg-icons';
+import { faLayerGroup, faChevronDown, faSort } from '@fortawesome/free-solid-svg-icons';
 import Projects from '../handlers/project';
 import type { Project } from '../handlers/project';
 import Variants from '../handlers/variant';
@@ -58,6 +58,13 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
 
     // Track previous project id to avoid clearing variant on initial default load
     const prevProjectIdRef = useRef("");
+
+    useEffect(() => {
+        if (compareEnabled && selectedCompareVariantId === selectedVariantId) {
+            const first = variants.find(v => v.id !== selectedVariantId);
+            setSelectedCompareVariantId(first?.id ?? '');
+        }
+    }, [selectedVariantId, compareEnabled, variants, selectedCompareVariantId]);
 
     // Load projects on mount
     useEffect(() => {
@@ -185,7 +192,7 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                         disabled={!selectedProjectId}
                         className="w-full rounded px-2 py-1 text-sm bg-cyan-800 border border-cyan-600 focus:outline-none focus:border-cyan-400 mb-4 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        <option value="">— All variants —</option>
+                        <option value="">All variants</option>
                         {variants.map(v => (
                             <option key={v.id} value={v.id}>{v.name}</option>
                         ))}
@@ -199,7 +206,12 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                                 checked={compareEnabled}
                                 onChange={e => {
                                     setCompareEnabled(e.target.checked);
-                                    if (!e.target.checked) setSelectedCompareVariantId('');
+                                    if (e.target.checked) {
+                                        const first = variants.find(v => v.id !== selectedVariantId);
+                                        if (first) setSelectedCompareVariantId(first.id);
+                                    } else {
+                                        setSelectedCompareVariantId('');
+                                    }
                                 }}
                                 className="accent-cyan-400"
                             />
@@ -209,9 +221,9 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                             <>
                                 <div className="flex flex-col gap-1.5 mb-3">
                                     {([
-                                        { value: 'difference',   symbol: 'Exclusion', desc: 'Present in B, not in A' },
+                                        { value: 'difference',   symbol: 'Exclusion', desc: 'Only present in compared variant' },
 
-                                        { value: 'intersection', symbol: 'Intersection', desc: 'common to both' },
+                                        { value: 'intersection', symbol: 'Intersection', desc: 'common to both variants' },
                                     ] as { value: 'difference' | 'intersection'; symbol: string; desc: string }[]).map(op => (
                                         <label key={op.value} className="flex items-center gap-2 text-sm cursor-pointer">
                                             <input
@@ -227,14 +239,13 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                                         </label>
                                     ))}
                                 </div>
-                                <label className="block text-sm mb-1">Compare variant (B)</label>
+                                <label className="block text-sm mb-1">Compare variant</label>
                                 <select
                                     value={selectedCompareVariantId}
                                     onChange={e => setSelectedCompareVariantId(e.target.value)}
                                     disabled={!selectedVariantId}
                                     className="w-full rounded px-2 py-1 text-sm bg-cyan-800 border border-cyan-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    <option value="">— select a compare variant —</option>
                                     {variants.filter(v => v.id !== selectedVariantId).map(v => (
                                         <option key={v.id} value={v.id}>{v.name}</option>
                                     ))}
@@ -250,8 +261,8 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                                     title="Swap variants"
                                     className="mt-2 w-full flex items-center justify-center gap-2 py-1 rounded border border-cyan-600 text-xs text-cyan-300 hover:bg-cyan-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                                 >
-                                    <FontAwesomeIcon icon={faArrowsRotate} />
-                                    Swap A ↔ B
+                                    <FontAwesomeIcon icon={faSort} />
+                                    Swap variants
                                 </button>
                             </>
                         )}
@@ -260,7 +271,7 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
                     {/* Apply button */}
                     <button
                         onClick={handleApply}
-                        disabled={!selectedProjectId || (compareEnabled && !selectedCompareVariantId)}
+                        disabled={!selectedProjectId || (compareEnabled && (!selectedVariantId || !selectedCompareVariantId))}
                         className="w-full py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-semibold transition-colors duration-150"
                         type="button"
                     >
