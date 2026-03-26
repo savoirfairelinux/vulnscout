@@ -208,6 +208,7 @@ cmd_scan() {
     # Has new input files when length > 4.
     local has_inputs=false
     local has_condition=false
+    local _cmd_scan_exit=0
     [[ ${#INIT_APP_ARGS[@]} -gt 4 ]]     && has_inputs=true
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
@@ -255,7 +256,7 @@ cmd_scan() {
                 else
                     echo "$_line"
                 fi
-            done
+            done || _cmd_scan_exit=$?
         if [[ "$has_inputs" == "true" ]]; then
             # Clean up input files now that they are fully processed
             for _type in spdx cdx openvex yocto_cve_check grype osv; do
@@ -281,6 +282,7 @@ cmd_scan() {
         echo "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
+    return $_cmd_scan_exit
 }
 
 cmd_serve() {
