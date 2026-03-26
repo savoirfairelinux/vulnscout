@@ -332,7 +332,9 @@ parse_and_run() {
         if [ "$DEV_MODE" = true ]; then
             start_frontend_dev
         fi
-        exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]:-}" --serve
+        trap "echo; echo 'Stopping container...'; docker rm -f '$CONTAINER_NAME' 2>/dev/null || true" SIGINT SIGTERM EXIT
+        exec_container --project "$PROJECT" --variant "$VARIANT" ${PENDING_ARGS[@]+"${PENDING_ARGS[@]}"} --serve
+        trap - SIGINT SIGTERM EXIT
     elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
         local -a scan_args=()
         [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
