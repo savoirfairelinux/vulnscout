@@ -270,7 +270,9 @@ class TestConfigEndpoint:
         response = client.get("/api/config")
         assert response.status_code == 200
         body = json.loads(response.data)
-        assert body["project"] is None
+        # No env var set: falls back to the first project (alphabetically), no variant
+        assert body["project"] is not None
+        assert body["project"]["name"] == "ProjectA"
         assert body["variant"] is None
 
     def test_config_with_matching_project_and_variant(self, app_with_data):
@@ -306,7 +308,9 @@ class TestConfigEndpoint:
         response = client.get("/api/config")
         assert response.status_code == 200
         body = json.loads(response.data)
-        assert body["project"] is None
+        # Unknown project name: falls back to the first project (alphabetically), no variant
+        assert body["project"] is not None
+        assert body["project"]["name"] == "ProjectA"
         assert body["variant"] is None
 
 
