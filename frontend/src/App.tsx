@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import Loading from "./pages/Loading";
 import Explorer from "./pages/Explorer";
+import NotificationModal, { type Notification } from "./components/NotificationModal";
 
 
 /**
@@ -15,6 +16,19 @@ function App() {
     details: 'Step 0 : starting script'
   });
   const [darkMode, setDarkMode] = useState(true);
+  const [notification, setNotification] = useState<Notification | null>(null);
+
+  // Fetch any system notification once on mount
+  useEffect(() => {
+    fetch(import.meta.env.VITE_API_URL + "/api/notifications", { mode: 'cors' })
+      .then(res => res.json())
+      .then((data: Notification[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setNotification(data[0]);
+        }
+      })
+      .catch(() => { /* non-critical, ignore */ });
+  }, []);
 
   useEffect(() => {
     if (!loading) return;
@@ -49,6 +63,11 @@ function App() {
 
   return (
     <div className={darkMode ? "dark" : "light"}>
+      {notification && (
+        <NotificationModal
+          notification={notification}
+        />
+      )}
       {
         loading ? (
           <Loading

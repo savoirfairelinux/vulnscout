@@ -372,6 +372,41 @@ REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
 
+# ---------------------------------------------------------------------------
+# Legacy setup detection: if an openvex.json output exists but no database,
+# this container is being started with the old docker-compose workflow.
+# ---------------------------------------------------------------------------
+_LEGACY_OPENVEX="${OUTPUTS_DIR:-/scan/outputs}/openvex.json"
+_DB_FILE="/cache/vulnscout/vulnscout.db"
+if [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]]; then
+    if [[ "${INTERACTIVE_MODE:-false}" == "true" ]]; then
+        # Write a notification that the web UI will display as a popup
+        mkdir -p /scan
+        cat > /scan/legacy_notification.json <<EOF
+{
+  "level": "warning",
+  "title": "Legacy setup detected — migration required",
+  "message": "This container was started using the old docker-compose workflow. Your data (inputs + assessments) has not been imported into the new database yet.",
+  "action": "Run migration.sh scriptavailable on https://github.com/savoirfairelinux/vulnscout to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow."
+}
+EOF
+        echo "WARNING: Legacy setup detected. A notification has been queued for the web UI."
+        # Write a completed status so the scan middleware doesn't block all routes
+        echo "2 <!-- __END_OF_SCAN_SCRIPT__ -->" > "$BASE_DIR/status.txt"
+        cd "$BASE_DIR"
+        flask --app src.bin.webapp db upgrade
+        flask --app src.bin.webapp run
+        exit $?
+    else
+        echo "ERROR: Legacy docker-compose setup detected." >&2
+        echo "This container was started using the old docker-compose workflow. Your data (inputs + assessments) has not been imported into the new database yet." >&2
+        echo "       Run migration.sh to import your data into the new database format," >&2
+        echo "       Run migration.sh scriptavailable on https://github.com/savoirfairelinux/vulnscout to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow." >&2
+        exit 2
+    fi
+fi
+unset _LEGACY_OPENVEX _DB_FILE
+
 if [[ $# -eq 0 ]]; then
     cmd_daemon
     exit 0
