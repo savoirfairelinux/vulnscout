@@ -407,7 +407,7 @@ while [[ $# -gt 0 ]]; do
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
-            cmd_clear_inputs "${2:-}" "${3:-}"; shift ;;
+            cmd_clear_inputs; shift ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
