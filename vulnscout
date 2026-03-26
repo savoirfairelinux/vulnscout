@@ -4,9 +4,9 @@ set -euo pipefail
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
 DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:latest}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")" 
-VULNSCOUT_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/vulnscout/config.env"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$SCRIPT_DIR/.vulnscout/cache}"
 VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$SCRIPT_DIR/.vulnscout/outputs}"
+VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
 # Source config early so stored values (e.g. VULNSCOUT_CACHE_DIR) take effect
 if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
@@ -50,9 +50,6 @@ Input commands (can be chained, triggers scan automatically):
   --add-cdx <path>                Add a CycloneDX file
   --add-report-template <path>    Add a custom report template (.adoc)
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
-
-Clear inputs:
-  clear-inputs [--project <name>] [--variant <name>]   Clear inputs for a project/variant (defaults to current)
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
@@ -275,10 +272,6 @@ parse_and_run() {
                 ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
             export-openvex|--export-openvex)
                 ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
-            clear-inputs)
-                ensure_running
-                exec_container --clear-inputs "$PROJECT" "$VARIANT"
-                shift ;;
             serve|--serve)
                 SERVE_REQUESTED=true; shift ;;
             report|--report)
