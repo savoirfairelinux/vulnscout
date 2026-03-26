@@ -113,8 +113,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         Config.get()
             .then(config => {
                 setDefaultConfig(config);
-                setCurrentVariantId(config.variant?.id || undefined);
-                loadData(config.variant?.id);
+                const variantId = config.variant?.id || undefined;
+                const projectId = variantId ? undefined : (config.project?.id || undefined);
+                setCurrentVariantId(variantId);
+                loadData(variantId, projectId);
             })
             .catch(() => loadData(undefined));
     }, [loadData]);
