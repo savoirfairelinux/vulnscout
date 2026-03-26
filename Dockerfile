@@ -67,7 +67,6 @@ RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
 # Create /scan/src
 RUN mkdir -p src
 COPY src ./src
-RUN chmod +x src/scan.sh
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
 
@@ -79,5 +78,3 @@ LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
 LABEL org.opencontainers.image.version="v0.11.1"
 
 ENTRYPOINT ["/scan/src/entrypoint.sh"]
-
-CMD ["/scan/src/scan.sh"]

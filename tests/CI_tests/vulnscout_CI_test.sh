@@ -1,34 +1,61 @@
 #!/bin/bash
-BASE_DIR=$PWD/../../
+# CI test: invokes Flask commands directly (no Docker) since this runs inside cqfd.
+set -euo pipefail
 
-cd $BASE_DIR
-# Launching VulnScout CI script with a fail condition that must be triggered
-./vulnscout.sh --name test_ci --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-	--cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
-	--fail_condition "cvss >= 8.0 or (cvss >= 7.0 and epss >= 50%)"
-if [ $? -eq 2 ]; then
-	echo "**Vulnscout condition fail correctly triggered**"
+BASE_DIR=$(readlink -f "$PWD/../../")
+cd "$BASE_DIR"
+
+SPDX3="$(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json"
+CVE3="$(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json"
+SPDX2="$(pwd)/.vulnscout/example/spdx2/example.rootfs.spdx.tar.zst"
+CVE2="$(pwd)/.vulnscout/example/spdx2/example.rootfs.json"
+
+# Shared helper: fresh DB in a temp dir, merge files, then run process and return its exit code
+run_scan() {
+    local condition="$1"; shift   # match condition string
+    local tmp_db
+    tmp_db=$(mktemp -d)
+    export FLASK_SQLALCHEMY_DATABASE_URI="sqlite:///${tmp_db}/vulnscout.db"
+    export IGNORE_PARSING_ERRORS=true
+
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp merge --project ci --variant default "$@"
+
+    export MATCH_CONDITION="$condition"
+    local rc=0
+    flask --app src.bin.webapp process || rc=$?
+
+    unset MATCH_CONDITION FLASK_SQLALCHEMY_DATABASE_URI IGNORE_PARSING_ERRORS
+    rm -rf "$tmp_db"
+    return $rc
+}
+
+# Test 1: condition must be triggered (exit 2) — SPDX3 + CVE3
+rc=0
+run_scan "cvss >= 8.0 or (cvss >= 7.0 and epss >= 50%)" --spdx "$SPDX3" --yocto-cve "$CVE3" || rc=$?
+if [ "$rc" -eq 2 ]; then
+    echo "**Vulnscout condition match correctly triggered**"
 else
-	echo "**VulnScout condition fail should have been triggered**"
-	exit 1
+    echo "**VulnScout condition match should have been triggered (got exit $rc)**"
+    exit 1
 fi
-# Launching VulnScout CI script with fail condition that must not be triggered
-./vulnscout.sh --name test_ci --spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
-	--cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json \
-	--fail_condition "cvss >= 11.0"
-if [ $? -eq 0 ]; then
-	echo "**Checking output files**"
+
+# Test 2: condition must NOT be triggered (exit 0) — SPDX3 + CVE3
+rc=0
+run_scan "cvss >= 11.0" --spdx "$SPDX3" --yocto-cve "$CVE3" || rc=$?
+if [ "$rc" -eq 0 ]; then
+    echo "**VulnScout condition match correctly not triggered**"
 else
-	echo "**VulnScout condition fail should not have been triggered**"
-	exit 1
+    echo "**VulnScout condition match should not have been triggered (got exit $rc)**"
+    exit 1
 fi
-# Launching VulnScout CI script with an archive of SPDX2
-./vulnscout.sh --name test_ci --spdx $(pwd)/.vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
-	--cve-check $(pwd)/.vulnscout/example/spdx2/example.rootfs.json \
-	--fail_condition "cvss >= 9.0"
-if [ $? -eq 2 ]; then
-	echo "**Vulnscout condition fail correctly triggered**"
+
+# Test 3: condition must be triggered (exit 2) — SPDX2 archive + CVE2
+rc=0
+run_scan "cvss >= 9.0" --spdx "$SPDX2" --yocto-cve "$CVE2" || rc=$?
+if [ "$rc" -eq 2 ]; then
+    echo "**Vulnscout condition match correctly triggered**"
 else
-	echo "**VulnScout condition fail should have been triggered**"
-	exit 1
+    echo "**VulnScout condition match should have been triggered (got exit $rc)**"
+    exit 1
 fi
