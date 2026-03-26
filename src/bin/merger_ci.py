@@ -55,10 +55,11 @@ def _ts_key(ts) -> str:
 
 def post_treatment(controllers, files):
     """Enrich vulnerabilities with EPSS scores and NVD published dates."""
-    # 1. fetch EPSS
+
+    # TODO: 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
 
-    # 2. fetch published dates from NVD
+    # TODO: 2. fetch published dates from NVD
     controllers["vulnerabilities"].fetch_published_dates()
 
 
@@ -262,11 +263,12 @@ def _run_main() -> dict:
         assessCtrl.use_savepoints = False
 
         scan_id = latest_scan.id if latest_scan else None
-        files = read_inputs(controllers, scan_id=scan_id)
+        read_inputs(controllers, scan_id=scan_id)
         verbose("merger_ci: Finished reading inputs")
 
         verbose("merger_ci: Start Post-treatment")
-        post_treatment(controllers, files)
+        # TODO: Refactor post-treatment to use the new DB schema
+        # post_treatment(controllers, files)
         verbose("merger_ci: Finished post-treatment")
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
