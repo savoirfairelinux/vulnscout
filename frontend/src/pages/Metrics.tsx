@@ -548,7 +548,7 @@ const packageColumns = [
 
             {/* Vulnerabilities by Severity */}
             <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Severity
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -563,7 +563,7 @@ const packageColumns = [
 
             {/* Vulnerabilities by Status */}
             <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Status
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -578,9 +578,9 @@ const packageColumns = [
 
             {/* Exploitable Vulnerabilities */}
             <div className="p-4">
-              <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
+              <div className="bg-zinc-700 p-2 flex flex-wrap items-center justify-center gap-2 rounded-t-md">
                 <div
-                  className="text-xl text-white whitespace-nowrap"
+                  className="text-xl text-white text-center"
                   title="Active vulnerabilities is the sum of exploitable and Pending Assessment vulnerabilities."
                 >
                   Active vulnerabilities
@@ -611,7 +611,7 @@ const packageColumns = [
 
             {/* Vulnerabilities by Database */}
             <div className="p-4">
-              <div className="bg-zinc-700 p-2 text-center text-xl text-white whitespace-nowrap rounded-t-md">
+              <div className="bg-zinc-700 p-2 text-center text-xl text-white rounded-t-md">
                 Vulnerabilities by Database
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
@@ -632,8 +632,8 @@ const packageColumns = [
           {/* Most Critical Unfixed Vulnerabilities */}
           <div className="p-4">
             {/* Table Header */}
-            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
-              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
+            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between gap-2 rounded-t-md">
+              <h3 className="text-2xl font-bold text-white min-w-0">
                 Most critical unfixed vulnerabilities
               </h3>
               <button
@@ -645,7 +645,7 @@ const packageColumns = [
             </div>
 
             {/* Table Body */}
-            <div className="bg-zinc-700 p-4 rounded-b-md">
+            <div className="bg-zinc-700 p-4 rounded-b-md overflow-x-auto">
               <div className="w-full h-full overflow-y-auto">
                 <TableGeneric
                   columns={vulnColumns}
@@ -661,8 +661,8 @@ const packageColumns = [
           {/* Most Vulnerable Packages */}
           <div className="p-4">
             {/* Table Header */}
-            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md">
-              <h3 className="text-2xl font-bold text-white whitespace-nowrap">
+            <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between gap-2 rounded-t-md">
+              <h3 className="text-2xl font-bold text-white min-w-0">
                 Most vulnerable packages
               </h3>
               <button
@@ -674,7 +674,7 @@ const packageColumns = [
             </div>
 
             {/* Table Body */}
-            <div className="bg-zinc-700 p-4 rounded-b-md">
+            <div className="bg-zinc-700 p-4 rounded-b-md overflow-x-auto">
               <div className="w-full h-full overflow-y-auto">
                 <TableGeneric
                   columns={packageColumns}
