@@ -136,6 +136,24 @@ def init_app(app):
         else:
             records = Vulnerability.get_all()
         vulns = [r.to_dict() for r in records]
+
+        # Enrich each vuln dict with sorted variant names in one batch query
+        vuln_ids = [v["id"] for v in vulns]
+        if vuln_ids:
+            rows = db.session.execute(
+                db.select(Finding.vulnerability_id, Variant.name)
+                .join(Observation, Finding.id == Observation.finding_id)
+                .join(Scan, Observation.scan_id == Scan.id)
+                .join(Variant, Scan.variant_id == Variant.id)
+                .where(Finding.vulnerability_id.in_(vuln_ids))
+                .distinct()
+            ).all()
+            variant_names_by_vuln: dict = {}
+            for vuln_id, variant_name in rows:
+                variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
+            for v in vulns:
+                v["variants"] = sorted(variant_names_by_vuln.get(v["id"], []))
+
         if request.args.get('format', 'list') == "dict":
             return {v["id"]: v for v in vulns}
         return vulns

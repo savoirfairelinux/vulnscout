@@ -439,6 +439,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'severity.severity': 'Severity',
         'epss': 'EPSS Score',
         'packages': 'Packages Affected',
+        'variants': 'Variants',
         'severity': 'Attack Vector',
         'simplified_status': 'Status',
         'effort.likely': 'Estimated Effort',
@@ -641,6 +642,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 return dateA - dateB;
             },
             size: 90
+            }),
+            columnHelper.accessor('variants', {
+            id: 'variants',
+            header: () => <div className="flex items-center justify-center">Variants</div>,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <div className="flex flex-wrap gap-1 justify-center">
+                        {info.getValue().map((name: string) => (
+                            <span key={name} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-900 text-green-300">
+                                {name}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            ),
+            enableSorting: false,
+            size: 120
             }),
             columnHelper.accessor('found_by', {
             id: 'found_by',
@@ -950,6 +968,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Severity',
                     'EPSS Score',
                     'Packages Affected',
+                    'Variants',
                     'Attack Vector',
                     'Status',
                     'Estimated Effort',
