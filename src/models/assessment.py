@@ -352,6 +352,7 @@ class Assessment(Base):
             "source": self.source or "",
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
+            "variant_id": str(self.variant_id) if self.variant_id else None,
             "timestamp": ts,
             "last_update": ts or "",
             "status": self.status or "",

@@ -17,6 +17,8 @@ import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, f
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
+import Variants from '../handlers/variant';
+import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
 type Props = {
@@ -53,6 +55,13 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
+
+    // Fetch variants that have a finding for this specific vulnerability
+    useEffect(() => {
+        setAvailableVariants([]);
+        Variants.listByVuln(vuln.id).then(setAvailableVariants).catch(() => {});
+    }, [vuln.id]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -355,47 +364,65 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const defaultStatus = getDefaultStatus();
 
     const addAssessment = async (content: PostAssessment) => {
-        content.vuln_id = vuln.id
-        content.packages = vuln.packages
+        content.vuln_id = vuln.id;
+        content.packages = vuln.packages;
 
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(content)
-        })
-        const data = await response.json()
-        if (data?.status === 'success') {
-            const casted = asAssessment(data?.assessment);
-            if (!Array.isArray(casted) && typeof casted === "object") {
-                // Track this as a newly added assessment
-                setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+        // Determine which variants to post to. If none selected, post once without a variant_id.
+        const variantIds: Array<string | undefined> =
+            content.variant_ids && content.variant_ids.length > 0
+                ? content.variant_ids
+                : [undefined];
 
-                // Remove the glow effect after animation completes
-                setTimeout(() => {
-                    setNewAssessmentIds(prev => {
-                        const newSet = new Set(prev);
-                        newSet.delete(casted.id);
-                        return newSet;
-                    });
-                }, 5500); // >2s that we used in css animation
+        const { variant_ids: _vids, ...baseContent } = content;
 
-                // Add the assessment immediately to the local vuln object for instant UI update
-                appendAssessment(casted);
-                vuln.assessments.push(casted);
-                vuln.status = casted.status;
-                vuln.simplified_status = casted.simplified_status;
+        let successCount = 0;
+        let lastCasted: Assessment | null = null;
 
-                // Also patch the vulnerability for real-time refresh in other views
-                patchVuln(vuln.id, vuln);
-                showMessage("Successfully added assessment.", "success");
-                setClearAssessmentFields(true);
-                setTimeout(() => setClearAssessmentFields(false), 100);
+        for (const vid of variantIds) {
+            const body = vid ? { ...baseContent, variant_id: vid } : baseContent;
+            const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+            if (data?.status === 'success') {
+                const casted = asAssessment(data?.assessment);
+                if (!Array.isArray(casted) && typeof casted === 'object') {
+                    successCount++;
+                    lastCasted = casted;
+
+                    // Highlight the first result
+                    if (successCount === 1) {
+                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                        setTimeout(() => {
+                            setNewAssessmentIds(prev => {
+                                const newSet = new Set(prev);
+                                newSet.delete(casted.id);
+                                return newSet;
+                            });
+                        }, 5500);
+                    }
+
+                    appendAssessment(casted);
+                    vuln.assessments.push(casted);
+                    vuln.status = casted.status;
+                    vuln.simplified_status = casted.simplified_status;
+                }
+            } else {
+                showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
             }
-        } else {
-            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, "error");
+        }
+
+        if (lastCasted) {
+            patchVuln(vuln.id, vuln);
+            const msg = successCount > 1
+                ? `Successfully added assessment to ${successCount} variants.`
+                : 'Successfully added assessment.';
+            showMessage(msg, 'success');
+            setClearAssessmentFields(true);
+            setTimeout(() => setClearAssessmentFields(false), 100);
         }
     };
 
@@ -710,6 +737,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             onFieldsChange={setHasAssessmentChanges}
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
+                                            variants={availableVariants}
                                         />
                                     </li>
                                 )}
@@ -732,6 +760,22 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                     </span>
                                                 ))}
                                             </div>
+                                            {(() => {
+                                                const variantTags = [...new Set(
+                                                    group.assessments
+                                                        .map(a => a.variant_id)
+                                                        .filter((vid): vid is string => !!vid)
+                                                )].map(vid => availableVariants.find(v => v.id === vid)).filter(Boolean) as Variant[];
+                                                return variantTags.length > 0 ? (
+                                                    <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                                        {variantTags.map(v => (
+                                                            <span key={v.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                                {v.name}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                ) : null;
+                                            })()}
                                             <div className="flex items-start justify-between">
                                                 <div className="flex-1">
                                                     <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
