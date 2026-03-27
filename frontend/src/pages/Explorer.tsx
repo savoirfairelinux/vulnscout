@@ -90,13 +90,33 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }, [loadPatchData]);
 
     const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
-        // When compare is active, packages/assessments are scoped to the compare variant
         const activeVariantId = compareVariantId || variantId;
+        // For intersection, packages and assessments must be merged from both variants
+        const isIntersection = !!(compareVariantId && variantId && operation === 'intersection');
         setIsLoadingData(true);
+
+        const pkgPromise: Promise<Package[]> = isIntersection
+            ? Promise.all([
+                Packages.list(variantId, projectId),
+                Packages.list(compareVariantId, projectId),
+              ]).then(([p1, p2]) => {
+                // Only keep packages present in both variants (true intersection)
+                const compareIds = new Set(p2.map(p => p.id));
+                return p1.filter(pkg => compareIds.has(pkg.id));
+              })
+            : Packages.list(activeVariantId, projectId);
+
+        const assessPromise: Promise<Assessment[]> = isIntersection
+            ? Promise.all([
+                Assessments.list(variantId, projectId),
+                Assessments.list(compareVariantId, projectId),
+              ]).then(([a1, a2]) => removeDuplicateAssessments([...a1, ...a2]))
+            : Assessments.list(activeVariantId, projectId);
+
         Promise.allSettled([
-            Packages.list(activeVariantId, projectId),
+            pkgPromise,
             Vulnerabilities.list(variantId, projectId, compareVariantId, operation),
-            Assessments.list(activeVariantId, projectId)
+            assessPromise,
         ]).then(([pkgsResult, vulnsResult, assessResult]) => {
             setIsLoadingData(false);
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
@@ -106,7 +126,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             }
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
             setVulns(enriched_vulns);
-            setPkgs(Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns));
+            const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
+            // For intersection, packages are already scoped to those in both variants — show all.
+            // For difference, packages are scoped to compareVariantId — show all.
+            // For no compare, show all.
+            setPkgs(enrichedPkgs);
             setTimeout(() => checkPatchReady(enriched_vulns), 100);
         });
     }, [checkPatchReady]);
