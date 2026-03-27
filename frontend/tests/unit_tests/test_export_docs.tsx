@@ -239,4 +239,44 @@ describe('Exports Page', () => {
         const exportTitle = await screen.findByText(/export/i);
         expect(exportTitle).toBeInTheDocument();
     })
+
+    test('clicking a file button opens its dropdown', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: "report.adoc", category: ['built-in'], extension: "adoc" }
+        ]));
+
+        render(<Exports />);
+
+        const fileButton = await screen.findByText(/report\.adoc/i);
+        fireEvent.click(fileButton);
+
+        // dropdown contains a download link
+        await waitFor(() => {
+            expect(screen.getByText(/Download AsciiDoc/i)).toBeInTheDocument();
+        });
+    })
+
+    test('clicking outside the file button closes the dropdown', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: "report.adoc", category: ['built-in'], extension: "adoc" }
+        ]));
+
+        render(<Exports />);
+
+        const fileButton = await screen.findByText(/report\.adoc/i);
+        fireEvent.click(fileButton);
+
+        await waitFor(() => {
+            expect(screen.getByText(/Download AsciiDoc/i)).toBeInTheDocument();
+        });
+
+        // click on the page background (outside the button)
+        fireEvent.click(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText(/Download AsciiDoc/i)).not.toBeInTheDocument();
+        });
+    })
 });

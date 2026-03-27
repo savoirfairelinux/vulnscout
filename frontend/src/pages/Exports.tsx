@@ -51,9 +51,15 @@ function Exports () {
         })
     }, []);
 
+    useEffect(() => {
+        const close = () => setOpenDl(null);
+        document.addEventListener('click', close);
+        return () => document.removeEventListener('click', close);
+    }, []);
+
 
     return (<>
-        <div className="w-full pt-32 flex justify-center" onClick={() => setOpenDl(null)}>
+        <div className="w-full pt-32 flex justify-center">
         <div className="w-[70%]">
             <h1 className="text-3xl font-bold mb-4">Export</h1>
             <p className="mb-6">Generate reports and SBOM files from your scan results.</p>
@@ -72,7 +78,6 @@ function Exports () {
                 onClick={(e) => {
                     e.stopPropagation()
                     setTab(key)
-                    setOpenDl(null)
                 }}
                 className={[
                     "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200",
