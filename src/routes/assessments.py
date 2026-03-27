@@ -4,7 +4,7 @@
 
 from flask import request
 from datetime import datetime
-from ..models.assessment import Assessment as DBAssessment
+from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
 from ..models.package import Package
 from ..models.finding import Finding
 from ..views.openvex import OpenVex
@@ -153,8 +153,21 @@ def init_app(app):
                         variant_id = _uuid.UUID(variant_id_raw)
                     except (ValueError, AttributeError):
                         return {"error": "Invalid variant_id"}, 400
-                db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
-                db.session.commit()
+                # Always create a new record — never merge with an existing one.
+                # from_vuln_assessment does a find-or-update which would overwrite
+                # previous user assessments on the same (finding, variant).
+                db_a = DBAssessment.create(
+                    status=assessment.status,
+                    simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                    finding_id=finding.id,
+                    variant_id=variant_id,
+                    status_notes=assessment.status_notes,
+                    justification=assessment.justification,
+                    impact_statement=assessment.impact_statement,
+                    workaround=getattr(assessment, "workaround", None),
+                    responses=list(assessment.responses) if assessment.responses else [],
+                    commit=True,
+                )
                 _save_openvex()
                 return {"status": "success", "assessment": db_a.to_dict()}, 200
             except Exception as e:

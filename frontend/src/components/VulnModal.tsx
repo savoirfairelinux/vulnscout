@@ -56,11 +56,26 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
+    const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
 
     // Fetch variants that have a finding for this specific vulnerability
     useEffect(() => {
         setAvailableVariants([]);
         Variants.listByVuln(vuln.id).then(setAvailableVariants).catch(() => {});
+    }, [vuln.id]);
+
+    // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
+    // complete even when a variant filter is active in the explorer.
+    useEffect(() => {
+        setAllVulnAssessments([]);
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors' })
+            .then(r => r.json())
+            .then((data: any[]) => {
+                if (Array.isArray(data)) {
+                    setAllVulnAssessments(data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a)));
+                }
+            })
+            .catch(() => {});
     }, [vuln.id]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
@@ -761,11 +776,22 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                 ))}
                                             </div>
                                             {(() => {
-                                                const variantTags = [...new Set(
-                                                    group.assessments
-                                                        .map(a => a.variant_id)
-                                                        .filter((vid): vid is string => !!vid)
-                                                )].map(vid => availableVariants.find(v => v.id === vid)).filter(Boolean) as Variant[];
+                                                // Build the same content fingerprint used by groupAssessments,
+                                                // then find ALL matching records (across all variants) in the
+                                                // unfiltered allVulnAssessments so we can show every variant tag
+                                                // even when the explorer is filtered to a single variant.
+                                                const fp = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
+                                                const allVariantIds = [...new Set(
+                                                    allVulnAssessments
+                                                        .filter(a => {
+                                                            const afp = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
+                                                            return afp === fp && !!a.variant_id;
+                                                        })
+                                                        .map(a => a.variant_id as string)
+                                                )];
+                                                const variantTags = allVariantIds
+                                                    .map(vid => availableVariants.find(v => v.id === vid))
+                                                    .filter(Boolean) as Variant[];
                                                 return variantTags.length > 0 ? (
                                                     <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                         {variantTags.map(v => (
