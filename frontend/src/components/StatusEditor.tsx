@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import MessageBanner from './MessageBanner';
+import type { Variant } from '../handlers/variant';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -8,7 +9,8 @@ type PostAssessment = {
     justification?: string,
     impact_statement?: string,
     status_notes?: string,
-    workaround?: string
+    workaround?: string,
+    variant_ids?: string[]
 }
 
 type Props = {
@@ -18,14 +20,16 @@ type Props = {
     onFieldsChange?: (hasChanges: boolean) => void;
     triggerBanner?: (message: string, type: "error" | "success") => void;
     defaultStatus?: string;
+    variants?: Variant[];
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation"}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants}: Readonly<Props>) {
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
+    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -81,7 +85,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined
+            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined,
+            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined
         });
     }
 
@@ -91,6 +96,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setStatusNotes("");
         setWorkaround("");
         setImpact("");
+        setSelectedVariantIds([]);
     }, [defaultStatus]);
 
     useEffect(() => {
@@ -141,6 +147,30 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </select>
             </>}
         </h3>
+        {variants && variants.length > 0 && (
+            <div className="mt-2 mb-2 ml-1">
+                <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {variants.map(v => (
+                        <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedVariantIds.includes(v.id)}
+                                onChange={(e) => {
+                                    if (e.target.checked) {
+                                        setSelectedVariantIds(prev => [...prev, v.id]);
+                                    } else {
+                                        setSelectedVariantIds(prev => prev.filter(id => id !== v.id));
+                                    }
+                                }}
+                                className="accent-blue-500"
+                            />
+                            <span className="text-gray-200">{v.name}</span>
+                        </label>
+                    ))}
+                </div>
+            </div>
+        )}
         {(status == "not_affected" || status == "false_positive") && <>
             <textarea
                 value={impact}
