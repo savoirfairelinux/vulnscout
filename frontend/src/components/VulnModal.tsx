@@ -57,6 +57,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
+    const [isSubmittingAssessment, setIsSubmittingAssessment] = useState(false);
 
     // Fetch variants that have a finding for this specific vulnerability
     useEffect(() => {
@@ -380,7 +381,10 @@ const dt_options: Intl.DateTimeFormatOptions = {
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id;
-        content.packages = vuln.packages;
+        // packages come from StatusEditor selection; fall back to all vuln packages
+        if (!content.packages || content.packages.length === 0) {
+            content.packages = vuln.packages;
+        }
 
         // Determine which variants to post to. If none selected, post once without a variant_id.
         const variantIds: Array<string | undefined> =
@@ -393,6 +397,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
         let successCount = 0;
         let lastCasted: Assessment | null = null;
 
+        setIsSubmittingAssessment(true);
+        try {
         for (const vid of variantIds) {
             const body = vid ? { ...baseContent, variant_id: vid } : baseContent;
             const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
@@ -403,27 +409,35 @@ const dt_options: Intl.DateTimeFormatOptions = {
             });
             const data = await response.json();
             if (data?.status === 'success') {
-                const casted = asAssessment(data?.assessment);
-                if (!Array.isArray(casted) && typeof casted === 'object') {
-                    successCount++;
-                    lastCasted = casted;
+                // Backend returns an array (one record per package); support legacy single too
+                const rawList: unknown[] = Array.isArray(data?.assessments)
+                    ? data.assessments
+                    : (data?.assessment ? [data.assessment] : []);
+                for (const raw of rawList) {
+                    const casted = asAssessment(raw);
+                    if (!Array.isArray(casted) && typeof casted === 'object') {
+                        successCount++;
+                        lastCasted = casted;
 
-                    // Highlight the first result
-                    if (successCount === 1) {
-                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                        setTimeout(() => {
-                            setNewAssessmentIds(prev => {
-                                const newSet = new Set(prev);
-                                newSet.delete(casted.id);
-                                return newSet;
-                            });
-                        }, 5500);
+                        // Highlight the very first created assessment
+                        if (successCount === 1) {
+                            setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                            setTimeout(() => {
+                                setNewAssessmentIds(prev => {
+                                    const newSet = new Set(prev);
+                                    newSet.delete(casted.id);
+                                    return newSet;
+                                });
+                            }, 5500);
+                        }
+
+                        appendAssessment(casted);
+                        vuln.assessments.push(casted);
+                        // Keep allVulnAssessments in sync so variant tags appear immediately
+                        setAllVulnAssessments(prev => [...prev, casted]);
+                        vuln.status = casted.status;
+                        vuln.simplified_status = casted.simplified_status;
                     }
-
-                    appendAssessment(casted);
-                    vuln.assessments.push(casted);
-                    vuln.status = casted.status;
-                    vuln.simplified_status = casted.simplified_status;
                 }
             } else {
                 showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
@@ -438,6 +452,9 @@ const dt_options: Intl.DateTimeFormatOptions = {
             showMessage(msg, 'success');
             setClearAssessmentFields(true);
             setTimeout(() => setClearAssessmentFields(false), 100);
+        }
+        } finally {
+            setIsSubmittingAssessment(false);
         }
     };
 
@@ -525,6 +542,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
             tabIndex={-1}
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
+            {isSubmittingAssessment && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Adding assessment...</span>
+                    </div>
+                </div>
+            )}
             <div className="relative p-16 h-full">
                 <div
                     ref={modalRef}
@@ -753,6 +778,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
                                             variants={availableVariants}
+                                            availablePackages={vuln.packages}
                                         />
                                     </li>
                                 )}
