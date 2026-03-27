@@ -26,6 +26,10 @@ type Props = {
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
     variantId?: string;
+    /** Origin variant when compare mode is active */
+    baseVariantId?: string;
+    /** 'difference' or 'intersection' when compare mode is active */
+    compareOperation?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -69,7 +73,7 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const fuseKeys = [
-    'id', 
+    'id',
     'packages',
     'texts.content'
 ]
@@ -88,10 +92,10 @@ type PublishedDateFilterProps = {
     nvdProgress: NVDProgress | null;
 };
 
-function PublishedDateFilter({ 
+function PublishedDateFilter({
     filterType, dateValue, daysValue, dateFrom, dateTo,
-    setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo, 
-    nvdProgress 
+    setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo,
+    nvdProgress
 }: Readonly<PublishedDateFilterProps>) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -263,7 +267,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
@@ -694,12 +698,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages.includes(pkg))) return false;
-            
+
             // Published date filter
             if (publishedDateFilterType && el.published) {
                 const publishedDate = new Date(el.published);
                 const today = new Date();
-                
+
                 switch (publishedDateFilterType) {
                     case 'is':
                         if (publishedDateValue) {
@@ -753,15 +757,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 // If filter is active but vulnerability has no published date, filter it out
                 return false;
             }
-            
+
             if(showCustomSeverityFilter){
                 // Use the max score as this is how the final severity level is determined
                 const maxScore = el.severity.max_score;
-            
+
                 if (maxScore === null) return false;
                 if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
             }
-            
+
             return true;
         });
     }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange]);
@@ -816,7 +820,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
             // Only trigger if not typing in an input/textarea
-            if (event.target instanceof HTMLInputElement || 
+            if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
             }
@@ -1028,6 +1032,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             triggerBanner={triggerBanner}
             hideBanner={closeBanner}
             variantId={variantId}
+            baseVariantId={baseVariantId}
+            compareOperation={compareOperation}
         />
 
         <TableGeneric
