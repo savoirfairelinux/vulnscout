@@ -21,15 +21,17 @@ type Props = {
     triggerBanner?: (message: string, type: "error" | "success") => void;
     defaultStatus?: string;
     variants?: Variant[];
+    availablePackages?: string[];
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages}: Readonly<Props>) {
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
     const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(availablePackages ?? []);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -43,6 +45,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const closeBanner = () => {
         setBannerVisible(false);
     };
+
+    // Reset selected packages when the available list changes (e.g. navigating to a different vuln)
+    useEffect(() => {
+        setSelectedPackages(availablePackages ?? []);
+    }, [availablePackages]);
 
     // Update status when defaultStatus prop changes
     useEffect(() => {
@@ -80,13 +87,30 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        if (variants && variants.length > 0 && selectedVariantIds.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one variant", "error");
+            } else {
+                internalTriggerBanner("You must select at least one variant", "error");
+            }
+            return;
+        }
+        if (availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one package", "error");
+            } else {
+                internalTriggerBanner("You must select at least one package", "error");
+            }
+            return;
+        }
         onAddAssessment({
             status,
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
             impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined,
-            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined
+            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
+            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
         });
     }
 
@@ -97,7 +121,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setWorkaround("");
         setImpact("");
         setSelectedVariantIds([]);
-    }, [defaultStatus]);
+        setSelectedPackages(availablePackages ?? []);
+    }, [defaultStatus, availablePackages]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -166,6 +191,30 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                                 className="accent-blue-500"
                             />
                             <span className="text-gray-200">{v.name}</span>
+                        </label>
+                    ))}
+                </div>
+            </div>
+        )}
+        {availablePackages && availablePackages.length > 1 && (
+            <div className="mt-2 mb-2 ml-1">
+                <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {availablePackages.map(pkg => (
+                        <label key={pkg} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedPackages.includes(pkg)}
+                                onChange={(e) => {
+                                    if (e.target.checked) {
+                                        setSelectedPackages(prev => [...prev, pkg]);
+                                    } else {
+                                        setSelectedPackages(prev => prev.filter(p => p !== pkg));
+                                    }
+                                }}
+                                className="accent-blue-400"
+                            />
+                            <span className="font-mono text-gray-200">{pkg}</span>
                         </label>
                     ))}
                 </div>
