@@ -175,14 +175,6 @@ cmd_scan() {
         (cd "$BASE_DIR" && flask "${FLASK_ARGS[@]}") &
     fi
 
-    python3 -m src.bin.epss_db_builder &
-
-    if [[ "$INTERACTIVE_MODE" == "true" ]]; then
-        python3 -m src.bin.nvd_db_builder &
-    else
-        set_status "0" "NVD sync skipped in CI Mode"
-    fi
-
     # All input files belong to a single variant set for this invocation
     PROJECT_NAME=${PROJECT_NAME:-"$PRODUCT_NAME"}
     VARIANT_NAME=${VARIANT_NAME:-"default"}

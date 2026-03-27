@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 def mock_epss_db():
     """Replace EPSS_DB with a harmless mock for every end-to-end test."""
     mock = MagicMock()
-    # Return None from get_score so fetch_epss_scores() skips set_epss()
-    mock.get_score.return_value = None
+    # Return None from api_get_epss so fetch_epss_scores() skips set_epss()
+    mock.api_get_epss.return_value = None
     with patch("src.controllers.vulnerabilities.EPSS_DB", return_value=mock):
         yield mock

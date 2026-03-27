@@ -25,7 +25,7 @@ from . import write_demo_files
 def mock_epss_db():
     """Replace EPSS_DB with a harmless mock."""
     mock = MagicMock()
-    mock.get_score.return_value = None
+    mock.api_get_epss.return_value = None
     with patch("src.controllers.vulnerabilities.EPSS_DB", return_value=mock):
         yield mock
 
