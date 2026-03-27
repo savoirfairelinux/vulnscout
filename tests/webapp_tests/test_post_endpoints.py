@@ -196,7 +196,19 @@ def test_patch_vulnerability_invalids(client):
     assert response.status_code == 400
 
 
-def test_post_scan_patch_finder(client):
+def test_post_scan_patch_finder(client, app):
+    from src.models.vulnerability import Vulnerability
+    with app.app_context():
+        Vulnerability.create_record(
+            id="CVE-2021-37322",
+            description="CVE-2021-37322 test fixture",
+            status="medium",
+            versions_data={
+                "binutils (nvd-cpe-match)": {"fix": [">=? 2.32"], "affected": ["< 2.32"]},
+                "gcc (nvd-cpe-match)": {"fix": [">=? 10.1"], "affected": ["< 10.1"]},
+            },
+        )
+
     response = client.post("/api/patch-finder/scan", json=[
         "CVE-2021-37322",
         "CVE-0000-00000"

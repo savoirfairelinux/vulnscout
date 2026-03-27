@@ -15,6 +15,11 @@ def setup_demo_db(app):
     from src.models.vulnerability import Vulnerability
     from src.models.finding import Finding
     from src.models.assessment import Assessment
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
 
     with app.app_context():
         db.drop_all()
@@ -47,6 +52,7 @@ def setup_demo_db(app):
                 "https://nvd.nist.gov/vuln/detail/CVE-2020-35492",
             ],
         )
+
         db.session.commit()
 
         # Link package to vulnerability via Finding
@@ -65,6 +71,32 @@ def setup_demo_db(app):
             finding_id=finding.id,
         )
         db.session.add(assessment)
+        db.session.commit()
+
+        # SBOM chain: project → variant → scan → sbom_document → sbom_package
+        # Required so that _populate_found_by() can derive found_by at query time.
+        project = Project(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), name="demo")
+        db.session.add(project)
+        variant = Variant(
+            id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            name="default",
+            project_id=project.id,
+        )
+        db.session.add(variant)
+        scan = Scan(
+            id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+            variant_id=variant.id,
+        )
+        db.session.add(scan)
+        sbom_doc = SBOMDocument(
+            id=uuid.UUID("44444444-4444-4444-4444-444444444444"),
+            path="/demo/grype.json",
+            source_name="grype.json",
+            format="grype",
+            scan_id=scan.id,
+        )
+        db.session.add(sbom_doc)
+        db.session.add(SBOMPackage(sbom_document_id=sbom_doc.id, package_id=pkg.id))
         db.session.commit()
 
 
