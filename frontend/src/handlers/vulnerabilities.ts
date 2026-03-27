@@ -22,6 +22,7 @@ type Vulnerability = {
     found_by: string[];
     datasource: string;
     packages: string[];
+    variants: string[];
     urls: string[];
     published?: string;
     texts: {
@@ -94,6 +95,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         found_by: asStringArray(data?.found_by),
         datasource: "unknown",
         packages: asStringArray(data?.packages),
+        variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
         texts: [],
         severity: {
@@ -264,14 +266,14 @@ class Vulnerabilities {
         } catch (e) {
             // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
             if (!(e instanceof Error && e.message === 'invalid vector')) {
-                 
+
                 console.error(e);
             }
             return null;
         }
     }
 
- 
+
 
 }
 
