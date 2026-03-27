@@ -94,6 +94,33 @@ def init_app(app):
             return {a["id"]: a for a in assessments}
         return assessments, 200
 
+    @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
+    def list_variants_by_vuln(vuln_id: str):
+        """Return all distinct variants that have a finding for this vulnerability
+        (via the Observation → Scan → Variant chain)."""
+        from ..models.observation import Observation
+        from ..models.scan import Scan
+        from ..models.variant import Variant as DBVariant
+        findings = Finding.get_by_vulnerability(vuln_id)
+        seen_variant_ids: set = set()
+        variants_out = []
+        for finding in findings:
+            for obs in Observation.get_by_finding(finding.id):
+                scan = db.session.get(Scan, obs.scan_id)
+                if scan is None:
+                    continue
+                if scan.variant_id in seen_variant_ids:
+                    continue
+                seen_variant_ids.add(scan.variant_id)
+                variant = db.session.get(DBVariant, scan.variant_id)
+                if variant:
+                    variants_out.append({
+                        "id": str(variant.id),
+                        "name": variant.name,
+                        "project_id": str(variant.project_id),
+                    })
+        return variants_out, 200
+
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str):
         payload_data = request.get_json()
@@ -118,7 +145,8 @@ def init_app(app):
                 # Ensure vulnerability record exists before creating Finding (FK constraint)
                 DBVuln.get_or_create(vuln_id)
                 finding = Finding.get_or_create(db_pkg.id, vuln_id)
-                db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
+                variant_id = payload_data.get('variant_id') or None
+                db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
                 db.session.commit()
                 _save_openvex()
                 return {"status": "success", "assessment": db_a.to_dict()}, 200

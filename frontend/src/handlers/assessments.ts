@@ -14,6 +14,7 @@ type Assessment = {
     id: string;
     vuln_id: string;
     packages: string[];
+    variant_id?: string;
     status: string;
     simplified_status: string;
     status_notes?: string;
@@ -43,6 +44,7 @@ const asAssessment = (data: any): Assessment | [] => {
         id: data.id,
         vuln_id: data.vuln_id,
         packages: asStringArray(data?.packages),
+        variant_id: undefined,
         status: data.status,
         simplified_status: `[invalid status] ${data.status}`,
         status_notes: undefined,
@@ -56,6 +58,7 @@ const asAssessment = (data: any): Assessment | [] => {
     };
     if (typeof STATUS_VEX_TO_GRAPH?.[data.status] === "string")
         item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
+    if (typeof data?.variant_id === "string") item.variant_id = data.variant_id;
     if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
     if (typeof data?.justification === "string") item.justification = data.justification;
     if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;
@@ -79,7 +82,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.workaround || ''
         ].join('|');
 
-        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}`;
+        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${assessment.variant_id ?? ''}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);
