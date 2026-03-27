@@ -54,13 +54,13 @@ def _ts_key(ts) -> str:
 
 
 def post_treatment(controllers, files):
-    """Enrich vulnerabilities with EPSS scores and NVD published dates."""
+    """Enrich vulnerabilities with EPSS scores and NVD data."""
 
     # TODO: 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
 
-    # TODO: 2. fetch published dates from NVD
-    controllers["vulnerabilities"].fetch_published_dates()
+    # TODO: 2. fetch published dates and NVD fields
+    controllers["vulnerabilities"].fetch_nvd_data()
 
 
 def evaluate_condition(controllers, condition):
@@ -453,7 +453,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     # Populate controllers from DB (needed for evaluate_condition and template rendering)
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
     vulnCtrl.fetch_epss_scores()
-    vulnCtrl.fetch_published_dates()
+    vulnCtrl.fetch_nvd_data()
 
     controllers = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
     templ = Templates(controllers)
