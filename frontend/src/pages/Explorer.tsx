@@ -39,6 +39,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
+    const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
+    const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -71,7 +73,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         ])
         .then(([patchData, progress]) => {
             setNvdProgress(progress);
-            
+
             if (patchData.db_ready) {
                 setPatchDbReady(true);
                 loadPatchData(vulns_list);
@@ -124,6 +126,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
         setCurrentVariantId(effectiveVariantId);
+        // Track origin variant and operation separately for MultiEditBar intersection logic
+        setCurrentBaseVariantId(compareVariantId ? (variantId || undefined) : undefined);
+        setCurrentOperation(compareVariantId ? (operation || undefined) : undefined);
         loadData(
             variantId || undefined,
             variantId ? undefined : projectId || undefined,
@@ -250,6 +255,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     filterLabel={filterLabel}
                     filterValue={filterValue}
                     variantId={currentVariantId}
+                    baseVariantId={currentBaseVariantId}
+                    compareOperation={currentOperation}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab == 'exports' && <Exports />}
