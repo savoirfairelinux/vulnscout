@@ -42,6 +42,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
     minute: 'numeric',
     timeZoneName: 'shortOffset'
 };
+
+type AssessmentGroup = {
+    key: string;
+    assessments: Assessment[];
+    timestamp: string;
+    packages: string[];
+};
+
   function VulnModal(props: Readonly<Props>) {
     const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
@@ -57,7 +65,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
-    const [isSubmittingAssessment, setIsSubmittingAssessment] = useState(false);
+    const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
+    const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
     // Fetch variants that have a finding for this specific vulnerability
     useEffect(() => {
@@ -178,12 +187,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
-    const handleEditAssessment = (assessmentId: string) => {
+    const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
+        setEditingGroup(group);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
+        setEditingGroup(null);
     };
 
     const handleDeleteAssessment = (assessment: Assessment) => {
@@ -239,70 +250,158 @@ const dt_options: Intl.DateTimeFormatOptions = {
     };
 
     const saveEditedAssessment = async (data: EditAssessmentData) => {
-        try {
-            const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(data.id)}`, {
-                method: 'PUT',
-                mode: 'cors',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    status: data.status,
-                    justification: data.justification,
-                    impact_statement: data.impact_statement,
-                    status_notes: data.status_notes,
-                    workaround: data.workaround
-                })
-            });
+        if (!editingGroup) return;
+        setSubmittingMessage('Editing assessment...');
 
-            if (response.ok) {
-                const responseData = await response.json();
-                if (responseData?.status === 'success' && responseData?.assessment) {
-                    // Find and update the assessment in vuln.assessments array
-                    const assessmentIndex = vuln.assessments.findIndex(
-                        assessment => assessment.id === data.id
-                    );
+        // Build target (package × variantId) combos from form selection
+        const targetVariantIds: Array<string | undefined> =
+            data.variant_ids && data.variant_ids.length > 0
+                ? data.variant_ids
+                : [undefined];
+        const targetPackages: string[] =
+            data.packages && data.packages.length > 0
+                ? data.packages
+                : editingGroup.packages;
 
-                    if (assessmentIndex !== -1) {
-                        // Update the assessment object with the response data
-                        let updatedAssessment = asAssessment(responseData.assessment);
-                        if (!Array.isArray(updatedAssessment) && typeof updatedAssessment === "object") {
-                            // Convert empty strings to undefined for non-relevant statuses
-                            const isRelevantStatus = updatedAssessment.status === "not_affected" || updatedAssessment.status === "false_positive";
-                            if (!isRelevantStatus) {
-                                updatedAssessment.justification = undefined;
-                                updatedAssessment.impact_statement = undefined;
-                            }
-
-                            // Replace the assessment in the array
-                            vuln.assessments[assessmentIndex] = updatedAssessment;
-
-                            // Update vulnerability status to match the edited assessment
-                            vuln.status = updatedAssessment.status;
-                            vuln.simplified_status = updatedAssessment.simplified_status;
-
-                            // Update the vuln object in the parent component
-                            patchVuln(vuln.id, vuln);
-
-                            showMessage("Assessment updated successfully!", "success");
-                        } else {
-                            showMessage("Error: Invalid assessment data received", "error");
-                        }
-                    } else {
-                        showMessage("Error: Assessment not found in local data", "error");
-                    }
-                } else {
-                    showMessage("Error: Invalid response from server", "error");
-                }
-            } else {
-                const errorData = await response.text();
-                showMessage(`Failed to update assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
-            }
-        } catch (error) {
-            showMessage(`Failed to update assessment: ${escape(String(error))}`, "error");
+        // Index existing group assessments by (pkg, vid) key
+        const existingByKey = new Map<string, Assessment>();
+        for (const a of editingGroup.assessments) {
+            const pkg = a.packages[0] ?? '';
+            const vid = a.variant_id ?? '';
+            existingByKey.set(`${pkg}::${vid}`, a);
         }
 
+        // Build the desired target key set
+        const targetKeys = new Set<string>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                targetKeys.add(`${pkg}::${vid ?? ''}`);
+            }
+        }
+
+        let anyError = false;
+
+        // Helper — normalise an Assessment from the API response
+        const normalise = (raw: unknown): Assessment | null => {
+            const a = asAssessment(raw);
+            if (Array.isArray(a) || typeof a !== 'object') return null;
+            const isRelevant = a.status === 'not_affected' || a.status === 'false_positive';
+            if (!isRelevant) {
+                a.justification = undefined;
+                a.impact_statement = undefined;
+            }
+            return a;
+        };
+
+        // 1. PUT-update persisting combos / DELETE removed combos
+        for (const [key, existing] of existingByKey) {
+            if (targetKeys.has(key)) {
+                try {
+                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
+                        method: 'PUT', mode: 'cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            status: data.status,
+                            justification: data.justification,
+                            impact_statement: data.impact_statement,
+                            status_notes: data.status_notes,
+                            workaround: data.workaround
+                        })
+                    });
+                    if (res.ok) {
+                        const rd = await res.json();
+                        const updated = rd?.status === 'success' ? normalise(rd.assessment) : null;
+                        if (updated) {
+                            const idx = vuln.assessments.findIndex(a => a.id === existing.id);
+                            if (idx !== -1) vuln.assessments[idx] = updated;
+                            setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
+                        }
+                    } else {
+                        anyError = true;
+                        showMessage(`Failed to update assessment: HTTP ${res.status}`, 'error');
+                    }
+                } catch (e) {
+                    anyError = true;
+                    showMessage(`Failed to update assessment: ${escape(String(e))}`, 'error');
+                }
+            } else {
+                // Deselected — delete this record
+                try {
+                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
+                        method: 'DELETE', mode: 'cors'
+                    });
+                    if (res.ok) {
+                        vuln.assessments = vuln.assessments.filter(a => a.id !== existing.id);
+                        setAllVulnAssessments(prev => prev.filter(a => a.id !== existing.id));
+                    } else {
+                        anyError = true;
+                        showMessage(`Failed to delete assessment: HTTP ${res.status}`, 'error');
+                    }
+                } catch (e) {
+                    anyError = true;
+                    showMessage(`Failed to delete assessment: ${escape(String(e))}`, 'error');
+                }
+            }
+        }
+
+        // 2. POST-create newly-added combos
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                const key = `${pkg}::${vid ?? ''}`;
+                if (!existingByKey.has(key)) {
+                    try {
+                        const body: Record<string, unknown> = {
+                            vuln_id: vuln.id,
+                            packages: [pkg],
+                            status: data.status,
+                            justification: data.justification,
+                            impact_statement: data.impact_statement,
+                            status_notes: data.status_notes,
+                            workaround: data.workaround
+                        };
+                        if (vid) body.variant_id = vid;
+                        const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                            method: 'POST', mode: 'cors',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        });
+                        const rd = await res.json();
+                        if (rd?.status === 'success') {
+                            const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
+                            for (const raw of rawList) {
+                                const casted = normalise(raw);
+                                if (casted) {
+                                    vuln.assessments.push(casted);
+                                    setAllVulnAssessments(prev => [...prev, casted]);
+                                }
+                            }
+                        } else {
+                            anyError = true;
+                            showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
+                        }
+                    } catch (e) {
+                        anyError = true;
+                        showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
+                    }
+                }
+            }
+        }
+
+        if (!anyError) {
+            const latest = vuln.assessments.slice().sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            )[0];
+            if (latest) {
+                vuln.status = latest.status;
+                vuln.simplified_status = latest.simplified_status;
+            }
+            patchVuln(vuln.id, vuln);
+            showMessage('Assessment updated successfully!', 'success');
+        }
+
+        setSubmittingMessage(null);
         setEditingAssessmentId(null);
+        setEditingGroup(null);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
@@ -397,7 +496,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
         let successCount = 0;
         let lastCasted: Assessment | null = null;
 
-        setIsSubmittingAssessment(true);
+        setSubmittingMessage('Adding assessment...');
         try {
         for (const vid of variantIds) {
             const body = vid ? { ...baseContent, variant_id: vid } : baseContent;
@@ -454,7 +553,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
             setTimeout(() => setClearAssessmentFields(false), 100);
         }
         } finally {
-            setIsSubmittingAssessment(false);
+            setSubmittingMessage(null);
         }
     };
 
@@ -542,11 +641,11 @@ const dt_options: Intl.DateTimeFormatOptions = {
             tabIndex={-1}
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
-            {isSubmittingAssessment && (
+            {submittingMessage && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
                     <div className="flex flex-col items-center gap-3 text-white">
                         <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">Adding assessment...</span>
+                        <span className="text-sm font-semibold">{submittingMessage}</span>
                     </div>
                 </div>
             )}
@@ -835,7 +934,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                         {isEditing && (
                                                             <div className="flex items-center ml-3 gap-2">
                                                                 <button
-                                                                    onClick={() => handleEditAssessment(firstAssess.id)}
+                                                                    onClick={() => handleEditAssessment(firstAssess.id, group)}
                                                                     className="text-blue-400 hover:text-blue-300 transition-colors"
                                                                     title="Edit assessment"
                                                                 >
@@ -868,6 +967,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                         onSaveAssessment={saveEditedAssessment}
                                                         onCancel={handleCancelEdit}
                                                         triggerBanner={showMessage}
+                                                        availableVariants={availableVariants}
+                                                        defaultSelectedVariantIds={[...new Set(
+                                                            group.assessments
+                                                                .map(a => a.variant_id)
+                                                                .filter((v): v is string => !!v)
+                                                        )]}
+                                                        availablePackages={vuln.packages}
+                                                        defaultSelectedPackages={group.packages}
                                                     />
                                                 </div>
                                             )}
