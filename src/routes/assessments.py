@@ -136,7 +136,18 @@ def init_app(app):
         if status != 200:
             return assessment, status
 
-        # Persist to DB
+        # Resolve variant_id once — same for all packages in this request
+        variant_id_raw = payload_data.get('variant_id') or None
+        variant_id = None
+        if variant_id_raw:
+            try:
+                import uuid as _uuid
+                variant_id = _uuid.UUID(variant_id_raw)
+            except (ValueError, AttributeError):
+                return {"error": "Invalid variant_id"}, 400
+
+        # Persist to DB — one Assessment record per package
+        created = []
         for pkg_string_id in (assessment.packages or []):
             try:
                 # find_or_create handles both lookup and creation in one query
@@ -145,14 +156,6 @@ def init_app(app):
                 # Ensure vulnerability record exists before creating Finding (FK constraint)
                 DBVuln.get_or_create(vuln_id)
                 finding = Finding.get_or_create(db_pkg.id, vuln_id)
-                variant_id_raw = payload_data.get('variant_id') or None
-                variant_id = None
-                if variant_id_raw:
-                    try:
-                        import uuid as _uuid
-                        variant_id = _uuid.UUID(variant_id_raw)
-                    except (ValueError, AttributeError):
-                        return {"error": "Invalid variant_id"}, 400
                 # Always create a new record — never merge with an existing one.
                 # from_vuln_assessment does a find-or-update which would overwrite
                 # previous user assessments on the same (finding, variant).
@@ -168,12 +171,15 @@ def init_app(app):
                     responses=list(assessment.responses) if assessment.responses else [],
                     commit=True,
                 )
-                _save_openvex()
-                return {"status": "success", "assessment": db_a.to_dict()}, 200
+                created.append(db_a.to_dict())
             except Exception as e:
                 return {"error": f"DB error: {e}"}, 500
 
-        return {"error": "No valid package found"}, 400
+        if not created:
+            return {"error": "No valid package found"}, 400
+
+        _save_openvex()
+        return {"status": "success", "assessments": created}, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
     def add_assessments_batch():
