@@ -145,7 +145,14 @@ def init_app(app):
                 # Ensure vulnerability record exists before creating Finding (FK constraint)
                 DBVuln.get_or_create(vuln_id)
                 finding = Finding.get_or_create(db_pkg.id, vuln_id)
-                variant_id = payload_data.get('variant_id') or None
+                variant_id_raw = payload_data.get('variant_id') or None
+                variant_id = None
+                if variant_id_raw:
+                    try:
+                        import uuid as _uuid
+                        variant_id = _uuid.UUID(variant_id_raw)
+                    except (ValueError, AttributeError):
+                        return {"error": "Invalid variant_id"}, 400
                 db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id, variant_id=variant_id)
                 db.session.commit()
                 _save_openvex()
