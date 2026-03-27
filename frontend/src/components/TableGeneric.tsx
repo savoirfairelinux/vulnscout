@@ -317,7 +317,7 @@ function TableGeneric<DataType> ({
                                 <th
                                     key={header.id}
                                     className={[
-                                        `p-4 border border-slate-600 flex-auto`,
+                                        header.column.id === 'id' ? 'border border-slate-600 flex-auto' : 'p-4 border border-slate-600 flex-auto',
                                         header.column.getCanSort() ? 'cursor-pointer select-none' : ''
                                     ].join(' ')}
                                     style={{width: header.getSize()}}

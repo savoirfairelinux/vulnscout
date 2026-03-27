@@ -176,7 +176,7 @@ const vulnColumns = useMemo(
     },
     {
       accessorKey: "edit",
-      header: () => <div className="flex items-center justify-center h-full">Actions</div>,
+      header: () => <div className="flex items-center justify-center h-full whitespace-normal break-all text-center">Actions</div>,
       cell: (info: any) => {
         const vuln = info.row.original.original;
         return (
@@ -219,7 +219,7 @@ const vulnColumns = useMemo(
           </div>
         );
       },
-      size: 50,
+      size: 100,
       enableSorting: false,
     },
   ],
@@ -278,7 +278,7 @@ const packageColumns = [
     accessorKey: "count",
     size: 100,
     header: () => (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center h-full whitespace-normal break-all text-center">
         Vulnerabilities
       </div>
     ),
