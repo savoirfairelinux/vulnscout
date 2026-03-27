@@ -204,7 +204,21 @@ def init_app(app):
                 continue
 
             vuln_id = assessment.vuln_id
-            for pkg_string_id in (assessment.packages or []):
+            # Parse optional variant_id from the raw item
+            variant_id_raw = item.get('variant_id') or None
+            variant_id = None
+            if variant_id_raw:
+                try:
+                    import uuid as _uuid
+                    variant_id = _uuid.UUID(variant_id_raw)
+                except (ValueError, AttributeError):
+                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                    continue
+            pkg_list = assessment.packages or []
+            if not pkg_list:
+                errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
+                continue
+            for pkg_string_id in pkg_list:
                 try:
                     # Resolve package from cache first, then DB
                     db_pkg = pkg_cache.get(pkg_string_id)
@@ -220,10 +234,20 @@ def init_app(app):
                     if finding is None:
                         finding = Finding.get_or_create(db_pkg.id, vuln_id)
                         finding_cache[f_key] = finding
-                    db_a = DBAssessment.from_vuln_assessment(assessment, finding_id=finding.id)
-                    db.session.commit()
+                    # Always create a new record — never overwrite an existing assessment
+                    db_a = DBAssessment.create(
+                        status=assessment.status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        status_notes=assessment.status_notes,
+                        justification=assessment.justification,
+                        impact_statement=assessment.impact_statement,
+                        workaround=getattr(assessment, "workaround", None),
+                        responses=list(assessment.responses) if assessment.responses else [],
+                        commit=True,
+                    )
                     results.append(db_a.to_dict())
-                    break
                 except Exception as e:
                     errors.append({"vuln_id": vuln_id, "error": str(e)})
 
@@ -235,6 +259,8 @@ def init_app(app):
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
+        if results:
+            _save_openvex()
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
