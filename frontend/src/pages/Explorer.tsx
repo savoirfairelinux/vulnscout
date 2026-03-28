@@ -16,6 +16,7 @@ import TableVulnerabilities from "./TableVulnerabilities";
 import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
+import ScanHistory from "./ScanHistory";
 import Assessments from "../handlers/assessments";
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -259,6 +260,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     compareOperation={currentOperation}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
+                {tab == 'scans' && <ScanHistory variantId={currentVariantId} />}
                 {tab == 'exports' && <Exports />}
             </div>
             <VersionDisplay />
