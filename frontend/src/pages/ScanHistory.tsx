@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, PackageDiffEntry } from "../handlers/scans";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPencil, faCheck, faXmark } from "@fortawesome/free-solid-svg-icons";
 
 type Props = {
     variantId?: string;
@@ -270,6 +272,16 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [openDiffId, setOpenDiffId] = useState<string | null>(null);
+    const [editingDescId, setEditingDescId] = useState<string | null>(null);
+    const [editingDescValue, setEditingDescValue] = useState<string>('');
+
+    async function saveDescription(scanId: string) {
+        const ok = await ScansHandler.setDescription(scanId, editingDescValue);
+        if (ok) {
+            setScans(prev => prev.map(s => s.id === scanId ? { ...s, description: editingDescValue } : s));
+            setEditingDescId(null);
+        }
+    }
 
     useEffect(() => {
         setLoading(true);
@@ -385,7 +397,50 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                     }
                                 </p>
 
-
+                                {/* Description row */}
+                                {editingDescId === scan.id ? (
+                                    <div className="mt-2 flex items-center gap-2">
+                                        <input
+                                            autoFocus
+                                            type="text"
+                                            value={editingDescValue}
+                                            onChange={e => setEditingDescValue(e.target.value)}
+                                            onKeyDown={e => {
+                                                if (e.key === 'Enter') saveDescription(scan.id);
+                                                if (e.key === 'Escape') setEditingDescId(null);
+                                            }}
+                                            placeholder="Add a description…"
+                                            className="flex-1 text-sm px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
+                                        />
+                                        <button
+                                            onClick={() => saveDescription(scan.id)}
+                                            title="Save"
+                                            className="text-green-400 hover:text-green-300 transition-colors"
+                                        >
+                                            <FontAwesomeIcon icon={faCheck} />
+                                        </button>
+                                        <button
+                                            onClick={() => setEditingDescId(null)}
+                                            title="Cancel"
+                                            className="text-neutral-400 hover:text-neutral-200 transition-colors"
+                                        >
+                                            <FontAwesomeIcon icon={faXmark} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="mt-1.5 flex items-center gap-2 group/desc">
+                                        <span className="text-sm text-neutral-400 dark:text-neutral-400 italic flex-1">
+                                            {scan.description ?? ''}
+                                        </span>
+                                        <button
+                                            onClick={() => { setEditingDescId(scan.id); setEditingDescValue(scan.description ?? ''); }}
+                                            title="Edit description"
+                                            className="opacity-0 group-hover/desc:opacity-100 text-neutral-400 hover:text-cyan-400 transition-all"
+                                        >
+                                            <FontAwesomeIcon icon={faPencil} className="text-xs" />
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </li>
                     ))}

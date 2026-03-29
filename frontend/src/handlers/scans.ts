@@ -75,6 +75,19 @@ class ScansHandler {
         if (typeof data?.scan_id !== 'string') return null;
         return data as ScanDiff;
     }
+
+    static async setDescription(scanId: string, description: string): Promise<boolean> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/scans/${encodeURIComponent(scanId)}`,
+            {
+                method: 'PATCH',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description }),
+            }
+        );
+        return response.ok;
+    }
 }
 
 export default ScansHandler;

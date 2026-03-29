@@ -215,7 +215,7 @@ def create_project_context(
 
     project_obj = ProjectController.get_or_create(project)
     variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
-    scan = ScanController.create("default", variant_obj.id)
+    scan = ScanController.create("empty description", variant_obj.id)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id}")
 
     format_groups: list[tuple[tuple, str]] = [

@@ -216,6 +216,25 @@ def init_app(app):
         scans = ScanController.get_by_variant(variant_id)
         return jsonify(_serialize_list_with_diff(scans))
 
+    @app.route('/api/scans/<scan_id>', methods=['PATCH'])
+    def update_scan(scan_id):
+        from flask import request as req
+        try:
+            scan_uuid = uuid_module.UUID(scan_id)
+        except ValueError:
+            return jsonify({"error": "Invalid scan id"}), 400
+        payload = req.get_json(silent=True)
+        if not payload or "description" not in payload:
+            return jsonify({"error": "Missing 'description' field"}), 400
+        description = payload["description"]
+        if not isinstance(description, str):
+            return jsonify({"error": "'description' must be a string"}), 400
+        scan = ScanController.get(scan_uuid)
+        if scan is None:
+            return jsonify({"error": "Scan not found"}), 404
+        updated = ScanController.update(scan, description)
+        return jsonify(ScanController.serialize(updated))
+
     @app.route('/api/scans/<scan_id>/diff')
     def get_scan_diff(scan_id):
         try:
