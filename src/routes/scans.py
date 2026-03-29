@@ -16,6 +16,8 @@ from ..models.finding import Finding
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
 from ..models.package import Package
+from ..models.variant import Variant
+from ..models.project import Project
 from ..extensions import db
 
 
@@ -75,6 +77,28 @@ def _pkg_to_dict(pkg: Package) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helpers — variant / project names
+# ---------------------------------------------------------------------------
+
+def _variant_info(variant_ids: list) -> dict:
+    """Return {variant_id: (variant_name, project_name)} in two queries."""
+    if not variant_ids:
+        return {}
+    variants = db.session.execute(
+        db.select(Variant).where(Variant.id.in_(variant_ids))
+    ).scalars().all()
+    project_ids = list({v.project_id for v in variants})
+    projects = db.session.execute(
+        db.select(Project).where(Project.id.in_(project_ids))
+    ).scalars().all()
+    project_map = {p.id: p.name for p in projects}
+    return {
+        v.id: (v.name, project_map.get(v.project_id))
+        for v in variants
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helpers — scan ordering
 # ---------------------------------------------------------------------------
 
@@ -102,10 +126,14 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     findings_map = _findings_by_scan_ids(scan_ids)
     packages_map = _packages_by_scan_ids(scan_ids)
     prev_map = _prev_scan_map(scans)
+    variant_map = _variant_info(list({s.variant_id for s in scans}))
 
     result = []
     for scan in scans:
         base = ScanController.serialize(scan)
+        variant_name, project_name = variant_map.get(scan.variant_id, (None, None))
+        base["variant_name"] = variant_name
+        base["project_name"] = project_name
         curr_f = findings_map.get(scan.id, set())
         curr_p = packages_map.get(scan.id, set())
         prev = prev_map.get(scan.id)

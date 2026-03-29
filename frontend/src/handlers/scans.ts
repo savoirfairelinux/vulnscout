@@ -3,6 +3,8 @@ type Scan = {
     description: string | null;
     timestamp: string;
     variant_id: string;
+    variant_name: string | null;
+    project_name: string | null;
     finding_count: number;
     package_count: number;
     is_first: boolean;
