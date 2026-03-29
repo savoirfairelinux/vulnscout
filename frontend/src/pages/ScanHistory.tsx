@@ -352,16 +352,16 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                         ) : (
                                             /* Subsequent scans: diff badges */
                                             <>
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.packages_added ?? 0).toLocaleString()} pkgs
                                                 </span>
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.packages_removed ?? 0).toLocaleString()} pkgs
                                                 </span>
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.findings_added ?? 0).toLocaleString()} findings
                                                 </span>
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.findings_removed ?? 0).toLocaleString()} findings
                                                 </span>
                                             </>
@@ -377,18 +377,15 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                     </div>
                                 </div>
 
-                                {/* Description */}
+                                {/* Project / Variant */}
                                 <p className="text-base font-medium text-gray-800 dark:text-neutral-100">
-                                    {scan.description
-                                        ? scan.description
-                                        : <span className="italic text-gray-400 dark:text-neutral-500">No description</span>
+                                    {scan.project_name
+                                        ? <><span className="text-neutral-500 dark:text-neutral-400">{scan.project_name}</span><span className="mx-1 text-neutral-400">/</span><span>{scan.variant_name ?? scan.variant_id}</span></>
+                                        : <span>{scan.variant_name ?? scan.variant_id}</span>
                                     }
                                 </p>
 
-                                {/* Scan ID */}
-                                <p className="mt-1 text-xs text-gray-400 dark:text-neutral-500 font-mono truncate">
-                                    {scan.id}
-                                </p>
+
                             </div>
                         </li>
                     ))}
