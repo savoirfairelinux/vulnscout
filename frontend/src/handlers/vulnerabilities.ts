@@ -22,6 +22,7 @@ type Vulnerability = {
     found_by: string[];
     datasource: string;
     packages: string[];
+    packages_current: string[];
     variants: string[];
     urls: string[];
     published?: string;
@@ -95,6 +96,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         found_by: asStringArray(data?.found_by),
         datasource: "unknown",
         packages: asStringArray(data?.packages),
+        packages_current: asStringArray(data?.packages_current),
         variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
         texts: [],
