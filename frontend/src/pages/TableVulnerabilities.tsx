@@ -291,7 +291,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Status', 'Last Updated', 'Published Date'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -428,7 +428,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'id': 'ID',
         'severity.severity': 'Severity',
         'epss': 'EPSS Score',
-        'packages': 'Packages Affected',
+        'packages': 'SBOM Affected',
         'variants': 'Variants',
         'severity': 'Attack Vector',
         'simplified_status': 'Status',
@@ -534,9 +534,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0),
             size: 50,
             }),
-            columnHelper.accessor('packages', {
+            columnHelper.accessor('packages_current', {
             id: 'packages',
-            header: () => <div className="flex items-center justify-center">Packages Affected</div>,
+            header: () => <div className="flex items-center justify-center">SBOM Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
             size: 255
@@ -715,7 +715,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
-            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages.includes(pkg))) return false;
+            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -812,7 +812,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateTo('');
         setSelectedRows({});
         setHideFixed(false);
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Status', 'Last Updated', 'Published Date']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
     }
@@ -920,7 +920,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'ID',
                     'Severity',
                     'EPSS Score',
-                    'Packages Affected',
+                    'SBOM Affected',
                     'Variants',
                     'Attack Vector',
                     'Status',
