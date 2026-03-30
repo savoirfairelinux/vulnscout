@@ -50,16 +50,16 @@ function FindingDiffTable({ entries, label, colorClass }: {
                         placeholder="Filter…"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
-                        className="text-xs px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-200 w-48"
+                        className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
                     />
                 )}
             </div>
             {entries.length === 0 ? (
-                <p className="text-sm text-neutral-400 italic">None</p>
+                <p className="text-sm text-gray-400 italic">None</p>
             ) : (
-                <div className="overflow-auto max-h-48 rounded border border-neutral-600">
+                <div className="overflow-auto max-h-48 rounded border border-gray-600">
                     <table className="w-full text-xs text-left">
-                        <thead className="sticky top-0 bg-neutral-800 text-neutral-300 uppercase">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
@@ -68,9 +68,9 @@ function FindingDiffTable({ entries, label, colorClass }: {
                         </thead>
                         <tbody>
                             {filtered.map((e) => (
-                                <tr key={e.finding_id} className="border-t border-neutral-700 hover:bg-neutral-700/40">
+                                <tr key={e.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
-                                    <td className="px-3 py-1.5 font-mono text-neutral-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                 </tr>
                             ))}
@@ -107,16 +107,16 @@ function PackageDiffTable({ entries, label, colorClass }: {
                         placeholder="Filter…"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
-                        className="text-xs px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-200 w-48"
+                        className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
                     />
                 )}
             </div>
             {entries.length === 0 ? (
-                <p className="text-sm text-neutral-400 italic">None</p>
+                <p className="text-sm text-gray-400 italic">None</p>
             ) : (
-                <div className="overflow-auto max-h-48 rounded border border-neutral-600">
+                <div className="overflow-auto max-h-48 rounded border border-gray-600">
                     <table className="w-full text-xs text-left">
-                        <thead className="sticky top-0 bg-neutral-800 text-neutral-300 uppercase">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
@@ -124,9 +124,9 @@ function PackageDiffTable({ entries, label, colorClass }: {
                         </thead>
                         <tbody>
                             {filtered.map((e) => (
-                                <tr key={e.package_id} className="border-t border-neutral-700 hover:bg-neutral-700/40">
+                                <tr key={e.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
-                                    <td className="px-3 py-1.5 font-mono text-neutral-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -159,23 +159,23 @@ function VulnDiffList({ vulns, label, colorClass }: {
                         placeholder="Filter…"
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
-                        className="text-xs px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-200 w-48"
+                        className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
                     />
                 )}
             </div>
             {vulns.length === 0 ? (
-                <p className="text-sm text-neutral-400 italic">None</p>
+                <p className="text-sm text-gray-400 italic">None</p>
             ) : (
-                <div className="overflow-auto max-h-64 rounded border border-neutral-600">
+                <div className="overflow-auto max-h-64 rounded border border-gray-600">
                     <table className="w-full text-xs text-left">
-                        <thead className="sticky top-0 bg-neutral-800 text-neutral-300 uppercase">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
                             <tr>
                                 <th className="px-3 py-2">CVE / Vulnerability ID</th>
                             </tr>
                         </thead>
                         <tbody>
                             {filtered.map((v) => (
-                                <tr key={v} className="border-t border-neutral-700 hover:bg-neutral-700/40">
+                                <tr key={v} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{v}</td>
                                 </tr>
                             ))}
@@ -197,6 +197,17 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
     const overlayRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                onClose();
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    useEffect(() => {
         ScansHandler.getDiff(scanId)
             .then(data => {
                 if (data) setDiff(data);
@@ -209,160 +220,177 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
             });
     }, [scanId]);
 
-    function handleOverlayClick(e: React.MouseEvent) {
-        if (e.target === overlayRef.current) onClose();
-    }
-
     const tabCls = (s: Section) =>
         [
             "px-4 py-2 text-sm font-semibold border-b-2 transition-colors",
             section === s
-                ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-neutral-400 hover:text-neutral-200",
+                ? "border-blue-500 text-blue-400"
+                : "border-transparent text-gray-400 hover:text-gray-200",
         ].join(' ');
 
     return (
         <div
+            className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 flex items-center justify-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
+            onClick={e => { if (e.target === overlayRef.current) onClose(); }}
             ref={overlayRef}
-            onClick={handleOverlayClick}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
         >
-            <div className="bg-neutral-900 text-neutral-100 rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-                {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-700">
-                    <h2 className="text-lg font-bold">Scan diff details</h2>
-                    <button
-                        onClick={onClose}
-                        className="text-neutral-400 hover:text-white transition-colors text-xl leading-none"
-                    >
-                        ✕
-                    </button>
-                </div>
+            <div className="relative p-16 h-full w-full">
+                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto flex flex-col">
 
-                {/* Tab bar */}
-                {diff && (
-                    <div className="flex border-b border-neutral-700 px-6 flex-wrap">
-                        <button className={tabCls('packages')} onClick={() => setSection('packages')}>
-                            Packages
-                            {diff.is_first ? (
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {diff.package_count.toLocaleString()}
-                                </span>
-                            ) : (
-                                <>
-                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        +{diff.packages_added.length.toLocaleString()}
-                                    </span>
-                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        −{diff.packages_removed.length.toLocaleString()}
-                                    </span>
-                                </>
-                            )}
-                        </button>
-                        <button className={tabCls('findings')} onClick={() => setSection('findings')}>
-                            Findings
-                            {diff.is_first ? (
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {diff.finding_count.toLocaleString()}
-                                </span>
-                            ) : (
-                                <>
-                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        +{diff.findings_added.length.toLocaleString()}
-                                    </span>
-                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        −{diff.findings_removed.length.toLocaleString()}
-                                    </span>
-                                </>
-                            )}
-                        </button>
-                        <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
-                            Vulnerabilities
-                            {diff.is_first ? (
-                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
-                                    {diff.vuln_count.toLocaleString()}
-                                </span>
-                            ) : (
-                                <>
-                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        +{diff.vulns_added.length.toLocaleString()}
-                                    </span>
-                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
-                                        −{diff.vulns_removed.length.toLocaleString()}
-                                    </span>
-                                </>
-                            )}
+                    {/* Header */}
+                    <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
+                        <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
+                            Scan diff details
+                        </h3>
+                        <button
+                            onClick={onClose}
+                            type="button"
+                            className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
+                        >
+                            <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                                <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
+                            </svg>
+                            <span className="sr-only">Close modal</span>
                         </button>
                     </div>
-                )}
 
-                {/* Body */}
-                <div className="overflow-auto px-6 py-4 flex-1">
-                    {loading && <p className="text-neutral-400">Loading…</p>}
-                    {error && <p className="text-red-400">{error}</p>}
-                    {diff && section === 'packages' && (
-                        <>
-                            {diff.is_first && (
-                                <p className="text-sm text-neutral-400 mb-4 italic">
-                                    This is the first scan — all {diff.package_count.toLocaleString()} packages are new.
-                                </p>
-                            )}
-                            <PackageDiffTable
-                                entries={diff.packages_added}
-                                label={diff.is_first ? "All packages" : "Added packages"}
-                                colorClass="text-green-400"
-                            />
-                            {!diff.is_first && (
+                    {/* Tab bar */}
+                    {diff && (
+                        <div className="flex border-b dark:border-gray-600 px-4 flex-wrap">
+                            <button className={tabCls('packages')} onClick={() => setSection('packages')}>
+                                Packages
+                                {diff.is_first ? (
+                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                        {diff.package_count.toLocaleString()}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            +{diff.packages_added.length.toLocaleString()}
+                                        </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            −{diff.packages_removed.length.toLocaleString()}
+                                        </span>
+                                    </>
+                                )}
+                            </button>
+                            <button className={tabCls('findings')} onClick={() => setSection('findings')}>
+                                Findings
+                                {diff.is_first ? (
+                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                        {diff.finding_count.toLocaleString()}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            +{diff.findings_added.length.toLocaleString()}
+                                        </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            −{diff.findings_removed.length.toLocaleString()}
+                                        </span>
+                                    </>
+                                )}
+                            </button>
+                            <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
+                                Vulnerabilities
+                                {diff.is_first ? (
+                                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
+                                        {diff.vuln_count.toLocaleString()}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            +{diff.vulns_added.length.toLocaleString()}
+                                        </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            −{diff.vulns_removed.length.toLocaleString()}
+                                        </span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Body */}
+                    <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
+                        {loading && <p className="text-gray-400">Loading…</p>}
+                        {error && <p className="text-red-400">{error}</p>}
+                        {diff && section === 'packages' && (
+                            <>
+                                {diff.is_first && (
+                                    <p className="text-sm text-gray-400 mb-4 italic">
+                                        This is the first scan — all {diff.package_count.toLocaleString()} packages are new.
+                                    </p>
+                                )}
                                 <PackageDiffTable
-                                    entries={diff.packages_removed}
-                                    label="Removed packages"
-                                    colorClass="text-red-400"
+                                    entries={diff.packages_added}
+                                    label={diff.is_first ? "All packages" : "Added packages"}
+                                    colorClass="text-green-400"
                                 />
-                            )}
-                        </>
-                    )}
-                    {diff && section === 'findings' && (
-                        <>
-                            {diff.is_first && (
-                                <p className="text-sm text-neutral-400 mb-4 italic">
-                                    This is the first scan — all {diff.finding_count.toLocaleString()} findings are listed below.
-                                </p>
-                            )}
-                            <FindingDiffTable
-                                entries={diff.findings_added}
-                                label={diff.is_first ? "All findings" : "Added findings"}
-                                colorClass="text-green-400"
-                            />
-                            {!diff.is_first && (
+                                {!diff.is_first && (
+                                    <PackageDiffTable
+                                        entries={diff.packages_removed}
+                                        label="Removed packages"
+                                        colorClass="text-red-400"
+                                    />
+                                )}
+                            </>
+                        )}
+                        {diff && section === 'findings' && (
+                            <>
+                                {diff.is_first && (
+                                    <p className="text-sm text-gray-400 mb-4 italic">
+                                        This is the first scan — all {diff.finding_count.toLocaleString()} findings are listed below.
+                                    </p>
+                                )}
                                 <FindingDiffTable
-                                    entries={diff.findings_removed}
-                                    label="Removed findings"
-                                    colorClass="text-red-400"
+                                    entries={diff.findings_added}
+                                    label={diff.is_first ? "All findings" : "Added findings"}
+                                    colorClass="text-green-400"
                                 />
-                            )}
-                        </>
-                    )}
-                    {diff && section === 'vulnerabilities' && (
-                        <>
-                            {diff.is_first && (
-                                <p className="text-sm text-neutral-400 mb-4 italic">
-                                    This is the first scan — all {diff.vuln_count.toLocaleString()} vulnerabilities are listed below.
-                                </p>
-                            )}
-                            <VulnDiffList
-                                vulns={diff.vulns_added}
-                                label={diff.is_first ? "All vulnerabilities" : "New vulnerabilities"}
-                                colorClass="text-green-400"
-                            />
-                            {!diff.is_first && (
+                                {!diff.is_first && (
+                                    <FindingDiffTable
+                                        entries={diff.findings_removed}
+                                        label="Removed findings"
+                                        colorClass="text-red-400"
+                                    />
+                                )}
+                            </>
+                        )}
+                        {diff && section === 'vulnerabilities' && (
+                            <>
+                                {diff.is_first && (
+                                    <p className="text-sm text-gray-400 mb-4 italic">
+                                        This is the first scan — all {diff.vuln_count.toLocaleString()} vulnerabilities are listed below.
+                                    </p>
+                                )}
                                 <VulnDiffList
-                                    vulns={diff.vulns_removed}
-                                    label="Removed vulnerabilities"
-                                    colorClass="text-red-400"
+                                    vulns={diff.vulns_added}
+                                    label={diff.is_first ? "All vulnerabilities" : "New vulnerabilities"}
+                                    colorClass="text-green-400"
                                 />
-                            )}
-                        </>
-                    )}
+                                {!diff.is_first && (
+                                    <VulnDiffList
+                                        vulns={diff.vulns_removed}
+                                        label="Removed vulnerabilities"
+                                        colorClass="text-red-400"
+                                    />
+                                )}
+                            </>
+                        )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-end p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                        <button
+                            onClick={onClose}
+                            type="button"
+                            className="py-2.5 px-5 text-sm font-medium text-gray-400 focus:outline-none rounded-lg border border-gray-600 hover:bg-gray-600 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800"
+                        >
+                            Close
+                        </button>
+                    </div>
+
                 </div>
             </div>
         </div>
