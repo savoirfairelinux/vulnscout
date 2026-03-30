@@ -14,7 +14,7 @@ Tests use the new DB-backed workflow:
 import pytest
 import json
 import os
-from src.bin.merger_ci import _run_main
+from src.bin.merger_ci import _run_main, _ts_key, post_treatment, main
 from . import write_demo_files
 
 
@@ -221,3 +221,179 @@ def test_expiration_vulnerabilities(app, init_files):
                 found_expiration = True
 
     assert found_expiration
+
+
+# ---------------------------------------------------------------------------
+# _ts_key() — all branches
+# ---------------------------------------------------------------------------
+
+def test_ts_key_none():
+    """_ts_key(None) returns empty string (line 46)."""
+    assert _ts_key(None) == ""
+
+
+def test_ts_key_str():
+    """_ts_key(str) returns the string unchanged (line 48)."""
+    assert _ts_key("2024-01-01T12:00:00") == "2024-01-01T12:00:00"
+
+
+def test_ts_key_datetime():
+    """_ts_key(datetime) returns isoformat string (lines 50-52)."""
+    from datetime import datetime, timezone
+    dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    result = _ts_key(dt)
+    assert "2024-01-01" in result
+
+
+def test_ts_key_fallback_to_str():
+    """_ts_key with an object that has no .isoformat() falls back to str() (line 53)."""
+
+    class WeirdTs:
+        def isoformat(self):
+            raise AttributeError("no isoformat")
+
+        def __str__(self):
+            return "weird-timestamp"
+
+    result = _ts_key(WeirdTs())
+    assert result == "weird-timestamp"
+
+
+# ---------------------------------------------------------------------------
+# post_treatment() — covers lines 60-63
+# ---------------------------------------------------------------------------
+
+def test_post_treatment():
+    """post_treatment calls fetch_epss_scores and fetch_published_dates (lines 60-63)."""
+    from unittest.mock import MagicMock
+    mock_vuln_ctrl = MagicMock()
+    controllers = {"vulnerabilities": mock_vuln_ctrl}
+    post_treatment(controllers, [])
+    mock_vuln_ctrl.fetch_epss_scores.assert_called_once()
+    mock_vuln_ctrl.fetch_published_dates.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# export_command — all format branches (lines 377-427)
+# ---------------------------------------------------------------------------
+
+def test_export_command_spdx2(app, tmp_path):
+    """flask export --format spdx2 writes sbom_spdx_v2_3.spdx.json (lines 397-400)."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=["export", "--format", "spdx2", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "sbom_spdx_v2_3.spdx.json").exists()
+
+
+def test_export_command_spdx3(app, tmp_path):
+    """flask export --format spdx3 writes sbom_spdx_v3_0.spdx.json (lines 402-405)."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=["export", "--format", "spdx3", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "sbom_spdx_v3_0.spdx.json").exists()
+
+
+def test_export_command_cdx14(app, tmp_path):
+    """flask export --format cdx14 writes sbom_cyclonedx_v1_4.cdx.json (lines 407-413)."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=["export", "--format", "cdx14", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "sbom_cyclonedx_v1_4.cdx.json").exists()
+
+
+def test_export_command_cdx15(app, tmp_path):
+    """flask export --format cdx15 writes sbom_cyclonedx_v1_5.cdx.json."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=["export", "--format", "cdx15", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "sbom_cyclonedx_v1_5.cdx.json").exists()
+
+
+def test_export_command_openvex(app, tmp_path):
+    """flask export --format openvex writes openvex.json (lines 415-420)."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=["export", "--format", "openvex", "--output-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "openvex.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# report_command — template rendering (lines 443-520)
+# ---------------------------------------------------------------------------
+
+def test_report_command_txt_template(app, tmp_path):
+    """flask report renders vulnerability_summary.txt to output dir (lines 497-504)."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "vulnerability_summary.txt").exists()
+
+
+def test_report_command_nonexistent_template(app, tmp_path):
+    """flask report with a nonexistent template logs a warning but exits 0."""
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "does_not_exist.txt",
+            "--output-dir", str(tmp_path),
+        ])
+    # Should complete without raising, warning printed to stderr
+    assert "does_not_exist.txt" in result.output or result.exit_code == 0
+
+
+def test_report_command_with_extra_template_env(app, tmp_path):
+    """GENERATE_DOCUMENTS env var causes extra template to be generated (lines 476-479)."""
+    os.environ["GENERATE_DOCUMENTS"] = "vulnerability_summary.txt"
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "report", "vulnerability_summary.txt",
+            "--output-dir", str(tmp_path),
+        ])
+    os.environ.pop("GENERATE_DOCUMENTS", None)
+    assert result.exit_code == 0, result.output
+
+
+def test_report_command_with_match_condition_cache(app, tmp_path):
+    """flask report uses cached failed_vulns when /tmp/vulnscout_matched_vulns.json exists (lines 464-467)."""
+    import json as _json
+    cache_path = "/tmp/vulnscout_matched_vulns.json"
+    _json.dump(["CVE-2020-35492"], open(cache_path, "w"))
+    os.environ["MATCH_CONDITION"] = "cvss >= 1"
+    try:
+        with app.app_context():
+            runner = app.test_cli_runner()
+            result = runner.invoke(args=[
+                "report", "vulnerability_summary.txt",
+                "--output-dir", str(tmp_path),
+            ])
+        assert result.exit_code == 0, result.output
+    finally:
+        os.environ.pop("MATCH_CONDITION", None)
+        try:
+            os.remove(cache_path)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# main() — entry-point (lines 530, 534)
+# ---------------------------------------------------------------------------
+
+def test_main_entry_point(app):
+    """main() delegates to _run_main() and returns the controllers dict (lines 530, 534)."""
+    with app.app_context():
+        result = main()
+    assert isinstance(result, dict)
+    assert "packages" in result
+    assert "vulnerabilities" in result
+    assert "assessments" in result

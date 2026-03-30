@@ -303,6 +303,7 @@ describe('Render patch found', () => {
             found_by: ["test"],
             datasource: "demo",
             packages: ["aaabbbccc@1.0.0"],
+            packages_current: [],
             urls: [],
             texts: [],
             severity: {
