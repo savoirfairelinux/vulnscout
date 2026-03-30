@@ -268,17 +268,50 @@ class VulnerabilitiesController:
         start_time = time.time()
         nb_vuln = 0
 
-        for vuln in self.vulnerabilities.values():
-            try:
-                result = self.epss_api.api_get_epss(vuln.id)
-                if result:
-                    vuln.set_epss(result['score'], result['percentile'])
-                    vuln.epss_score = result['score']
-                    nb_vuln += 1
-            except Exception as e:
-                verbose(f"[fetch_epss_scores {vuln.id!r}] {e}")
+        # Only CVE-prefixed IDs exist in the EPSS database.
+        cve_vulns = {
+            vid: v for vid, v in self.vulnerabilities.items()
+            if vid.startswith("CVE-")
+        }
+        total = len(cve_vulns)
+        skipped = len(self.vulnerabilities) - total
+        print(
+            f"=== EPSS: starting enrichment for {total} CVEs"
+            + (f" ({skipped} non-CVE IDs skipped)" if skipped else ""),
+            flush=True,
+        )
 
-        print(f"Fetched EPSS data for {nb_vuln} vulnerabilities in {time.time() - start_time:.1f}s.")
+        # Batch in chunks of 100 (FIRST.org API limit).
+        BATCH_SIZE = 100
+        cve_ids = list(cve_vulns.keys())
+        chunks = [cve_ids[i:i + BATCH_SIZE] for i in range(0, len(cve_ids), BATCH_SIZE)]
+
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            print(
+                f"=== EPSS: batch {chunk_idx}/{len(chunks)} ({len(chunk)} CVEs)",
+                flush=True,
+            )
+            try:
+                batch_results = self.epss_api.api_get_epss_batch(chunk)
+            except Exception as e:
+                verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
+                continue
+
+            for cve_id in chunk:
+                result = batch_results.get(cve_id)
+                if result is None:
+                    continue
+                vuln = cve_vulns[cve_id]
+                try:
+                    vuln.set_epss(result['score'], result['percentile'])
+                    rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
+                    if rec is not None:
+                        rec.update_record(epss_score=result['score'])
+                    nb_vuln += 1
+                except Exception as e:
+                    verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
+
+        print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
 
     @staticmethod
     def _fetch_ghsa_published(vuln_id: str) -> Optional[str]:
@@ -299,6 +332,60 @@ class VulnerabilitiesController:
         except Exception as e:
             print(f"Error for {vuln_id}: {e}")
         return None
+
+    def fetch_published_dates(self):
+        """Fetch published dates for all vulnerabilities from the NVD SQLite cache and GitHub API.
+
+        CVE-prefixed IDs are looked up in the local NVD SQLite DB (offline cache).
+        GHSA-prefixed IDs use the GitHub Advisories API via a thread pool.
+        All errors are silently caught so that a missing/corrupt NVD SQLite file
+        never aborts the enrichment run.
+        """
+        import sqlite3
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+
+        cve_vulns = {vid: v for vid, v in self.vulnerabilities.items() if vid.startswith("CVE-")}
+        ghsa_vulns = {vid: v for vid, v in self.vulnerabilities.items() if "GHSA" in vid}
+
+        # Query the NVD SQLite cache for CVE published dates
+        if cve_vulns:
+            try:
+                conn = sqlite3.connect(nvd_db_path)
+                try:
+                    placeholders = ",".join("?" for _ in cve_vulns)
+                    cursor = conn.execute(
+                        f"SELECT id, published FROM nvd_vulns WHERE id IN ({placeholders})",
+                        list(cve_vulns.keys()),
+                    )
+                    for row in cursor.fetchall():
+                        cve_id, published = row
+                        if cve_id in cve_vulns and published:
+                            cve_vulns[cve_id].published = published
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError:
+                pass
+            except Exception as e:
+                verbose(f"[fetch_published_dates] {e}")
+
+        # GHSA: fetch via GitHub API with a thread pool
+        if ghsa_vulns:
+            max_workers = min(10, len(ghsa_vulns))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {
+                    executor.submit(self._fetch_ghsa_published, vid): vid
+                    for vid in ghsa_vulns
+                }
+                for future in as_completed(future_to_id, timeout=60):
+                    vid = future_to_id[future]
+                    try:
+                        published = future.result(timeout=15)
+                        if published:
+                            ghsa_vulns[vid].published = published
+                    except Exception:
+                        pass
 
     def fetch_nvd_data(self):
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
@@ -326,15 +413,17 @@ class VulnerabilitiesController:
                 nvd_vulns.append(vuln)
 
         total = len(nvd_vulns) + len(ghsa_vulns)
+        print(f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs", flush=True)
         tracker = NVDProgressTracker()
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
         done = 0
         for vuln in nvd_vulns:
+            print(f"=== NVD [{done + 1}/{total}] {vuln.id}", flush=True)
             try:
                 result = self.nvd_api.fetch_cve_data(vuln.id)
-                if result:
+                if result and not result.get("not_found"):
                     if result.get("published"):
                         vuln.published = result["published"]
                     vuln.weaknesses = result.get("weaknesses")
@@ -376,6 +465,7 @@ class VulnerabilitiesController:
                 }
                 for future in as_completed(future_to_id, timeout=60):
                     vid = future_to_id[future]
+                    print(f"=== NVD [{done + 1}/{total}] {vid} (GHSA)", flush=True)
                     try:
                         published = future.result(timeout=15)
                         if published:
@@ -394,7 +484,10 @@ class VulnerabilitiesController:
                     tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vid})")
 
         tracker.complete()
-        print(f"Fetched NVD/published data for {nb_vuln} vulnerabilities in {time.time() - start_time:.1f}s.")
+        print(
+            f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
+            flush=True,
+        )
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""

@@ -53,14 +53,11 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers, files):
-    """Enrich vulnerabilities with EPSS scores and NVD data."""
+def post_treatment(controllers, documents=None):
+    """Enrich vulnerabilities with EPSS scores and published dates."""
 
-    # TODO: 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
-
-    # TODO: 2. fetch published dates and NVD fields
-    controllers["vulnerabilities"].fetch_nvd_data()
+    controllers["vulnerabilities"].fetch_published_dates()
 
 
 def evaluate_condition(controllers, condition):
@@ -266,12 +263,12 @@ def _run_main() -> dict:
         read_inputs(controllers, scan_id=scan_id)
         verbose("merger_ci: Finished reading inputs")
 
-        verbose("merger_ci: Start Post-treatment")
-        # TODO: Refactor post-treatment to use the new DB schema
-        # post_treatment(controllers, files)
-        verbose("merger_ci: Finished post-treatment")
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
+
+    verbose("merger_ci: Starting post-treatment (EPSS + NVD enrichment)")
+    post_treatment(controllers)
+    verbose("merger_ci: Post-treatment done")
 
     match_condition = os.getenv("MATCH_CONDITION", "")
     failed_vulns = []

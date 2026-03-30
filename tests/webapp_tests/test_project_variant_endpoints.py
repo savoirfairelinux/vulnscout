@@ -376,6 +376,111 @@ class TestPackagesFiltering:
         assert isinstance(body, dict)
         assert "cairo@1.16.0" in body
 
+    # Compare-filtering tests:
+    # VariantA has cairo@1.16.0, VariantB has no packages (via observations).
+
+    def test_packages_compare_difference_returns_compare_unique_pkgs(self, client_and_data):
+        """difference(base=VB, compare=VA): pkgs in VA but NOT in VB → cairo."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_b_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=difference"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        names = [p["name"] for p in body]
+        assert "cairo" in names
+
+    def test_packages_compare_difference_empty_when_compare_has_no_unique(self, client_and_data):
+        """difference(base=VA, compare=VB): pkgs in VB but NOT in VA → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_b_id}"
+            f"&operation=difference"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body == []
+
+    def test_packages_compare_intersection_empty_when_no_common(self, client_and_data):
+        """intersection(VA, VB): no common packages → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_b_id}"
+            f"&operation=intersection"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body == []
+
+    def test_packages_compare_intersection_same_variant(self, client_and_data):
+        """intersection(VA, VA): both sides identical → all of VA's packages returned."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=intersection"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        names = [p["name"] for p in body]
+        assert "cairo" in names
+
+    def test_packages_compare_difference_same_variant_empty(self, client_and_data):
+        """difference(VA, VA): base and compare identical → nothing unique → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_a_id}"
+            f"&compare_variant_id={variant_a_id}"
+            f"&operation=difference"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body == []
+
+    def test_packages_compare_default_operation_is_difference(self, client_and_data):
+        """Omitting operation defaults to difference."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_b_id}"
+            f"&compare_variant_id={variant_a_id}"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        names = [p["name"] for p in body]
+        assert "cairo" in names
+
+    def test_packages_compare_invalid_compare_uuid(self, client_and_data):
+        """Invalid compare_variant_id UUID returns 400."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?variant_id={variant_a_id}&compare_variant_id=not-a-uuid"
+        )
+        assert response.status_code == 400
+
+    def test_packages_compare_invalid_base_uuid(self, client_and_data):
+        """Invalid base variant_id UUID (with compare) returns 400."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?variant_id=not-a-uuid&compare_variant_id={variant_a_id}"
+        )
+        assert response.status_code == 400
+
 
 # ===========================================================================
 # /api/vulnerabilities  — variant / project filtering

@@ -44,11 +44,18 @@ class Packages {
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string): Promise<Package[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Package[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
         url.searchParams.set('format', 'list');
-        if (variantId) url.searchParams.set('variant_id', variantId);
-        else if (projectId) url.searchParams.set('project_id', projectId);
+        if (variantId && compareVariantId) {
+            url.searchParams.set('variant_id', variantId);
+            url.searchParams.set('compare_variant_id', compareVariantId);
+            if (operation) url.searchParams.set('operation', operation);
+        } else if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
         const response = await fetch(url.toString(), {
             mode: "cors",
         });

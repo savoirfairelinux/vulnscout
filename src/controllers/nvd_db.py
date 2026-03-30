@@ -6,13 +6,11 @@
 import json
 import urllib.request
 import urllib.parse
+import urllib.error
 from ..helpers.fixs_scrapper import FixsScrapper
+from ..helpers.proxy import install_proxy_opener
 from typing import Optional, Tuple
 import time
-import sys
-import os
-
-sys.tracebacklimit = 0  # disable traceback
 
 
 class NVD_DB:
@@ -21,29 +19,23 @@ class NVD_DB:
     Fetches CVE data directly from the NVD API without local caching.
     """
 
+    # HTTP status codes that should not be retried (permanent client errors)
+    _NON_RETRYABLE_STATUSES = {400, 403, 404}
+
     def __init__(self, nvd_api_key: Optional[str] = None):
         self.nvd_api_key = nvd_api_key
         self._setup_proxy()
 
     def _setup_proxy(self):
-        """
-        Set up proxy handler if proxy environment variables are set.
-        """
-        proxies = {}
-        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
-            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
-        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
-            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        """Set up proxy handler if proxy environment variables are set."""
+        install_proxy_opener()
 
-        if proxies:
-            proxy_handler = urllib.request.ProxyHandler(proxies)
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-
-    def _call_nvd_api(self, params: dict = {}) -> Tuple[int, dict]:
+    def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict]:
         """
         Call the NVD API and return the status code as int and response as a dictionary.
         """
+        if params is None:
+            params = {}
         txt_params = "&".join(
             [
                 f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
@@ -60,7 +52,7 @@ class NVD_DB:
 
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 resp_status = response.status
                 try:
                     resp_json = json.loads(response.read().decode())
@@ -72,7 +64,8 @@ class NVD_DB:
             return resp_status, resp_json
 
         except urllib.error.HTTPError as e:
-            print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
+            if e.code != 404:  # 404 is expected (CVE not in NVD), not an error
+                print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
             return e.code, {}
         except Exception as e:
             print(f"Error calling NVD API: {e}", flush=True)
@@ -86,8 +79,10 @@ class NVD_DB:
         status = 0
         while retry <= 3:
             time.sleep(10 * retry)
-            status, data = self._call_nvd_api({"cveId": cve_id})
+            status, data = self._call_nvd_api({"cveId": cve_id.strip()})
             if status == 200:
+                return status, data
+            elif status in self._NON_RETRYABLE_STATUSES:
                 return status, data
             else:
                 retry += 1
@@ -117,11 +112,16 @@ class NVD_DB:
         Returns a dict with keys:
             published, lastModified, weaknesses, versions_data, patch_url
 
-        Returns None if the CVE is not found or on any API/parse failure.
+        Returns None on transient/connection failures (caller should retry later).
+        Returns {"not_found": True} when NVD definitively has no record for this
+        CVE (HTTP 404 or 200 with empty result set) — caller should persist a
+        sentinel so the CVE is not re-queried on every restart.
         """
         try:
             status, data = self.api_get_cve(cve_id)
-            if status != 200 or not data.get("vulnerabilities"):
+            if status == 404 or (status == 200 and not data.get("vulnerabilities")):
+                return {"not_found": True}
+            if status != 200:
                 return None
             vuln = data["vulnerabilities"][0]
             cve = vuln["cve"]
