@@ -11,15 +11,33 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..extensions import db, migrate
 from ..routes import init_app
 from .. import models  # noqa: F401
-from .merger_ci import init_app as init_merger_cli
+from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
 import os
+import threading
 from datetime import datetime, timezone
 import signal
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
+
+
+def _launch_enrichment(app):
+    """Spawn a background thread in the webapp process to run EPSS/NVD enrichment."""
+    def _enrich():
+        with app.app_context():
+            try:
+                from ..controllers.packages import PackagesController
+                from ..controllers.vulnerabilities import VulnerabilitiesController
+                pkgCtrl = PackagesController()
+                vulnCtrl = VulnerabilitiesController(pkgCtrl)
+                post_treatment({"vulnerabilities": vulnCtrl, "packages": pkgCtrl})
+            except Exception as e:
+                print(f"[enrichment background] {e}", flush=True)
+
+    t = threading.Thread(target=_enrich, name="enrichment", daemon=True)
+    t.start()
 
 
 def create_app():
@@ -44,8 +62,9 @@ def create_app():
             if "__END_OF_SCAN_SCRIPT__" in f.read():
                 if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
-
                 app._INT_SCAN_FINISHED = True
+                if not app.config.get("TESTING"):
+                    _launch_enrichment(app)
                 return True
         return False
 

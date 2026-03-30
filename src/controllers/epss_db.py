@@ -5,11 +5,12 @@
 
 import urllib.request
 import urllib.parse
+import urllib.error
 import json
 from typing import Optional
-import os
+from ..helpers.proxy import install_proxy_opener
 
-EPSS_API_URL = "https://api.first.org/data/1.0/epss"
+EPSS_API_URL = "https://api.first.org/data/v1/epss"
 
 
 class EPSS_DB:
@@ -23,16 +24,7 @@ class EPSS_DB:
 
     def _setup_proxy(self):
         """Set up proxy handler if proxy environment variables are set."""
-        proxies = {}
-        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
-            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
-        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
-            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
-
-        if proxies:
-            proxy_handler = urllib.request.ProxyHandler(proxies)
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
+        install_proxy_opener()
 
     def api_get_epss(self, cve_id: str) -> Optional[dict]:
         """
@@ -56,6 +48,46 @@ class EPSS_DB:
                         "percentile": float(entry["percentile"]),
                     }
                 return None
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None  # CVE has no EPSS score — not an error
+            print(f"Error fetching EPSS for {cve_id}: {e}", flush=True)
+            return None
         except Exception as e:
             print(f"Error fetching EPSS for {cve_id}: {e}", flush=True)
             return None
+
+    def api_get_epss_batch(self, cve_ids: list[str]) -> dict[str, dict]:
+        """
+        Fetch EPSS scores for a batch of CVE IDs in a single API call.
+
+        The FIRST.org API accepts up to 100 comma-separated CVE IDs per request.
+        Returns a dict mapping each CVE ID that has a score to
+        ``{"score": float, "percentile": float}``.
+        CVE IDs with no score are absent from the returned dict.
+        """
+        if not cve_ids:
+            return {}
+        try:
+            encoded = ",".join(urllib.parse.quote(c, safe='') for c in cve_ids)
+            url = f"{EPSS_API_URL}?cve={encoded}&limit={len(cve_ids)}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status != 200:
+                    return {}
+                data = json.loads(response.read().decode())
+                results = {}
+                for entry in data.get("data", []):
+                    cve = entry.get("cve")
+                    if cve:
+                        results[cve] = {
+                            "score": float(entry["epss"]),
+                            "percentile": float(entry["percentile"]),
+                        }
+                return results
+        except urllib.error.HTTPError as e:
+            print(f"Error fetching EPSS batch: {e}", flush=True)
+            return {}
+        except Exception as e:
+            print(f"Error fetching EPSS batch: {e}", flush=True)
+            return {}

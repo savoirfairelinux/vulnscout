@@ -26,7 +26,7 @@ class FakeResp:
 
 def test_call_nvd_api_json_decode(monkeypatch):
     monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen",
-                        lambda req: FakeResp(200, b"not json"))
+                        lambda req, timeout=None: FakeResp(200, b"not json"))
     db = NVD_DB()
     status, data = db._call_nvd_api({"foo": "bar"})
     assert status == 200
@@ -34,7 +34,7 @@ def test_call_nvd_api_json_decode(monkeypatch):
 
 
 def test_call_nvd_api_exception(monkeypatch):
-    def boom(req):
+    def boom(req, timeout=None):
         raise RuntimeError("boom")
     monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", boom)
     db = NVD_DB()
@@ -129,7 +129,8 @@ def test_fetch_cve_data_success(monkeypatch):
 def test_fetch_cve_data_not_found(monkeypatch):
     monkeypatch.setattr(NVD_DB, "api_get_cve", lambda self, cve_id: (200, {"vulnerabilities": []}))
     db = NVD_DB()
-    assert db.fetch_cve_data("CVE-9999-0000") is None
+    # Empty result set means NVD definitively has no record — sentinel returned
+    assert db.fetch_cve_data("CVE-9999-0000") == {"not_found": True}
 
 
 def test_fetch_cve_data_connection_error(monkeypatch):
@@ -172,4 +173,46 @@ def test_fetch_cve_data_no_weaknesses_no_references(monkeypatch):
     assert result["weaknesses"] == []
     assert result["patch_url"] == []
 
+
+@pytest.mark.parametrize("status_code", [400, 403, 404])
+def test_api_get_cve_non_retryable_returns_immediately(monkeypatch, status_code):
+    """Non-retryable status codes (404, 403, 400) should return after the first attempt."""
+    call_count = 0
+
+    def fake_call(self, params):
+        nonlocal call_count
+        call_count += 1
+        return status_code, {}
+
+    monkeypatch.setattr(NVD_DB, "_call_nvd_api", fake_call)
+    monkeypatch.setattr("src.controllers.nvd_db.time.sleep", lambda *_: None)
+
+    db = NVD_DB()
+    s, d = db.api_get_cve("CVE-2019-5747")
+    assert s == status_code
+    assert d == {}
+    assert call_count == 1, "Should not retry on non-retryable status codes"
+
+
+def test_fetch_cve_data_404_returns_not_found(monkeypatch):
+    """A 404 from the NVD API should return the not_found sentinel without raising."""
+    monkeypatch.setattr(NVD_DB, "api_get_cve", lambda self, cve_id: (404, {}))
+    db = NVD_DB()
+    assert db.fetch_cve_data("CVE-2019-5747") == {"not_found": True}
+
+
+def test_call_nvd_api_404_no_print(monkeypatch, capsys):
+    """A 404 HTTPError should not print an error message."""
+    import urllib.error
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", boom)
+    db = NVD_DB()
+    status, data = db._call_nvd_api({"cveId": "CVE-2019-5747"})
+    assert status == 404
+    assert data == {}
+    captured = capsys.readouterr()
+    assert "HTTP Error" not in captured.out
 

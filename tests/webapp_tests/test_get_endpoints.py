@@ -240,8 +240,12 @@ def test_render_document_pdf(client):
         assert response.status_code == 200
 
 def test_render_document_html(client):
+    import shutil
     response = client.get("/api/documents/summary.adoc?ext=html")
-    assert response.status_code == 200
+    if shutil.which("asciidoctor") is None:
+        assert response.status_code == 503
+    else:
+        assert response.status_code == 200
 
 
 def test_render_cdx_v1_6(client):
