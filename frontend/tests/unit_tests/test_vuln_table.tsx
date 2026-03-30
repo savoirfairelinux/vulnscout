@@ -46,6 +46,7 @@ describe('Vulnerability Table', () => {
             found_by: ['hardcoded'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
             packages: ['aaabbbccc@1.0.0'],
+            packages_current: ['aaabbbccc@1.0.0'],
             urls: ['https://security-tracker.debian.org/tracker/CVE-2010-1234'],
             texts: [
                 {
@@ -94,6 +95,7 @@ describe('Vulnerability Table', () => {
             found_by: ['cve-finder'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2018-5678',
             packages: ['xxxyyyzzz@2.0.0'],
+            packages_current: ['xxxyyyzzz@2.0.0'],
             urls: ['https://security-tracker.debian.org/tracker/CVE-2018-5678'],
             texts: [
                 {
@@ -154,6 +156,7 @@ describe('Vulnerability Table', () => {
             found_by: ['yocto'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2024-56730',
             packages: ['linux-yocto@6.6.21'],
+            packages_current: ['linux-yocto@6.6.21'],
             urls: ['https://nvd.nist.gov/vuln/detail/CVE-2024-56730'],
             texts: [
                 {
@@ -258,7 +261,7 @@ describe('Vulnerability Table', () => {
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
-        const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
+        const packages_header = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
         const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
 
@@ -1063,7 +1066,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const packagesHeader = await screen.getByRole('columnheader', {name: /packages/i});
+        const packagesHeader = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
 
         // Store initial order
         const initialHtml = document.body.innerHTML;
@@ -1700,6 +1703,7 @@ describe('Vulnerability Table', () => {
                 found_by: ['hardcoded'],
                 datasource: 'test',
                 packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
                 urls: [],
                 texts: [{ title: 'description', content: 'No date vuln' }],
                 severity: {
@@ -1910,6 +1914,7 @@ describe('Vulnerability Table', () => {
                 found_by: ['hardcoded'],
                 datasource: 'test',
                 packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
                 urls: [],
                 texts: [{ title: 'description', content: 'No date vuln' }],
                 severity: {

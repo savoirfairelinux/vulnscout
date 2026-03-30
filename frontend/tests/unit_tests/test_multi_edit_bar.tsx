@@ -18,6 +18,7 @@ describe('MultiEditBar', () => {
             found_by: ['test'],
             datasource: 'test',
             packages: ['pkg1'],
+            packages_current: [],
             urls: [],
             texts: [],
             severity: {
@@ -51,6 +52,7 @@ describe('MultiEditBar', () => {
             found_by: ['test'],
             datasource: 'test',
             packages: ['pkg2'],
+            packages_current: [],
             urls: [],
             texts: [],
             severity: {
@@ -200,6 +202,7 @@ describe('MultiEditBar', () => {
                 id: 'assess-1',
                 vuln_id: 'vuln-1',
                 packages: ['pkg1'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'affected',
                 timestamp: '2024-01-01T00:00:00Z'
@@ -535,6 +538,7 @@ describe('MultiEditBar', () => {
                 id: 'assess-2',
                 vuln_id: 'vuln-1',
                 packages: ['pkg1'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'affected',
                 timestamp: '2024-01-01T00:00:00Z',
@@ -584,6 +588,7 @@ describe('MultiEditBar', () => {
                 id: 'assess-3',
                 vuln_id: 'vuln-1',
                 packages: ['pkg1'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'affected',
                 timestamp: '2024-01-01T00:00:00Z',
@@ -637,6 +642,7 @@ describe('MultiEditBar', () => {
                 id: 'assess-4',
                 vuln_id: 'vuln-1',
                 packages: ['pkg1'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'affected',
                 timestamp: '2024-01-01T00:00:00Z',
