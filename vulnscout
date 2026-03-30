@@ -165,6 +165,7 @@ USER_UID=$(id -u)
 USER_GID=$(id -g)
 VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 VULNSCOUT_CACHE_DIR=$VULNSCOUT_CACHE_DIR
+VITE_API_URL=http://localhost:7275
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
@@ -215,7 +216,7 @@ start_frontend_dev() {
     fi
 
     if [ ! -f "$frontend_dir/.env" ]; then
-        echo 'VITE_API_URL="http://localhost:7275"' > "$frontend_dir/.env"
+        echo "VITE_API_URL=\"${VITE_API_URL:-http://localhost:7275}\"" > "$frontend_dir/.env"
     fi
 
     if [ ! -d "$frontend_dir/node_modules" ]; then
