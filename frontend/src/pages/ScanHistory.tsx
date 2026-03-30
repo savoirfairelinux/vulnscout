@@ -137,7 +137,57 @@ function PackageDiffTable({ entries, label, colorClass }: {
     );
 }
 
-type Section = 'packages' | 'findings';
+function VulnDiffList({ vulns, label, colorClass }: {
+    vulns: string[];
+    label: string;
+    colorClass: string;
+}) {
+    const [filter, setFilter] = useState('');
+    const filtered = filter
+        ? vulns.filter(v => v.toLowerCase().includes(filter.toLowerCase()))
+        : vulns;
+
+    return (
+        <div className="mb-6">
+            <div className="flex items-center justify-between mb-2 gap-3">
+                <h3 className={["font-bold text-base", colorClass].join(' ')}>
+                    {label} ({vulns.length})
+                </h3>
+                {vulns.length > 10 && (
+                    <input
+                        type="text"
+                        placeholder="Filter…"
+                        value={filter}
+                        onChange={e => setFilter(e.target.value)}
+                        className="text-xs px-2 py-1 rounded border border-neutral-500 bg-neutral-800 text-neutral-200 w-48"
+                    />
+                )}
+            </div>
+            {vulns.length === 0 ? (
+                <p className="text-sm text-neutral-400 italic">None</p>
+            ) : (
+                <div className="overflow-auto max-h-64 rounded border border-neutral-600">
+                    <table className="w-full text-xs text-left">
+                        <thead className="sticky top-0 bg-neutral-800 text-neutral-300 uppercase">
+                            <tr>
+                                <th className="px-3 py-2">CVE / Vulnerability ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((v) => (
+                                <tr key={v} className="border-t border-neutral-700 hover:bg-neutral-700/40">
+                                    <td className="px-3 py-1.5 font-mono">{v}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+type Section = 'packages' | 'findings' | 'vulnerabilities';
 
 function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void }) {
     const [diff, setDiff] = useState<ScanDiff | null>(null);
@@ -191,21 +241,56 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
 
                 {/* Tab bar */}
                 {diff && (
-                    <div className="flex border-b border-neutral-700 px-6">
+                    <div className="flex border-b border-neutral-700 px-6 flex-wrap">
                         <button className={tabCls('packages')} onClick={() => setSection('packages')}>
                             Packages
-                            {!diff.is_first && (
-                                <span className="ml-2 text-xs font-normal text-neutral-400">
-                                    +{diff.packages_added.length} / −{diff.packages_removed.length}
+                            {diff.is_first ? (
+                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                                    {diff.package_count.toLocaleString()}
                                 </span>
+                            ) : (
+                                <>
+                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        +{diff.packages_added.length.toLocaleString()}
+                                    </span>
+                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        −{diff.packages_removed.length.toLocaleString()}
+                                    </span>
+                                </>
                             )}
                         </button>
                         <button className={tabCls('findings')} onClick={() => setSection('findings')}>
                             Findings
-                            {!diff.is_first && (
-                                <span className="ml-2 text-xs font-normal text-neutral-400">
-                                    +{diff.findings_added.length} / −{diff.findings_removed.length}
+                            {diff.is_first ? (
+                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                                    {diff.finding_count.toLocaleString()}
                                 </span>
+                            ) : (
+                                <>
+                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        +{diff.findings_added.length.toLocaleString()}
+                                    </span>
+                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        −{diff.findings_removed.length.toLocaleString()}
+                                    </span>
+                                </>
+                            )}
+                        </button>
+                        <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
+                            Vulnerabilities
+                            {diff.is_first ? (
+                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-cyan-900/40 text-cyan-300">
+                                    {diff.vuln_count.toLocaleString()}
+                                </span>
+                            ) : (
+                                <>
+                                    <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_added.length > 0 ? 'bg-green-900/40 text-green-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        +{diff.vulns_added.length.toLocaleString()}
+                                    </span>
+                                    <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-neutral-700 text-neutral-400'}`}>
+                                        −{diff.vulns_removed.length.toLocaleString()}
+                                    </span>
+                                </>
                             )}
                         </button>
                     </div>
@@ -252,6 +337,27 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                 <FindingDiffTable
                                     entries={diff.findings_removed}
                                     label="Removed findings"
+                                    colorClass="text-red-400"
+                                />
+                            )}
+                        </>
+                    )}
+                    {diff && section === 'vulnerabilities' && (
+                        <>
+                            {diff.is_first && (
+                                <p className="text-sm text-neutral-400 mb-4 italic">
+                                    This is the first scan — all {diff.vuln_count.toLocaleString()} vulnerabilities are listed below.
+                                </p>
+                            )}
+                            <VulnDiffList
+                                vulns={diff.vulns_added}
+                                label={diff.is_first ? "All vulnerabilities" : "New vulnerabilities"}
+                                colorClass="text-green-400"
+                            />
+                            {!diff.is_first && (
+                                <VulnDiffList
+                                    vulns={diff.vulns_removed}
+                                    label="Removed vulnerabilities"
                                     colorClass="text-red-400"
                                 />
                             )}
@@ -344,13 +450,13 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                             ].join(' ')} />
 
                             <div className="p-4 bg-white dark:bg-neutral-700 rounded-lg shadow-sm border border-gray-100 dark:border-neutral-600">
-                                {/* Row 1: timestamp + finding badges + details button */}
-                                <div className="flex items-center flex-wrap gap-2 mb-1 justify-between">
-                                    <time className="text-sm font-semibold text-gray-500 dark:text-neutral-400">
-                                        {formatDate(scan.timestamp)}
-                                    </time>
+                                {/* Row 1: timestamp */}
+                                <time className="block text-sm font-semibold text-gray-500 dark:text-neutral-400 mb-1">
+                                    {formatDate(scan.timestamp)}
+                                </time>
 
-                                    <div className="flex items-center gap-2 flex-wrap">
+                                {/* Row 2: badges + details button */}
+                                <div className="flex items-center gap-2 flex-wrap mb-1">
                                         {scan.is_first ? (
                                             /* First scan: total counts */
                                             <>
@@ -359,6 +465,9 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                                 </span>
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                                                     {(scan.finding_count ?? 0).toLocaleString()} findings
+                                                </span>
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
+                                                    {(scan.vuln_count ?? 0).toLocaleString()} vulns
                                                 </span>
                                             </>
                                         ) : (
@@ -376,6 +485,12 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.findings_removed ?? 0).toLocaleString()} findings
                                                 </span>
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                    +{(scan.vulns_added ?? 0).toLocaleString()} vulns
+                                                </span>
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                    −{(scan.vulns_removed ?? 0).toLocaleString()} vulns
+                                                </span>
                                             </>
                                         )}
 
@@ -387,7 +502,6 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                             Details
                                         </button>
                                     </div>
-                                </div>
 
                                 {/* Project / Variant */}
                                 <p className="text-base font-medium text-gray-800 dark:text-neutral-100">
