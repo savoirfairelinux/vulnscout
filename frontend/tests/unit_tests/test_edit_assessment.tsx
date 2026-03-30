@@ -56,9 +56,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const cancelButton = screen.getByText('Cancel');
-        
+
         await user.click(cancelButton);
-        
+
         expect(mockOnCancel).toHaveBeenCalled();
     });
 
@@ -73,9 +73,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         expect(mockOnSave).toHaveBeenCalled();
     });
 
@@ -96,9 +96,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         // Internal banner should appear
         await waitFor(() => {
             expect(screen.getByText('You must provide a justification for this status')).toBeInTheDocument();
@@ -122,9 +122,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         // Internal banner should appear
         await waitFor(() => {
             expect(screen.getByText('You must provide a justification for this status')).toBeInTheDocument();
@@ -157,9 +157,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         expect(mockTriggerBanner).toHaveBeenCalledWith(
             'You must provide a justification for this status',
             'error'
@@ -245,14 +245,16 @@ describe('EditAssessment Component', () => {
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
-        
+
         expect(mockOnSave).toHaveBeenCalledWith({
             id: 'test-assessment-id',
             status: 'false_positive',
             justification: undefined,
             status_notes: 'test notes',
             workaround: 'test workaround',
-            impact_statement: undefined
+            impact_statement: '',
+            packages: [],
+            variant_ids: undefined
         });
     });
 
@@ -267,15 +269,15 @@ describe('EditAssessment Component', () => {
         );
 
         const user = userEvent.setup();
-        
+
         // Should initially have no changes
         expect(mockOnFieldsChange).toHaveBeenCalledWith(false);
-        
+
         // Modify a field
         const notesField = screen.getByPlaceholderText(/Free text notes/i);
         await user.clear(notesField);
         await user.type(notesField, 'new notes');
-        
+
         // Should detect changes
         expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
     });
@@ -373,9 +375,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const statusSelect = screen.getByDisplayValue(/Affected \/ exploitable/i);
-        
+
         await user.selectOptions(statusSelect, 'not_affected');
-        
+
         // Justification dropdown should appear
         await waitFor(() => {
             expect(screen.getByDisplayValue(/No justification/i)).toBeInTheDocument();
@@ -393,9 +395,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const statusSelect = screen.getByDisplayValue(/Affected \/ exploitable/i);
-        
+
         await user.selectOptions(statusSelect, 'false_positive');
-        
+
         // Impact field should appear
         await waitFor(() => {
             expect(screen.getByPlaceholderText(/why this vulnerability is not exploitable/i)).toBeInTheDocument();
@@ -419,9 +421,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const justificationSelect = screen.getByDisplayValue(/Component not present/i);
-        
+
         await user.selectOptions(justificationSelect, 'code_not_reachable');
-        
+
         await waitFor(() => {
             expect(screen.getByDisplayValue(/The vulnerable code is not invoked at runtime/i)).toBeInTheDocument();
         });
@@ -444,16 +446,18 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         expect(mockOnSave).toHaveBeenCalledWith({
             id: 'test-assessment-id',
             status: 'not_affected',
             justification: 'component_not_present',
             status_notes: 'test notes',
             workaround: 'test workaround',
-            impact_statement: 'test impact'
+            impact_statement: 'test impact',
+            packages: [],
+            variant_ids: undefined
         });
     });
 
@@ -469,10 +473,10 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const notesField = screen.getByDisplayValue('test notes');
-        
+
         await user.clear(notesField);
         await user.type(notesField, 'updated notes');
-        
+
         expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
     });
 
@@ -488,10 +492,10 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const workaroundField = screen.getByDisplayValue('test workaround');
-        
+
         await user.clear(workaroundField);
         await user.type(workaroundField, 'updated workaround');
-        
+
         expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
     });
 
@@ -512,9 +516,9 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const saveButton = screen.getByText('Save Changes');
-        
+
         await user.click(saveButton);
-        
+
         expect(mockOnSave).not.toHaveBeenCalled();
     });
 
@@ -544,18 +548,18 @@ describe('EditAssessment Component', () => {
 
             const user = userEvent.setup();
             const justificationSelect = document.querySelector('select[name="edit_assessment_justification"]') as HTMLSelectElement;
-            
+
             await user.selectOptions(justificationSelect, justOption);
-            
+
             const saveButton = screen.getByText('Save Changes');
             await user.click(saveButton);
-            
+
             expect(mockOnSave).toHaveBeenCalledWith(
                 expect.objectContaining({
                     justification: justOption
                 })
             );
-            
+
             jest.clearAllMocks();
             unmount();
         }
@@ -580,10 +584,222 @@ describe('EditAssessment Component', () => {
 
         const user = userEvent.setup();
         const impactField = screen.getByDisplayValue('original impact');
-        
+
         await user.clear(impactField);
         await user.type(impactField, 'updated impact');
-        
+
         expect(mockOnFieldsChange).toHaveBeenCalledWith(true);
+    });
+
+    test('shows external triggerBanner when not_affected justification is none', async () => {
+        const notAffectedAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'not_affected',
+            justification: 'none'
+        };
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={notAffectedAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                triggerBanner={mockTriggerBanner}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(mockTriggerBanner).toHaveBeenCalledWith(
+            'You must provide a justification for this status',
+            'error'
+        );
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('renders variant checkboxes when availableVariants is provided', () => {
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+            />
+        );
+
+        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+        expect(screen.getByText('default')).toBeInTheDocument();
+        expect(screen.getByText('release')).toBeInTheDocument();
+    });
+
+    test('shows external error when no variant selected and variants are available', async () => {
+        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                triggerBanner={mockTriggerBanner}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one variant', 'error');
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('shows internal error when no variant selected', async () => {
+        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(screen.getByText('You must select at least one variant')).toBeInTheDocument();
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('includes selected variant_ids when variant checkbox is checked', async () => {
+        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={['v1']}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ variant_ids: ['v1'] })
+        );
+    });
+
+    test('toggles variant checkbox checked/unchecked', async () => {
+        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={['v1']}
+                triggerBanner={mockTriggerBanner}
+            />
+        );
+
+        const variantCheckbox = screen.getByRole('checkbox');
+        // Uncheck the variant
+        await user.click(variantCheckbox);
+
+        // Now save attempt should fail validation (no variant selected)
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one variant', 'error');
+    });
+
+    test('renders package checkboxes when two or more packages available', () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={packages}
+            />
+        );
+
+        expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
+        expect(screen.getByText('pkg1@1.0.0')).toBeInTheDocument();
+        expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
+    });
+
+    test('shows external error when no package selected', async () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={packages}
+                defaultSelectedPackages={[]}
+                triggerBanner={mockTriggerBanner}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one package', 'error');
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('shows internal error when no package selected and no external triggerBanner', async () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={packages}
+                defaultSelectedPackages={[]}
+            />
+        );
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(screen.getByText('You must select at least one package')).toBeInTheDocument();
+        expect(mockOnSave).not.toHaveBeenCalled();
+    });
+
+    test('toggles package checkboxes and saves with selected packages', async () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={packages}
+                defaultSelectedPackages={['pkg1@1.0.0', 'pkg2@2.0.0']}
+            />
+        );
+
+        // Uncheck pkg2 then re-check
+        const checkboxes = screen.getAllByRole('checkbox');
+        await user.click(checkboxes[1]); // uncheck pkg2
+        await user.click(checkboxes[1]); // re-check pkg2
+
+        const saveButton = screen.getByText('Save Changes');
+        await user.click(saveButton);
+
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ packages: expect.arrayContaining(['pkg1@1.0.0', 'pkg2@2.0.0']) })
+        );
     });
 });

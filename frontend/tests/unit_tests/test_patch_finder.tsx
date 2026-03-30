@@ -200,7 +200,7 @@ describe('compute_versions_and_patch', () => {
         });
         const current = { "test-pkg": "1.0.0" };
         const result = PatchFinderLogic.compute_versions_and_patch(data, current, [], '');
-        
+
         expect(result['test-pkg'].same_minor.solve).toBe(1); // 1.0.5 is same minor
         expect(result['test-pkg'].same_minor.version).toBe('1.0.5');
         expect(result['test-pkg'].same_major.solve).toBe(2); // 1.0.5 and 1.5.0 are same major
@@ -232,7 +232,7 @@ describe('compute_vulns_per_versions', () => {
         };
         const current = { "test-pkg": "1.0.0" };
         const result = PatchFinderLogic.compute_vulns_per_versions(data, current, ['nvd'], '');
-        
+
         expect(result['test-pkg']['1.2.3']).toHaveLength(1);
         expect(result['test-pkg']['1.2.3']).toContain('CVE-2021-1234');
         expect(result['test-pkg']['1.2.3']).not.toContain('CVE-2021-5678');
@@ -259,7 +259,7 @@ describe('compute_vulns_per_versions', () => {
         };
         const current = { "test-pkg": "1.0.0" };
         const result = PatchFinderLogic.compute_vulns_per_versions(data, current, [], '2.0.0');
-        
+
         expect(result['test-pkg']['2.0.0']).toBeDefined();
         expect(result['test-pkg']['1.2.3']).toBeUndefined();
     });
@@ -285,7 +285,7 @@ describe('compute_vulns_per_versions', () => {
         };
         const current = { "test-pkg": "1.0.0" };
         const result = PatchFinderLogic.compute_vulns_per_versions(data, current, [], 'CVE-2021-5678');
-        
+
         expect(result['test-pkg']['1.2.3']).toHaveLength(1);
         expect(result['test-pkg']['1.2.3']).toContain('CVE-2021-5678');
         expect(result['test-pkg']['1.2.3']).not.toContain('CVE-2021-1234');
@@ -325,6 +325,7 @@ describe('Render patch found', () => {
             },
             status: "",
             simplified_status: "",
+            variants: [],
             assessments: []
         }
     ];
