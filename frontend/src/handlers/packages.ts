@@ -45,7 +45,7 @@ class Packages {
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
     static async list(variantId?: string, projectId?: string): Promise<Package[]> {
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/packages");
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
         url.searchParams.set('format', 'list');
         if (variantId) url.searchParams.set('variant_id', variantId);
         else if (projectId) url.searchParams.set('project_id', projectId);
