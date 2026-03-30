@@ -7,11 +7,14 @@ type Scan = {
     project_name: string | null;
     finding_count: number;
     package_count: number;
+    vuln_count: number;
     is_first: boolean;
     findings_added: number | null;
     findings_removed: number | null;
     packages_added: number | null;
     packages_removed: number | null;
+    vulns_added: number | null;
+    vulns_removed: number | null;
 };
 
 type FindingDiffEntry = {
@@ -34,10 +37,13 @@ type ScanDiff = {
     is_first: boolean;
     finding_count: number;
     package_count: number;
+    vuln_count: number;
     findings_added: FindingDiffEntry[];
     findings_removed: FindingDiffEntry[];
     packages_added: PackageDiffEntry[];
     packages_removed: PackageDiffEntry[];
+    vulns_added: string[];
+    vulns_removed: string[];
 };
 
 export type { Scan, FindingDiffEntry, PackageDiffEntry, ScanDiff };
