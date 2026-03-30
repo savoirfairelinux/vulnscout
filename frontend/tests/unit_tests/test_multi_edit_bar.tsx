@@ -35,6 +35,7 @@ describe('MultiEditBar', () => {
             },
             status: 'not_affected',
             simplified_status: 'not_affected',
+            variants: [],
             assessments: [],
             effort: {
                 optimistic: { formatAsIso8601: () => 'PT1H' } as any,
@@ -67,6 +68,7 @@ describe('MultiEditBar', () => {
             },
             status: 'affected',
             simplified_status: 'affected',
+            variants: [],
             assessments: [],
             effort: {
                 optimistic: { formatAsIso8601: () => 'PT1H' } as any,
@@ -191,6 +193,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessments: [{
@@ -447,5 +450,235 @@ describe('MultiEditBar', () => {
                 'error'
             );
         });
+    });
+
+    test('resolves and displays variant name when variantId prop is set and panel opens', async () => {
+        const mockTriggerBanner = jest.fn();
+        // Variants.listAll() call when panel opens
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v-abc', name: 'machine-image', project_id: 'p1' }
+        ]));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            variantId: 'v-abc',
+            triggerBanner: mockTriggerBanner
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+
+        await waitFor(() => {
+            expect(getByText('machine-image')).toBeInTheDocument();
+        });
+    });
+
+    test('uses variantId as name when listAll returns no match', async () => {
+        const mockTriggerBanner = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // no match for variantId
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            variantId: 'v-unknown',
+            triggerBanner: mockTriggerBanner
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+
+        await waitFor(() => {
+            expect(getByText('v-unknown')).toBeInTheDocument();
+        });
+    });
+
+    test('intersection mode includes base variant name in panel', async () => {
+        const mockTriggerBanner = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v-cmp', name: 'compare-variant', project_id: 'p1' },
+            { id: 'v-base', name: 'base-variant', project_id: 'p1' },
+        ]));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            variantId: 'v-cmp',
+            baseVariantId: 'v-base',
+            compareOperation: 'intersection',
+            triggerBanner: mockTriggerBanner
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+
+        await waitFor(() => {
+            expect(getByText('compare-variant')).toBeInTheDocument();
+            expect(getByText('base-variant')).toBeInTheDocument();
+        });
+    });
+
+    test('addAssessment with variantId sends correct batch without listByVuln call', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockAppendAssessment = jest.fn();
+        const mockPatchVuln = jest.fn();
+        // Only 1 fetch: the batch POST (no listByVuln)
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v-abc', name: 'machine-image', project_id: 'p1' }
+        ])); // Variants.listAll for panel display
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessments: [{
+                id: 'assess-2',
+                vuln_id: 'vuln-1',
+                packages: ['pkg1'],
+                status: 'affected',
+                simplified_status: 'affected',
+                timestamp: '2024-01-01T00:00:00Z',
+                responses: []
+            }],
+            count: 1
+        }));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            variantId: 'v-abc',
+            triggerBanner: mockTriggerBanner,
+            appendAssessment: mockAppendAssessment,
+            patchVuln: mockPatchVuln
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await waitFor(() => expect(getByText('machine-image')).toBeInTheDocument());
+
+        const select = document.querySelector('[name="new_assessment_status"]') as HTMLSelectElement;
+        fireEvent.change(select, { target: { value: 'affected' } });
+
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith(
+                expect.stringContaining('Successfully added assessments'),
+                'success'
+            );
+        });
+    });
+
+    test('addAssessment fans out per variant when listByVuln returns results', async () => {
+        const mockTriggerBanner = jest.fn();
+        const mockAppendAssessment = jest.fn();
+        const mockPatchVuln = jest.fn();
+        // listByVuln returns one variant → should create 1 triple with variant_id
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'default', project_id: 'p1' }
+        ])); // Variants.listByVuln for vuln-1
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessments: [{
+                id: 'assess-3',
+                vuln_id: 'vuln-1',
+                packages: ['pkg1'],
+                status: 'affected',
+                simplified_status: 'affected',
+                timestamp: '2024-01-01T00:00:00Z',
+                responses: []
+            }],
+            count: 1
+        }));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            triggerBanner: mockTriggerBanner,
+            appendAssessment: mockAppendAssessment,
+            patchVuln: mockPatchVuln
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+
+        const select = document.querySelector('[name="new_assessment_status"]') as HTMLSelectElement;
+        fireEvent.change(select, { target: { value: 'affected' } });
+
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith(
+                expect.stringContaining('Successfully added assessments'),
+                'success'
+            );
+        });
+        // The batch request body should include variant_id
+        const batchCall = fetchMock.mock.calls.find((c: any[]) =>
+            typeof c[0] === 'string' && c[0].includes('/api/assessments/batch')
+        ) as any[];
+        expect(batchCall).toBeDefined();
+        const body = JSON.parse(batchCall[1].body);
+        expect(body.assessments[0].variant_id).toBe('v1');
+    });
+
+    test('addAssessment intersection mode creates triples for both variants', async () => {
+        const mockTriggerBanner = jest.fn();
+        // Variants.listAll for panel + batch POST
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v-cmp', name: 'compare', project_id: 'p1' },
+            { id: 'v-base', name: 'base', project_id: 'p1' },
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessments: [{
+                id: 'assess-4',
+                vuln_id: 'vuln-1',
+                packages: ['pkg1'],
+                status: 'affected',
+                simplified_status: 'affected',
+                timestamp: '2024-01-01T00:00:00Z',
+                responses: []
+            }],
+            count: 2
+        }));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1'],
+            variantId: 'v-cmp',
+            baseVariantId: 'v-base',
+            compareOperation: 'intersection',
+            triggerBanner: mockTriggerBanner
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await waitFor(() => expect(getByText('compare')).toBeInTheDocument());
+
+        const select = document.querySelector('[name="new_assessment_status"]') as HTMLSelectElement;
+        fireEvent.change(select, { target: { value: 'affected' } });
+
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith(
+                expect.stringContaining('Successfully added assessments'),
+                'success'
+            );
+        });
+        // Should have created 2 triples (one per variant)
+        const batchCall = fetchMock.mock.calls.find((c: any[]) =>
+            typeof c[0] === 'string' && c[0].includes('/api/assessments/batch')
+        ) as any[];
+        expect(batchCall).toBeDefined();
+        const body = JSON.parse(batchCall[1].body);
+        expect(body.assessments).toHaveLength(2);
+        const variantIds = body.assessments.map((a: any) => a.variant_id);
+        expect(variantIds).toContain('v-cmp');
+        expect(variantIds).toContain('v-base');
     });
 });

@@ -83,6 +83,7 @@ describe('Vulnerability Table', () => {
             status: 'affected',
             simplified_status: 'Exploitable',
             assessments: [],
+            variants: [],
             published: '2010-05-15T08:00:00Z'
         },
         {
@@ -142,7 +143,8 @@ describe('Vulnerability Table', () => {
             status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             published: '2018-07-22T14:30:00Z',
-            assessments: []
+            assessments: [],
+            variants: []
         },
         {
             id: 'CVE-2024-56730',
@@ -206,7 +208,8 @@ describe('Vulnerability Table', () => {
                     last_update: '2026-02-06T17:43:14.254537+00:00',
                     responses: []
                 }
-            ]
+            ],
+            variants: []
         }
     ];
 
@@ -701,7 +704,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
+        expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
     test('select and change time estimate', async () => {
@@ -819,7 +823,7 @@ describe('Vulnerability Table', () => {
         }, { timeout: 1000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
-        
+
         expect(vuln_abc).toBeInTheDocument();
     })
 
@@ -1687,6 +1691,7 @@ describe('Vulnerability Table', () => {
                 status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
+                variants: [],
                 // no 'published' field
             }
         ];
@@ -1896,6 +1901,7 @@ describe('Vulnerability Table', () => {
                 status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
+                variants: [],
                 // no 'published' field
             }
         ];

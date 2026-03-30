@@ -179,7 +179,8 @@ def init_app(app):
             return {"error": "No valid package found"}, 400
 
         _save_openvex()
-        return {"status": "success", "assessments": created}, 200
+        response_body = {"status": "success", "assessments": created, "assessment": created[0]}
+        return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
     def add_assessments_batch():

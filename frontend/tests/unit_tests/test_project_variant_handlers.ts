@@ -231,6 +231,93 @@ describe('Variants', () => {
         expect(variants).toHaveLength(1);
         expect(variants[0].id).toBe('v1');
     });
+
+    test('Variants.listAll returns all variants', async () => {
+        const mockData = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p2' },
+        ];
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: true,
+                json: () => Promise.resolve(mockData),
+            } as Response)
+        );
+
+        const variants = await Variants.listAll();
+
+        expect(variants).toHaveLength(2);
+        expect(variants[0]).toEqual({ id: 'v1', name: 'default', project_id: 'p1' });
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/variants'),
+            expect.objectContaining({ mode: 'cors' })
+        );
+    });
+
+    test('Variants.listAll returns empty array when response is not ok', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: false, json: () => Promise.resolve([]) } as Response)
+        );
+        expect(await Variants.listAll()).toEqual([]);
+    });
+
+    test('Variants.listAll returns empty array when server returns non-array', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve({ error: 'not found' }) } as Response)
+        );
+        expect(await Variants.listAll()).toEqual([]);
+    });
+
+    test('Variants.listAll filters out items missing required fields', async () => {
+        const mockData = [
+            { id: 'v1', name: 'valid', project_id: 'p1' },
+            { name: 'no-id', project_id: 'p1' },
+        ];
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve(mockData) } as Response)
+        );
+        const result = await Variants.listAll();
+        expect(result).toHaveLength(1);
+        expect(result[0].id).toBe('v1');
+    });
+
+    test('Variants.listByVuln returns variants for a vulnerability', async () => {
+        const mockData = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve(mockData) } as Response)
+        );
+        const variants = await Variants.listByVuln('CVE-2023-1234');
+        expect(variants).toHaveLength(1);
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/vulnerabilities/CVE-2023-1234/variants'),
+            expect.anything()
+        );
+    });
+
+    test('Variants.listByVuln returns empty array when response is not ok', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: false, json: () => Promise.resolve([]) } as Response)
+        );
+        expect(await Variants.listByVuln('CVE-2023-1234')).toEqual([]);
+    });
+
+    test('Variants.listByVuln encodes vuln id in URL', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response)
+        );
+        await Variants.listByVuln('CVE 2023 1234');
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('CVE%202023%201234'),
+            expect.anything()
+        );
+    });
+
+    test('Variants.listByVuln returns empty array when server returns non-array', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve(null) } as Response)
+        );
+        expect(await Variants.listByVuln('CVE-2023-1234')).toEqual([]);
+    });
 });
 
 

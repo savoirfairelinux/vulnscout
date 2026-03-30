@@ -66,7 +66,7 @@ def test_post_minimal_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    assert len(data) == 3
     assert "CVE-1999-12345" in data_str
     assert "Disable option X in configuration" in data_str
 
@@ -90,7 +90,7 @@ def test_post_detailled_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    assert len(data) == 3
     assert "CVE-1999-12345" in data_str
     assert "Demonstration assessment" in data_str
 
