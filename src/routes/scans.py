@@ -40,6 +40,25 @@ def _findings_by_scan_ids(scan_ids: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helpers — vulnerabilities
+# ---------------------------------------------------------------------------
+
+def _vulns_by_scan_ids(scan_ids: list) -> dict:
+    """Return {scan_id: set(vulnerability_id)} via Observation -> Finding join."""
+    if not scan_ids:
+        return {}
+    rows = db.session.execute(
+        db.select(Observation.scan_id, Finding.vulnerability_id)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .where(Observation.scan_id.in_(scan_ids))
+    ).all()
+    result: dict = {}
+    for sid, vid in rows:
+        result.setdefault(sid, set()).add(vid)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Helpers — packages
 # ---------------------------------------------------------------------------
 
@@ -125,6 +144,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     scan_ids = [s.id for s in scans]
     findings_map = _findings_by_scan_ids(scan_ids)
     packages_map = _packages_by_scan_ids(scan_ids)
+    vulns_map = _vulns_by_scan_ids(scan_ids)
     prev_map = _prev_scan_map(scans)
     variant_map = _variant_info(list({s.variant_id for s in scans}))
 
@@ -136,10 +156,12 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         base["project_name"] = project_name
         curr_f = findings_map.get(scan.id, set())
         curr_p = packages_map.get(scan.id, set())
+        curr_v = vulns_map.get(scan.id, set())
         prev = prev_map.get(scan.id)
 
         base["finding_count"] = len(curr_f)
         base["package_count"] = len(curr_p)
+        base["vuln_count"] = len(curr_v)
 
         if prev is None:
             base["is_first"] = True
@@ -147,14 +169,19 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["findings_removed"] = None
             base["packages_added"] = None
             base["packages_removed"] = None
+            base["vulns_added"] = None
+            base["vulns_removed"] = None
         else:
             prev_f = findings_map.get(prev.id, set())
             prev_p = packages_map.get(prev.id, set())
+            prev_v = vulns_map.get(prev.id, set())
             base["is_first"] = False
             base["findings_added"] = len(curr_f - prev_f)
             base["findings_removed"] = len(prev_f - curr_f)
             base["packages_added"] = len(curr_p - prev_p)
             base["packages_removed"] = len(prev_p - curr_p)
+            base["vulns_added"] = len(curr_v - prev_v)
+            base["vulns_removed"] = len(prev_v - curr_v)
 
         result.append(base)
     return result
@@ -256,13 +283,17 @@ def init_app(app):
 
         # --- Findings diff ---
         current_finding_ids = {obs.finding_id for obs in scan.observations}
+        curr_vulns = {obs.finding.vulnerability_id for obs in scan.observations}
 
         if prev_scan_id is None:
             findings_added = [_obs_to_dict(obs) for obs in scan.observations]
             findings_removed: list = []
+            vulns_added = sorted(curr_vulns)
+            vulns_removed: list = []
         else:
             prev_scan = _load_scan_with_findings(prev_scan_id)
             prev_finding_ids = {obs.finding_id for obs in prev_scan.observations} if prev_scan else set()
+            prev_vulns = {obs.finding.vulnerability_id for obs in prev_scan.observations} if prev_scan else set()
             added_fids = current_finding_ids - prev_finding_ids
             removed_fids = prev_finding_ids - current_finding_ids
             findings_added = [_obs_to_dict(obs) for obs in scan.observations if obs.finding_id in added_fids]
@@ -270,6 +301,8 @@ def init_app(app):
                 [_obs_to_dict(obs) for obs in prev_scan.observations if obs.finding_id in removed_fids]
                 if prev_scan else []
             )
+            vulns_added = sorted(curr_vulns - prev_vulns)
+            vulns_removed = sorted(prev_vulns - curr_vulns)
 
         # --- Packages diff ---
         scans_to_query = [scan.id] if prev_scan_id is None else [scan.id, prev_scan_id]
@@ -296,9 +329,12 @@ def init_app(app):
             "is_first": prev_scan_id is None,
             "finding_count": len(current_finding_ids),
             "package_count": len(curr_pkg_ids),
+            "vuln_count": len(curr_vulns),
             "findings_added": findings_added,
             "findings_removed": findings_removed,
             "packages_added": packages_added,
             "packages_removed": packages_removed,
+            "vulns_added": vulns_added,
+            "vulns_removed": vulns_removed,
         })
 
