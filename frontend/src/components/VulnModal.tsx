@@ -310,11 +310,19 @@ type AssessmentGroup = {
                     });
                     if (res.ok) {
                         const rd = await res.json();
-                        const updated = rd?.status === 'success' ? normalise(rd.assessment) : null;
-                        if (updated) {
-                            const idx = vuln.assessments.findIndex(a => a.id === existing.id);
-                            if (idx !== -1) vuln.assessments[idx] = updated;
-                            setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
+                        if (rd?.status !== 'success') {
+                            anyError = true;
+                            showMessage('Error: invalid response from server', 'error');
+                        } else {
+                            const updated = normalise(rd.assessment);
+                            if (updated) {
+                                const idx = vuln.assessments.findIndex(a => a.id === existing.id);
+                                if (idx !== -1) vuln.assessments[idx] = updated;
+                                setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
+                            } else {
+                                anyError = true;
+                                showMessage('Error: invalid assessment data received', 'error');
+                            }
                         }
                     } else {
                         anyError = true;
@@ -491,7 +499,7 @@ type AssessmentGroup = {
                 ? content.variant_ids
                 : [undefined];
 
-        const { variant_ids: _vids, ...baseContent } = content;
+        const { variant_ids: _, ...baseContent } = content;
 
         let successCount = 0;
         let lastCasted: Assessment | null = null;
