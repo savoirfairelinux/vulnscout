@@ -141,7 +141,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
 
 class Vulnerabilities {
     static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Vulnerability[]> {
-        const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities");
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
         url.searchParams.set('format', 'list');
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
@@ -264,14 +264,14 @@ class Vulnerabilities {
         } catch (e) {
             // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
             if (!(e instanceof Error && e.message === 'invalid vector')) {
-                 
+
                 console.error(e);
             }
             return null;
         }
     }
 
- 
+
 
 }
 
