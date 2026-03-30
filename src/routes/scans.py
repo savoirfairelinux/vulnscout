@@ -196,8 +196,8 @@ def _load_scan_with_findings(scan_id: uuid_module.UUID) -> Scan | None:
     return db.session.execute(
         db.select(Scan)
         .options(
-            selectinload(Scan.observations)
-            .selectinload(Observation.finding)
+            selectinload(Scan.observations)  # type: ignore[arg-type]
+            .selectinload(Observation.finding)  # type: ignore[arg-type]
             .selectinload(Finding.package)
         )
         .where(Scan.id == scan_id)
@@ -337,4 +337,3 @@ def init_app(app):
             "vulns_added": vulns_added,
             "vulns_removed": vulns_removed,
         })
-

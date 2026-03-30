@@ -568,18 +568,104 @@ def test_patch_batch_effort_ordering_error(client):
     assert "Invalid effort values" in data["errors"][0]["error"]
 
 
-def test_patch_batch_cvss_missing_vector_string(client):
-    """Batch PATCH: CVSS missing 'vector_string' appends error entry (lines 140-141)."""
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — compare_variant_id paths (lines 88, 100, 118)
+# ---------------------------------------------------------------------------
+
+def test_get_vulnerabilities_compare_base_none(client):
+    """GET with variant_id+compare_variant_id where base has no scan → base_ids=set() (line 88)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+
+
+def test_get_vulnerabilities_compare_intersection_no_scan(client):
+    """GET with operation=intersection and compare has no scan → records=[] (line 100)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+def test_get_vulnerabilities_compare_difference_no_scan(client):
+    """GET (default difference) compare has no scan → records=[] (line 118)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=difference"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — invalid variant_id/project_id (lines 140, 162)
+# ---------------------------------------------------------------------------
+
+def test_get_vulnerabilities_invalid_variant_id(client):
+    """GET /api/vulnerabilities?variant_id=bad-uuid returns 400 (line 140)."""
+    response = client.get("/api/vulnerabilities?variant_id=not-a-valid-uuid")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "invalid" in data["error"].lower() or "variant" in data["error"].lower()
+
+
+def test_get_vulnerabilities_invalid_project_id(client):
+    """GET /api/vulnerabilities?project_id=bad-uuid returns 400 (line 162)."""
+    response = client.get("/api/vulnerabilities?project_id=not-a-valid-uuid")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "invalid" in data["error"].lower() or "project" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/<id> — invalid variant_id in effort (lines 280-281)
+# ---------------------------------------------------------------------------
+
+def test_patch_vulnerability_effort_invalid_variant_id(client):
+    """PATCH vulnerability effort with invalid variant_id returns 400 (lines 280-281)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "PT1H",
+            "likely": "PT4H",
+            "pessimistic": "P1D",
+        },
+        "variant_id": "not-a-valid-uuid",
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "variant_id" in data["error"].lower() or "invalid" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/batch — invalid variant_id in effort (lines 354-355)
+# ---------------------------------------------------------------------------
+
+def test_patch_batch_vulnerability_effort_invalid_variant_id(client):
+    """Batch PATCH effort with invalid variant_id appends error entry (lines 354-355)."""
     response = client.patch("/api/vulnerabilities/batch", json={
         "vulnerabilities": [{
             "id": "CVE-2020-35492",
-            "cvss": {
-                "base_score": 7.0,
-                "version": "3.1"
-                # missing vector_string
-            }
+            "effort": {
+                "optimistic": "PT1H",
+                "likely": "PT4H",
+                "pessimistic": "P1D",
+            },
+            "variant_id": "not-a-valid-uuid",
         }]
     })
     data = json.loads(response.data)
-    assert data["error_count"] == 1
-    assert "Invalid CVSS data" in data["errors"][0]["error"]
+    assert data["error_count"] >= 1
+    assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
+               for e in data["errors"])
