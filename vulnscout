@@ -69,7 +69,6 @@ Environment variables:
   VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:latest)
   VULNSCOUT_OUTPUTS_DIR Output directory (default: ./.vulnscout/outputs)
   VULNSCOUT_CACHE_DIR        Cache base dir (default: ./.vulnscout/cache)
-  XDG_CONFIG_HOME       Config base dir (default: ~/.config)
 
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
@@ -164,7 +163,6 @@ VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
 VULNSCOUT_VERSION=$VULNSCOUT_VERSION
-VULNSCOUT_CACHE_DIR=$VULNSCOUT_CACHE_DIR
 VITE_API_URL=http://localhost:7275
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"

@@ -19,11 +19,15 @@ VulnScout also provides a web interface for visualisation and a command line to 
 
 === VulnScout Features
 
-* Analyse SBOMs
-* Detect vulnerabilities
-* Enrich SBOM files
-* Generate detailed reports
-* Help track fixes with the dashboard
+* Analyse SBOMs (SPDX 2/3, CycloneDX, Yocto CVE check, OpenVEX, Grype)
+* Detect and enrich vulnerabilities from NVD, EPSS, and Grype
+* Manage projects and variants for multi-target builds
+* Web interface for visualisation, triage, and assessment
+* Non-interactive / CI mode with configurable match conditions
+* Generate customisable reports (AsciiDoc, HTML, PDF, CSV)
+* Export enriched SBOMs (SPDX 3.0, CycloneDX 1.6, OpenVEX)
+* Custom CVSS scoring per vulnerability
+* Time estimation tracking for remediation effort
 
 ==  :wrench: Setting up VulnScout
 
@@ -76,6 +80,70 @@ It is also possible to add sources files on a specific project and variant with 
 --add-cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
+===  Container Lifecycle
+
+The `vulnscout` script manages the container lifecycle. The container runs in the background and accepts commands via `docker exec`.
+
+[source,shell]
+----
+# Start the container (done automatically by most commands)
+./vulnscout start
+
+# Stop and remove the container
+./vulnscout stop
+
+# Restart the container (useful after changing config)
+./vulnscout restart
+----
+
+===  Projects and Variants
+
+VulnScout organises data into *projects* and *variants*. A project typically maps to a product, and variants represent different builds or architectures (e.g. `x86_64`, `aarch64`).
+
+Both flags are optional and default to `default` if not provided.
+
+[source,shell]
+----
+./vulnscout --project <name> --variant <name> <command>
+----
+
+===  Adding Input Files to the Database
+
+VulnScout accepts multiple input file types. Commands can be chained and will automatically trigger a scan.
+
+[source,shell]
+----
+# SPDX 2/3 SBOM (JSON, tag-value, or .tar/.tar.gz/.tar.zst archive)
+./vulnscout --add-spdx <path>
+
+# Yocto CVE check JSON output
+./vulnscout --add-cve-check <path>
+
+# CycloneDX file
+./vulnscout --add-cdx <path>
+
+# OpenVEX file
+./vulnscout --add-openvex <path>
+----
+
+Multiple inputs can be chained in a single command:
+
+[source,shell]
+----
+./vulnscout --project demo --variant x86 \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json \
+  --add-openvex /path/to/assessments.openvex.json
+----
+
+[TIP]
+====
+- `.tar`, `.tar.gz`, `.tar.zst` archives are supported as SPDX 2 input.
+- `.spdx` files (tag-value format) are supported as SPDX 2 input.
+- `.spdx.json` is supported as SPDX 3 input.
+- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
+====
+
 ===  Run VulnScout with Yocto
 
 We have a dedicated layer for VulnScout integration in Yocto.
@@ -88,55 +156,250 @@ The vulnscout web interface can be started with a `bitbake <image-recipe> -c vul
 
 === Run VulnScout in non-interactive mode
 
-If you want to use the non-interactive mode, without the web interface, you can the command with the `--match-condition` argument:
+If you want to use the non-interactive mode, without the web interface, you can use the command with the `--match-condition` argument:
 
 [source,shell]
 ----
 ./vulnscout --project demo --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
 ----
 
-You can obtain the report of vulnerabilities matching the condition by including the proper report remplate:
+The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
+
+See link:doc/WRITING_MATCH_CONDITION.adoc[WRITING_MATCH_CONDITION.adoc] for the full condition syntax and token reference.
+
+You can combine inputs with a match condition in a single invocation:
 
 [source,shell]
 ----
-./vulnscout --project demo --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)" --report-template match_condition.adoc
+./vulnscout --project demo \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json \
+  --match-condition "cvss >= 9.0"
 ----
 
-==== Configuration tips for other projects
+===  Performing a Grype Scan
 
-To use VulnScout, you only need a Software Bill of Materials *(SBOM)* file in SPDX or CycloneDX format. +
-The Grype scanner will analyse the SBOM for vulnerabilities; if it already includes some, those will be merged into the final results. +
-To do so, create a new sub-folder in _.vulnscout_ and place a modified `yaml` using your configuration. +
-To configure your `yaml` file, you can look at the example provided here _.vulnscout/example/docker-example.yml_
+VulnScout can run Grype on the current database contents. This exports the current state as a CycloneDX SBOM, runs Grype against it, and merges the results back:
 
-===== Tips for Editing your `yaml` file
+[source,shell]
+----
+./vulnscout --project demo --variant x86 --perform-grype-scan
+----
 
-[TIP]
+This can be chained with other inputs to scan newly added files immediately:
+
+[source,shell]
+----
+./vulnscout --project demo --add-spdx .vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
+----
+
+===  Generating Reports
+
+Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
+
+[source,shell]
+----
+# Generate a report from a built-in template
+./vulnscout --project demo report summary.adoc
+
+# Register a custom template permanently in the container
+./vulnscout --add-report-template /path/to/my-custom-report.adoc
+
+# Then generate a report from it by name
+./vulnscout --project demo report my-custom-report.adoc
+
+# Or pass the file path directly — registers and runs it in one step
+./vulnscout --project demo report /path/to/my-custom-report.adoc
+----
+
+Multiple reports can be generated in one command:
+
+[source,shell]
+----
+./vulnscout --project demo report summary.adoc --report all_assessments.adoc
+----
+
+Reports are written to the outputs directory (default: `.vulnscout/outputs/`).
+
+See link:doc/WRITING_REPORT_TEMPLATE.adoc[WRITING_REPORT_TEMPLATE.adoc] for documentation on writing custom report templates.
+
+===  Exporting SBOM Files
+
+VulnScout can export the enriched project data as standard SBOM formats. Exported files are written to the outputs directory (default: `.vulnscout/outputs/`).
+
+[source,shell]
+----
+# Export as SPDX 3.0 SBOM
+./vulnscout --project demo --export-spdx
+
+# Export as CycloneDX 1.6 SBOM
+./vulnscout --project demo --export-cdx
+
+# Export as OpenVEX document (vulnerabilities + assessments)
+./vulnscout --project demo --export-openvex
+----
+
+Export commands can be chained with inputs and reports in a single invocation:
+
+[source,shell]
+----
+./vulnscout --project demo \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json \
+  --export-spdx --export-cdx --export-openvex \
+  report summary.adoc
+----
+
+=== Configuration
+
+==== Configuration Commands
+
+Persistent configuration is stored in `.vulnscout/cache/config.env` and is automatically loaded on each run.
+
+[source,shell]
+----
+# Set a config value
+./vulnscout config <key> <value>
+
+# List current configuration (sensitive values masked)
+./vulnscout config-list
+
+# Remove a config key
+./vulnscout config-clear <key>
+----
+
+Example — set an NVD API key for higher rate limits:
+
+[source,shell]
+----
+./vulnscout config NVD_API_KEY abc123
+----
+
+==== Environment Variables
+
+The following environment variables can be set via `vulnscout config` or exported before running:
+
+.Container & runtime
+[cols="1,2,1"]
+|===
+|Variable |Description |Default
+
+|`VULNSCOUT_CONTAINER`
+|Name of the Docker container
+|`vulnscout`
+
+|`VULNSCOUT_IMAGE`
+|Docker image to use
+|`docker.io/sflinux/vulnscout:latest`
+
+|`VULNSCOUT_OUTPUTS_DIR`
+|Directory for output files on the host
+|`./.vulnscout/outputs`
+
+|`VULNSCOUT_CACHE_DIR`
+|Cache base directory on the host
+|`./.vulnscout/cache`
+
+|`FLASK_RUN_PORT`
+|Port the web UI listens on
+|`7275`
+
+|`FLASK_RUN_HOST`
+|Host address for the web UI
+|`0.0.0.0`
+
+|`VITE_API_URL`
+|Backend API URL used by the dev frontend
+|`http://localhost:7275`
+
+|`USER_UID`
+|UID used to write output files (avoids permission issues)
+|current user
+
+|`USER_GID`
+|GID used to write output files
+|current group
+|===
+
+.Scan & enrichment
+[cols="1,2,1"]
+|===
+|Variable |Description |Default
+
+|`NVD_API_KEY`
+|NVD API key for higher rate limits (https://nvd.nist.gov/developers/request-an-api-key)
+|_(none)_
+
+|`IGNORE_PARSING_ERRORS`
+|Continue scanning even if input files contain errors
+|`false`
+
+|`VERBOSE_MODE`
+|Enable verbose logging in the container
+|`false`
+|===
+
+.Report metadata
+[cols="1,2,1"]
+|===
+|Variable |Description |Default
+
+|`PRODUCT_NAME`
+|Product name embedded in generated reports and SBOMs
+|_(none)_
+
+|`PRODUCT_VERSION`
+|Product version embedded in generated reports
+|_(none)_
+
+|`AUTHOR_NAME`
+|Author/company name embedded in reports
+|_(none)_
+
+|`CONTACT_EMAIL`
+|Contact email embedded in reports
+|_(none)_
+
+|`DOCUMENT_URL`
+|URL embedded in exported SBOM documents
+|_(none)_
+|===
+
+==== HTTP Proxy Configuration
+
+If you want to run VulnScout with an HTTP proxy, set variables in the config:
+
+[source,shell]
+----
+./vulnscout config HTTP_PROXY http://proxy.example.com:8080
+./vulnscout config HTTPS_PROXY http://proxy.example.com:8080
+./vulnscout config NO_PROXY localhost,127.0.0.1
+----
+
+Or pass them directly as environment variables when calling `vulnscout`.
+
+=== Developer Mode
+
+Dev mode mounts the local `src/` directory into the container and starts the Vite frontend dev server alongside the backend, enabling hot-reload for both:
+
+[source,shell]
+----
+./vulnscout --dev start
+----
+
+Or combined with a serve command:
+
+[source,shell]
+----
+./vulnscout --dev serve
+----
+
+The frontend dev server uses `VITE_API_URL` from the config to reach the backend (default: `http://localhost:7275`).
+
+[NOTE]
 ====
-- .tar, .tar.gz, .tar.zst, and archives are supported as SPDX 2 input.
-- .spdx files (tag-value format) are supported as SPDX 2 input.
-- .spdx.json is supported as SPDX 3 input.
-- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
+Dev mode requires `npm` to be available on the host.
 ====
-
-List of environment variables and their purpose:
-
-* `USER_UID`: This variable sets the UID of the user in the container, allowing
-  Vulnscout to create output files with correct permissions
-* `USER_GID`: This variable sets the GID of the user in the container, allowing
-  Vulnscout to create output files with correct permissions
-
-===== HTTP Proxy Configuration
-
-If you want to run VulnScout with an HTTP proxy, simply add the standard http_proxy environment variables to the docker-compose file. These variables are respected by all traffic in the container:
-
-[source,yaml]
-----
-environment:
-  - HTTP_PROXY=http://proxy.example.com:8080
-  - HTTPS_PROXY=http://proxy.example.com:8080
-  - NO_PROXY=localhost,127.0.0.1
-----
 
 == :mag_right: Architecture
 
@@ -168,7 +431,6 @@ image::doc/images/architecture_with_logo.png[An architecture diagram showing dif
 * NVD (National Vulnerability Database)
 * All data sources supported by Grype
 * EPSS (Exploit Prediction Scoring System)
-* ##OSV (Open Source Vulnerabilities) Coming soon##
 * Information embedded in input files
 
 === :pencil: Custom CVSS Scoring
