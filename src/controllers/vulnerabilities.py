@@ -17,6 +17,7 @@ from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
+from ..extensions import db
 
 
 def _persist_vuln_to_db(
@@ -282,19 +283,19 @@ class VulnerabilitiesController:
         )
 
         # Batch in chunks of 100 (FIRST.org API limit).
+        # DB commits happen every 500 CVEs to minimise write-transaction overhead.
         BATCH_SIZE = 100
+        DB_COMMIT_EVERY = 500
         cve_ids = list(cve_vulns.keys())
         chunks = [cve_ids[i:i + BATCH_SIZE] for i in range(0, len(cve_ids), BATCH_SIZE)]
 
+        processed = 0
         for chunk_idx, chunk in enumerate(chunks, 1):
-            print(
-                f"=== EPSS: batch {chunk_idx}/{len(chunks)} ({len(chunk)} CVEs)",
-                flush=True,
-            )
             try:
                 batch_results = self.epss_api.api_get_epss_batch(chunk)
             except Exception as e:
                 verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
+                processed += len(chunk)
                 continue
 
             for cve_id in chunk:
@@ -306,10 +307,19 @@ class VulnerabilitiesController:
                     vuln.set_epss(result['score'], result['percentile'])
                     rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
                     if rec is not None:
-                        rec.update_record(epss_score=result['score'])
+                        rec.update_record(epss_score=result['score'], commit=False)
                     nb_vuln += 1
                 except Exception as e:
                     verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
+            processed += len(chunk)
+            # Commit once every 500 CVEs processed.
+            if processed % DB_COMMIT_EVERY < BATCH_SIZE:
+                try:
+                    db.session.commit()
+                    print(f"=== EPSS: committed {processed}/{total}", flush=True)
+                except Exception as e:
+                    verbose(f"[fetch_epss_scores commit at {processed}] {e}")
+                    db.session.rollback()
 
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
 
@@ -418,9 +428,9 @@ class VulnerabilitiesController:
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
+        DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:
-            print(f"=== NVD [{done + 1}/{total}] {vuln.id}", flush=True)
             try:
                 result = self.nvd_api.fetch_cve_data(vuln.id)
                 if result and not result.get("not_found"):
@@ -446,6 +456,7 @@ class VulnerabilitiesController:
                                 versions_data=vuln.versions_data,
                                 patch_url=vuln.patch_url,
                                 nvd_last_modified=vuln.nvd_last_modified,
+                                commit=False,
                             )
                     except Exception as e:
                         verbose(f"[fetch_nvd_data persist {vuln.id!r}] {e}")
@@ -454,6 +465,13 @@ class VulnerabilitiesController:
                 verbose(f"[fetch_nvd_data {vuln.id!r}] {e}")
             done += 1
             tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
+            if done % DB_COMMIT_EVERY == 0:
+                try:
+                    db.session.commit()
+                    print(f"=== NVD: committed {done}/{total}", flush=True)
+                except Exception as e:
+                    verbose(f"[fetch_nvd_data commit at {done}] {e}")
+                    db.session.rollback()
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
@@ -465,7 +483,6 @@ class VulnerabilitiesController:
                 }
                 for future in as_completed(future_to_id, timeout=60):
                     vid = future_to_id[future]
-                    print(f"=== NVD [{done + 1}/{total}] {vid} (GHSA)", flush=True)
                     try:
                         published = future.result(timeout=15)
                         if published:
@@ -474,7 +491,7 @@ class VulnerabilitiesController:
                                 publish_date = datetime.date.fromisoformat(str(published)[:10])
                                 rec = self._db_record_cache.get(vid) or Vulnerability.get_by_id(vid)
                                 if rec is not None:
-                                    rec.update_record(publish_date=publish_date)
+                                    rec.update_record(publish_date=publish_date, commit=False)
                             except Exception as e:
                                 verbose(f"[fetch_nvd_data persist GHSA {vid!r}] {e}")
                             nb_vuln += 1
@@ -483,6 +500,12 @@ class VulnerabilitiesController:
                     done += 1
                     tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vid})")
 
+        # Final commit for any remaining deferred NVD/GHSA updates.
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_nvd_data final commit] {e}")
+            db.session.rollback()
         tracker.complete()
         print(
             f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
