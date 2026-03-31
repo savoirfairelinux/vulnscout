@@ -150,6 +150,7 @@ cmd_scan() {
     export PRODUCT_NAME="${PRODUCT_NAME:-}"
     export PRODUCT_VERSION="${PRODUCT_VERSION:-}"
     export AUTHOR_NAME="${AUTHOR_NAME:-}"
+    export CLIENT_NAME="${CLIENT_NAME:-}"
     export CONTACT_EMAIL="${CONTACT_EMAIL:-}"
     export DOCUMENT_URL="${DOCUMENT_URL:-}"
     export NVD_API_KEY="${NVD_API_KEY:-}"
