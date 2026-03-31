@@ -264,13 +264,12 @@ def test_ts_key_fallback_to_str():
 # ---------------------------------------------------------------------------
 
 def test_post_treatment():
-    """post_treatment calls fetch_epss_scores and fetch_published_dates (lines 60-63)."""
+    """post_treatment calls fetch_epss_scores (lines 60-63)."""
     from unittest.mock import MagicMock
     mock_vuln_ctrl = MagicMock()
     controllers = {"vulnerabilities": mock_vuln_ctrl}
     post_treatment(controllers, [])
     mock_vuln_ctrl.fetch_epss_scores.assert_called_once()
-    mock_vuln_ctrl.fetch_published_dates.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

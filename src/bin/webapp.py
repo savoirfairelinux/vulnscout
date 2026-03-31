@@ -33,6 +33,7 @@ def _launch_enrichment(app):
                 pkgCtrl = PackagesController()
                 vulnCtrl = VulnerabilitiesController(pkgCtrl)
                 post_treatment({"vulnerabilities": vulnCtrl, "packages": pkgCtrl})
+                vulnCtrl.fetch_nvd_data()
             except Exception as e:
                 print(f"[enrichment background] {e}", flush=True)
 
