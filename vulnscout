@@ -151,6 +151,19 @@ config_clear() {
     echo "Config cleared: $key"
 }
 
+_detect_legacy() {
+    # If the new DB already exists, no migration needed.
+    [[ -f "$VULNSCOUT_CACHE_DIR/vulnscout.db" ]] && return
+    # Walk sibling dirs of the cache dir for legacy docker-compose/output artefacts.
+    local parent
+    parent="$(dirname "$VULNSCOUT_CACHE_DIR")"
+    if find "$parent" -maxdepth 4 \( -name 'openvex.json' -o -name 'docker-*.yml' \) 2>/dev/null | grep -q .; then
+        LEGACY_SETUP_DETECTED=true
+    fi
+}
+
+LEGACY_SETUP_DETECTED=false
+
 do_start() {
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
@@ -180,11 +193,13 @@ EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
     local -a env_args=()
+    _detect_legacy
     while IFS='=' read -r key value; do
         [ -z "$key" ] && continue
         [ "${key#\#}" = "$key" ] || continue
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
+    [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR":/cache/vulnscout
         -v "$VULNSCOUT_OUTPUTS_DIR":/scan/outputs
