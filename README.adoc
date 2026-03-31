@@ -469,7 +469,7 @@ VulnScout allows you to add a custom CVSS vector string to a vulnerability, enab
 
 == :clipboard: Licence
 
-`Copyright (C) 2017-2025 Savoir-faire Linux, Inc.` +
+`Copyright (C) 2017-2026 Savoir-faire Linux, Inc.` +
 VulnScout is released under the GPL-3.0 license.
 
 image::./doc/images/SFL.jpeg[fit]
