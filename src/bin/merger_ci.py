@@ -480,6 +480,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
         "only_epss_greater": 0.0,
         "scan_date": "unknown date",
         "failed_vulns": failed_vulns,
+        "match_condition": match_condition,
     }
 
     # Collect all templates to generate (deduplicated)
