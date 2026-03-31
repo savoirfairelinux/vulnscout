@@ -43,8 +43,6 @@ Match conditions can be combined with input files in a single invocation:
 
 == Language Syntax
 
-The full parser is implemented in `src/controllers/conditions_parser.py`.
-
 The following keywords are recognised:
 
 * Boolean literals: `true`, `false`
