@@ -480,7 +480,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
 
     metadata = {
         "author": _os.getenv("AUTHOR_NAME", "Savoir-faire Linux"),
-        "client_name": "",
+        "client_name": _os.getenv("CLIENT_NAME", ""),
         "export_date": _date.today().isoformat(),
         "ignore_before": "1970-01-01T00:00",
         "only_epss_greater": 0.0,

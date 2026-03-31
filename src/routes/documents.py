@@ -92,7 +92,7 @@ def init_app(app):
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
             metadata = {
                 "author": request.args.get("author") or os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
-                "client_name": request.args.get("client_name") or "",
+                "client_name": request.args.get("client_name") or os.getenv('CLIENT_NAME', ""),
                 "export_date": request.args.get("export_date") or date.today().isoformat(),
                 "ignore_before": request.args.get("ignore_before") or "1970-01-01T00:00",
                 "only_epss_greater": 0.0,
