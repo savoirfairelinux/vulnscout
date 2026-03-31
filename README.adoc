@@ -55,8 +55,8 @@ This project contains default examples of VulnScout.
 To run VulnScout demo in interactive mode, you can simply run the command:
 [source,shell]
 ----
-./vulnscout serve --add-spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout serve --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 Then open your browser to view the results:
@@ -76,8 +76,8 @@ If you don't need additional source files, VulnScout can be rerun directly witho
 It is also possible to add sources files on a specific project and variant with the `--project` and `--variant` arguments:
 [source,shell]
 ----
-./vulnscout --project demo --variant x86 --add-spdx $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
---add-cve-check $(pwd)/.vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
+./vulnscout --project demo --variant x86 --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+--add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
 ===  Container Lifecycle
@@ -190,7 +190,7 @@ This can be chained with other inputs to scan newly added files immediately:
 
 [source,shell]
 ----
-./vulnscout --project demo --add-spdx .vulnscout/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
+./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
 ----
 
 ===  Generating Reports
@@ -201,6 +201,9 @@ Reports are generated from AsciiDoc templates. VulnScout ships with built-in tem
 ----
 # Generate a report from a built-in template
 ./vulnscout --project demo report summary.adoc
+
+# Generate a match-condition report (lists vulnerabilities that triggered the condition)
+./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
 
 # Register a custom template permanently in the container
 ./vulnscout --add-report-template /path/to/my-custom-report.adoc
