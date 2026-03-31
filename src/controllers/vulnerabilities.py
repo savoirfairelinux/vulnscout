@@ -5,7 +5,6 @@
 
 import datetime
 import time
-import sqlite3
 import os
 import json
 import urllib.request
@@ -14,9 +13,69 @@ from typing import Optional
 from ..models.vulnerability import Vulnerability
 from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
+from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
 from ..models.cvss import CVSS
 from ..models.metrics import Metrics as MetricsModel
+from ..extensions import db
+
+
+# ---------------------------------------------------------------------------
+# Remote-refresh delay helpers
+# ---------------------------------------------------------------------------
+
+_NEVER = datetime.timedelta.max
+_ALWAYS = None  # sentinel: always re-fetch
+
+
+def parse_refresh_delay(value: Optional[str]) -> Optional[datetime.timedelta]:
+    """Parse a REFRESH_REMOTE_DELAY string into a timedelta.
+
+    Accepted formats:
+      * ``\"never\"``  – only fetch data that was never fetched before
+      * ``\"always\"`` – always re-fetch regardless of age
+      * ``\"<N>h\"``   – re-fetch when data is older than N hours  (e.g. ``48h``, default)
+      * ``"<N>d"``   – re-fetch when data is older than N days   (e.g. ``7d``)
+      * ``"<N>w"``   – re-fetch when data is older than N weeks  (e.g. ``2w``)
+      * ``"<N>m"``   – re-fetch when data is older than N minutes (e.g. ``30m``)
+
+    Returns ``datetime.timedelta.max`` for ``"never"``, ``None`` for
+    ``"always"``, or a :class:`datetime.timedelta` for duration values.
+    """
+    if value is None:
+        return _NEVER
+    v = value.strip().lower()
+    if v == "never":
+        return _NEVER
+    if v == "always":
+        return _ALWAYS
+    units = {"h": "hours", "d": "days", "w": "weeks", "m": "minutes"}
+    if v and v[-1] in units:
+        try:
+            return datetime.timedelta(**{units[v[-1]]: float(v[:-1])})
+        except ValueError:
+            pass
+    raise ValueError(
+        f"Invalid REFRESH_REMOTE_DELAY value {value!r}. "
+        "Use 'never', 'always', or a duration like '48h', '7d', '2w', '30m'."
+    )
+
+
+def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[datetime.timedelta]) -> bool:
+    """Return True if the entry should be (re-)fetched.
+
+    * delay is ``None`` (always)         → always True
+    * ``fetched_at`` is ``None``         → True  (never fetched)
+    * delay is ``timedelta.max`` (never) → False (already fetched, skip)
+    * otherwise                          → True if the data is older than *delay*
+    """
+    if delay is _ALWAYS:
+        return True
+    if fetched_at is None:
+        return True
+    if delay is _NEVER:
+        return False
+    return (datetime.datetime.utcnow() - fetched_at) >= delay
 
 
 def _persist_vuln_to_db(
@@ -93,8 +152,8 @@ class VulnerabilitiesController:
         observation for the new scan — preventing cross-variant observation leakage."""
         self._db_record_cache: dict = {}
         """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
-        self.epss_db = EPSS_DB("/cache/vulnscout/epss.db")
-        self.nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+        self.epss_api = EPSS_DB()
+        self.nvd_api = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
         self._preload_cache()
 
     def _preload_cache(self) -> None:
@@ -265,16 +324,94 @@ class VulnerabilitiesController:
         return False
 
     def fetch_epss_scores(self):
+        from ..controllers.epss_progress import EPSSProgressTracker
         start_time = time.time()
         nb_vuln = 0
 
-        for vuln in self.vulnerabilities.values():
-            result = self.epss_db.get_score(vuln.id)
-            if result:
-                vuln.set_epss(result['score'], result['percentile']),
-                nb_vuln += 1
+        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
 
-        print(f"Fetched EPSS data for {nb_vuln} vulnerabilities from local DB in {time.time() - start_time} seconds.")
+        # Only CVE-prefixed IDs exist in the EPSS database.
+        # Bulk-fetch epss_fetched_at timestamps to avoid N+1 queries.
+        all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
+        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_cve_ids)  # {id: (epss_fa, nvd_fa)}
+
+        cve_vulns = {}
+        skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
+        skipped_fresh = 0
+        for vid in all_cve_ids:
+            epss_fa = fetched_at_map.get(vid, (None, None))[0]
+            if _should_refetch(epss_fa, refresh_delay):
+                cve_vulns[vid] = self.vulnerabilities[vid]
+            else:
+                skipped_fresh += 1
+
+        total = len(cve_vulns)
+        msg = f"=== EPSS: starting enrichment for {total} CVEs"
+        if skipped_non_cve:
+            msg += f" ({skipped_non_cve} non-CVE IDs skipped)"
+        if skipped_fresh:
+            msg += f" ({skipped_fresh} already up-to-date, skipped)"
+        print(msg, flush=True)
+
+        tracker = EPSSProgressTracker()
+        tracker.start("epss_enrichment")
+        tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
+
+        # Batch in chunks of 100 (FIRST.org API limit).
+        # DB commits happen every 500 CVEs to minimise write-transaction overhead.
+        BATCH_SIZE = 100
+        DB_COMMIT_EVERY = 500
+        cve_ids = list(cve_vulns.keys())
+        chunks = [cve_ids[i:i + BATCH_SIZE] for i in range(0, len(cve_ids), BATCH_SIZE)]
+
+        processed = 0
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            try:
+                batch_results = self.epss_api.api_get_epss_batch(chunk)
+            except Exception as e:
+                verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
+                processed += len(chunk)
+                tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
+                continue
+
+            for cve_id in chunk:
+                result = batch_results.get(cve_id)
+                if result is None:
+                    continue
+                vuln = cve_vulns[cve_id]
+                try:
+                    vuln.set_epss(result['score'], result['percentile'])
+                    rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
+                    if rec is not None:
+                        rec.update_record(
+                            epss_score=result['score'],
+                            epss_fetched_at=datetime.datetime.utcnow(),
+                            commit=False,
+                        )
+                    nb_vuln += 1
+                except Exception as e:
+                    verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
+            processed += len(chunk)
+            tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
+            # Commit once every 500 CVEs processed.
+            if processed % DB_COMMIT_EVERY < BATCH_SIZE:
+                try:
+                    db.session.commit()
+                    print(f"=== EPSS: committed {processed}/{total}", flush=True)
+                except Exception as e:
+                    verbose(f"[fetch_epss_scores commit at {processed}] {e}")
+
+                    db.session.rollback()
+
+        # Final commit for any remaining deferred EPSS updates.
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_epss_scores final commit] {e}")
+            db.session.rollback()
+
+        tracker.complete()
+        print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
 
     @staticmethod
     def _fetch_ghsa_published(vuln_id: str) -> Optional[str]:
@@ -297,36 +434,149 @@ class VulnerabilitiesController:
         return None
 
     def fetch_published_dates(self):
-        """Fetch published dates from NVD database for all vulnerabilities."""
+        """Fetch published dates for all vulnerabilities from the NVD SQLite cache and GitHub API.
+
+        CVE-prefixed IDs are looked up in the local NVD SQLite DB (offline cache).
+        GHSA-prefixed IDs use the GitHub Advisories API via a thread pool.
+        All errors are silently caught so that a missing/corrupt NVD SQLite file
+        never aborts the enrichment run.
+        """
+        import sqlite3
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
+
+        cve_vulns = {vid: v for vid, v in self.vulnerabilities.items() if vid.startswith("CVE-")}
+        ghsa_vulns = {vid: v for vid, v in self.vulnerabilities.items() if "GHSA" in vid}
+
+        # Query the NVD SQLite cache for CVE published dates
+        if cve_vulns:
+            try:
+                conn = sqlite3.connect(nvd_db_path)
+                try:
+                    placeholders = ",".join("?" for _ in cve_vulns)
+                    cursor = conn.execute(
+                        f"SELECT id, published FROM nvd_vulns WHERE id IN ({placeholders})",
+                        list(cve_vulns.keys()),
+                    )
+                    for row in cursor.fetchall():
+                        cve_id, published = row
+                        if cve_id in cve_vulns and published:
+                            cve_vulns[cve_id].published = published
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError:
+                pass
+            except Exception as e:
+                verbose(f"[fetch_published_dates] {e}")
+
+        # GHSA: fetch via GitHub API with a thread pool
+        if ghsa_vulns:
+            max_workers = min(10, len(ghsa_vulns))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {
+                    executor.submit(self._fetch_ghsa_published, vid): vid
+                    for vid in ghsa_vulns
+                }
+                for future in as_completed(future_to_id, timeout=60):
+                    vid = future_to_id[future]
+                    try:
+                        published = future.result(timeout=15)
+                        if published:
+                            ghsa_vulns[vid].published = published
+                    except Exception:
+                        pass
+
+    def fetch_nvd_data(self):
+        """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
+
+        CVE-prefixed IDs are looked up via the NVD API. GHSA-prefixed IDs use
+        the GitHub Advisories API (published date only). Results are written to
+        the in-memory vulnerability objects and persisted to the main DB.
+        All per-CVE failures are logged and silently skipped so that a single
+        unreachable CVE never aborts the whole enrichment run.
+        Progress is reported via the NVDProgressTracker singleton so that
+        /api/nvd/progress reflects the live enrichment state.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from ..controllers.nvd_progress import NVDProgressTracker
 
         start_time = time.time()
         nb_vuln = 0
 
-        # Separate GHSA vulns (need HTTP) from NVD vulns (local DB lookup)
+        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
+
+        # Bulk-fetch nvd_fetched_at timestamps to avoid N+1 queries.
+        all_ids = list(self.vulnerabilities.keys())
+        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_ids)  # {id: (epss_fa, nvd_fa)}
+
         ghsa_vulns = {}
         nvd_vulns = []
+        skipped_fresh = 0
         for vuln in self.vulnerabilities.values():
+            nvd_fa = fetched_at_map.get(vuln.id, (None, None))[1]
+            if not _should_refetch(nvd_fa, refresh_delay):
+                skipped_fresh += 1
+                continue
             if "GHSA" in vuln.id:
                 ghsa_vulns[vuln.id] = vuln
             else:
                 nvd_vulns.append(vuln)
 
-        # Batch NVD lookups from local SQLite DB
-        try:
-            conn = sqlite3.connect(self.nvd_db_path)
-            cursor = conn.cursor()
-            for vuln in nvd_vulns:
-                result = cursor.execute(
-                    "SELECT published FROM nvd_vulns WHERE id = ?;",
-                    (vuln.id,)
-                ).fetchone()
-                if result and result[0]:
-                    vuln.published = result[0]
+        total = len(nvd_vulns) + len(ghsa_vulns)
+        msg = f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs"
+        if skipped_fresh:
+            msg += f" ({skipped_fresh} already up-to-date, skipped)"
+        print(msg, flush=True)
+        tracker = NVDProgressTracker()
+        tracker.start("nvd_enrichment")
+
+        # NVD lookups via API
+        DB_COMMIT_EVERY = 100
+        done = 0
+        for vuln in nvd_vulns:
+            try:
+                result = self.nvd_api.fetch_cve_data(vuln.id)
+                if result and not result.get("not_found"):
+                    if result.get("published"):
+                        vuln.published = result["published"]
+                    vuln.weaknesses = result.get("weaknesses")
+                    vuln.versions_data = result.get("versions_data")
+                    vuln.patch_url = result.get("patch_url")
+                    vuln.nvd_last_modified = result.get("lastModified")
+                    # Persist the enriched fields
+                    try:
+                        rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
+                        if rec is not None:
+                            publish_date = None
+                            if vuln.published:
+                                try:
+                                    publish_date = datetime.date.fromisoformat(str(vuln.published)[:10])
+                                except ValueError:
+                                    pass
+                            rec.update_record(
+                                publish_date=publish_date or rec.publish_date,
+                                weaknesses=vuln.weaknesses,
+                                versions_data=vuln.versions_data,
+                                patch_url=vuln.patch_url,
+                                nvd_last_modified=vuln.nvd_last_modified,
+                                nvd_fetched_at=datetime.datetime.utcnow(),
+                                commit=False,
+                            )
+                    except Exception as e:
+                        verbose(f"[fetch_nvd_data persist {vuln.id!r}] {e}")
                     nb_vuln += 1
-            conn.close()
-        except Exception as e:
-            print(f"Error fetching published dates from NVD DB: {e}")
+            except Exception as e:
+                verbose(f"[fetch_nvd_data {vuln.id!r}] {e}")
+            done += 1
+            tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vuln.id})")
+            if done % DB_COMMIT_EVERY == 0:
+                try:
+                    db.session.commit()
+                    print(f"=== NVD: committed {done}/{total}", flush=True)
+                except Exception as e:
+                    verbose(f"[fetch_nvd_data commit at {done}] {e}")
+                    db.session.rollback()
 
         # Fetch GHSA dates concurrently with a thread pool and a timeout
         if ghsa_vulns:
@@ -342,11 +592,34 @@ class VulnerabilitiesController:
                         published = future.result(timeout=15)
                         if published:
                             ghsa_vulns[vid].published = published
+                            try:
+                                publish_date = datetime.date.fromisoformat(str(published)[:10])
+                                rec = self._db_record_cache.get(vid) or Vulnerability.get_by_id(vid)
+                                if rec is not None:
+                                    rec.update_record(
+                                        publish_date=publish_date,
+                                        nvd_fetched_at=datetime.datetime.utcnow(),
+                                        commit=False,
+                                    )
+                            except Exception as e:
+                                verbose(f"[fetch_nvd_data persist GHSA {vid!r}] {e}")
                             nb_vuln += 1
                     except Exception as e:
                         print(f"Error for {vid}: {e}")
+                    done += 1
+                    tracker.update("nvd_enrichment", done, total, f"NVD enrichment: {done}/{total} ({vid})")
 
-        print(f"Fetched published dates for {nb_vuln} vulnerabilities in {time.time() - start_time:.1f}s.")
+        # Final commit for any remaining deferred NVD/GHSA updates.
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_nvd_data final commit] {e}")
+            db.session.rollback()
+        tracker.complete()
+        print(
+            f"=== NVD: done — enriched {nb_vuln}/{total} vulnerabilities in {time.time() - start_time:.1f}s.",
+            flush=True,
+        )
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""

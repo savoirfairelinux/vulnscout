@@ -3,118 +3,39 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import sqlite3
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone, timedelta
+import urllib.error
 from ..helpers.fixs_scrapper import FixsScrapper
-from typing import Optional, Generator, Tuple
+from ..helpers.proxy import install_proxy_opener
+from typing import Optional, Tuple
 import time
-import sys
-import os
-
-sys.tracebacklimit = 0  # disable traceback
-
-DB_MODEL_VERSION = "nvd2.0-vulnscout1.1"
 
 
 class NVD_DB:
     """
-    A class to interact with sqlite local copy of NVD
-    Also include API interaction used to build / refresh DB
+    API client for NVD (National Vulnerability Database).
+    Fetches CVE data directly from the NVD API without local caching.
     """
 
-    def __init__(self, db_path: str, nvd_api_key: Optional[str] = None):
-        self.conn = sqlite3.connect(db_path)
-        self.cursor = self.conn.cursor()
+    # HTTP status codes that should not be retried (permanent client errors)
+    _NON_RETRYABLE_STATUSES = {400, 403, 404}
 
-        self.last_modified: str = ""
-        self.last_index: int = 0
-        self.in_sync: bool = False
-
+    def __init__(self, nvd_api_key: Optional[str] = None):
         self.nvd_api_key = nvd_api_key
         self._setup_proxy()
-        self._init_db()
-
-    def _init_db(self):
-        """
-        Initialize the local DB if it doesn't exist.
-        """
-        self.cursor.execute(
-            "CREATE TABLE IF NOT EXISTS nvd_vulns "
-            + "(id TEXT PRIMARY KEY NOT NULL, published TEXT, lastModified TEXT, weaknesses TEXT, "
-            + "versions_data TEXT, patch_url TEXT);"
-        )
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS nvd_metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT);")
-        self.conn.commit()
-        self._load_metadata()
-
-    def _load_metadata(self):
-        """
-        Load the metadata from the local DB.
-        """
-        res = self.cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
-        if res is None:
-            # database was just created
-            self.cursor.execute("INSERT INTO nvd_metadata (key, value) VALUES ('version', ?);", (DB_MODEL_VERSION,))
-            self.conn.commit()
-        elif res[0] != DB_MODEL_VERSION:
-            # incompatible database version
-            print("DB version mismatch, please update or reset the DB")
-            raise RuntimeError(f"DB version mismatch, expected {DB_MODEL_VERSION}, got {res[0]}")
-        else:
-            # database was existing before and with correct version, restore metadata
-            res = self.cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_index';").fetchone()
-            if res is not None:
-                self.last_index = int(res[0])
-
-            # if restoring last_modified is impossible, then re-pull all data
-            res = self.cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_modified';").fetchone()
-            try:
-                if res is not None and datetime.fromisoformat(res[0]) is not None:
-                    self.last_modified = res[0]
-                else:
-                    self.last_index = 0
-            except Exception:
-                self.last_index = 0
-
-            print(
-                "Restored DB from cache, last_index =",
-                self.last_index,
-                ", last_modified =",
-                self.last_modified
-            )
-
-    def set_writing_flag(self, flag: bool):
-        """
-        Set the writing flag for the local DB. This flag is only used when reading DB, to avoid using incomplete data
-        """
-        self.cursor.execute(
-            "INSERT OR REPLACE INTO nvd_metadata (key, value) VALUES ('writing_flag', ?);",
-            ("true" if flag else "false",)
-        )
-        self.conn.commit()
 
     def _setup_proxy(self):
-        """
-        Set up proxy handler if proxy environment variables are set.
-        """
-        proxies = {}
-        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
-            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
-        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
-            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        """Set up proxy handler if proxy environment variables are set."""
+        install_proxy_opener()
 
-        if proxies:
-            proxy_handler = urllib.request.ProxyHandler(proxies)
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-
-    def _call_nvd_api(self, params: dict = {}) -> Tuple[int, dict]:
+    def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict]:
         """
         Call the NVD API and return the status code as int and response as a dictionary.
         """
+        if params is None:
+            params = {}
         txt_params = "&".join(
             [
                 f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
@@ -131,7 +52,7 @@ class NVD_DB:
 
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 resp_status = response.status
                 try:
                     resp_json = json.loads(response.read().decode())
@@ -143,7 +64,9 @@ class NVD_DB:
             return resp_status, resp_json
 
         except urllib.error.HTTPError as e:
-            print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
+            _silent = {404, 429}  # 404 = not in NVD; 429 = rate-limited, expected under load
+            if e.code not in _silent:
+                print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
             return e.code, {}
         except Exception as e:
             print(f"Error calling NVD API: {e}", flush=True)
@@ -157,8 +80,10 @@ class NVD_DB:
         status = 0
         while retry <= 3:
             time.sleep(10 * retry)
-            status, data = self._call_nvd_api({"cveId": cve_id})
+            status, data = self._call_nvd_api({"cveId": cve_id.strip()})
             if status == 200:
+                return status, data
+            elif status in self._NON_RETRYABLE_STATUSES:
                 return status, data
             else:
                 retry += 1
@@ -168,52 +93,9 @@ class NVD_DB:
             "If the issue persists after adding the API key, it may have been invalidated."
         )
 
-    def api_get_from_index(self, start_index: int = 0) -> Tuple[int, dict]:
-        """
-        Call the NVD API to get a list of CVEs starting from a specific index.
-        """
-        retry = 0
-        status = 0
-        while retry <= 3:
-            time.sleep(10 * retry)
-            status, data = self._call_nvd_api({"startIndex": str(start_index)})
-            if status == 200:
-                return status, data
-            else:
-                retry += 1
-        raise ConnectionError(
-            f"Failed to call NVD API (retry = 3, status = {status}, startIndex = {start_index})\n"
-            "Providing an NVD API key may help prevent this error.\n"
-            "If the issue persists after adding the API key, it may have been invalidated."
-        )
-
-    def api_get_by_date(self, start: str, end: str, index: int = 0) -> Tuple[int, dict]:
-        """
-        Call the NVD API to get a list of CVEs between specific date.
-        """
-        retry = 0
-        status = 0
-        while retry <= 3:
-            time.sleep(10 * retry)
-            status, data = self._call_nvd_api({
-                "lastModStartDate": start,
-                "lastModEndDate": end,
-                "startIndex": str(index)
-            })
-            if status == 200:
-                return status, data
-            else:
-                retry += 1
-        raise ConnectionError(
-            f"Failed to call NVD API (retry = 3, status = {status}"
-            + f", startIndex = {index}, lastModStartDate = {start}, lastModEndDate = {end})\n"
-            "Providing an NVD API key may help prevent this error.\n"
-            "If the issue persists after adding the API key, it may have been invalidated."
-        )
-
     def api_weaknesses_to_list_str(self, weaknesses: list) -> list[str]:
         """
-        Convert a list of weaknesses obtained from API to a string.
+        Convert a list of weaknesses obtained from API to a list of strings.
         """
         weaks = set([x["value"] for publisher in weaknesses for x in publisher["description"]])
         return list(weaks)
@@ -224,107 +106,44 @@ class NVD_DB:
         """
         return [x["url"] for x in references if "tags" in x and "Patch" in x["tags"]]
 
-    def write_result_to_db(self, data: dict) -> bool:
+    def fetch_cve_data(self, cve_id: str) -> Optional[dict]:
         """
-        Write the result of an API call to the local DB.
+        Fetch and parse NVD data for a single CVE directly from the API.
+
+        Returns a dict with keys:
+            published, lastModified, weaknesses, versions_data, patch_url
+
+        Returns None on transient/connection failures (caller should retry later).
+        Returns {"not_found": True} when NVD definitively has no record for this
+        CVE (HTTP 404 or 200 with empty result set) — caller should persist a
+        sentinel so the CVE is not re-queried on every restart.
         """
         try:
-            datas = []
-            for vuln in data["vulnerabilities"]:
-                cve = vuln["cve"]
-                fix_scrapper = FixsScrapper()
-                fix_scrapper.search_in_nvd(vuln)
-                datas.append((
-                    cve["id"],
-                    cve["published"],
-                    cve["lastModified"],
-                    json.dumps(self.api_weaknesses_to_list_str(cve["weaknesses"])) if "weaknesses" in cve else "",
-                    json.dumps(fix_scrapper.list_per_packages()),
-                    json.dumps(self.api_references_filter_patchs(cve["references"])) if "references" in cve else ""
-                ))
-            self.cursor.executemany(
-                "INSERT OR REPLACE INTO nvd_vulns "
-                + "(id, published, lastModified, weaknesses, versions_data, patch_url) "
-                + "VALUES (?, ?, ?, ?, ?, ?);",
-                datas
-            )
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"Error writing to DB: {e}")
-            raise e
-        return False
-
-    def build_initial_db(self) -> Generator:
-        """
-        Build the initial DB by calling the API and iterating on index.
-        Writing the result to the local DB and yielding the last index and total results.
-        """
-        if self.last_index == 0:
-            self.last_modified = datetime.now(timezone.utc).isoformat()
-            self.cursor.execute(
-                "INSERT OR REPLACE INTO nvd_metadata (key, value) VALUES ('last_modified', ?);",
-                (self.last_modified,)
-            )
-            self.conn.commit()
-
-        reached_end = False
-        while not reached_end:
-            status, data = self.api_get_from_index(self.last_index)
+            status, data = self.api_get_cve(cve_id)
+            if status == 404 or (status == 200 and not data.get("vulnerabilities")):
+                return {"not_found": True}
             if status != 200:
-                raise ConnectionError(f"Failed to fetch data from NVD API [{status}]", data)
-            if self.write_result_to_db(data):
-                self.last_index += len(data["vulnerabilities"])
-                self.cursor.execute(
-                    "INSERT OR REPLACE INTO nvd_metadata (key, value) VALUES ('last_index', ?);",
-                    (str(self.last_index),)
-                )
-                self.conn.commit()
-            yield self.last_index, data["totalResults"]
-            reached_end = self.last_index >= data["totalResults"]
-
-    def _find_120_days_interval(self, start: str, end: str) -> Tuple[str, str, bool]:
-        """
-        Take a start and end date as string in ISO datetime format.
-        Return the start and end date to use in query and a boolean to true if end provided is end returned.
-        """
-        def clean(date: datetime) -> str:
-            return date.isoformat().removesuffix("+00:00")
-
-        st = datetime.fromisoformat(start) - timedelta(days=1)
-        en = datetime.fromisoformat(end) + timedelta(days=1)
-        delta = en - st
-        if delta.days < 120:
-            return (clean(st), clean(en), True)
-        return (clean(st), clean(st + timedelta(days=119)), False)
-
-    def update_db(self) -> Generator:
-        """
-        Update the local DB by calling the API using the last_modified date.
-        Writing the result to the local DB and yielding the start and end time range pulled.
-        """
-        if self.last_modified == "":
-            raise RuntimeError("No last_modified date found in metadata, cannot update DB")
-        reached_end = False
-        while not reached_end:
-            today = datetime.now(timezone.utc).isoformat()
-            start, end, reached_end = self._find_120_days_interval(self.last_modified, today)
-
-            reached_end_range = False
-            current_index = 0
-            while not reached_end_range:
-                status, data = self.api_get_by_date(start, end, current_index)
-                if status != 200:
-                    raise ConnectionError(f"Failed to fetch data from NVD API [{status}]", data)
-
-                if self.write_result_to_db(data):
-                    current_index += len(data["vulnerabilities"])
-                yield f"{start} - {end} : {current_index} / {data['totalResults']}"
-                reached_end_range = current_index >= data["totalResults"]
-
-            self.last_modified = today if reached_end else end
-            self.cursor.execute(
-                "INSERT OR REPLACE INTO nvd_metadata (key, value) VALUES ('last_modified', ?);",
-                (self.last_modified,)
-            )
-            self.conn.commit()
+                return None
+            vuln = data["vulnerabilities"][0]
+            cve = vuln["cve"]
+            fix_scrapper = FixsScrapper()
+            fix_scrapper.search_in_nvd(vuln)
+            return {
+                "published": cve.get("published"),
+                "lastModified": cve.get("lastModified"),
+                "weaknesses": (
+                    self.api_weaknesses_to_list_str(cve["weaknesses"])
+                    if "weaknesses" in cve else []
+                ),
+                "versions_data": fix_scrapper.list_per_packages(),
+                "patch_url": (
+                    self.api_references_filter_patchs(cve["references"])
+                    if "references" in cve else []
+                ),
+            }
+        except ConnectionError:
+            print(f"NVD API unavailable for {cve_id}, skipping enrichment.", flush=True)
+            return None
+        except Exception as e:
+            print(f"Error fetching NVD data for {cve_id}: {e}", flush=True)
+            return None

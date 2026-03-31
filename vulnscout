@@ -175,6 +175,7 @@ USER_UID=$(id -u)
 USER_GID=$(id -g)
 VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 VITE_API_URL=http://localhost:7275
+REFRESH_REMOTE_DELAY=48h
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi

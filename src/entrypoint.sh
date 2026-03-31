@@ -154,6 +154,7 @@ cmd_scan() {
     export CONTACT_EMAIL="${CONTACT_EMAIL:-}"
     export DOCUMENT_URL="${DOCUMENT_URL:-}"
     export NVD_API_KEY="${NVD_API_KEY:-}"
+    export REFRESH_REMOTE_DELAY="${REFRESH_REMOTE_DELAY:-48h}"
     export HTTP_PROXY="${HTTP_PROXY:-}"
     export HTTPS_PROXY="${HTTPS_PROXY:-}"
     export NO_PROXY="${NO_PROXY:-}"
@@ -174,14 +175,6 @@ cmd_scan() {
             FLASK_ARGS+=(--debug)
         fi
         (cd "$BASE_DIR" && flask "${FLASK_ARGS[@]}") &
-    fi
-
-    python3 -m src.bin.epss_db_builder &
-
-    if [[ "$INTERACTIVE_MODE" == "true" ]]; then
-        python3 -m src.bin.nvd_db_builder &
-    else
-        set_status "0" "NVD sync skipped in CI Mode"
     fi
 
     # All input files belong to a single variant set for this invocation

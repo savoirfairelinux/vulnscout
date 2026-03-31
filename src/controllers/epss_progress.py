@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from threading import Lock
 
 
-class NVDProgressTracker:
+class EPSSProgressTracker:
     """
-    Singleton class to track NVD enrichment progress in-memory.
+    Singleton class to track EPSS enrichment progress in-memory.
     """
 
     _instance = None
@@ -18,7 +18,7 @@ class NVDProgressTracker:
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(NVDProgressTracker, cls).__new__(cls)
+            cls._instance = super(EPSSProgressTracker, cls).__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
@@ -37,8 +37,8 @@ class NVDProgressTracker:
         }
         self._initialized = True
 
-    def start(self, phase: str = "enrichment"):
-        """Mark the start of an enrichment process."""
+    def start(self, phase: str = "epss_enrichment"):
+        """Mark the start of an EPSS enrichment process."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             self._data = {
@@ -66,7 +66,7 @@ class NVDProgressTracker:
         with self._lock:
             self._data["in_progress"] = False
             self._data["phase"] = "completed"
-            self._data["message"] = "Enrichment completed successfully"
+            self._data["message"] = "EPSS enrichment completed successfully"
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def error(self, message: str):
@@ -78,6 +78,6 @@ class NVDProgressTracker:
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def get_progress(self) -> dict:
-        """Get current progress information."""
+        """Return a copy of the current progress data."""
         with self._lock:
             return dict(self._data)

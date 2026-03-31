@@ -53,14 +53,10 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers, files):
-    """Enrich vulnerabilities with EPSS scores and NVD published dates."""
+def post_treatment(controllers, documents=None):
+    """Enrich vulnerabilities with EPSS scores."""
 
-    # TODO: 1. fetch EPSS
     controllers["vulnerabilities"].fetch_epss_scores()
-
-    # TODO: 2. fetch published dates from NVD
-    controllers["vulnerabilities"].fetch_published_dates()
 
 
 def evaluate_condition(controllers, condition):
@@ -266,12 +262,22 @@ def _run_main() -> dict:
         read_inputs(controllers, scan_id=scan_id)
         verbose("merger_ci: Finished reading inputs")
 
-        verbose("merger_ci: Start Post-treatment")
-        # TODO: Refactor post-treatment to use the new DB schema
-        # post_treatment(controllers, files)
-        verbose("merger_ci: Finished post-treatment")
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
+
+    # In interactive (serve) mode the webapp background thread handles all
+    # enrichment after the loading screen clears.  Running it here too would
+    # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
+    # the frontend stuck at Step 1.
+    # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
+    # EPSS scores are available for --match-condition evaluation.
+    interactive_mode = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
+    if not interactive_mode:
+        verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
+        post_treatment(controllers)
+        verbose("merger_ci: Post-treatment done")
+    else:
+        verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
     match_condition = os.getenv("MATCH_CONDITION", "")
     failed_vulns = []
@@ -453,7 +459,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     # Populate controllers from DB (needed for evaluate_condition and template rendering)
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
     vulnCtrl.fetch_epss_scores()
-    vulnCtrl.fetch_published_dates()
+    vulnCtrl.fetch_nvd_data()
 
     controllers = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
     templ = Templates(controllers)

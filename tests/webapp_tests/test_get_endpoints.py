@@ -90,6 +90,8 @@ def test_get_vulnerabilities_list(client):
     assert data[0]["id"] == "CVE-2020-35492"
     assert data[0]["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data[0]["packages"]
+    # found_by must be populated from the SBOM chain (grype doc in setup_demo_db)
+    assert "grype" in data[0]["found_by"]
 
 
 def test_get_vulnerabilities_dict(client):
@@ -238,8 +240,12 @@ def test_render_document_pdf(client):
         assert response.status_code == 200
 
 def test_render_document_html(client):
+    import shutil
     response = client.get("/api/documents/summary.adoc?ext=html")
-    assert response.status_code == 200
+    if shutil.which("asciidoctor") is None:
+        assert response.status_code == 503
+    else:
+        assert response.status_code == 200
 
 
 def test_render_cdx_v1_6(client):
@@ -269,15 +275,8 @@ def test_get_patch_finder_status(client):
     response = client.get("/api/patch-finder/status")
     assert response.status_code == 200
     data = json.loads(response.data)
-    # values allowed to be changed on future updates
-    assert data["api_version"] == "nvd2.0-vulnscout1.1"
-    assert data["db_version"] == "nvd2.0-vulnscout1.1"
-
-    # following should be true whichever version is used
-    assert data["api_version"] == data["db_version"]
     assert data["db_ready"] is True
-    assert data["vulns_count"] == 264387
-    assert data["last_modified"] == "2024-10-03T13:35:12.847678+00:00"
+    assert isinstance(data["vulns_count"], int)
 
 def test_render_spdx_json(client):
     response = client.get("/api/documents/SPDX 2.3?ext=json")
@@ -408,26 +407,9 @@ def test_patch_finder_scan_non_list_payload(client):
     assert response.status_code == 400
 
 
-def test_patch_finder_scan_db_version_mismatch(client, monkeypatch):
-    """POST /api/patch-finder/scan returns 500 when DB version does not match (line 52)."""
-    import sqlite3 as _sqlite3
-    real_connect = _sqlite3.connect
-
-    class FakeCursor:
-        def execute(self, query, *args):
-            self._query = query
-            return self
-        def fetchone(self):
-            if 'version' in self._query:
-                return ("wrong-version",)
-            return None
-
-    class FakeConn:
-        def cursor(self):
-            return FakeCursor()
-        def close(self):
-            pass
-
-    monkeypatch.setattr("src.routes.patch_finder.sqlite3.connect", lambda path: FakeConn())
-    response = client.post("/api/patch-finder/scan", json=["CVE-2020-35492"])
-    assert response.status_code == 500
+def test_patch_finder_scan_unknown_cve(client):
+    """POST /api/patch-finder/scan with an unknown CVE returns 200 with empty dict."""
+    response = client.post("/api/patch-finder/scan", json=["CVE-0000-99999"])
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == {}

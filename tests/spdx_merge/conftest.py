@@ -35,7 +35,7 @@ def flask_app_ctx():
 def mock_epss_db(flask_app_ctx):
     """Replace EPSS_DB with a harmless mock for every spdx_merge test."""
     mock = MagicMock()
-    # Return None from get_score so fetch_epss_scores() skips set_epss()
-    mock.get_score.return_value = None
+    # Return None from api_get_epss so fetch_epss_scores() skips set_epss()
+    mock.api_get_epss.return_value = None
     with patch("src.controllers.vulnerabilities.EPSS_DB", return_value=mock):
         yield mock

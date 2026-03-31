@@ -200,23 +200,21 @@ def vuln_ghsa():
     return vuln
 
 @patch('urllib.request.urlopen')
-@patch('sqlite3.connect')
-def test_fetch_published_dates_ghsa_http_error(mock_sqlite, mock_urlopen, vuln_controller, vuln_ghsa):
+def test_fetch_nvd_data_ghsa_http_error(mock_urlopen, vuln_controller, vuln_ghsa):
     """
     GIVEN a GHSA vulnerability
     WHEN the GitHub API returns an HTTP Error
     THEN the loop should continue gracefully without crashing
     """
     vuln_controller.add(vuln_ghsa)
-    vuln_controller.nvd_db_path = "mock_db.sqlite"
-    
+
     # Simulate a 404 Not Found from GitHub
     mock_urlopen.side_effect = urllib.error.HTTPError(
         url="...", code=404, msg="Not Found", hdrs={}, fp=None
     )
 
     # Execute - should not raise exception
-    vuln_controller.fetch_published_dates()
+    vuln_controller.fetch_nvd_data()
 
     # Assertions
     assert vuln_ghsa.published is None

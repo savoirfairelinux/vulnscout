@@ -49,7 +49,49 @@ def init_app(app):
         from flask import request
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
-        if variant_id:
+        compare_variant_id = request.args.get('compare_variant_id')
+        if variant_id and compare_variant_id:
+            try:
+                base_uuid = uuid.UUID(variant_id)
+                compare_uuid = uuid.UUID(compare_variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id or compare_variant_id"}, 400
+            operation = request.args.get('operation', 'difference')
+
+            def _pkg_ids_for_variant(variant_uuid):
+                return set(db.session.execute(
+                    db.select(Package.id)
+                    .join(Finding, Package.id == Finding.package_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == variant_uuid)
+                    .distinct()
+                ).scalars().all())
+
+            if operation == 'intersection':
+                base_ids = _pkg_ids_for_variant(base_uuid)
+                compare_ids = _pkg_ids_for_variant(compare_uuid)
+                result_ids = list(base_ids & compare_ids)
+                pkgs = list(db.session.execute(
+                    db.select(Package)
+                    .where(Package.id.in_(result_ids))
+                    .order_by(Package.name)
+                ).scalars().all()) if result_ids else []
+            else:  # difference (default): packages in compare but NOT in base
+                exclude_ids = list(_pkg_ids_for_variant(base_uuid))
+                query = (
+                    db.select(Package)
+                    .join(Finding, Package.id == Finding.package_id)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Scan.variant_id == compare_uuid)
+                    .distinct()
+                    .order_by(Package.name)
+                )
+                if exclude_ids:
+                    query = query.where(~Package.id.in_(exclude_ids))
+                pkgs = list(db.session.execute(query).scalars().all())
+        elif variant_id:
             try:
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:

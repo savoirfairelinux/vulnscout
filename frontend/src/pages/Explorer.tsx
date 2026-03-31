@@ -17,7 +17,7 @@ import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
-import Assessments from "../handlers/assessments";
+import Assessments, { removeDuplicateAssessments } from "../handlers/assessments";
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
@@ -90,13 +90,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }, [loadPatchData]);
 
     const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
-        // When compare is active, packages/assessments are scoped to the compare variant
-        const activeVariantId = compareVariantId || variantId;
         setIsLoadingData(true);
+
+        const assessPromise: Promise<Assessment[]> = (compareVariantId && variantId)
+            ? Promise.all([
+                Assessments.list(variantId, projectId),
+                Assessments.list(compareVariantId, projectId),
+              ]).then(([a1, a2]) => removeDuplicateAssessments([...a1, ...a2]))
+            : Assessments.list(variantId, projectId);
+
         Promise.allSettled([
-            Packages.list(activeVariantId, projectId),
+            Packages.list(variantId, projectId, compareVariantId, operation),
             Vulnerabilities.list(variantId, projectId, compareVariantId, operation),
-            Assessments.list(activeVariantId, projectId)
+            assessPromise,
         ]).then(([pkgsResult, vulnsResult, assessResult]) => {
             setIsLoadingData(false);
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
@@ -106,7 +112,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             }
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
             setVulns(enriched_vulns);
-            setPkgs(Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns));
+            const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
+            setPkgs(enrichedPkgs);
             setTimeout(() => checkPatchReady(enriched_vulns), 100);
         });
     }, [checkPatchReady]);

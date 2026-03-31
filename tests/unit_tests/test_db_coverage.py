@@ -1073,7 +1073,7 @@ class TestVulnerabilitiesController:
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.models.vulnerability import Vulnerability
 
-        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
         pkgctrl = PackagesController()
         ctrl = VulnerabilitiesController(pkgctrl)
         # Create the vuln AFTER init so it is not in the in-memory dict
@@ -1089,7 +1089,7 @@ class TestVulnerabilitiesController:
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.models.vulnerability import Vulnerability
 
-        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
         pkgctrl = PackagesController()
         ctrl = VulnerabilitiesController(pkgctrl)
         # Create the vuln AFTER init then clear memory so to_dict uses the DB
@@ -1100,21 +1100,47 @@ class TestVulnerabilitiesController:
         assert "CVE-2099-TODICT" in result
 
     def test_fetch_epss_scores_hit(self, app, monkeypatch):
-        """fetch_epss_scores counts a match when epss_db.get_score returns data (lines 264-265)."""
+        """fetch_epss_scores calls api_get_epss_batch, sets the in-memory score and persists to DB."""
         from src.controllers.packages import PackagesController
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.models.vulnerability import Vulnerability
         from unittest.mock import MagicMock
 
-        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
-        v = Vulnerability("CVE-2099-EPSS", [], "", "NVD")
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
+        # Create the record in DB so the persist path is exercised
+        Vulnerability.create_record("CVE-2099-EPSS")
         pkgctrl = PackagesController()
         ctrl = VulnerabilitiesController(pkgctrl)
-        ctrl.vulnerabilities["CVE-2099-EPSS"] = v
-        ctrl.epss_db = MagicMock()
-        ctrl.epss_db.get_score.return_value = {"score": 0.05, "percentile": 50.0}
+        ctrl.epss_api = MagicMock()
+        ctrl.epss_api.api_get_epss_batch.return_value = {
+            "CVE-2099-EPSS": {"score": 0.05, "percentile": 50.0}
+        }
         ctrl.fetch_epss_scores()
-        assert v.epss["score"] == 0.05
+        # In-memory update
+        assert ctrl.vulnerabilities["CVE-2099-EPSS"].epss["score"] == 0.05
+        # DB update
+        rec = Vulnerability.get_by_id("CVE-2099-EPSS")
+        assert rec is not None
+        assert float(rec.epss_score) == 0.05
+
+    def test_fetch_epss_scores_persists_to_db(self, app, monkeypatch):
+        """fetch_epss_scores writes the EPSS score to the database."""
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+        from unittest.mock import MagicMock
+
+        Vulnerability.create_record("CVE-2099-EPSS-DB")
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        ctrl.epss_api = MagicMock()
+        ctrl.epss_api.api_get_epss_batch.return_value = {
+            "CVE-2099-EPSS-DB": {"score": 0.42, "percentile": 95.0}
+        }
+        ctrl.fetch_epss_scores()
+        rec = Vulnerability.get_by_id("CVE-2099-EPSS-DB")
+        assert rec is not None
+        assert float(rec.epss_score) == pytest.approx(0.42)
 
     def test_fetch_ghsa_published_success(self):
         """_fetch_ghsa_published returns the published_at value on success (lines 279-280)."""
@@ -1162,15 +1188,15 @@ class TestVulnerabilitiesController:
             result = VulnerabilitiesController._fetch_ghsa_published("GHSA-xxxx")
         assert result is None
 
-    def test_fetch_published_dates_ghsa(self, app, monkeypatch):
-        """fetch_published_dates processes a GHSA vuln and sets its published date (lines 334-337)."""
+    def test_fetch_nvd_data_ghsa(self, app, monkeypatch):
+        """fetch_nvd_data processes a GHSA vuln and sets its published date."""
         import json
         from unittest.mock import patch as mock_patch, MagicMock
         from src.controllers.packages import PackagesController
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.models.vulnerability import Vulnerability
 
-        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
         v = Vulnerability("GHSA-xxxx-test-0001", [], "", "github")
         pkgctrl = PackagesController()
         ctrl = VulnerabilitiesController(pkgctrl)
@@ -1182,7 +1208,7 @@ class TestVulnerabilitiesController:
         mock_resp.__exit__ = MagicMock(return_value=False)
 
         with mock_patch("urllib.request.urlopen", return_value=mock_resp):
-            ctrl.fetch_published_dates()
+            ctrl.fetch_nvd_data()
         assert v.published == "2024-06-01T00:00:00Z"
 
     def test_get_vuln_db_fallback(self, app, monkeypatch):
@@ -1192,7 +1218,7 @@ class TestVulnerabilitiesController:
         from src.controllers.vulnerabilities import VulnerabilitiesController
         from src.models.vulnerability import Vulnerability
 
-        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda p: MagicMock())
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
         pkgctrl = PackagesController()
         ctrl = VulnerabilitiesController(pkgctrl)
         # Create the record AFTER init so _preload_cache did not pre-fill it
@@ -1200,3 +1226,20 @@ class TestVulnerabilitiesController:
         result = ctrl.get("CVE-2099-DBGET")
         assert result is not None
         assert result.id == "CVE-2099-DBGET"
+
+    def test_published_populated_from_db_date(self, app):
+        """Vulnerability loaded from DB with publish_date set exposes it via .published and to_dict()."""
+        import datetime
+        from src.models.vulnerability import Vulnerability
+
+        rec = Vulnerability.create_record("CVE-2099-PUBDATE")
+        rec.update_record(publish_date=datetime.date(2024, 3, 15))
+
+        # Re-load from DB — simulates a fresh _preload_cache() after NVD enrichment
+        fresh = Vulnerability.get_by_id("CVE-2099-PUBDATE")
+        assert fresh is not None
+        assert fresh.published == "2024-03-15", (
+            "published transient should be initialised from publish_date on DB load"
+        )
+        assert fresh.to_dict()["published"] == "2024-03-15"
+

@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from flask import request
-import json
 import re
-import sqlite3
 
-NVD_DB_PATH = "/cache/vulnscout/nvd.db"
-DB_MODEL_VERSION = "nvd2.0-vulnscout1.1"
+from ..models.vulnerability import Vulnerability
+from ..extensions import db
 
 
 def init_app(app):
@@ -16,24 +14,12 @@ def init_app(app):
     safe_url_regex = r"[^a-zA-Z0-9_\-\.]"
     """Regex to remove unsafe characters from URLs."""
 
-    if "NVD_DB_PATH" not in app.config:
-        app.config["NVD_DB_PATH"] = NVD_DB_PATH
-
     @app.route('/api/patch-finder/status', methods=['GET'])
     def get_status():
-        conn = sqlite3.connect(app.config["NVD_DB_PATH"])
-        cursor = conn.cursor()
-        version = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
-        write_flag = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'writing_flag';").fetchone()
-        last_index = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_index';").fetchone()
-        last_modified = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'last_modified';").fetchone()
-        conn.close()
+        vuln_count = db.session.query(Vulnerability).count()
         return {
-            "api_version": DB_MODEL_VERSION,
-            "db_version": version[0] if version is not None else None,
-            "db_ready": write_flag[0] == "false" if write_flag is not None else False,
-            "vulns_count": int(last_index[0]) if last_index is not None else 0,
-            "last_modified": last_modified[0] if last_modified is not None else None
+            "db_ready": True,
+            "vulns_count": vuln_count,
         }, 200
 
     @app.route('/api/patch-finder/scan', methods=['POST'])
@@ -45,18 +31,12 @@ def init_app(app):
             return "Invalid payload, require a list of string", 400
         safe_cve = [re.sub(safe_url_regex, '', s) for s in payload_data]
 
-        conn = sqlite3.connect(app.config["NVD_DB_PATH"])
-        cursor = conn.cursor()
-        res = cursor.execute("SELECT value FROM nvd_metadata WHERE key = 'version';").fetchone()
-        if res is None or res[0] != DB_MODEL_VERSION:
-            return "DB version mismatch", 500
-
         response = {}
         for cve in safe_cve:
-            res = cursor.execute("SELECT versions_data FROM nvd_vulns WHERE id = ?;", (cve,)).fetchone()
-            if res is None:
+            rec = Vulnerability.get_by_id(cve)
+            if rec is None or not rec.versions_data:
                 continue
-            versions_data: dict = json.loads(res[0])
+            versions_data: dict = rec.versions_data
             for (package, data) in versions_data.items():
                 pkg_name = package.split(" (")[0]
                 scanner = package.split(" ")[-1]

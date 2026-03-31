@@ -16,6 +16,8 @@ from ..models.variant import Variant
 from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
+from ..models.sbom_document import SBOMDocument
+from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 from ..helpers.verbose import verbose
 
@@ -60,6 +62,99 @@ def _parse_effort_hours(value) -> int:
     raise ValueError(f"Invalid effort value: {value!r}")
 
 
+# Formats that are exclusively vulnerability scanners (never pure package BOMs)
+_DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
+
+# Mapping from SBOMDocument.format to the legacy found_by string the front-end expects
+_FORMAT_TO_FOUND_BY: dict[str, str] = {
+    "grype": "grype",
+    "spdx": "spdx3",
+    "cdx": "cyclonedx",
+    "openvex": "openvex",
+    "yocto_cve_check": "yocto",
+}
+
+
+def _populate_found_by(
+    records: list,
+    variant_uuid=None,
+    project_uuid=None,
+) -> None:
+    """Populate the transient found_by list on each record from SBOMDocument.format.
+
+    Walks the Finding -> SBOMPackage -> SBOMDocument chain to discover which
+    SBOM document formats are linked to each vulnerability's affected packages,
+    then maps them to the legacy found_by strings consumed by the frontend chart.
+
+    Attribution logic to avoid false-positives from package-list SBOM files:
+    - ``grype`` and ``yocto_cve_check`` are dedicated scanners: they only list
+      packages that are affected by a vulnerability, so their presence is always
+      authoritative.
+    - ``spdx``, ``cdx``, ``openvex`` are dual-purpose (package list OR security
+      file): they are only attributed as a source for a given
+      (vulnerability, package) pair when NO dedicated scanner document also
+      contains that same package.  This prevents a plain SPDX package BOM from
+      being incorrectly credited as a vulnerability discovery source.
+
+    When variant_uuid or project_uuid is provided, only SBOM documents
+    belonging to that variant or project are considered.
+    """
+    if not records:
+        return
+
+    vuln_ids = [r.id for r in records]
+
+    # Build the base query explicitly from Finding so that SBOMDocument does not
+    # end up in the implicit FROM clause (which would happen if we referenced
+    # SBOMDocument.format without select_from(), causing a cartesian product or
+    # a silent no-op when the second .join(SBOMDocument) is evaluated).
+    base_query = (
+        db.select(Finding.vulnerability_id, Finding.package_id, SBOMDocument.format)
+        .select_from(Finding)
+        .join(SBOMPackage, SBOMPackage.package_id == Finding.package_id)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .where(Finding.vulnerability_id.in_(vuln_ids))
+        .where(SBOMDocument.format.isnot(None))
+    )
+
+    if variant_uuid is not None:
+        base_query = (
+            base_query
+            .join(Scan, Scan.id == SBOMDocument.scan_id)
+            .where(Scan.variant_id == variant_uuid)
+        )
+    elif project_uuid is not None:
+        base_query = (
+            base_query
+            .join(Scan, Scan.id == SBOMDocument.scan_id)
+            .join(Variant, Variant.id == Scan.variant_id)
+            .where(Variant.project_id == project_uuid)
+        )
+
+    rows = db.session.execute(base_query.distinct()).all()
+
+    # Group collected formats by (vuln_id, package_id)
+    # pkg_formats: {(vuln_id, package_id): set of formats}
+    pkg_formats: dict[tuple, set[str]] = {}
+    for vuln_id, pkg_id, fmt in rows:
+        key = (vuln_id, str(pkg_id))
+        pkg_formats.setdefault(key, set()).add(fmt)
+
+    # Determine the sources to attribute for each vulnerability
+    found_by_map: dict[str, set[str]] = {}
+    for (vuln_id, _pkg_id), formats in pkg_formats.items():
+        dedicated = formats & _DEDICATED_SCANNER_FORMATS
+        # Only use dedicated scanners when present; fall back to all formats otherwise
+        sources = dedicated if dedicated else formats
+        for fmt in sources:
+            mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+            found_by_map.setdefault(vuln_id, set()).add(mapped)
+
+    for record in records:
+        for scanner in found_by_map.get(record.id, set()):
+            record.add_found_by(scanner)
+
+
 def init_app(app):
 
     if "TIME_ESTIMATES_PATH" not in app.config:
@@ -80,6 +175,8 @@ def init_app(app):
             base_latest_id = _latest_scan_id_for_variant(base_uuid)
             compare_latest_id = _latest_scan_id_for_variant(compare_uuid)
             current_scan_ids = [compare_latest_id] if compare_latest_id else []
+            _scope_variant = compare_uuid
+            _scope_project = None
             opts = (
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.metrics),
@@ -134,6 +231,8 @@ def init_app(app):
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
+            _scope_variant = variant_uuid
+            _scope_project = None
             latest_id = _latest_scan_id_for_variant(variant_uuid)
             current_scan_ids = [latest_id] if latest_id else []
             if latest_id is None:
@@ -156,6 +255,8 @@ def init_app(app):
                 project_uuid = uuid.UUID(project_id)
             except ValueError:
                 return {"error": "Invalid project_id"}, 400
+            _scope_variant = None
+            _scope_project = project_uuid
             latest_ids = _latest_scan_ids_for_project(project_uuid)
             current_scan_ids = latest_ids
             if not latest_ids:
@@ -175,6 +276,9 @@ def init_app(app):
                 ).scalars().all())
         else:
             records = Vulnerability.get_all()
+            _scope_variant = None
+            _scope_project = None
+        _populate_found_by(records, _scope_variant, _scope_project)
         vulns = [r.to_dict() for r in records]
 
         vuln_ids = [v["id"] for v in vulns]

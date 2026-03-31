@@ -21,6 +21,15 @@ jest.mock('../../src/handlers/nvd_progress', () => ({
     },
 }));
 
+// Mock EPSSProgressHandler to prevent unwanted fetch calls
+jest.mock('../../src/handlers/epss_progress', () => ({
+    __esModule: true,
+    default: {
+        getProgress: jest.fn().mockImplementation(() => new Promise(() => {})),
+        getProgressPercentage: jest.fn().mockReturnValue(0),
+    },
+}));
+
 
 const getDOMRect = (width: number, height: number) => ({
     width,
