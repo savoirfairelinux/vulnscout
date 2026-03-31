@@ -64,7 +64,8 @@ class NVD_DB:
             return resp_status, resp_json
 
         except urllib.error.HTTPError as e:
-            if e.code != 404:  # 404 is expected (CVE not in NVD), not an error
+            _silent = {404, 429}  # 404 = not in NVD; 429 = rate-limited, expected under load
+            if e.code not in _silent:
                 print(f"HTTP Error calling NVD API: {e.code} - {e.reason}", flush=True)
             return e.code, {}
         except Exception as e:

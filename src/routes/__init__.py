@@ -8,6 +8,7 @@ from .assessments import init_app as init_assess_app
 from .documents import init_app as init_doc_app
 from .patch_finder import init_app as init_patch_finder_app
 from .nvd_progress import init_app as init_nvd_progress_app
+from .epss_progress import init_app as init_epss_progress_app
 from .project import init_app as init_project_app
 from .variant import init_app as init_variant_app
 from .scans import init_app as init_scans_app
@@ -22,6 +23,7 @@ def init_app(app):
     init_doc_app(app)
     init_patch_finder_app(app)
     init_nvd_progress_app(app)
+    init_epss_progress_app(app)
     init_project_app(app)
     init_variant_app(app)
     init_scans_app(app)

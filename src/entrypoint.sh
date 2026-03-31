@@ -153,6 +153,7 @@ cmd_scan() {
     export CONTACT_EMAIL="${CONTACT_EMAIL:-}"
     export DOCUMENT_URL="${DOCUMENT_URL:-}"
     export NVD_API_KEY="${NVD_API_KEY:-}"
+    export REFRESH_REMOTE_DELAY="${REFRESH_REMOTE_DELAY:-48h}"
     export HTTP_PROXY="${HTTP_PROXY:-}"
     export HTTPS_PROXY="${HTTPS_PROXY:-}"
     export NO_PROXY="${NO_PROXY:-}"

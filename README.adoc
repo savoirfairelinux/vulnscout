@@ -125,6 +125,13 @@ List of environment variables and their purpose:
   Vulnscout to create output files with correct permissions
 * `USER_GID`: This variable sets the GID of the user in the container, allowing
   Vulnscout to create output files with correct permissions
+* `REFRESH_REMOTE_DELAY`: Controls how often EPSS scores and NVD data are
+  re-fetched from remote APIs for vulnerabilities already in the database.
+  Accepted values:
+** `never` — only fetch data that was never fetched (no re-fetch once stored).
+** `always` — always re-fetch on every run.
+** A duration such as `48h` _(default)_, `7d`, `2w`, `30m` — re-fetch when the stored
+   data is older than the given period.
 
 ===== HTTP Proxy Configuration
 
