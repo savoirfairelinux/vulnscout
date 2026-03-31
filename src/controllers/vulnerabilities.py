@@ -20,6 +20,64 @@ from ..models.metrics import Metrics as MetricsModel
 from ..extensions import db
 
 
+# ---------------------------------------------------------------------------
+# Remote-refresh delay helpers
+# ---------------------------------------------------------------------------
+
+_NEVER = datetime.timedelta.max
+_ALWAYS = None  # sentinel: always re-fetch
+
+
+def parse_refresh_delay(value: Optional[str]) -> Optional[datetime.timedelta]:
+    """Parse a REFRESH_REMOTE_DELAY string into a timedelta.
+
+    Accepted formats:
+      * ``\"never\"``  – only fetch data that was never fetched before
+      * ``\"always\"`` – always re-fetch regardless of age
+      * ``\"<N>h\"``   – re-fetch when data is older than N hours  (e.g. ``48h``, default)
+      * ``"<N>d"``   – re-fetch when data is older than N days   (e.g. ``7d``)
+      * ``"<N>w"``   – re-fetch when data is older than N weeks  (e.g. ``2w``)
+      * ``"<N>m"``   – re-fetch when data is older than N minutes (e.g. ``30m``)
+
+    Returns ``datetime.timedelta.max`` for ``"never"``, ``None`` for
+    ``"always"``, or a :class:`datetime.timedelta` for duration values.
+    """
+    if value is None:
+        return _NEVER
+    v = value.strip().lower()
+    if v == "never":
+        return _NEVER
+    if v == "always":
+        return _ALWAYS
+    units = {"h": "hours", "d": "days", "w": "weeks", "m": "minutes"}
+    if v and v[-1] in units:
+        try:
+            return datetime.timedelta(**{units[v[-1]]: float(v[:-1])})
+        except ValueError:
+            pass
+    raise ValueError(
+        f"Invalid REFRESH_REMOTE_DELAY value {value!r}. "
+        "Use 'never', 'always', or a duration like '48h', '7d', '2w', '30m'."
+    )
+
+
+def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[datetime.timedelta]) -> bool:
+    """Return True if the entry should be (re-)fetched.
+
+    * delay is ``None`` (always)         → always True
+    * ``fetched_at`` is ``None``         → True  (never fetched)
+    * delay is ``timedelta.max`` (never) → False (already fetched, skip)
+    * otherwise                          → True if the data is older than *delay*
+    """
+    if delay is _ALWAYS:
+        return True
+    if fetched_at is None:
+        return True
+    if delay is _NEVER:
+        return False
+    return (datetime.datetime.utcnow() - fetched_at) >= delay
+
+
 def _persist_vuln_to_db(
         vuln: Vulnerability, pkg_id_cache=None, finding_cache=None,
         db_record_cache=None, use_savepoint: bool = True) -> None:
@@ -266,21 +324,38 @@ class VulnerabilitiesController:
         return False
 
     def fetch_epss_scores(self):
+        from ..controllers.epss_progress import EPSSProgressTracker
         start_time = time.time()
         nb_vuln = 0
 
+        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
+
         # Only CVE-prefixed IDs exist in the EPSS database.
-        cve_vulns = {
-            vid: v for vid, v in self.vulnerabilities.items()
-            if vid.startswith("CVE-")
-        }
+        # Bulk-fetch epss_fetched_at timestamps to avoid N+1 queries.
+        all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
+        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_cve_ids)  # {id: (epss_fa, nvd_fa)}
+
+        cve_vulns = {}
+        skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
+        skipped_fresh = 0
+        for vid in all_cve_ids:
+            epss_fa = fetched_at_map.get(vid, (None, None))[0]
+            if _should_refetch(epss_fa, refresh_delay):
+                cve_vulns[vid] = self.vulnerabilities[vid]
+            else:
+                skipped_fresh += 1
+
         total = len(cve_vulns)
-        skipped = len(self.vulnerabilities) - total
-        print(
-            f"=== EPSS: starting enrichment for {total} CVEs"
-            + (f" ({skipped} non-CVE IDs skipped)" if skipped else ""),
-            flush=True,
-        )
+        msg = f"=== EPSS: starting enrichment for {total} CVEs"
+        if skipped_non_cve:
+            msg += f" ({skipped_non_cve} non-CVE IDs skipped)"
+        if skipped_fresh:
+            msg += f" ({skipped_fresh} already up-to-date, skipped)"
+        print(msg, flush=True)
+
+        tracker = EPSSProgressTracker()
+        tracker.start("epss_enrichment")
+        tracker.update("epss_enrichment", 0, total, f"EPSS enrichment: 0/{total}")
 
         # Batch in chunks of 100 (FIRST.org API limit).
         # DB commits happen every 500 CVEs to minimise write-transaction overhead.
@@ -296,6 +371,7 @@ class VulnerabilitiesController:
             except Exception as e:
                 verbose(f"[fetch_epss_scores batch {chunk_idx}] {e}")
                 processed += len(chunk)
+                tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
                 continue
 
             for cve_id in chunk:
@@ -307,11 +383,16 @@ class VulnerabilitiesController:
                     vuln.set_epss(result['score'], result['percentile'])
                     rec = self._db_record_cache.get(cve_id) or Vulnerability.get_by_id(cve_id)
                     if rec is not None:
-                        rec.update_record(epss_score=result['score'], commit=False)
+                        rec.update_record(
+                            epss_score=result['score'],
+                            epss_fetched_at=datetime.datetime.utcnow(),
+                            commit=False,
+                        )
                     nb_vuln += 1
                 except Exception as e:
                     verbose(f"[fetch_epss_scores {cve_id!r}] {e}")
             processed += len(chunk)
+            tracker.update("epss_enrichment", processed, total, f"EPSS enrichment: {processed}/{total}")
             # Commit once every 500 CVEs processed.
             if processed % DB_COMMIT_EVERY < BATCH_SIZE:
                 try:
@@ -319,8 +400,17 @@ class VulnerabilitiesController:
                     print(f"=== EPSS: committed {processed}/{total}", flush=True)
                 except Exception as e:
                     verbose(f"[fetch_epss_scores commit at {processed}] {e}")
+
                     db.session.rollback()
 
+        # Final commit for any remaining deferred EPSS updates.
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_epss_scores final commit] {e}")
+            db.session.rollback()
+
+        tracker.complete()
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
 
     @staticmethod
@@ -414,16 +504,30 @@ class VulnerabilitiesController:
         start_time = time.time()
         nb_vuln = 0
 
+        refresh_delay = parse_refresh_delay(os.environ.get("REFRESH_REMOTE_DELAY"))
+
+        # Bulk-fetch nvd_fetched_at timestamps to avoid N+1 queries.
+        all_ids = list(self.vulnerabilities.keys())
+        fetched_at_map = Vulnerability.get_fetched_at_bulk(all_ids)  # {id: (epss_fa, nvd_fa)}
+
         ghsa_vulns = {}
         nvd_vulns = []
+        skipped_fresh = 0
         for vuln in self.vulnerabilities.values():
+            nvd_fa = fetched_at_map.get(vuln.id, (None, None))[1]
+            if not _should_refetch(nvd_fa, refresh_delay):
+                skipped_fresh += 1
+                continue
             if "GHSA" in vuln.id:
                 ghsa_vulns[vuln.id] = vuln
             else:
                 nvd_vulns.append(vuln)
 
         total = len(nvd_vulns) + len(ghsa_vulns)
-        print(f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs", flush=True)
+        msg = f"=== NVD: starting enrichment — {len(nvd_vulns)} CVEs + {len(ghsa_vulns)} GHSAs"
+        if skipped_fresh:
+            msg += f" ({skipped_fresh} already up-to-date, skipped)"
+        print(msg, flush=True)
         tracker = NVDProgressTracker()
         tracker.start("nvd_enrichment")
 
@@ -456,6 +560,7 @@ class VulnerabilitiesController:
                                 versions_data=vuln.versions_data,
                                 patch_url=vuln.patch_url,
                                 nvd_last_modified=vuln.nvd_last_modified,
+                                nvd_fetched_at=datetime.datetime.utcnow(),
                                 commit=False,
                             )
                     except Exception as e:
@@ -491,7 +596,11 @@ class VulnerabilitiesController:
                                 publish_date = datetime.date.fromisoformat(str(published)[:10])
                                 rec = self._db_record_cache.get(vid) or Vulnerability.get_by_id(vid)
                                 if rec is not None:
-                                    rec.update_record(publish_date=publish_date, commit=False)
+                                    rec.update_record(
+                                        publish_date=publish_date,
+                                        nvd_fetched_at=datetime.datetime.utcnow(),
+                                        commit=False,
+                                    )
                             except Exception as e:
                                 verbose(f"[fetch_nvd_data persist GHSA {vid!r}] {e}")
                             nb_vuln += 1

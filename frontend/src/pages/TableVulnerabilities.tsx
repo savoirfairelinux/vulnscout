@@ -2,6 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
+import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
@@ -14,8 +15,9 @@ import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
+import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faCaretDown, faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faCaretDown, faCircleQuestion, faSync, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -284,6 +286,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [publishedDateFrom, setPublishedDateFrom] = useState<string>('');
     const [publishedDateTo, setPublishedDateTo] = useState<string>('');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
+    const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [hideFixed, setHideFixed] = useState<boolean>(false);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -343,6 +346,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         fetchNvdProgress();
         const interval = setInterval(fetchNvdProgress, 5000); // Poll every 5 seconds
+
+        return () => clearInterval(interval);
+    }, []);
+
+    // Fetch EPSS progress on mount and periodically
+    useEffect(() => {
+        const fetchEpssProgress = async () => {
+            try {
+                const progress = await EPSSProgressHandler.getProgress();
+                setEpssProgress(progress);
+            } catch (error) {
+                console.error('Failed to fetch EPSS progress:', error);
+            }
+        };
+
+        fetchEpssProgress();
+        const interval = setInterval(fetchEpssProgress, 5000); // Poll every 5 seconds
 
         return () => clearInterval(interval);
     }, []);
@@ -530,14 +550,33 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('epss', {
             id: 'epss',
-            header: () => <div className="flex items-center justify-center">EPSS Score</div>,
+            header: () => {
+                const loading = epssProgress?.in_progress ?? false;
+                const pct = epssProgress && epssProgress.total > 0
+                    ? Math.round((epssProgress.current / epssProgress.total) * 100)
+                    : 0;
+                return (
+                    <div className="flex flex-col items-center justify-center gap-0.5">
+                        <span>EPSS Score</span>
+                        {loading && (
+                            <span className="flex items-center gap-1 text-xs text-amber-400 font-normal">
+                                <FontAwesomeIcon icon={faSync} className="text-[10px]" />
+                                {pct}%
+                            </span>
+                        )}
+                    </div>
+                );
+            },
             cell: info => {
                 const epss = info.getValue();
+                const fetching = epssProgress?.in_progress && (!epss.score || epss.score === 0);
                 return (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                    {epss.score !== undefined && epss.score !== 0 &&  <>
-                    {(epss.score * 100).toFixed(2)}%
-                    </>}
+                    {fetching ? (
+                        <span className="text-xs text-gray-500 italic">fetching…</span>
+                    ) : epss.score !== undefined && epss.score !== 0 ? (
+                        <>{(epss.score * 100).toFixed(2)}%</>
+                    ) : null}
                 </div>
                 );
             },
@@ -617,9 +656,29 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('published', {
             id: 'published',
-            header: () => <div className="flex items-center justify-center">Published Date</div>,
+            header: () => {
+                const loading = nvdProgress?.in_progress ?? false;
+                const pct = nvdProgress && nvdProgress.total > 0
+                    ? Math.round((nvdProgress.current / nvdProgress.total) * 100)
+                    : 0;
+                return (
+                    <div className="flex flex-col items-center justify-center gap-0.5">
+                        <span>Published Date</span>
+                        {loading && (
+                            <span className="flex items-center gap-1 text-xs text-amber-400 font-normal">
+                                <FontAwesomeIcon icon={faSync} className="text-[10px]" />
+                                {pct}%
+                            </span>
+                        )}
+                    </div>
+                );
+            },
             cell: info => {
                 const published = info.getValue();
+                const fetching = nvdProgress?.in_progress && !published;
+                if (fetching) {
+                    return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
+                }
                 if (!published) {
                     return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
                 }
@@ -709,7 +768,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
