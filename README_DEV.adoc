@@ -10,8 +10,9 @@ Savoir-faire Linux
 
 === Requirements
 
-NVM 22 is required to develop on VulnScout without any issues.
-Installation guide for NVM : https://github.com/nvm-sh/nvm[nvm]
+* Docker (rootless or with your user in the `docker` group)
+* NVM 22 is required to develop the frontend without issues:
+  https://github.com/nvm-sh/nvm[nvm installation guide]
 
 [source,bash]
 ----
@@ -19,22 +20,128 @@ nvm install 22
 nvm use 22
 ----
 
-=== Modify the frontend
+=== Project Structure
 
-By default, the _/frontend_ directory is not mounted in a volume with the container. To visualise frontend modifications, you will need to run VulnScout in development mode.
-To do so, you can run the following command:
+[cols="1,2"]
+|===
+|Directory |Purpose
+
+|`src/`
+|Python/Flask backend (controllers, models, routes, helpers)
+
+|`frontend/`
+|React + TypeScript frontend (Vite, Tailwind CSS)
+
+|`tests/`
+|Backend unit, integration, end-to-end and webapp tests
+
+|`frontend/tests/`
+|Frontend unit tests (Jest + Testing Library)
+
+|`src/migrations/`
+|Alembic database migrations
+
+|`.vulnscout/`
+|Local cache, outputs and example input files
+|===
+
+=== Modify the backend
+
+The backend is a Flask application located in `src/`. When running in dev mode the local `src/` directory is mounted into the container, so any change is picked up immediately without rebuilding the image.
+
+Start the container in dev mode:
 
 [source,bash]
 ----
-./vulnscout.sh \
---name example \
---spdx .vulnscout/example/spdx2/example.rootfs.spdx.tar.zst \
---dev
+./vulnscout --dev start
 ----
+
+Or start with inputs and the web UI in one step:
+
+[source,bash]
+----
+./vulnscout --dev serve \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json
+----
+
+Flask will run with `--debug` when `DEV_MODE=true` is set in the container, enabling auto-reload on Python file changes.
+
+=== Modify the frontend
+
+By default, the `frontend/` directory is not mounted into the container. To get hot-reload for frontend changes, run VulnScout in dev mode — this starts the backend container and a Vite dev server on the host side:
+
+[source,bash]
+----
+./vulnscout --dev start
+----
+
+Or combined with a serve command that also loads input files:
+
+[source,bash]
+----
+./vulnscout --dev serve \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json
+----
+
+The Vite dev server reads `VITE_API_URL` from `frontend/.env` (created automatically from the config, default: `http://localhost:7275`) to proxy API requests to the backend container.
+
+If `node_modules` are not yet installed, the script will run `npm install` automatically.
+
+[NOTE]
+====
+Dev mode requires `npm` to be available on the host. Use NVM 22 to ensure compatibility.
+====
 
 == icon:check[] Testing the project
 
 We use CQFD to run testing tools in a container.
+
+=== Running Tests Locally (without CQFD)
+
+==== Backend
+
+Activate the virtual environment and install dev dependencies first:
+
+[source,bash]
+----
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements/dev.txt
+----
+
+Then run the tests:
+
+[source,bash]
+----
+# All unit tests
+pytest tests/unit_tests/
+
+# All webapp (API) tests
+pytest tests/webapp_tests/
+
+# All tests with coverage report in terminal
+pytest --cov=src tests/
+
+# All tests with HTML coverage report
+pytest --cov-report html --cov=src tests/
+
+# Type checking
+mypy --config-file tests/tox.ini
+----
+
+==== Frontend
+
+[source,bash]
+----
+cd frontend
+npm install
+npm run test          # unit tests
+npm run coverage      # tests + coverage report
+npm run lint          # ESLint
+npm run build         # production build check
+----
 
 === Quick Setup with CQFD
 
@@ -98,7 +205,14 @@ To build and test the Docker image, run:
 
 [source,bash]
 ----
-export BUILD_TAG="$(pwgen -n 12 -1)"
+make -C tests docker_build docker_test docker_clean
+----
+
+Optionally set a custom tag:
+
+[source,bash]
+----
+export BUILD_TAG="my-local-test"
 make -C tests docker_build docker_test docker_clean
 ----
 
