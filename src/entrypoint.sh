@@ -375,10 +375,27 @@ SCAN_REQUIRED=false
 # ---------------------------------------------------------------------------
 # Legacy setup detection: if an openvex.json output exists but no database,
 # this container is being started with the old docker-compose workflow.
+# LEGACY_SETUP_DETECTED may also be injected by the host-side 'vulnscout'
+# wrapper when it finds legacy artefacts outside the /scan/outputs mount.
 # ---------------------------------------------------------------------------
+# Pre-scan args so INTERACTIVE_MODE is correct before the legacy check,
+# even when this script is called with --serve via 'docker exec'.
+for _prearg in "$@"; do
+    [[ "$_prearg" == "--serve" ]] && INTERACTIVE_MODE="true"
+done
+unset _prearg
+
+# Only run legacy detection when we are in (or about to enter) interactive/serve
+# mode. When the new 'vulnscout' wrapper starts the container with the 'daemon'
+# command, skip this block entirely — it will be re-evaluated correctly once
+# 'exec_container --serve' is called and INTERACTIVE_MODE becomes true.
+_run_legacy_check=false
+[[ "${INTERACTIVE_MODE:-false}" == "true" ]] && _run_legacy_check=true
+
 _LEGACY_OPENVEX="${OUTPUTS_DIR:-/scan/outputs}/openvex.json"
 _DB_FILE="/cache/vulnscout/vulnscout.db"
-if [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]]; then
+if [[ "$_run_legacy_check" == "true" ]] && \
+   ( [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] || ( [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]] ) ); then
     if [[ "${INTERACTIVE_MODE:-false}" == "true" ]]; then
         # Write a notification that the web UI will display as a popup
         mkdir -p /scan
@@ -387,7 +404,7 @@ if [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]]; then
   "level": "warning",
   "title": "Legacy setup detected — migration required",
   "message": "This container was started using the old docker-compose workflow. Your data (inputs + assessments) has not been imported into the new database yet.",
-  "action": "Run migration.sh scriptavailable on https://github.com/savoirfairelinux/vulnscout to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow."
+  "action": "Run migration.sh script (available on https://github.com/savoirfairelinux/vulnscout) to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow."
 }
 EOF
         echo "WARNING: Legacy setup detected. A notification has been queued for the web UI."
@@ -405,7 +422,7 @@ EOF
         exit 2
     fi
 fi
-unset _LEGACY_OPENVEX _DB_FILE
+unset _LEGACY_OPENVEX _DB_FILE _run_legacy_check
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon
