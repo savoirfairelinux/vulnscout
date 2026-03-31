@@ -163,7 +163,7 @@ def read_inputs(controllers, scan_id=None):
             else:
                 print(f"Warning: unknown format for {doc.path}, skipping")
         except FileNotFoundError:
-            print(f"Error: registered SBOM document not found on disk: {doc.path}")
+            pass  # File was already merged into the DB and cleaned up — expected.
         except Exception as e:
             if not use_fastspdx:
                 print(f"Error parsing {doc.path}: {e}")

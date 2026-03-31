@@ -83,7 +83,7 @@ env.bak/
 venv.bak/
 
 # Vulnscout files
-.vulnscout/*
+.vulnscout
 .vulnscout-npm.pid
 
 # testing .adoc files
