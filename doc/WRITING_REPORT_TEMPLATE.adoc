@@ -91,9 +91,19 @@ The following variables are available in every template:
 |`client_name`
 |string
 |Customer company name. Set via `CLIENT_NAME` config or overridden per-export from the web UI. May be empty.
-|===
 
-When generating a report after a `--match-condition` run, `unfiltered_vulnerabilities` and `unfiltered_assessments` give access to the full dataset, bypassing any active filter. Useful for summary counts.
+|`unfiltered_vulnerabilities`
+|dict
+|All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset.
+
+|`unfiltered_assessments`
+|dict
+|All assessments, bypassing any active export filter. Keyed by assessment ID.
+
+|`failed_vulns`
+|list[string]
+|List of vulnerability IDs that triggered the `--match-condition` expression. Empty list when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object.
+|===
 
 === Environment Variables in Templates
 

@@ -84,7 +84,6 @@ venv.bak/
 
 # Vulnscout files
 .vulnscout/*
-!.vulnscout/example/
 .vulnscout-npm.pid
 
 # testing .adoc files
