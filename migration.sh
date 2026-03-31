@@ -139,6 +139,17 @@ for v in raw_vols:
         parsed.append((parts[0] if len(parts) > 0 else "",
                         parts[1] if len(parts) > 1 else ""))
 
+import os
+compose_dir = os.path.dirname(os.path.abspath(compose_file))
+
+def resolve(path):
+    """Resolve path relative to the compose file's directory."""
+    if not path:
+        return path
+    if not os.path.isabs(path):
+        return os.path.normpath(os.path.join(compose_dir, path))
+    return path
+
 # Container-path prefix → vulnscout flag
 TYPE_MAP = {
     "/scan/inputs/spdx/":            "--add-spdx",
@@ -151,6 +162,7 @@ inputs = []   # list of [flag, host_path]
 output_dir = ""
 
 for host, container in parsed:
+    host = resolve(host)
     if container.rstrip("/") == "/scan/outputs":
         output_dir = host
         continue
@@ -173,15 +185,22 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 fi
 
+# Point the vulnscout wrapper's cache and outputs at the target directory so
+# the DB and config land there rather than next to the vulnscout script itself.
+export VULNSCOUT_CACHE_DIR="$VULNSCOUT_DIR/cache"
+export VULNSCOUT_OUTPUTS_DIR="$VULNSCOUT_DIR/outputs"
+
 # ---------------------------------------------------------------------------
 # Main loop — walk sub-directories of <vulnscout_dir>
 # ---------------------------------------------------------------------------
 found_any=false
+found_yaml=false
 
 while IFS= read -r -d '' yaml_file; do
     subdir="$(dirname "$yaml_file")"
     variant="$(basename "$subdir")"
 
+    found_yaml=true
     echo "──────────────────────────────────────────────"
     echo "Variant : $variant"
     echo "YAML    : $yaml_file"
@@ -281,8 +300,14 @@ done < <(find "$VULNSCOUT_DIR" -maxdepth 2 \
 
 echo "──────────────────────────────────────────────"
 
-if [[ "$found_any" == "false" ]]; then
+if [[ "$found_yaml" == "false" ]]; then
     echo "No docker-compose YAML files found under $VULNSCOUT_DIR"
+    exit 1
+fi
+
+if [[ "$found_any" == "false" ]]; then
+    echo "Warning: YAML files were found but all variants were skipped (no SBOM/CVE input files)."
+    echo "Check that the input paths in the compose files are accessible."
     exit 1
 fi
 

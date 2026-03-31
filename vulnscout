@@ -173,10 +173,11 @@ do_start() {
     local uid gid
     uid="$(id -u)"; gid="$(id -g)"
     docker run --rm \
+        --entrypoint sh \
         -v "$VULNSCOUT_CACHE_DIR:/mnt/cache" \
         -v "$VULNSCOUT_OUTPUTS_DIR:/mnt/outputs" \
         "$DOCKER_IMAGE" \
-        sh -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
+        -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
         2>/dev/null || true
     if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
         cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
