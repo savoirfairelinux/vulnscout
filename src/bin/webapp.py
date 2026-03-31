@@ -75,13 +75,15 @@ def create_app():
     # mode serialises all reads behind any active write transaction, blocking
     # every Flask request while the enrichment thread commits batches.
     # WAL is a persistent DB-level setting — one-time setup per database file.
+    # PRAGMAs are SQLite-only; skip silently on other DB engines (e.g. MySQL).
     with app.app_context():
-        try:
-            db.session.execute(db.text("PRAGMA journal_mode=WAL"))
-            db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
-            db.session.commit()
-        except Exception:
-            pass
+        if db.engine.dialect.name == "sqlite":
+            try:
+                db.session.execute(db.text("PRAGMA journal_mode=WAL"))
+                db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
+                db.session.commit()
+            except Exception:
+                pass
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
