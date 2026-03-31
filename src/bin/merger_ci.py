@@ -159,7 +159,7 @@ def read_inputs(controllers, scan_id=None):
             else:
                 print(f"Warning: unknown format for {doc.path}, skipping")
         except FileNotFoundError:
-            print(f"Error: registered SBOM document not found on disk: {doc.path}")
+            pass  # File was already merged into the DB and cleaned up — expected.
         except Exception as e:
             if not use_fastspdx:
                 print(f"Error parsing {doc.path}: {e}")
@@ -480,12 +480,13 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
 
     metadata = {
         "author": _os.getenv("AUTHOR_NAME", "Savoir-faire Linux"),
-        "client_name": "",
+        "client_name": _os.getenv("CLIENT_NAME", ""),
         "export_date": _date.today().isoformat(),
         "ignore_before": "1970-01-01T00:00",
         "only_epss_greater": 0.0,
         "scan_date": "unknown date",
         "failed_vulns": failed_vulns,
+        "match_condition": match_condition,
     }
 
     # Collect all templates to generate (deduplicated)

@@ -1,0 +1,188 @@
+= Writing Match Conditions
+Savoir-faire Linux
+:url-repo: https://github.com/savoirfairelinux/vulnscout
+:source-highlighter: highlight.js
+:icons: font
+:icon-set: fa
+
+== Overview
+
+The `--match-condition` flag lets you define a boolean expression that is evaluated against every vulnerability in the project.
+If at least one vulnerability satisfies the condition, the command exits with code *2*, making it suitable for use in CI pipelines.
+
+[source,shell]
+----
+./vulnscout --project <name> --match-condition "<expression>"
+----
+
+Match conditions can be combined with input files in a single invocation:
+
+[source,shell]
+----
+./vulnscout --project demo \
+  --add-spdx /path/to/sbom.spdx.json \
+  --add-cve-check /path/to/cve-check.json \
+  --match-condition "cvss >= 9.0"
+----
+
+== Exit Codes
+
+[cols="1,3"]
+|===
+|Code |Meaning
+
+|`0`
+|Success — no vulnerability matched the condition.
+
+|`1`
+|Execution error — invalid condition syntax, configuration error, or scan failure.
+
+|`2`
+|Condition triggered — at least one vulnerability matched the condition.
+|===
+
+== Language Syntax
+
+The following keywords are recognised:
+
+* Boolean literals: `true`, `false`
+* Logical operators: `and`, `or`, `not`
+* Comparison operators: `>`, `>=`, `<`, `<=`, `==`, `!=`
+* Numbers: `0`, `5`, `2.3`, `-1`, `.42`, `25%` (percentages are divided by 100 internally)
+* Grouping: `(` ... `)`
+
+Every condition must be an expression of the form `<left token> <operator> <right token>`.
+For example: `cvss >= 5 or ignored == true`.
+
+NOTE: `true` alone is *not* a valid expression, but `true == true` is.
+
+Any unrecognised token is treated as a string identifier. String tokens can start with `[a-zA-Z_]` and contain `[a-zA-Z0-9_-:]`.
+
+== Available Tokens
+
+The following tokens are evaluated per vulnerability:
+
+[cols="1,1,3"]
+|===
+|Token |Type |Description
+
+|`id`
+|string
+|The CVE / vulnerability ID (e.g. `CVE-2021-44228`).
+
+|`cvss`
+|number
+|Maximum CVSS score. Generally 0–10.
+
+|`cvss_min`
+|number
+|Minimum CVSS score. Generally 0–10.
+
+|`epss`
+|number
+|EPSS score (0–1). Use `%` notation for percentages, e.g. `epss >= 50%`.
+
+|`effort`
+|number / boolean
+|"Most likely" remediation time estimate, in seconds. Evaluates to `false` when no estimate is set.
+
+|`effort_min`
+|number
+|"Optimistic" remediation time estimate, in seconds.
+
+|`effort_max`
+|number
+|"Pessimistic" remediation time estimate, in seconds.
+
+|`fixed`
+|boolean
+|`true` if the vulnerability status is *fixed*.
+
+|`ignored`
+|boolean
+|`true` if the vulnerability status is *ignored* / not_affected.
+
+|`affected`
+|boolean
+|`true` if the vulnerability status is *affected*.
+
+|`pending`
+|boolean
+|`true` if the vulnerability has not yet been reviewed (status is *pending*).
+
+|`new`
+|boolean
+|`true` if the vulnerability was not present in the previous scan.
+|===
+
+== Examples
+
+=== Basic severity gate
+
+Fail if any critical vulnerability is found:
+
+[source]
+----
+cvss >= 9.0
+----
+
+=== Combined CVSS and EPSS gate
+
+Fail if any vulnerability is critical, or is both high severity and highly exploitable:
+
+[source]
+----
+cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)
+----
+
+=== Require human review
+
+Fail if any vulnerability has not yet been triaged:
+
+[source]
+----
+pending == true
+----
+
+=== Block unresolved high vulnerabilities
+
+Fail if a high-severity vulnerability is neither fixed nor ignored:
+
+[source]
+----
+cvss >= 7.0 and fixed == false and ignored == false
+----
+
+=== Effort-based gate
+
+Fail if an affected vulnerability has no time estimate set:
+
+[source]
+----
+affected == true and effort == false
+----
+
+Fail if a high vulnerability affecting the product could be fixed in under an hour but hasn't been:
+
+[source]
+----
+cvss >= 7.0 and affected == true and effort < 3600
+----
+
+=== Specific CVE check
+
+Fail if a specific known vulnerability is present:
+
+[source]
+----
+id == CVE-2021-44228
+----
+
+=== New vulnerabilities only
+
+Fail if any new (previously unseen) vulnerability is critical:
+
+[source]
+----
+new == true and cvss >= 9.0
+----

@@ -1,0 +1,78 @@
+= Match Condition Report
+{{author}}
+{{export_date}}
+:toc:
+
+{% if client_name is defined and client_name != "" -%}
+This report is strictly confidential and restricted to {% if author is defined and author != "" %}{{author}} and {% endif %}{{client_name}}.
+{%- endif %}
+
+== Legal Notice
+
+[.text-justify]
+This report lists the vulnerabilities that triggered the configured match condition during the scan performed on {{scan_date}}.
+Export date: {{export_date}}.
+
+== Condition Applied
+
+[source]
+----
+{% if match_condition %}{{ match_condition }}{% else %}(no condition set){% endif %}
+----
+
+== Result
+
+{% if failed_vulns is not defined or failed_vulns | length == 0 -%}
+No vulnerabilities matched the condition. The scan passed successfully.
+{%- else -%}
+**{{ failed_vulns | length }}** vulnerabilit{{ "y" if failed_vulns | length == 1 else "ies" }} matched the condition out of **{{ unfiltered_vulnerabilities | as_list | length }}** total.
+
+[cols="2,1,1,1,3"]
+|===
+^| CVE ID ^| Severity ^| CVSS ^| EPSS ^| Packages
+
+{% for vuln_id in failed_vulns %}{% set vuln = unfiltered_vulnerabilities[vuln_id] %}
+^| {{ vuln.id }}
+^| {{ vuln.severity.severity | capitalize }}
+^| {{ "%.1f" | format(vuln.severity.max_score | float) }}
+^| {{ "%.2f" | format(vuln.epss.score | float * 100) }} %
+| {{ ', '.join(vuln.packages) or "unknown" }}
+{% endfor %}
+|===
+
+<<<
+
+== Vulnerability Details
+
+{% for vuln_id in failed_vulns %}{% set vuln = unfiltered_vulnerabilities[vuln_id] %}
+=== {{ vuln.id }} ({{ vuln.severity.severity | capitalize }})
+
+* *CVSS*: {{ vuln.severity.max_score }}
+* *EPSS*: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %
+* *Status*: {{ vuln.simplified_status | capitalize }}
+* *Packages*: {{ ', '.join(vuln.packages) or "unknown" }}
+* *Reference*: {{ vuln.datasource or (vuln.urls[0] if vuln.urls else "No sources found") }}
+
+{% if vuln.texts -%}
+**Description**: +
+{% for title, content in vuln.texts.items() %}
+{{ content }}
+{% endfor %}
+{%- endif %}
+
+{% if vuln.last_assessment is defined -%}
+**Assessment**: +
+[{{ vuln.last_assessment.timestamp | print_iso8601 }}] {{ vuln.last_assessment.status }}
+{%- if vuln.last_assessment.justification %} — {{ vuln.last_assessment.justification }}{%- endif %}
+{%- if vuln.last_assessment.status_notes != '' %} +
+_Notes_: {{ vuln.last_assessment.status_notes }}{%- endif %}
+{%- if vuln.last_assessment.impact_statement != '' %} +
+_Impact statement_: {{ vuln.last_assessment.impact_statement }}{%- endif %}
+{%- if vuln.last_assessment.workaround != '' %} +
+_Workaround_: {{ vuln.last_assessment.workaround }}{%- endif %}
+{%- endif %}
+
+'''
+
+{% endfor %}
+{%- endif %}

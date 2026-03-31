@@ -69,7 +69,6 @@ Environment variables:
   VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:latest)
   VULNSCOUT_OUTPUTS_DIR Output directory (default: ./.vulnscout/outputs)
   VULNSCOUT_CACHE_DIR        Cache base dir (default: ./.vulnscout/cache)
-  XDG_CONFIG_HOME       Config base dir (default: ~/.config)
 
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
@@ -155,6 +154,17 @@ config_clear() {
 do_start() {
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
+    # Docker bind-mounts create root-owned directories on the host when a path
+    # doesn't exist yet. Use a temporary container (running as root) to clean up
+    # any such stale paths and re-chown the cache/outputs dirs to the current user.
+    local uid gid
+    uid="$(id -u)"; gid="$(id -g)"
+    docker run --rm \
+        -v "$VULNSCOUT_CACHE_DIR:/mnt/cache" \
+        -v "$VULNSCOUT_OUTPUTS_DIR:/mnt/outputs" \
+        "$DOCKER_IMAGE" \
+        sh -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
+        2>/dev/null || true
     if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
         cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
 FLASK_RUN_PORT=7275
@@ -164,7 +174,6 @@ VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
 VULNSCOUT_VERSION=$VULNSCOUT_VERSION
-VULNSCOUT_CACHE_DIR=$VULNSCOUT_CACHE_DIR
 VITE_API_URL=http://localhost:7275
 REFRESH_REMOTE_DELAY=48h
 EOF

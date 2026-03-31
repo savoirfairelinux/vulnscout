@@ -55,8 +55,8 @@ Container lifecycle:
 
 Examples:
   /scan/src/entrypoint.sh --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
-  /scan/src/entrypoint.sh --project test scan --match-condition "cvss >= 9.0"
-  /scan/src/entrypoint.sh --project test --variant x86 scan --match-condition "cvss >= 9.0"
+  /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
+  /scan/src/entrypoint.sh --project test --variant x86 --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --serve
   /scan/src/entrypoint.sh --report summary.adoc
   /scan/src/entrypoint.sh --config NVD_API_KEY abc123
@@ -150,6 +150,7 @@ cmd_scan() {
     export PRODUCT_NAME="${PRODUCT_NAME:-}"
     export PRODUCT_VERSION="${PRODUCT_VERSION:-}"
     export AUTHOR_NAME="${AUTHOR_NAME:-}"
+    export CLIENT_NAME="${CLIENT_NAME:-}"
     export CONTACT_EMAIL="${CONTACT_EMAIL:-}"
     export DOCUMENT_URL="${DOCUMENT_URL:-}"
     export NVD_API_KEY="${NVD_API_KEY:-}"
