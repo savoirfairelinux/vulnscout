@@ -54,10 +54,9 @@ def _ts_key(ts) -> str:
 
 
 def post_treatment(controllers, documents=None):
-    """Enrich vulnerabilities with EPSS scores and published dates."""
+    """Enrich vulnerabilities with EPSS scores."""
 
     controllers["vulnerabilities"].fetch_epss_scores()
-    controllers["vulnerabilities"].fetch_published_dates()
 
 
 def evaluate_condition(controllers, condition):
@@ -266,9 +265,19 @@ def _run_main() -> dict:
     # ← single COMMIT happens here
     verbose("merger_ci: DB commit done")
 
-    verbose("merger_ci: Starting post-treatment (EPSS + NVD enrichment)")
-    post_treatment(controllers)
-    verbose("merger_ci: Post-treatment done")
+    # In interactive (serve) mode the webapp background thread handles all
+    # enrichment after the loading screen clears.  Running it here too would
+    # block the shell from writing the __END_OF_SCAN_SCRIPT__ marker, keeping
+    # the frontend stuck at Step 1.
+    # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
+    # EPSS scores are available for --match-condition evaluation.
+    interactive_mode = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
+    if not interactive_mode:
+        verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
+        post_treatment(controllers)
+        verbose("merger_ci: Post-treatment done")
+    else:
+        verbose("merger_ci: Skipping CLI enrichment in interactive mode (webapp background thread will handle it)")
 
     match_condition = os.getenv("MATCH_CONDITION", "")
     failed_vulns = []
