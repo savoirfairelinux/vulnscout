@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faBugSlash, faClockRotateLeft } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
@@ -59,7 +59,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       </li>
 
       {/* === Patch-Finder === */}
-      <li className={[bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
+      {/* <li className={[bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('patch-finder')}
           className="flex items-center h-full px-4 py-2"
@@ -67,7 +67,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
           <FontAwesomeIcon icon={faBugSlash} className="mr-1" />
           Patch-Finder
         </button>
-      </li>
+      </li> */}
 
       {/* === Scans === */}
       <li className={[bgHoverColor, tab == 'scans' && bgActiveColor].join(' ')}>
