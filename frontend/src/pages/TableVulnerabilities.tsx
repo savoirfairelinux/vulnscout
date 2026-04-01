@@ -465,6 +465,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'effort.likely': 'Estimated Effort',
         'assessments': 'Last Updated',
         'published': 'Published Date',
+        'first_scan_date': 'First Scan Date',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -701,6 +702,38 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 return dateA - dateB;
             },
             size: 90
+            }),
+            columnHelper.accessor('first_scan_date', {
+            id: 'first_scan_date',
+            header: () => <div className="flex items-center justify-center">First Scan Date</div>,
+            cell: info => {
+                const scanDate = info.getValue();
+                if (!scanDate) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                }
+                const date = new Date(scanDate);
+                const formattedDate = date.toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                }) + ' ' + date.toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                });
+                return (
+                    <div className="flex items-center justify-center h-full text-center text-sm">
+                        {formattedDate}
+                    </div>
+                );
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const dateA = rowA.original.first_scan_date ? new Date(rowA.original.first_scan_date).getTime() : 0;
+                const dateB = rowB.original.first_scan_date ? new Date(rowB.original.first_scan_date).getTime() : 0;
+                return dateA - dateB;
+            },
+            size: 110
             }),
             columnHelper.accessor('variants', {
             id: 'variants',
@@ -1033,6 +1066,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Estimated Effort',
                     'Last Updated',
                     'Published Date',
+                    'First Scan Date',
                     'Sources'
                 ]}
                 selected={visibleColumns}

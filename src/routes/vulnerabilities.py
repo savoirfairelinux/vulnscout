@@ -398,6 +398,20 @@ def init_app(app):
             for v in vulns:
                 v["variants"] = sorted(variant_names_by_vuln.get(v["id"], []))
 
+            # Enrich with the date of the earliest scan where each vuln was first observed
+            first_scan_rows = db.session.execute(
+                db.select(Finding.vulnerability_id, func.min(Scan.timestamp))
+                .join(Observation, Finding.id == Observation.finding_id)
+                .join(Scan, Observation.scan_id == Scan.id)
+                .where(Finding.vulnerability_id.in_(vuln_ids))
+                .group_by(Finding.vulnerability_id)
+            ).all()
+            first_scan_by_vuln: dict = {}
+            for vuln_id, min_ts in first_scan_rows:
+                first_scan_by_vuln[str(vuln_id)] = min_ts.isoformat() if min_ts else None
+            for v in vulns:
+                v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
+
         if request.args.get('format', 'list') == "dict":
             return {v["id"]: v for v in vulns}
         return vulns
