@@ -51,13 +51,13 @@ Input commands (can be chained, triggers scan automatically):
   --add-cve-check <path>          Add a Yocto CVE check JSON file
   --add-openvex <path>            Add an OpenVEX JSON file
   --add-cdx <path>                Add a CycloneDX file
-  --add-report-template <path>    Add a custom report template (.adoc)
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
   serve                           Run scan then start web UI (port 7275)
   report <template>               Generate a report from a template
+  report <path>                   Stage a local report template file and generate a report from it
   --export-spdx                   Export project as SPDX 3.0 SBOM
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
@@ -108,14 +108,6 @@ add_input() {
 
     docker cp "$file" "$CONTAINER_NAME:$staged"
     PENDING_ARGS+=("--${cmd}" "$staged")
-}
-
-add_report_template() {
-    local file
-    file="$(readlink -f "$1")"
-    local staged="/tmp/vulnscout_stage_$(basename "$file")"
-    docker cp "$file" "$CONTAINER_NAME:$staged"
-    exec_container --add-report-template "$staged"
 }
 
 do_match_condition() {
@@ -295,8 +287,6 @@ parse_and_run() {
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
-            add-report-template|--add-report-template)
-                ensure_running; add_report_template "$2"; shift 2 ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)
@@ -308,12 +298,14 @@ parse_and_run() {
             report|--report)
                 ensure_running
                 local tpl="$2"
-                # If it's an existing local file, stage it and use its basename as template name
                 if [ -f "$tpl" ]; then
-                    local tpl_staged="/tmp/vulnscout_stage_$(basename "$tpl")"
-                    docker cp "$tpl" "$CONTAINER_NAME:$tpl_staged"
-                    exec_container --add-report-template "$tpl_staged"
-                    tpl="$(basename "$tpl")"
+                    local tpl_abs tpl_staged
+                    tpl_abs="$(readlink -f "$tpl")"
+                    tpl_staged="/tmp/vulnscout_stage_$(basename "$tpl_abs")"
+                    docker cp "$tpl_abs" "$CONTAINER_NAME:$tpl_staged"
+                    tpl="$tpl_staged"
+                elif [[ "$tpl" == */* ]]; then
+                    echo "Error: template file not found: $tpl" >&2; exit 1
                 fi
                 REPORT_ARGS+=(--report "$tpl")
                 shift 2 ;;
