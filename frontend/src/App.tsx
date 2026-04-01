@@ -13,7 +13,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadingText, setLoadingText] = useState({
     topline: 'Vulnerability analysis is running...',
-    details: 'Step 0 : starting script'
+    details: 'Starting...'
   });
   const [darkMode, setDarkMode] = useState(true);
   const [notification, setNotification] = useState<Notification | null>(null);
@@ -45,7 +45,7 @@ function App() {
         }
         setLoadingText({
           topline: 'Vulnerability analysis is running...',
-          details: `Step ${data?.step ?? '0'}/${data?.maxsteps ?? '?'} : ${data?.message}`
+          details: data?.message ?? 'Processing...'
         });
       })
       .catch(error => {
