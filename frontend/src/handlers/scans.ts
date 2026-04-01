@@ -11,8 +11,10 @@ type Scan = {
     is_first: boolean;
     findings_added: number | null;
     findings_removed: number | null;
+    findings_upgraded: number | null;
     packages_added: number | null;
     packages_removed: number | null;
+    packages_upgraded: number | null;
     vulns_added: number | null;
     vulns_removed: number | null;
 };
@@ -31,6 +33,21 @@ type PackageDiffEntry = {
     package_version: string;
 };
 
+type PackageUpgradeEntry = {
+    package_name: string;
+    old_version: string;
+    new_version: string;
+    old_package_id: string;
+    new_package_id: string;
+};
+
+type FindingUpgradeEntry = {
+    vulnerability_id: string;
+    package_name: string;
+    old_version: string;
+    new_version: string;
+};
+
 type ScanDiff = {
     scan_id: string;
     previous_scan_id: string | null;
@@ -40,13 +57,15 @@ type ScanDiff = {
     vuln_count: number;
     findings_added: FindingDiffEntry[];
     findings_removed: FindingDiffEntry[];
+    findings_upgraded: FindingUpgradeEntry[];
     packages_added: PackageDiffEntry[];
     packages_removed: PackageDiffEntry[];
+    packages_upgraded: PackageUpgradeEntry[];
     vulns_added: string[];
     vulns_removed: string[];
 };
 
-export type { Scan, FindingDiffEntry, PackageDiffEntry, ScanDiff };
+export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, ScanDiff };
 
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
