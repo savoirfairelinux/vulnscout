@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ScansHandler from "../handlers/scans";
-import type { Scan, ScanDiff, FindingDiffEntry, PackageDiffEntry } from "../handlers/scans";
+import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry } from "../handlers/scans";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark } from "@fortawesome/free-solid-svg-icons";
 
@@ -44,15 +44,13 @@ function FindingDiffTable({ entries, label, colorClass }: {
                 <h3 className={["font-bold text-base", colorClass].join(' ')}>
                     {label} ({entries.length})
                 </h3>
-                {entries.length > 10 && (
-                    <input
-                        type="text"
-                        placeholder="Filter…"
-                        value={filter}
-                        onChange={e => setFilter(e.target.value)}
-                        className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
-                    />
-                )}
+                <input
+                    type="text"
+                    placeholder="Filter\u2026"
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
+                />
             </div>
             {entries.length === 0 ? (
                 <p className="text-sm text-gray-400 italic">None</p>
@@ -71,6 +69,65 @@ function FindingDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function FindingUpgradeDiffTable({ entries, label, colorClass }: {
+    entries: FindingUpgradeEntry[];
+    label: string;
+    colorClass: string;
+}) {
+    const [filter, setFilter] = useState('');
+    const filtered = filter
+        ? entries.filter(e =>
+            e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
+            e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
+            e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
+            e.new_version.toLowerCase().includes(filter.toLowerCase())
+        )
+        : entries;
+
+    return (
+        <div className="mb-6">
+            <div className="flex items-center justify-between mb-2 gap-3">
+                <h3 className={["font-bold text-base", colorClass].join(' ')}>
+                    {label} ({entries.length})
+                </h3>
+                <input
+                    type="text"
+                    placeholder="Filter&#x2026;"
+                    value={filter}
+                    onChange={e => setFilter(e.target.value)}
+                    className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
+                />
+            </div>
+            {entries.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">None</p>
+            ) : (
+                <div className="overflow-auto max-h-48 rounded border border-gray-600">
+                    <table className="w-full text-xs text-left">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                            <tr>
+                                <th className="px-3 py-2">Package</th>
+                                <th className="px-3 py-2">Old Version</th>
+                                <th className="px-3 py-2">New Version</th>
+                                <th className="px-3 py-2">Vulnerability</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((e, i) => (
+                                <tr key={e.vulnerability_id + e.package_name + i} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                    <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
+                                    <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
+                                    <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                 </tr>
                             ))}
@@ -127,6 +184,64 @@ function PackageDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function PackageUpgradeDiffTable({ entries, label, colorClass }: {
+    entries: PackageUpgradeEntry[];
+    label: string;
+    colorClass: string;
+}) {
+    const [filter, setFilter] = useState('');
+    const filtered = filter
+        ? entries.filter(e =>
+            e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
+            e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
+            e.new_version.toLowerCase().includes(filter.toLowerCase())
+        )
+        : entries;
+
+    return (
+        <div className="mb-6">
+            <div className="flex items-center justify-between mb-2 gap-3">
+                <h3 className={["font-bold text-base", colorClass].join(' ')}>
+                    {label} ({entries.length})
+                </h3>
+                {entries.length > 10 && (
+                    <input
+                        type="text"
+                        placeholder="Filter…"
+                        value={filter}
+                        onChange={e => setFilter(e.target.value)}
+                        className="text-xs px-2 py-1 rounded border border-gray-600 bg-gray-800 text-gray-200 w-48"
+                    />
+                )}
+            </div>
+            {entries.length === 0 ? (
+                <p className="text-sm text-gray-400 italic">None</p>
+            ) : (
+                <div className="overflow-auto max-h-48 rounded border border-gray-600">
+                    <table className="w-full text-xs text-left">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
+                            <tr>
+                                <th className="px-3 py-2">Package</th>
+                                <th className="px-3 py-2">Old Version</th>
+                                <th className="px-3 py-2">New Version</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((e) => (
+                                <tr key={e.old_package_id + e.new_package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                    <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
+                                    <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
+                                    <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -271,6 +386,9 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                         <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
                                             −{diff.packages_removed.length.toLocaleString()}
                                         </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            ↑{diff.packages_upgraded.length.toLocaleString()}
+                                        </span>
                                     </>
                                 )}
                             </button>
@@ -287,6 +405,9 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                         </span>
                                         <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
                                             −{diff.findings_removed.length.toLocaleString()}
+                                        </span>
+                                        <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
+                                            ↑{diff.findings_upgraded.length.toLocaleString()}
                                         </span>
                                     </>
                                 )}
@@ -334,6 +455,13 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                         colorClass="text-red-400"
                                     />
                                 )}
+                                {!diff.is_first && (
+                                    <PackageUpgradeDiffTable
+                                        entries={diff.packages_upgraded}
+                                        label="Upgraded packages"
+                                        colorClass="text-yellow-400"
+                                    />
+                                )}
                             </>
                         )}
                         {diff && section === 'findings' && (
@@ -353,6 +481,13 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                         entries={diff.findings_removed}
                                         label="Removed findings"
                                         colorClass="text-red-400"
+                                    />
+                                )}
+                                {!diff.is_first && diff.findings_upgraded.length > 0 && (
+                                    <FindingUpgradeDiffTable
+                                        entries={diff.findings_upgraded}
+                                        label="Findings on upgraded packages"
+                                        colorClass="text-yellow-400"
                                     />
                                 )}
                             </>
@@ -459,7 +594,7 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                 <DiffModal scanId={openDiffId} onClose={() => setOpenDiffId(null)} />
             )}
 
-            <div className="max-w-3xl mx-auto py-6">
+            <div className="max-w-5xl mx-auto py-6">
                 <h1 className="text-2xl font-bold mb-6 text-gray-800 dark:text-neutral-100">
                     Scan History
                 </h1>
@@ -507,11 +642,17 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.packages_removed ?? 0).toLocaleString()} pkgs
                                                 </span>
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                    ↑{(scan.packages_upgraded ?? 0).toLocaleString()} upgraded
+                                                </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.findings_added ?? 0).toLocaleString()} findings
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.findings_removed ?? 0).toLocaleString()} findings
+                                                </span>
+                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                    ↑{(scan.findings_upgraded ?? 0).toLocaleString()} upgraded
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.vulns_added ?? 0).toLocaleString()} vulns
