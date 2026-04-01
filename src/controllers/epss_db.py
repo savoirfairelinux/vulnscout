@@ -6,25 +6,17 @@
 import urllib.request
 import urllib.parse
 import urllib.error
-import json
 from typing import Optional
-from ..helpers.proxy import install_proxy_opener
+from ..helpers.base_api_client import BaseAPIClient
 
 EPSS_API_URL = "https://api.first.org/data/v1/epss"
 
 
-class EPSS_DB:
+class EPSS_DB(BaseAPIClient):
     """
     API client for EPSS (Exploit Prediction Scoring System).
     Fetches scores directly from the FIRST.org API without local caching.
     """
-
-    def __init__(self):
-        self._setup_proxy()
-
-    def _setup_proxy(self):
-        """Set up proxy handler if proxy environment variables are set."""
-        install_proxy_opener()
 
     def api_get_epss(self, cve_id: str) -> Optional[dict]:
         """
@@ -39,7 +31,7 @@ class EPSS_DB:
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.status != 200:
                     return None
-                data = json.loads(response.read().decode())
+                data = self._decode_response_json(response)
                 entries = data.get("data", [])
                 if entries:
                     entry = entries[0]
@@ -75,7 +67,7 @@ class EPSS_DB:
             with urllib.request.urlopen(req, timeout=30) as response:
                 if response.status != 200:
                     return {}
-                data = json.loads(response.read().decode())
+                data = self._decode_response_json(response)
                 results = {}
                 for entry in data.get("data", []):
                     cve = entry.get("cve")

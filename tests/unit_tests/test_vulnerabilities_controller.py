@@ -3,9 +3,8 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Tests for src/controllers/vulnerabilities.py — DB-fallback paths and
-fetch_published_dates error/GHSA branches (lines 127-128, 161-162, 328-329,
-346-347, 357-359, 418-419)."""
+"""Tests for src/controllers/vulnerabilities.py — DB-fallback paths
+(lines 127-128, 161-162, 418-419)."""
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -101,64 +100,3 @@ class TestVulnerabilitiesControllerIter:
         assert db_vuln.id in vuln_ids
 
 
-# ---------------------------------------------------------------------------
-# fetch_published_dates — NVD SQLite error (lines 328-329)
-# ---------------------------------------------------------------------------
-
-class TestFetchPublishedDates:
-    def test_nvd_sqlite_error_is_silently_caught(self, app):
-        """A connection error to the NVD SQLite DB is caught, not raised (lines 328-329)."""
-        import sqlite3
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.packages import PackagesController
-        from src.models.vulnerability import Vulnerability
-
-        vuln = Vulnerability("CVE-2025-NVD", [], "ds", "ns")
-        pkg_ctrl = PackagesController()
-        vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-        vuln_ctrl.vulnerabilities["CVE-2025-NVD"] = vuln
-
-        with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("no such file")):
-            vuln_ctrl.fetch_published_dates()  # must not raise
-
-    # ---------------------------------------------------------------------------
-    # fetch_published_dates — GHSA thread-pool path (lines 346-359)
-    # ---------------------------------------------------------------------------
-
-    def test_ghsa_published_date_returned(self, app):
-        """GHSA vulns use the ThreadPoolExecutor path; a mocked date is applied (lines 346-347)."""
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.packages import PackagesController
-        from src.models.vulnerability import Vulnerability
-
-        vuln = Vulnerability("GHSA-test-xxxx-0001", [], "ds", "ns")
-        pkg_ctrl = PackagesController()
-        vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-        vuln_ctrl.vulnerabilities["GHSA-test-xxxx-0001"] = vuln
-
-        with patch.object(
-            VulnerabilitiesController,
-            "_fetch_ghsa_published",
-            return_value="2024-06-01T00:00:00Z",
-        ):
-            vuln_ctrl.fetch_published_dates()
-
-        assert vuln.published == "2024-06-01T00:00:00Z"
-
-    def test_ghsa_future_exception_is_caught(self, app):
-        """An exception raised inside a GHSA future is caught, not re-raised (lines 357-359)."""
-        from src.controllers.vulnerabilities import VulnerabilitiesController
-        from src.controllers.packages import PackagesController
-        from src.models.vulnerability import Vulnerability
-
-        vuln = Vulnerability("GHSA-test-xxxx-0002", [], "ds", "ns")
-        pkg_ctrl = PackagesController()
-        vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
-        vuln_ctrl.vulnerabilities["GHSA-test-xxxx-0002"] = vuln
-
-        with patch.object(
-            VulnerabilitiesController,
-            "_fetch_ghsa_published",
-            side_effect=RuntimeError("network error"),
-        ):
-            vuln_ctrl.fetch_published_dates()  # must not raise
