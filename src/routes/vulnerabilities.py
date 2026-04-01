@@ -113,7 +113,6 @@ def _populate_found_by(
         .select_from(Finding)
         .join(SBOMPackage, SBOMPackage.package_id == Finding.package_id)
         .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-        .where(Finding.vulnerability_id.in_(vuln_ids))
         .where(SBOMDocument.format.isnot(None))
     )
 
@@ -130,6 +129,8 @@ def _populate_found_by(
             .join(Variant, Variant.id == Scan.variant_id)
             .where(Variant.project_id == project_uuid)
         )
+    else:
+        base_query = base_query.where(Finding.vulnerability_id.in_(vuln_ids))  # no need for full query on all variants
 
     rows = db.session.execute(base_query.distinct()).all()
 
@@ -179,6 +180,7 @@ def init_app(app):
             _scope_project = None
             opts = (
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
+                selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
                 selectinload(Vulnerability.metrics),
             )
             if base_latest_id is None:
@@ -242,6 +244,7 @@ def init_app(app):
                     db.select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
+                        selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
                         selectinload(Vulnerability.metrics),
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
@@ -262,18 +265,81 @@ def init_app(app):
             if not latest_ids:
                 records = []
             else:
-                records = list(db.session.execute(
-                    db.select(Vulnerability)
-                    .options(
-                        selectinload(Vulnerability.findings).selectinload(Finding.package),
-                        selectinload(Vulnerability.metrics),
-                    )
-                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+                from ..models.time_estimate import TimeEstimate
+
+                # Subquery for vulnerability IDs visible in these scans,
+                # used to avoid huge literal IN-lists in secondary queries.
+                vuln_ids_subq = (
+                    db.select(Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
                     .where(Observation.scan_id.in_(latest_ids))
                     .distinct()
+                    .scalar_subquery()
+                )
+
+                records = list(db.session.execute(
+                    db.select(Vulnerability)
+                    .where(Vulnerability.id.in_(vuln_ids_subq))
                     .order_by(Vulnerability.id)
                 ).scalars().all())
+
+                # Bulk-load metrics per vulnerability
+                metric_rows = db.session.execute(
+                    db.select(Metrics)
+                    .where(Metrics.vulnerability_id.in_(vuln_ids_subq))
+                ).scalars().all()
+                metrics_by_vuln: dict[str, list] = {}
+                for m in metric_rows:
+                    metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
+
+                # Bulk-load packages per vulnerability
+                pkg_rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Package.name, Package.version)
+                    .join(Package, Finding.package_id == Package.id)
+                    .where(Finding.vulnerability_id.in_(vuln_ids_subq))
+                    .distinct()
+                ).all()
+                pkgs_by_vuln: dict[str, list[str]] = {}
+                for vid, pname, pver in pkg_rows:
+                    pkgs_by_vuln.setdefault(vid, []).append(f"{pname}@{pver}")
+
+                # Bulk-load effort (time estimates) per vulnerability
+                te_rows = db.session.execute(
+                    db.select(
+                        Finding.vulnerability_id,
+                        TimeEstimate.optimistic,
+                        TimeEstimate.likely,
+                        TimeEstimate.pessimistic,
+                    )
+                    .join(Finding, TimeEstimate.finding_id == Finding.id)
+                    .where(Finding.vulnerability_id.in_(vuln_ids_subq))
+                ).all()
+                effort_by_vuln: dict[str, tuple] = {}
+                for vid, opti, like, pess in te_rows:
+                    if vid not in effort_by_vuln:
+                        effort_by_vuln[vid] = (opti, like, pess)
+
+                # Pre-populate transient fields so to_dict() won't lazy-load findings
+                from sqlalchemy.orm import attributes as orm_attrs
+                for r in records:
+                    r.packages = pkgs_by_vuln.get(r.id, [])
+                    te = effort_by_vuln.get(r.id)
+                    if te:
+                        opti, like, pess = te
+
+                        def _h(v):
+                            if v is None:
+                                return None
+                            return Iso8601Duration(f"PT{v}H")
+                        r.effort = {
+                            "optimistic": _h(opti),
+                            "likely": _h(like),
+                            "pessimistic": _h(pess),
+                        }
+                    # Mark findings and metrics as loaded to prevent lazy-load
+                    orm_attrs.set_committed_value(r, 'findings', [])
+                    orm_attrs.set_committed_value(r, 'metrics', metrics_by_vuln.get(r.id, []))
+
         else:
             records = Vulnerability.get_all()
             _scope_variant = None

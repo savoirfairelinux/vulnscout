@@ -23,8 +23,8 @@ class Finding(Base):
     __tablename__ = "findings"
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    package_id = db.Column(db.Uuid, db.ForeignKey("packages.id"), nullable=False)
-    vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False)
+    package_id = db.Column(db.Uuid, db.ForeignKey("packages.id"), nullable=False, index=True)
+    vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False, index=True)
 
     __table_args__ = (
         db.UniqueConstraint("package_id", "vulnerability_id", name="uq_finding_package_vulnerability"),

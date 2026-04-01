@@ -14,8 +14,8 @@ class Observation(Base):
     __tablename__ = "observations"
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False)
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False)
+    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False, index=True)
+    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
 
     scan = db.relationship("Scan", back_populates="observations")
     finding = db.relationship("Finding", back_populates="observations")
