@@ -17,7 +17,7 @@ class Metrics(Base):
     __tablename__ = "metrics"
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False)
+    vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False, index=True)
     version = db.Column(db.String, nullable=True)
     score = db.Column(db.Numeric, nullable=True)
     vector = db.Column(db.Text, nullable=True)

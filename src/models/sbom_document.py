@@ -20,7 +20,7 @@ class SBOMDocument(Base):
     path = db.Column(db.Text, nullable=False)
     source_name = db.Column(db.String, nullable=False)
     format = db.Column(db.String, nullable=True)  # e.g. 'spdx', 'cdx', 'openvex', 'yocto_cve_check'
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False)
+    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
 
     scan = db.relationship("Scan", back_populates="sbom_documents")
     sbom_packages = db.relationship("SBOMPackage", back_populates="sbom_document", cascade="all, delete-orphan")

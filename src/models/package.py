@@ -27,6 +27,10 @@ class Package(Base):
     purl = db.Column(db.JSON, nullable=True)
     licences = db.Column(db.String, nullable=True)
 
+    __table_args__ = (
+        db.Index('ix_packages_name_version', 'name', 'version'),
+    )
+
     sbom_packages = db.relationship("SBOMPackage", back_populates="package", cascade="all, delete-orphan")
     findings = db.relationship("Finding", back_populates="package", cascade="all, delete-orphan")
 

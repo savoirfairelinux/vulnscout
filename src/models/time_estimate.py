@@ -14,8 +14,8 @@ class TimeEstimate(Base):
     __tablename__ = "time_estimates"
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True)
+    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
+    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
     optimistic = db.Column(db.Integer, nullable=True)
     likely = db.Column(db.Integer, nullable=True)
     pessimistic = db.Column(db.Integer, nullable=True)
