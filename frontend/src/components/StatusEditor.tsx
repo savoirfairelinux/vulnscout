@@ -30,7 +30,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
-    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
+    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
+        variants?.length === 1 ? [variants[0].id] : []
+    );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(availablePackages ?? []);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
@@ -120,9 +122,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setStatusNotes("");
         setWorkaround("");
         setImpact("");
-        setSelectedVariantIds([]);
+        setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
         setSelectedPackages(availablePackages ?? []);
-    }, [defaultStatus, availablePackages]);
+    }, [defaultStatus, availablePackages, variants]);
 
     useEffect(() => {
         if (shouldClearFields) {
