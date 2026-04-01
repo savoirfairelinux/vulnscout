@@ -13,7 +13,7 @@ class SBOMPackage(Base):
     __tablename__ = "sbom_packages"
 
     sbom_document_id = db.Column(db.Uuid, db.ForeignKey("sbom_documents.id"), primary_key=True)
-    package_id = db.Column(db.Uuid, db.ForeignKey("packages.id"), primary_key=True)
+    package_id = db.Column(db.Uuid, db.ForeignKey("packages.id"), primary_key=True, index=True)
 
     sbom_document = db.relationship("SBOMDocument", back_populates="sbom_packages")
     package = db.relationship("Package", back_populates="sbom_packages")

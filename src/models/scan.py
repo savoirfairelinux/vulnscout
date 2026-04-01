@@ -22,7 +22,7 @@ class Scan(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=False)
+    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=False, index=True)
 
     variant = db.relationship("Variant", back_populates="scans")
     sbom_documents = db.relationship("SBOMDocument", back_populates="scan", cascade="all, delete-orphan")

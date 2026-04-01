@@ -125,8 +125,8 @@ class Assessment(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     responses = db.Column(db.JSON, nullable=True)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True)
+    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
+    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
 
     finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
     variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
@@ -559,8 +559,12 @@ class Assessment(Base):
     def get_all() -> list["Assessment"]:
         """Return all assessments."""
         return list(db.session.execute(
-            db.select(Assessment).order_by(Assessment.timestamp)
-        ).scalars().all())
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .order_by(Assessment.timestamp)
+        ).scalars().unique().all())
 
     @staticmethod
     def from_vuln_assessment(assess, finding_id=None, variant_id=None) -> "Assessment":
@@ -631,8 +635,12 @@ class Assessment(Base):
         if isinstance(finding_id, str):
             finding_id = uuid.UUID(finding_id)
         return list(db.session.execute(
-            db.select(Assessment).where(Assessment.finding_id == finding_id)
-        ).scalars().all())
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .where(Assessment.finding_id == finding_id)
+        ).scalars().unique().all())
 
     @staticmethod
     def get_by_variant(variant_id: uuid.UUID | str) -> list["Assessment"]:
@@ -640,8 +648,12 @@ class Assessment(Base):
         if isinstance(variant_id, str):
             variant_id = uuid.UUID(variant_id)
         return list(db.session.execute(
-            db.select(Assessment).where(Assessment.variant_id == variant_id)
-        ).scalars().all())
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .where(Assessment.variant_id == variant_id)
+        ).scalars().unique().all())
 
     @staticmethod
     def get_by_finding_and_variant(
