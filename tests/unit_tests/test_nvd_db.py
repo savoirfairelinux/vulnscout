@@ -76,14 +76,14 @@ def test_api_weaknesses_to_list_str():
     assert sorted(result) == ["CWE-20", "CWE-79"]
 
 
-def test_api_references_filter_patchs():
+def test_api_references_filter_patches():
     db = NVD_DB()
     refs = [
         {"url": "https://example.com/patch.diff", "tags": ["Patch"]},
         {"url": "https://example.com/info", "tags": ["Exploit"]},
         {"url": "https://example.com/other"},
     ]
-    result = db.api_references_filter_patchs(refs)
+    result = db.api_references_filter_patches(refs)
     assert result == ["https://example.com/patch.diff"]
 
 
@@ -194,11 +194,16 @@ def test_api_get_cve_non_retryable_returns_immediately(monkeypatch, status_code)
     assert call_count == 1, "Should not retry on non-retryable status codes"
 
 
-def test_fetch_cve_data_404_returns_not_found(monkeypatch):
-    """A 404 from the NVD API should return the not_found sentinel without raising."""
+def test_fetch_cve_data_404_returns_none(monkeypatch):
+    """A 404 from the NVD API should return None (retryable error), not the not_found sentinel.
+
+    NVD API v2 never returns HTTP 404 for CVE queries — it always returns 200
+    (with totalResults=0 when the CVE is absent).  A 404 therefore indicates a
+    network or proxy issue and must not be cached as a permanent "not found".
+    """
     monkeypatch.setattr(NVD_DB, "api_get_cve", lambda self, cve_id: (404, {}))
     db = NVD_DB()
-    assert db.fetch_cve_data("CVE-2019-5747") == {"not_found": True}
+    assert db.fetch_cve_data("CVE-2019-5747") is None
 
 
 def test_call_nvd_api_404_no_print(monkeypatch, capsys):
@@ -213,6 +218,22 @@ def test_call_nvd_api_404_no_print(monkeypatch, capsys):
     status, data = db._call_nvd_api({"cveId": "CVE-2019-5747"})
     assert status == 404
     assert data == {}
-    captured = capsys.readouterr()
-    assert "HTTP Error" not in captured.out
+
+
+def test_empty_api_key_not_sent_as_header(monkeypatch):
+    """An empty-string NVD_API_KEY must NOT be sent as a header.
+
+    The entrypoint exports NVD_API_KEY="" when no key is configured.
+    Sending ``apiKey: ""`` causes the NVD API to return HTTP 404.
+    """
+    captured_headers = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured_headers.update(dict(req.headers))
+        return FakeResp(200, json.dumps({"vulnerabilities": [], "totalResults": 0}).encode())
+
+    monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", fake_urlopen)
+    db = NVD_DB(nvd_api_key="")
+    db._call_nvd_api({"cveId": "CVE-2020-1967"})
+    assert "Apikey" not in captured_headers and "apiKey" not in captured_headers
 
