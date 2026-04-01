@@ -40,6 +40,7 @@ Input commands:
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
   --report <template>       Generate a report from a template in /scan/templates/
+  --report <path>           Stage a local report template file and generate a report from it 
   --export-spdx             Export project as SPDX 3.0 SBOM to /scan/outputs/
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
@@ -132,10 +133,60 @@ cmd_add_report_template() {
     dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
     mkdir -p "/scan/templates"
     cp "$src" "/scan/templates/$dest_name"
-    echo "Added report template: /scan/templates/$dest_name"
+    echo "Added report template: /scan/templates/$dest_name" >&2
 }
 
+cmd_stage_report_template() {
+    local template="$1"
+    local raw_basename dest_name
+    raw_basename="$(basename "$template")"
+    # Strip the staging prefix that the host wrapper added
+    dest_name="${raw_basename#vulnscout_stage_}"
 
+    # Bare name — use the template already present in
+    # the container without any copying or md5 check.
+    if [[ "$template" != */* ]]; then
+        echo "$template"
+        return 0
+    fi
+
+    if [[ ! -f "$template" ]]; then
+        echo "Warning: '$template' not found inside the container, falling back to '$dest_name'." >&2
+        echo "$dest_name"
+        return 0
+    fi
+
+    local in_scan_templates="/scan/templates/$dest_name"
+    local in_views_templates="$BASE_DIR/src/views/templates/$dest_name"
+
+    local src_md5
+    src_md5=$(md5sum "$template" | awk '{print $1}')
+
+    if [[ -f "$in_scan_templates" ]]; then
+        local dst_md5
+        dst_md5=$(md5sum "$in_scan_templates" | awk '{print $1}')
+        if [[ "$src_md5" == "$dst_md5" ]]; then
+            echo "Template '$dest_name' already up-to-date in /scan/templates/, skipping copy." >&2
+        else
+            echo "Template '$dest_name' differs from /scan/templates/ copy, updating..." >&2
+            cmd_add_report_template "$template"
+        fi
+    elif [[ -f "$in_views_templates" ]]; then
+        local dst_md5
+        dst_md5=$(md5sum "$in_views_templates" | awk '{print $1}')
+        if [[ "$src_md5" == "$dst_md5" ]]; then
+            echo "Template '$dest_name' matches built-in template, skipping copy." >&2
+        else
+            echo "Template '$dest_name' differs from built-in template, copying to /scan/templates/..." >&2
+            cmd_add_report_template "$template"
+        fi
+    else
+        echo "Template '$dest_name' not found in templates directories, copying..." >&2
+        cmd_add_report_template "$template"
+    fi
+
+    echo "$dest_name"
+}
 
 cmd_scan() {
     # Export all variables from config file
@@ -450,8 +501,6 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file openvex "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
             cmd_add_file cdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
-        --add-report-template)
-            cmd_add_report_template "$2"; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
@@ -465,7 +514,8 @@ while [[ $# -gt 0 ]]; do
         daemon)
             cmd_daemon; exit 0 ;;
         --report)
-            REPORT_TEMPLATES+=("$2"); shift 2 ;;
+            _staged_tpl="$(cmd_stage_report_template "$2")"
+            REPORT_TEMPLATES+=("$_staged_tpl"); shift 2 ;;
         --export-spdx)
             EXPORT_FORMATS+=("spdx3"); shift ;;
         --export-cdx)

@@ -501,6 +501,9 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     _os.makedirs(output_dir, exist_ok=True)
 
     for tmpl in to_generate:
+        # Always use the bare filename — Jinja2 FileSystemLoader does not
+        # accept absolute or relative paths, only names within its search dirs.
+        tmpl = _os.path.basename(tmpl)
         try:
             content = templ.render(tmpl, **metadata)
             fmt = output_format
