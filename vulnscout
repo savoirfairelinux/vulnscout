@@ -55,9 +55,9 @@ Input commands (can be chained, triggers scan automatically):
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
-  serve                           Run scan then start web UI (port 7275)
-  report <template>               Generate a report from a template
-  report <path>                   Stage a local report template file and generate a report from it
+  --serve                         Run scan then start web UI (port 7275)
+  --report <template>             Generate a report from a template
+  --report <path>                 Stage a local report template file and generate a report from it
   --export-spdx                   Export project as SPDX 3.0 SBOM
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
@@ -77,9 +77,8 @@ Environment variables:
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
   vulnscout --project test --match-condition "cvss >= 9.0"
-  vulnscout serve --project test
-  vulnscout serve
-  vulnscout report summary.adoc
+  vulnscout --serve
+  vulnscout --report summary.adoc
   vulnscout config NVD_API_KEY abc123
 
 Exit codes:
