@@ -12,12 +12,12 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
+
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faCaretDown, faCircleQuestion, faSync } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -288,7 +288,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
-    const [hideFixed, setHideFixed] = useState<boolean>(false);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -300,11 +299,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
     const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useState<boolean>(false);
+    const [epssRange, setEpssRange] = useState<{ min: number; max: number }>({ min: 0, max: 100 });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useState<string[]>([]);
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showMoreFilters, setShowMoreFilters] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
+    const moreFiltersRef = useRef<HTMLDivElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -377,6 +382,47 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
         setSeverityRange(value);
     }, 750, { maxWait: 5000 });
+
+    const updateCustomEpssFilter = debounce((value: { min: number; max: number }) => {
+        setEpssRange(value);
+    }, 750, { maxWait: 5000 });
+
+    const attack_vector_list = useMemo(() => {
+        const avSet = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            vuln.severity.cvss.forEach(cvss => {
+                if (cvss.attack_vector) avSet.add(cvss.attack_vector);
+            });
+        });
+        const order = ['NETWORK', 'ADJACENT', 'LOCAL', 'PHYSICAL'];
+        return Array.from(avSet).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    }, [vulnerabilities]);
+
+    // Build list of distinct first-scan timestamps, grouped by scan (same second = same scan)
+    const availableFirstScanDates = useMemo(() => {
+        const tsSet = new Set<number>();
+        vulnerabilities.forEach(vuln => {
+            if (vuln.first_scan_date) {
+                // Round to the nearest second to group identical scans
+                const ts = Math.round(new Date(vuln.first_scan_date).getTime() / 1000) * 1000;
+                tsSet.add(ts);
+            }
+        });
+        return Array.from(tsSet).sort((a, b) => a - b);
+    }, [vulnerabilities]);
+
+    const formatScanDate = useCallback((ts: number) => {
+        const d = new Date(ts);
+        return d.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+        }) + ' ' + d.toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short',
+        });
+    }, []);
 
     const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
         vuln.found_by.forEach(source => {
@@ -876,9 +922,30 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
             }
 
+            // EPSS range filter
+            if (showCustomEpssFilter) {
+                const epssScore = el.epss?.score;
+                if (epssScore === undefined || epssScore === null) return false;
+                const epssPct = epssScore * 100;
+                if (epssPct < epssRange.min || epssPct > epssRange.max) return false;
+            }
+
+            // Attack vector filter
+            if (selectedAttackVectors.length) {
+                const vulnAVs = new Set(el.severity.cvss.map(c => c.attack_vector).filter(Boolean));
+                if (!selectedAttackVectors.some(av => vulnAVs.has(av))) return false;
+            }
+
+            // First scan date filter (multi-select by scan timestamp)
+            if (selectedFirstScanDates.length > 0) {
+                if (!el.first_scan_date) return false;
+                const elTs = Math.round(new Date(el.first_scan_date).getTime() / 1000) * 1000;
+                if (!selectedFirstScanDates.includes(String(elTs))) return false;
+            }
+
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -903,29 +970,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setHideFixed(false);
         setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+        setShowCustomEpssFilter(false);
+        setEpssRange({ min: 0, max: 100 });
+        setSelectedAttackVectors([]);
+        setSelectedFirstScanDates([]);
     }
-
-    const handleHideFixedToggle = (enabled: boolean) => {
-        setHideFixed(enabled);
-        if (enabled) {
-            const allStatuses = Array.from(new Set(vulnerabilities.map(v => v.simplified_status)));
-            const statusesExceptFixed = allStatuses.filter(status => status !== 'Fixed');
-            setSelectedStatuses(statusesExceptFixed);
-        } else {
-            setSelectedStatuses([]);
-        }
-    };
-
-    const handleStatusChange = (newStatuses: string[]) => {
-        setSelectedStatuses(newStatuses);
-        if (newStatuses.includes('Fixed') && hideFixed) {
-            setHideFixed(false);
-        }
-    };
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -990,6 +1042,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         };
     }, [showShortcutHelper]);
 
+    // Close "More Filters" on click outside
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (moreFiltersRef.current && !moreFiltersRef.current.contains(event.target as Node)) {
+                setShowMoreFilters(false);
+            }
+        };
+        if (showMoreFilters) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showMoreFilters]);
+
 
 
     return (<>
@@ -1002,7 +1069,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             />
         )}
 
-        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
 
@@ -1059,7 +1126,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 label="Status"
                 options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
                 selected={selectedStatuses}
-                setSelected={handleStatusChange}
+                setSelected={setSelectedStatuses}
             />
 
             {/* Published Date Filter Dropdown */}
@@ -1077,6 +1144,119 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 nvdProgress={nvdProgress}
             />
 
+            {/* More Filters dropdown — EPSS Range, Attack Vector, First Scan Date */}
+            <div ref={moreFiltersRef} className="ml-1 relative inline-block text-left">
+                <button
+                    onClick={() => setShowMoreFilters(!showMoreFilters)}
+                    className={`py-1 px-2 rounded flex items-center gap-1 ${
+                        showMoreFilters ? 'bg-sky-950' : 'bg-sky-900 hover:bg-sky-950'
+                    } text-white`}
+                    title="More filters"
+                >
+                    <FontAwesomeIcon icon={faFilter} />
+                    More
+                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0) && (
+                        <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>
+                    )}
+                    <FontAwesomeIcon icon={faCaretDown} />
+                </button>
+
+                {showMoreFilters && (
+                    <div className="absolute mt-1 w-80 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50 max-h-[70vh] overflow-y-auto">
+                        <div className="p-3 space-y-4">
+
+                            {/* EPSS Range Filter */}
+                            <div>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <input
+                                        type="checkbox"
+                                        id="epss-range-filter"
+                                        checked={showCustomEpssFilter}
+                                        onChange={() => setShowCustomEpssFilter(!showCustomEpssFilter)}
+                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                    />
+                                    <label htmlFor="epss-range-filter" className="text-sm font-semibold">EPSS Range (%)</label>
+                                </div>
+                                {showCustomEpssFilter && (
+                                    <div className="ml-2">
+                                        <RangeSlider
+                                            min={0}
+                                            max={100}
+                                            initialMin={epssRange.min}
+                                            initialMax={epssRange.max}
+                                            step={0.5}
+                                            onChange={updateCustomEpssFilter}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* Attack Vector Filter */}
+                            <div>
+                                <div className="text-sm font-semibold mb-2">Attack Vector</div>
+                                <div className="space-y-1 ml-2">
+                                    {attack_vector_list.map(av => (
+                                        <label key={av} className="flex items-center space-x-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedAttackVectors.includes(av)}
+                                                onChange={() => {
+                                                    if (selectedAttackVectors.includes(av)) {
+                                                        setSelectedAttackVectors(selectedAttackVectors.filter(v => v !== av));
+                                                    } else {
+                                                        setSelectedAttackVectors([...selectedAttackVectors, av]);
+                                                    }
+                                                }}
+                                                className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                            />
+                                            <span>{av.charAt(0) + av.slice(1).toLowerCase()}</span>
+                                        </label>
+                                    ))}
+                                    {attack_vector_list.length === 0 && (
+                                        <span className="text-xs text-gray-400 italic">No attack vectors available</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* First Scan Date Filter */}
+                            <div>
+                                <div className="text-sm font-semibold mb-2">First Scan Date</div>
+                                <div className="ml-2 space-y-1">
+                                    {availableFirstScanDates.length === 0 ? (
+                                        <span className="text-xs text-gray-400 italic">No scan dates available</span>
+                                    ) : (
+                                        availableFirstScanDates.map(ts => {
+                                            const key = String(ts);
+                                            return (
+                                                <label key={key} className="flex items-center space-x-2">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedFirstScanDates.includes(key)}
+                                                        onChange={() => {
+                                                            if (selectedFirstScanDates.includes(key)) {
+                                                                setSelectedFirstScanDates(selectedFirstScanDates.filter(d => d !== key));
+                                                            } else {
+                                                                setSelectedFirstScanDates([...selectedFirstScanDates, key]);
+                                                            }
+                                                        }}
+                                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                                    />
+                                                    <span className="text-sm">{formatScanDate(ts)}</span>
+                                                </label>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* Package indicator (no dropdown, just display) */}
             {selectedPackages.length > 0 && (
                 <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
@@ -1091,12 +1271,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     </button>
                 </div>
             )}
-
-            <ToggleSwitch
-                enabled={hideFixed}
-                setEnabled={handleHideFixedToggle}
-                label="Hide Fixed"
-            />
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button
