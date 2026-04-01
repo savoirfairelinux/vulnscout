@@ -52,7 +52,7 @@ This project contains default examples of VulnScout.
 To run VulnScout demo in interactive mode, you can simply run the command:
 [source,shell]
 ----
-./vulnscout serve --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
+./vulnscout --serve --add-spdx $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
 --add-cve-check $(pwd)/example/spdx3/core-image-minimal-qemux86-64.rootfs.json
 ----
 
@@ -67,7 +67,7 @@ If you don't need additional source files, VulnScout can be rerun directly witho
 
 [source,shell]
 ----
-./vulnscout serve
+./vulnscout --serve
 ----
 
 It is also possible to add sources files on a specific project and variant with the `--project` and `--variant` arguments:
@@ -157,7 +157,7 @@ If you want to use the non-interactive mode, without the web interface, you can 
 
 [source,shell]
 ----
-./vulnscout --project demo --match-condition "cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)"
+./vulnscout --project demo --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending == true or affected == true))"
 ----
 
 The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
@@ -171,7 +171,7 @@ You can combine inputs with a match condition in a single invocation:
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json \
-  --match-condition "cvss >= 9.0"
+  --match-condition "((cvss >= 9.0) and (pending == true or affected == true)) "
 ----
 
 ===  Performing a Grype Scan
@@ -197,7 +197,7 @@ Reports are generated from AsciiDoc templates. VulnScout ships with built-in tem
 [source,shell]
 ----
 # Generate a report from a built-in template
-./vulnscout --project demo report summary.adoc
+./vulnscout --project demo --report summary.adoc
 
 # Generate a match-condition report (lists vulnerabilities that triggered the condition)
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
@@ -206,17 +206,17 @@ Reports are generated from AsciiDoc templates. VulnScout ships with built-in tem
 ./vulnscout --report /path/to/my-custom-report.adoc
 
 # Then generate a report from it by name
-./vulnscout --project demo report my-custom-report.adoc
+./vulnscout --project demo --report my-custom-report.adoc
 
 # Or pass the file path directly — registers and runs it in one step
-./vulnscout --project demo report /path/to/my-custom-report.adoc
+./vulnscout --project demo --report /path/to/my-custom-report.adoc
 ----
 
 Multiple reports can be generated in one command:
 
 [source,shell]
 ----
-./vulnscout --project demo report summary.adoc --report all_assessments.adoc
+./vulnscout --project demo --report summary.adoc --report all_assessments.adoc
 ----
 
 Reports are written to the outputs directory (default: `.vulnscout/outputs/`).
@@ -247,7 +247,7 @@ Export commands can be chained with inputs and reports in a single invocation:
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json \
   --export-spdx --export-cdx --export-openvex \
-  report summary.adoc
+  --report summary.adoc
 ----
 
 === Configuration
@@ -432,7 +432,7 @@ Or combined with a serve command:
 
 [source,shell]
 ----
-./vulnscout --dev serve
+./vulnscout --dev --serve
 ----
 
 The frontend dev server uses `VITE_API_URL` from the config to reach the backend (default: `http://localhost:7275`).
