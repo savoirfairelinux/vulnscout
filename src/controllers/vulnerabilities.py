@@ -433,60 +433,6 @@ class VulnerabilitiesController:
             print(f"Error for {vuln_id}: {e}")
         return None
 
-    def fetch_published_dates(self):
-        """Fetch published dates for all vulnerabilities from the NVD SQLite cache and GitHub API.
-
-        CVE-prefixed IDs are looked up in the local NVD SQLite DB (offline cache).
-        GHSA-prefixed IDs use the GitHub Advisories API via a thread pool.
-        All errors are silently caught so that a missing/corrupt NVD SQLite file
-        never aborts the enrichment run.
-        """
-        import sqlite3
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        nvd_db_path = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
-
-        cve_vulns = {vid: v for vid, v in self.vulnerabilities.items() if vid.startswith("CVE-")}
-        ghsa_vulns = {vid: v for vid, v in self.vulnerabilities.items() if "GHSA" in vid}
-
-        # Query the NVD SQLite cache for CVE published dates
-        if cve_vulns:
-            try:
-                conn = sqlite3.connect(nvd_db_path)
-                try:
-                    placeholders = ",".join("?" for _ in cve_vulns)
-                    cursor = conn.execute(
-                        f"SELECT id, published FROM nvd_vulns WHERE id IN ({placeholders})",
-                        list(cve_vulns.keys()),
-                    )
-                    for row in cursor.fetchall():
-                        cve_id, published = row
-                        if cve_id in cve_vulns and published:
-                            cve_vulns[cve_id].published = published
-                finally:
-                    conn.close()
-            except sqlite3.OperationalError:
-                pass
-            except Exception as e:
-                verbose(f"[fetch_published_dates] {e}")
-
-        # GHSA: fetch via GitHub API with a thread pool
-        if ghsa_vulns:
-            max_workers = min(10, len(ghsa_vulns))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_id = {
-                    executor.submit(self._fetch_ghsa_published, vid): vid
-                    for vid in ghsa_vulns
-                }
-                for future in as_completed(future_to_id, timeout=60):
-                    vid = future_to_id[future]
-                    try:
-                        published = future.result(timeout=15)
-                        if published:
-                            ghsa_vulns[vid].published = published
-                    except Exception:
-                        pass
-
     def fetch_nvd_data(self):
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
@@ -537,7 +483,18 @@ class VulnerabilitiesController:
         for vuln in nvd_vulns:
             try:
                 result = self.nvd_api.fetch_cve_data(vuln.id)
-                if result and not result.get("not_found"):
+                if result and result.get("not_found"):
+                    # NVD has no record for this CVE (404 or empty result set).
+                    # Persist nvd_fetched_at as a sentinel so it is not re-queried
+                    # on every restart; _should_refetch will retry after REFRESH_REMOTE_DELAY.
+                    print(f"=== NVD: {vuln.id} not found in NVD database.", flush=True)
+                    try:
+                        rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
+                        if rec is not None:
+                            rec.update_record(nvd_fetched_at=datetime.datetime.utcnow(), commit=False)
+                    except Exception as e:
+                        verbose(f"[fetch_nvd_data not_found sentinel {vuln.id!r}] {e}")
+                elif result:
                     if result.get("published"):
                         vuln.published = result["published"]
                     vuln.weaknesses = result.get("weaknesses")
