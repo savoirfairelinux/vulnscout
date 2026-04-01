@@ -46,15 +46,15 @@ const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
     const [showCpeBox, setShowCpeBox] = useState(false);
     const buttonRef = useRef<HTMLSpanElement>(null);
-    
+
     return (
         <div className="flex items-center justify-center h-full text-center gap-1">
             <span>{version}</span>
             {cpe && cpe.length > 0 && (
                 <>
-                    <span 
+                    <span
                         ref={buttonRef}
-                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold" 
+                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold"
                         onClick={() => setShowCpeBox(!showCpeBox)}
                     >
                         CPE
@@ -114,7 +114,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
             // Only trigger if not typing in an input/textarea
-            if (event.target instanceof HTMLInputElement || 
+            if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
             }
@@ -197,6 +197,40 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 },
                 sortingFn: (a, b) => sortVunerabilitiesFn(a, b, [])
             }
+            ),
+            columnHelper.accessor('variants', {
+                id: 'variants',
+                header: () => <div className="flex items-center justify-center">Variants</div>,
+                cell: info => (
+                    <div className="flex items-center justify-center h-full">
+                        <div className="flex flex-wrap gap-1 justify-center">
+                            {info.getValue().map((name: string) => (
+                                <span key={name} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-900 text-green-300">
+                                    {name}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                ),
+                enableSorting: false,
+                size: 120
+            }),
+            columnHelper.accessor(
+                row => row.vulnerabilities['Pending Assessment'] ?? 0,
+                {
+                    id: 'remainingPendingVulns',
+                    header: () => <div className="flex items-center justify-center">Remaining Pending Vulns</div>,
+                    cell: info => (
+                        <div className="flex items-center justify-center h-full text-center">
+                            {info.getValue()}
+                        </div>
+                    ),
+                    sortingFn: (a, b) => {
+                        const countA = a.original.vulnerabilities['Pending Assessment'] ?? 0;
+                        const countB = b.original.vulnerabilities['Pending Assessment'] ?? 0;
+                        return countA - countB;
+                    }
+                }
             ),
             columnHelper.accessor('source', {
                 header: () => <div className="flex items-center justify-center">Sources</div>,

@@ -9,6 +9,7 @@ type Package = {
     vulnerabilities: VulnCounts;
     maxSeverity: Severities;
     source: string[];
+    variants: string[];
 };
 
 export type { Package, VulnCounts, Severities };
@@ -28,6 +29,7 @@ const asPackage = (data: any): Package | [] => {
         vulnerabilities: {},
         maxSeverity: {},
         source: [],
+        variants: [],
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -96,6 +98,7 @@ class Packages {
                 vulnerabilities: counts,
                 maxSeverity: severities,
                 source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by).flat())],
+                variants: [...new Set(vulnerabilities.flatMap((vuln) => vuln.variants || []))],
             };
         });
     }
