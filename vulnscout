@@ -3,16 +3,19 @@ set -euo pipefail
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
 DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:latest}"
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")" 
-VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$SCRIPT_DIR/.vulnscout/cache}"
-VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$SCRIPT_DIR/.vulnscout/outputs}"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
+VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
+VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}"
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
-# Source config early so stored values (e.g. VULNSCOUT_CACHE_DIR) take effect
+# Source config early so stored values (e.g. VULNSCOUT_BUILD_DIR) take effect
 if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
     # shellcheck source=/dev/null
     . "$VULNSCOUT_CONFIG_FILE"
 fi
+# Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
+VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
 VULNSCOUT_VERSION="$(docker inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
 VARIANT="default"
@@ -67,8 +70,9 @@ Configuration:
 Environment variables:
   VULNSCOUT_CONTAINER   Container name (default: vulnscout)
   VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:latest)
-  VULNSCOUT_OUTPUTS_DIR Output directory (default: ./.vulnscout/outputs)
-  VULNSCOUT_CACHE_DIR        Cache base dir (default: ./.vulnscout/cache)
+  VULNSCOUT_BUILD_DIR   Build base dir (default: ./.vulnscout)
+  VULNSCOUT_CACHE_DIR   Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
+  VULNSCOUT_OUTPUTS_DIR Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
 
 Examples:
   vulnscout --project test --variant x86 --add-cve-check ./cve.json --add-spdx ./sbom.json
@@ -154,10 +158,10 @@ config_clear() {
 _detect_legacy() {
     # If the new DB already exists, no migration needed.
     [[ -f "$VULNSCOUT_CACHE_DIR/vulnscout.db" ]] && return
-    # Walk sibling dirs of the cache dir for legacy docker-compose/output artefacts.
-    local parent
-    parent="$(dirname "$VULNSCOUT_CACHE_DIR")"
-    if find "$parent" -maxdepth 4 \( -name 'openvex.json' -o -name 'docker-*.yml' \) 2>/dev/null | grep -q .; then
+    # Walk inside the build dir for legacy docker-compose/output artefacts.
+    # Legacy project dirs (e.g. oip-image-*/docker-compose.yml) sit directly
+    # alongside the cache/ and outputs/ subdirs, so maxdepth 2 reaches them.
+    if find "$VULNSCOUT_BUILD_DIR" -maxdepth 2 \( -name 'openvex.json' -o -name 'docker-*.yml' \) 2>/dev/null | grep -q .; then
         LEGACY_SETUP_DETECTED=true
     fi
 }
@@ -189,7 +193,7 @@ USER_UID=$(id -u)
 USER_GID=$(id -g)
 VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 VITE_API_URL=http://localhost:7275
-REFRESH_REMOTE_DELAY=48h
+REFRESH_REMOTE_DELAY=2w
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi

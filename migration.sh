@@ -18,9 +18,11 @@
 #   4. If the sub-directory contains an output/openvex.json (old assessments),
 #      adds it as --add-openvex so existing statuses are preserved.
 #   5. Calls './vulnscout' with the discovered flags to populate the DB.
+#   6. Once all imports succeed, asks whether to delete the old YAML files and
+#      output directories (can be skipped with --keep-old or --remove-old).
 #
 # Usage:
-#   ./migration.sh <vulnscout_dir> [--project <name>] [--dry-run]
+#   ./migration.sh <vulnscout_dir> [--project <name>] [--dry-run] [--keep-old|--remove-old]
 #
 # Arguments:
 #   <vulnscout_dir>   Path to the .vulnscout directory (contains sub-dirs with
@@ -30,6 +32,8 @@
 #   --project <name>  Project name passed to vulnscout for all imports.
 #                     Defaults to the basename of <vulnscout_dir>'s parent.
 #   --dry-run         Print the vulnscout commands without executing them.
+#   --keep-old        Keep old YAML files and output directories after migration.
+#   --remove-old      Remove old YAML files and output directories without prompting.
 #   -h, --help        Show this help.
 
 set -euo pipefail
@@ -40,14 +44,17 @@ VULNSCOUT="$SCRIPT_DIR/vulnscout"
 VULNSCOUT_DIR=""
 PROJECT=""
 DRY_RUN=false
+CLEAN_OLD=""   # empty = ask interactively; "yes" = remove; "no" = keep
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --project)  PROJECT="$2"; shift 2 ;;
-        --dry-run)  DRY_RUN=true; shift ;;
+        --project)    PROJECT="$2"; shift 2 ;;
+        --dry-run)    DRY_RUN=true; shift ;;
+        --keep-old)   CLEAN_OLD="no"; shift ;;
+        --remove-old) CLEAN_OLD="yes"; shift ;;
         -h|--help)
             sed -n '/^# Usage:/,/^[^#]/{ /^[^#]/d; s/^# \?//; p }' "$0"
             exit 0 ;;
@@ -63,9 +70,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$VULNSCOUT_DIR" ]]; then
-    echo "Error: <vulnscout_dir> is required."
-    echo "Usage: $0 <vulnscout_dir> [--project <name>] [--dry-run]"
-    exit 1
+    sed -n '/^# Usage:/,/^[^#]/{ /^[^#]/d; s/^# \?//; p }' "$0"
+    exit 0
 fi
 
 if [[ ! -d "$VULNSCOUT_DIR" ]]; then
@@ -195,6 +201,9 @@ export VULNSCOUT_OUTPUTS_DIR="$VULNSCOUT_DIR/outputs"
 # ---------------------------------------------------------------------------
 found_any=false
 found_yaml=false
+cleanup_yaml_files=()
+cleanup_dirs=()
+cleanup_subdirs=()
 
 while IFS= read -r -d '' yaml_file; do
     subdir="$(dirname "$yaml_file")"
@@ -270,25 +279,15 @@ PYEOF
         "$VULNSCOUT" "${vulnscout_args[@]}"
         echo "  ✓ Import complete."
 
-        # Clean up: remove the YAML file and the output directory now that
-        # all data has been merged into the database.
-        echo "  Removing $yaml_file"
-        rm -f "$yaml_file"
-        # Remove the compose-declared output dir if present
+        # Collect files/dirs to clean up after all imports
+        cleanup_yaml_files+=("$yaml_file")
         if [[ -n "$output_dir" && -d "$output_dir" ]]; then
-            echo "  Removing output dir $output_dir"
-            rm -rf "$output_dir"
+            cleanup_dirs+=("$output_dir")
         fi
-        # Also remove a sibling output/ directory if it exists
         if [[ -d "$subdir/output" ]]; then
-            echo "  Removing output dir $subdir/output"
-            rm -rf "$subdir/output"
+            cleanup_dirs+=("$subdir/output")
         fi
-        # Remove the sub-directory if it is now empty
-        if [[ -d "$subdir" ]] && [[ -z "$(find "$subdir" -mindepth 1 -print -quit)" ]]; then
-            echo "  Removing empty dir $subdir"
-            rmdir "$subdir"
-        fi
+        cleanup_subdirs+=("$subdir")
     fi
 
     found_any=true
@@ -313,5 +312,43 @@ fi
 
 if [[ "$DRY_RUN" == "false" ]]; then
     echo ""
-    echo "Migration complete. Run './vulnscout serve' to browse the imported data."
+    echo "Migration complete. Run 'export VULNSCOUT_BUILD_DIR=\"$VULNSCOUT_DIR\" && ./vulnscout serve' to browse the imported data."
+
+    # -----------------------------------------------------------------------
+    # Cleanup prompt
+    # -----------------------------------------------------------------------
+    if [[ ${#cleanup_yaml_files[@]} -gt 0 || ${#cleanup_dirs[@]} -gt 0 ]]; then
+        if [[ -z "$CLEAN_OLD" ]]; then
+            echo ""
+            echo "The following legacy files/directories are no longer needed:"
+            for f in "${cleanup_yaml_files[@]}"; do echo "  $f"; done
+            for d in "${cleanup_dirs[@]}";      do echo "  $d/"; done
+            read -r -p "Delete them now? [y/N] " _answer
+            case "$_answer" in
+                [Yy]*) CLEAN_OLD="yes" ;;
+                *)     CLEAN_OLD="no"  ;;
+            esac
+        fi
+
+        if [[ "$CLEAN_OLD" == "yes" ]]; then
+            echo "Cleaning up legacy artefacts..."
+            for f in "${cleanup_yaml_files[@]}"; do
+                echo "  Removing $f"
+                rm -f "$f"
+            done
+            for d in "${cleanup_dirs[@]}"; do
+                echo "  Removing $d"
+                rm -rf "$d"
+            done
+            # Remove sub-directories that are now empty
+            for subdir in "${cleanup_subdirs[@]}"; do
+                if [[ -d "$subdir" ]] && [[ -z "$(find "$subdir" -mindepth 1 -print -quit)" ]]; then
+                    echo "  Removing empty dir $subdir"
+                    rmdir "$subdir"
+                fi
+            done
+        else
+            echo "Legacy files kept."
+        fi
+    fi
 fi
