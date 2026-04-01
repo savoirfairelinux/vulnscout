@@ -60,7 +60,7 @@ Or start with inputs and the web UI in one step:
 
 [source,bash]
 ----
-./vulnscout --dev serve \
+./vulnscout --dev --serve \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json
 ----
@@ -80,7 +80,7 @@ Or combined with a serve command that also loads input files:
 
 [source,bash]
 ----
-./vulnscout --dev serve \
+./vulnscout --dev --serve \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json
 ----
