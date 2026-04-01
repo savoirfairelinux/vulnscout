@@ -596,7 +596,7 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                 <DiffModal scanId={openDiffId} onClose={() => setOpenDiffId(null)} />
             )}
 
-            <div className="max-w-5xl mx-auto py-6">
+            <div className="max-w-7xl mx-auto py-6">
                 <h1 className="text-2xl font-bold mb-6 text-gray-800 dark:text-neutral-100">
                     Scan History
                 </h1>
@@ -626,26 +626,26 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                             /* First scan: total counts */
                                             <>
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
-                                                    {(scan.package_count ?? 0).toLocaleString()} pkgs
+                                                    {(scan.package_count ?? 0).toLocaleString()} packages
                                                 </span>
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                                                     {(scan.finding_count ?? 0).toLocaleString()} findings
                                                 </span>
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
-                                                    {(scan.vuln_count ?? 0).toLocaleString()} vulns
+                                                    {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities
                                                 </span>
                                             </>
                                         ) : (
                                             /* Subsequent scans: diff badges */
                                             <>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    +{(scan.packages_added ?? 0).toLocaleString()} pkgs
+                                                    +{(scan.packages_added ?? 0).toLocaleString()} packages
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    −{(scan.packages_removed ?? 0).toLocaleString()} pkgs
+                                                    −{(scan.packages_removed ?? 0).toLocaleString()} packages
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    ↑{(scan.packages_upgraded ?? 0).toLocaleString()} upgraded
+                                                    ↑{(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.findings_added ?? 0).toLocaleString()} findings
@@ -654,13 +654,13 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                                     −{(scan.findings_removed ?? 0).toLocaleString()} findings
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    ↑{(scan.findings_upgraded ?? 0).toLocaleString()} upgraded
+                                                    ↑{(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    +{(scan.vulns_added ?? 0).toLocaleString()} vulns
+                                                    +{(scan.vulns_added ?? 0).toLocaleString()} vulnerabilities
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                    −{(scan.vulns_removed ?? 0).toLocaleString()} vulns
+                                                    −{(scan.vulns_removed ?? 0).toLocaleString()} vulnerabilities
                                                 </span>
                                             </>
                                         )}
