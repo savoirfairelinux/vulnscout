@@ -49,8 +49,12 @@ function EditAssessment({
     );
     const [workaround, setWorkaround] = useState(assessment.workaround || "");
     const [impact, setImpact] = useState(isImpactStatus ? (assessment.impact_statement || "") : "");
-    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(defaultSelectedVariantIds ?? []);
-    const [selectedPackages, setSelectedPackages] = useState<string[]>(defaultSelectedPackages ?? []);
+    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
+        defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : [])
+    );
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(
+        defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
+    );
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -128,8 +132,8 @@ function EditAssessment({
         setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
         setWorkaround(assessment.workaround || "");
         setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
-        setSelectedVariantIds(defaultSelectedVariantIds ?? []);
-        setSelectedPackages(defaultSelectedPackages ?? []);
+        setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
+        setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
     }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages]);
 
     useEffect(() => {
