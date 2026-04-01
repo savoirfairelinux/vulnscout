@@ -34,10 +34,7 @@ VulnScout also provides a web interface for visualisation and a command line to 
 === Requirements & Installation
 
 VulnScout is designed to run locally in a Docker container.
-It will require having `docker-compose` or `docker compose` available on your host.
-
-If you need to install `docker compose`, look at:
-https://docs.docker.com/compose/install/[docker-compose]
+It only requires `docker` to be installed and running on your host.
 
 To install VulnScout, you only need to clone the repository:
 [source,bash]
@@ -295,13 +292,17 @@ The following environment variables can be set via `vulnscout config` or exporte
 |Docker image to use
 |`docker.io/sflinux/vulnscout:latest`
 
+|`VULNSCOUT_BUILD_DIR`
+|Root build directory on the host (parent of `cache/` and `outputs/`)
+|`./.vulnscout`
+
 |`VULNSCOUT_OUTPUTS_DIR`
 |Directory for output files on the host
-|`./.vulnscout/outputs`
+|`$VULNSCOUT_BUILD_DIR/outputs`
 
 |`VULNSCOUT_CACHE_DIR`
-|Cache base directory on the host
-|`./.vulnscout/cache`
+|Cache directory on the host (holds the SQLite database and config)
+|`$VULNSCOUT_BUILD_DIR/cache`
 
 |`FLASK_RUN_PORT`
 |Port the web UI listens on
@@ -384,6 +385,39 @@ If you want to run VulnScout with an HTTP proxy, set variables in the config:
 ----
 
 Or pass them directly as environment variables when calling `vulnscout`.
+
+=== Migrating from the Legacy docker-compose Workflow
+
+If you were previously running VulnScout with a `docker-compose.yml` file per variant,
+use `migration.sh` to import all your existing data into the new SQLite database.
+
+[source,shell]
+----
+# Migrate specifying the directory explicitly
+./migration.sh /path/to/.vulnscout --project myproject
+
+# Remove legacy YAML files and output dirs without prompting
+./migration.sh /path/to/.vulnscout --project myproject --remove-old
+
+# Keep legacy files (skip cleanup prompt)
+./migration.sh /path/to/.vulnscout --project myproject --keep-old
+----
+
+The script will:
+
+. Scan the build directory for sub-directories containing `docker-compose.yml` files.
+. Use each sub-directory name as the `--variant` for that import batch.
+. Extract host-side input paths from the compose volume mounts and import them.
+. Re-import legacy assessments from any `output/openvex.json` found alongside the compose file.
+. After all imports succeed, prompt whether to delete the old YAML files and output directories
+  (overridden by `--keep-old` / `--remove-old`).
+
+Once migration is complete, start VulnScout normally:
+
+[source,shell]
+----
+./vulnscout serve
+----
 
 === Developer Mode
 
