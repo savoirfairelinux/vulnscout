@@ -3,97 +3,217 @@
 # Copyright (C) 2025 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import json
 import pytest
-import gzip
-from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 from src.controllers.epss_db import EPSS_DB
 
 
-def _write_gz(path: str, text: str):
-    with gzip.open(path, "wt") as f:
-        f.write(text)
+class FakeResp:
+    def __init__(self, status=200, data=None):
+        self.status = status
+        self._data = data or {}
+
+    def read(self):
+        return json.dumps(self._data).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
-def test_update_epss_and_query(monkeypatch, tmp_path):
-    def fake_urlretrieve(url, filename):
-        _write_gz(
-            filename,
-            "\n".join(
-                [
-                    "# some banner line without headers",
-                    "cve,epss,percentile",
-                    "CVE-2020-1234,0.123,0.95",
-                    "NOT-A-CVE,0.5,0.3",  # should be skipped
-                    "CVE-2020-9999,foo,0.2",  # invalid epss -> skipped
-                    "CVE-2020-8888,0.5,bar",  # invalid percentile -> skipped
-                    "CVE-2020-0001,0.001,0.01",
-                ]
-            ),
-        )
-        return (filename, None)
-
-    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlretrieve", fake_urlretrieve)
-
-    db = EPSS_DB(str(tmp_path / "epss.db"))
-    db.update_epss()
-
-    s1 = db.get_score("CVE-2020-1234")
-    assert s1 and abs(s1["score"] - 0.123) < 1e-9 and abs(s1["percentile"] - 0.95) < 1e-9
-
-    s2 = db.get_score("CVE-2020-0001")
-    assert s2 and abs(s2["score"] - 0.001) < 1e-9 and abs(s2["percentile"] - 0.01) < 1e-9
-
-    assert db.get_score("CVE-DOES-NOT-EXIST") is None
-    # last_updated just set -> should not need update for default 1 day
-    assert db.needs_update() is False
-
-
-def test_update_epss_no_valid_header_raises(monkeypatch, tmp_path):
-    def fake_urlretrieve(url, filename):
-        # No header line containing cve, epss, percentile -> should raise ValueError
-        _write_gz(
-            filename,
-            "\n".join(
-                [
-                    "this,is,not,a,valid,header",
-                    "1,2,3,4,5,6",
-                    "foo,bar,baz",
-                ]
-            ),
-        )
-        return (filename, None)
-
-    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlretrieve", fake_urlretrieve)
-
-    db = EPSS_DB(str(tmp_path / "epss_no_header.db"))
-    with pytest.raises(ValueError):
-        db.update_epss()
-
-    # No metadata written -> needs_update should be True
-    assert db.needs_update() is True
-
-
-def test_needs_update_paths(tmp_path):
-    db = EPSS_DB(str(tmp_path / "epss_meta_only.db"))
-
-    # No metadata present -> True
-    assert db.needs_update() is True
-
-    # Insert invalid timestamp -> True via exception path
-    db.cursor.execute(
-        "INSERT OR REPLACE INTO epss_metadata (key, value) VALUES ('last_updated', ?);",
-        ("INVALID-TIMESTAMP",),
+def test_api_get_epss_success(monkeypatch):
+    payload = {
+        "status": "OK",
+        "data": [{"cve": "CVE-2021-44228", "epss": "0.97514", "percentile": "1.00000"}]
+    }
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=10: FakeResp(200, payload)
     )
-    db.conn.commit()
-    assert db.needs_update() is True
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-2021-44228")
+    assert result is not None
+    assert abs(result["score"] - 0.97514) < 1e-5
+    assert abs(result["percentile"] - 1.0) < 1e-5
 
-    # Insert an old timestamp -> True for small 'days', False for larger 'days'
-    old_ts = (datetime.utcnow() - timedelta(days=3)).isoformat()
-    db.cursor.execute(
-        "INSERT OR REPLACE INTO epss_metadata (key, value) VALUES ('last_updated', ?);",
-        (old_ts,),
+
+def test_api_get_epss_not_found(monkeypatch):
+    payload = {"status": "OK", "data": []}
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=10: FakeResp(200, payload)
     )
-    db.conn.commit()
-    assert db.needs_update(1) is True
-    assert db.needs_update(5) is False
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-9999-0000")
+    assert result is None
+
+
+def test_api_get_epss_non_200(monkeypatch):
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=10: FakeResp(404, {})
+    )
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-2021-44228")
+    assert result is None
+
+
+def test_api_get_epss_network_error(monkeypatch):
+    def boom(req, timeout=10):
+        raise OSError("timeout")
+
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", boom)
+    db = EPSS_DB()
+    # Should return None on failure, not raise
+    result = db.api_get_epss("CVE-2021-44228")
+    assert result is None
+
+
+def test_api_get_epss_malformed_response(monkeypatch):
+    class BadResp:
+        status = 200
+        def read(self):
+            return b"not json"
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=10: BadResp()
+    )
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-2021-44228")
+    assert result is None
+
+
+def test_epss_db_no_args():
+    """EPSS_DB() should be constructable with no arguments."""
+    db = EPSS_DB()
+    assert hasattr(db, "api_get_epss")
+
+
+# ---------------------------------------------------------------------------
+# api_get_epss — HTTPError paths (lines 52-55)
+# ---------------------------------------------------------------------------
+
+def test_api_get_epss_http_error_404(monkeypatch):
+    """HTTPError with code 404 should return None silently."""
+    import urllib.error
+
+    def raise_404(req, timeout=10):
+        raise urllib.error.HTTPError(
+            url="http://example.com", code=404, msg="Not Found",
+            hdrs=None, fp=None
+        )
+
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", raise_404)
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-9999-0000")
+    assert result is None
+
+
+def test_api_get_epss_http_error_500(monkeypatch):
+    """HTTPError with non-404 code should return None and print."""
+    import urllib.error
+
+    def raise_500(req, timeout=10):
+        raise urllib.error.HTTPError(
+            url="http://example.com", code=500, msg="Server Error",
+            hdrs=None, fp=None
+        )
+
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", raise_500)
+    db = EPSS_DB()
+    result = db.api_get_epss("CVE-2021-44228")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# api_get_epss_batch (lines 69-93)
+# ---------------------------------------------------------------------------
+
+def test_api_get_epss_batch_empty_list(monkeypatch):
+    """Batch with empty list returns empty dict without calling API."""
+    db = EPSS_DB()
+    result = db.api_get_epss_batch([])
+    assert result == {}
+
+
+def test_api_get_epss_batch_success(monkeypatch):
+    """Batch returns scores for all CVEs present in the API response."""
+    payload = {
+        "status": "OK",
+        "data": [
+            {"cve": "CVE-2021-44228", "epss": "0.97514", "percentile": "1.00000"},
+            {"cve": "CVE-2023-0001", "epss": "0.12345", "percentile": "0.56789"},
+        ]
+    }
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=30: FakeResp(200, payload)
+    )
+    db = EPSS_DB()
+    result = db.api_get_epss_batch(["CVE-2021-44228", "CVE-2023-0001"])
+    assert len(result) == 2
+    assert abs(result["CVE-2021-44228"]["score"] - 0.97514) < 1e-5
+    assert abs(result["CVE-2023-0001"]["percentile"] - 0.56789) < 1e-5
+
+
+def test_api_get_epss_batch_non_200(monkeypatch):
+    """Batch with non-200 response returns empty dict."""
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=30: FakeResp(500, {})
+    )
+    db = EPSS_DB()
+    result = db.api_get_epss_batch(["CVE-2021-44228"])
+    assert result == {}
+
+
+def test_api_get_epss_batch_http_error(monkeypatch):
+    """Batch with HTTPError returns empty dict."""
+    import urllib.error
+
+    def raise_err(req, timeout=30):
+        raise urllib.error.HTTPError(
+            url="http://example.com", code=503, msg="Unavailable",
+            hdrs=None, fp=None
+        )
+
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", raise_err)
+    db = EPSS_DB()
+    result = db.api_get_epss_batch(["CVE-2021-44228"])
+    assert result == {}
+
+
+def test_api_get_epss_batch_network_error(monkeypatch):
+    """Batch with generic exception returns empty dict."""
+    def boom(req, timeout=30):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", boom)
+    db = EPSS_DB()
+    result = db.api_get_epss_batch(["CVE-2021-44228"])
+    assert result == {}
+
+
+def test_api_get_epss_batch_partial_data(monkeypatch):
+    """Batch returns only CVEs present in the response; missing ones are absent."""
+    payload = {
+        "status": "OK",
+        "data": [
+            {"cve": "CVE-2021-44228", "epss": "0.97514", "percentile": "1.00000"},
+        ]
+    }
+    monkeypatch.setattr(
+        "src.controllers.epss_db.urllib.request.urlopen",
+        lambda req, timeout=30: FakeResp(200, payload)
+    )
+    db = EPSS_DB()
+    result = db.api_get_epss_batch(["CVE-2021-44228", "CVE-9999-0000"])
+    assert "CVE-2021-44228" in result
+    assert "CVE-9999-0000" not in result

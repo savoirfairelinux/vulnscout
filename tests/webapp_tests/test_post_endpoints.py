@@ -6,7 +6,7 @@
 import pytest
 import json
 from src.bin.webapp import create_app
-from . import write_demo_files
+from . import write_demo_files, setup_demo_db
 
 
 @pytest.fixture()
@@ -25,19 +25,20 @@ def init_files(tmp_path):
 
 @pytest.fixture()
 def app(init_files):
-    app = create_app()
-    app.config.update({
-        "TESTING": True,
-        "SCAN_FILE": init_files["status"],
-        "PKG_FILE": init_files["packages"],
-        "VULNS_FILE": init_files["vulnerabilities"],
-        "ASSESSMENTS_FILE": init_files["assessments"],
-        "OPENVEX_FILE": init_files["openvex"],
-        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
-        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
-    })
-
-    yield app
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": init_files["status"],
+            "OPENVEX_FILE": init_files["openvex"],
+            "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
+        })
+        setup_demo_db(application)
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
     # clean up / reset resources here
     # tmp_file are automatically deleted by pytest
@@ -65,7 +66,7 @@ def test_post_minimal_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    assert len(data) == 3
     assert "CVE-1999-12345" in data_str
     assert "Disable option X in configuration" in data_str
 
@@ -89,7 +90,7 @@ def test_post_detailled_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 2
+    assert len(data) == 3
     assert "CVE-1999-12345" in data_str
     assert "Demonstration assessment" in data_str
 
@@ -166,10 +167,6 @@ def test_patch_vulnerability_efforts(init_files, client):
     assert data["effort"]["likely"] == "P1D"
     assert data["effort"]["pessimistic"] == "P2DT4H"
 
-    estimates_content = json.loads(init_files["time_estimates"].read_text())
-    assert "CVE-2020-35492" in estimates_content["tasks"]
-    assert estimates_content["tasks"]["CVE-2020-35492"]["pessimistic"] == "P2DT4H"
-
 
 def test_patch_vulnerability_invalids(client):
     response = client.patch("/api/vulnerabilities/CVE-0000-00000", json={
@@ -199,7 +196,19 @@ def test_patch_vulnerability_invalids(client):
     assert response.status_code == 400
 
 
-def test_post_scan_patch_finder(client):
+def test_post_scan_patch_finder(client, app):
+    from src.models.vulnerability import Vulnerability
+    with app.app_context():
+        Vulnerability.create_record(
+            id="CVE-2021-37322",
+            description="CVE-2021-37322 test fixture",
+            status="medium",
+            versions_data={
+                "binutils (nvd-cpe-match)": {"fix": [">=? 2.32"], "affected": ["< 2.32"]},
+                "gcc (nvd-cpe-match)": {"fix": [">=? 10.1"], "affected": ["< 10.1"]},
+            },
+        )
+
     response = client.post("/api/patch-finder/scan", json=[
         "CVE-2021-37322",
         "CVE-0000-00000"

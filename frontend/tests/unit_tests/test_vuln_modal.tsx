@@ -22,6 +22,7 @@ describe('Vulnerability Modal', () => {
         found_by: ['hardcoded'],
         datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
         packages: ['aaabbbccc@1.0.0'],
+        packages_current: [],
         urls: ['https://security-tracker.debian.org/tracker/CVE-2010-1234'],
         texts: [
             {
@@ -49,6 +50,7 @@ describe('Vulnerability Modal', () => {
         },
         status: 'affected',
         simplified_status: 'active',
+        variants: [],
         assessments: [{
             id: 'assessment-1',
             vuln_id: 'CVE-2010-1234',
@@ -167,6 +169,8 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         const thisFetch = fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
@@ -207,7 +211,7 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(1);
+        expect(thisFetch).toHaveBeenCalledTimes(3);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
@@ -234,23 +238,19 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({
+            id: vulnerability.id,
+            packages: vulnerability.packages,
+            effort: {
+                optimistic: 'PT5H',
+                likely: 'P2DT4H',
+                pessimistic: 'P2W3D'
+            },
+            responses: []
+        })); // estimation save response
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
-        const thisFetch = fetchMock.mockImplementationOnce(() =>
-            Promise.resolve({
-                json: () => Promise.resolve({
-                    id: vulnerability.id,
-                    packages: vulnerability.packages,
-                    effort: {
-                        optimistic: 'PT5H',
-                        likely: 'P2DT4H',
-                        pessimistic: 'P2W3D'
-                    },
-                    responses: []
-                }),
-                text: () => Promise.resolve('Text only usefull when error happens'),
-                status: 200
-            } as Response)
-        );
 
         // ARRANGE
         const updateCb = jest.fn();
@@ -270,12 +270,14 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(thisFetch).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
 
@@ -294,17 +296,19 @@ describe('Vulnerability Modal', () => {
         await user.click(addBtn);
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(0);
-        
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/the vector string is invalid/i);
         expect(errorBanner).toBeInTheDocument();
-        
+
         expect(closeCb).not.toHaveBeenCalled();
     });
 
     test('custom CVSS API error shows alert (error branch lines 80-93)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -331,12 +335,12 @@ describe('Vulnerability Modal', () => {
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save cvss/i);
         expect(errorBanner).toBeInTheDocument();
-        
+
         expect(patchVuln).not.toHaveBeenCalled();
         expect(closeCb).not.toHaveBeenCalled();
         errorSpy.mockRestore();
@@ -344,6 +348,8 @@ describe('Vulnerability Modal', () => {
 
     test('custom CVSS success updates vulnerability and closes (lines 83-89)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
 
         const closeCb = jest.fn();
         const patchVuln = jest.fn();
@@ -380,9 +386,9 @@ describe('Vulnerability Modal', () => {
         await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
         expect(patchVuln).toHaveBeenCalledTimes(1);
-        
+
         // Check for success banner instead of alert
         const successBanner = await screen.findByText(/successfully added custom cvss/i);
         expect(successBanner).toBeInTheDocument();
@@ -403,24 +409,24 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        // Make some changes to trigger unsaved state in assessment editor
-        const selects = await screen.getAllByRole('combobox');
-        const selectSource = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
-        if (selectSource) {
-            await user.selectOptions(selectSource, 'fixed');
-        }
-
+        // Type in time estimate field to trigger hasTimeChanges (avoids SELECT element intercepting Escape)
+        const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
+        await user.type(optimistic, '5h');
         await user.keyboard('{Escape}');
 
-        // TODO: Fix unsaved changes detection - placeholder for coverage
-        // Should show confirmation modal instead of closing directly
-        // const confirmModalTitle = await screen.findByText('Unsaved Changes');
-        // expect(confirmModalTitle).toBeInTheDocument();
-        expect(closeCb).toHaveBeenCalledTimes(1); // Placeholder: currently closes directly
+        // Confirmation modal should appear for unsaved changes
+        const confirmModalTitle = await screen.findByText('Unsaved Changes');
+        expect(confirmModalTitle).toBeInTheDocument();
+        // Click "Yes, close" to actually close
+        const yesCloseBtn = screen.getByText(/yes, close/i);
+        await user.click(yesCloseBtn);
+        expect(closeCb).toHaveBeenCalledTimes(1);
     });
 
     test('addAssessment API failure shows error banner', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Database connection failed'
@@ -429,7 +435,7 @@ describe('Vulnerability Modal', () => {
         const updateCb = jest.fn();
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={updateCb} appendCVSS={() => null} patchVuln={patchVuln} />);
-        
+
         const user = userEvent.setup();
 
         const selects = await screen.getAllByRole('combobox');
@@ -441,10 +447,10 @@ describe('Vulnerability Modal', () => {
         await user.type(inputStatus, 'patched');
         await user.click(btn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
         expect(updateCb).not.toHaveBeenCalled();
         expect(patchVuln).not.toHaveBeenCalled();
-        
+
         const errorBanner = await screen.findByText(/failed to add assessment/i);
         expect(errorBanner).toBeInTheDocument();
     });
@@ -453,7 +459,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // Find edit button
         const editBtn = screen.getByText(/edit$/i);
         expect(editBtn).toBeInTheDocument();
@@ -474,14 +480,14 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
+
         // Find custom vector button
         const customBtn = screen.getByLabelText(/add custom cvss vector/i);
         expect(customBtn).toBeInTheDocument();
 
         // Click to show custom CVSS input
         await user.click(customBtn);
-        
+
         // CVSS input should be visible
         const cvssInput = await screen.findByPlaceholderText(/CVSS:3\.1/i);
         expect(cvssInput).toBeInTheDocument();
@@ -498,6 +504,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -514,7 +521,7 @@ describe('Vulnerability Modal', () => {
         // Find edit and delete buttons for assessments
         const editBtn = screen.getByTitle(/edit assessment/i);
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         expect(editBtn).toBeInTheDocument();
         expect(deleteBtn).toBeInTheDocument();
     });
@@ -522,6 +529,8 @@ describe('Vulnerability Modal', () => {
     test('save estimation failure triggers alert (lines 121-122)', async () => {
         fetchMock.resetMocks();
 
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({
                 status: 500,
@@ -548,12 +557,12 @@ describe('Vulnerability Modal', () => {
         const saveBtn = await screen.getByText(/save estimation/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save estimation/i);
         expect(errorBanner).toBeInTheDocument();
-        
+
         expect(patchVuln).not.toHaveBeenCalled();
         expect(closeCb).not.toHaveBeenCalled();
     });
@@ -567,6 +576,7 @@ describe('Vulnerability Modal', () => {
             found_by: ['scanner'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-5678',
             packages: ['package2@2.0.0'],
+            packages_current: [],
             urls: ['https://security-tracker.debian.org/tracker/CVE-2010-5678'],
             texts: [
                 {
@@ -594,6 +604,7 @@ describe('Vulnerability Modal', () => {
             },
             status: 'affected',
             simplified_status: 'active',
+            variants: [],
             assessments: []
         };
 
@@ -609,12 +620,12 @@ describe('Vulnerability Modal', () => {
         });
 
         test('should not render navigation buttons when currentIndex is not provided', () => {
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
             />);
 
@@ -625,12 +636,12 @@ describe('Vulnerability Modal', () => {
         });
 
         test('should render navigation buttons when vulnerabilities and currentIndex are provided', () => {
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={() => {}}
@@ -639,18 +650,18 @@ describe('Vulnerability Modal', () => {
             // Navigation buttons should be present
             expect(screen.getByLabelText('Previous vulnerability')).toBeInTheDocument();
             expect(screen.getByLabelText('Next vulnerability')).toBeInTheDocument();
-            
+
             // Navigation info should be present
             expect(document.getElementById('navigation-info')).toHaveTextContent('Vulnerability 1 of 2');
         });
 
         test('should disable previous button on first vulnerability', () => {
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={() => {}}
@@ -664,12 +675,12 @@ describe('Vulnerability Modal', () => {
         });
 
         test('should disable next button on last vulnerability', () => {
-            render(<VulnModal 
-                vuln={vulnerability2} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+            render(<VulnModal
+                vuln={vulnerability2}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={1}
                 onNavigate={() => {}}
@@ -684,13 +695,13 @@ describe('Vulnerability Modal', () => {
 
         test('should enable both buttons when in middle of vulnerabilities list', () => {
             const threeVulns = [vulnerability, vulnerability2, { ...vulnerability, id: 'CVE-2010-9999' }];
-            
-            render(<VulnModal 
-                vuln={vulnerability2} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability2}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={threeVulns}
                 currentIndex={1}
                 onNavigate={() => {}}
@@ -701,20 +712,20 @@ describe('Vulnerability Modal', () => {
 
             expect(prevButton).toBeEnabled();
             expect(nextButton).toBeEnabled();
-            
+
             expect(document.getElementById('navigation-info')).toHaveTextContent('Vulnerability 2 of 3');
         });
 
         test('should call onNavigate with correct index when next button is clicked', async () => {
             const onNavigate = jest.fn();
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={onNavigate}
@@ -729,13 +740,13 @@ describe('Vulnerability Modal', () => {
         test('should call onNavigate with correct index when previous button is clicked', async () => {
             const onNavigate = jest.fn();
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability2} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability2}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={1}
                 onNavigate={onNavigate}
@@ -750,13 +761,13 @@ describe('Vulnerability Modal', () => {
         test('should show confirmation modal when navigating with unsaved changes', async () => {
             const onNavigate = jest.fn();
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={onNavigate}
@@ -780,13 +791,13 @@ describe('Vulnerability Modal', () => {
         test('should navigate after confirming unsaved changes', async () => {
             const onNavigate = jest.fn();
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={onNavigate}
@@ -811,13 +822,13 @@ describe('Vulnerability Modal', () => {
         test('should cancel navigation when canceling confirmation modal', async () => {
             const onNavigate = jest.fn();
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
                 onNavigate={onNavigate}
@@ -843,13 +854,13 @@ describe('Vulnerability Modal', () => {
 
         test('should render navigation buttons but not navigate when onNavigate prop is not provided', async () => {
             const user = userEvent.setup();
-            
-            render(<VulnModal 
-                vuln={vulnerability} 
-                onClose={() => {}} 
-                appendAssessment={() => {}} 
-                appendCVSS={() => null} 
-                patchVuln={() => {}} 
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
                 vulnerabilities={vulnerabilities}
                 currentIndex={0}
             />);
@@ -857,15 +868,60 @@ describe('Vulnerability Modal', () => {
             // Buttons should be present even without onNavigate
             const prevButton = screen.getByLabelText('Previous vulnerability');
             const nextButton = screen.getByLabelText('Next vulnerability');
-            
+
             expect(prevButton).toBeInTheDocument();
             expect(nextButton).toBeInTheDocument();
-            
+
             // Clicking buttons should not cause any errors (they should just do nothing)
             await user.click(nextButton);
             await user.click(prevButton);
-            
+
             // No error should occur - navigation just doesn't happen
+        });
+
+        test('ArrowRight key navigates to next vulnerability', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+
+            render(<VulnModal
+                vuln={vulnerability}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                vulnerabilities={vulnerabilities}
+                currentIndex={0}
+                onNavigate={onNavigate}
+            />);
+
+            // Focus the modal container (not a text field)
+            const modalTitle = screen.getByText('CVE-2010-1234');
+            modalTitle.focus();
+            await user.keyboard('{ArrowRight}');
+
+            expect(onNavigate).toHaveBeenCalledWith(1);
+        });
+
+        test('ArrowLeft key navigates to previous vulnerability', async () => {
+            const onNavigate = jest.fn();
+            const user = userEvent.setup();
+
+            render(<VulnModal
+                vuln={vulnerability2}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                vulnerabilities={vulnerabilities}
+                currentIndex={1}
+                onNavigate={onNavigate}
+            />);
+
+            const modalTitle = screen.getByText('CVE-2010-5678');
+            modalTitle.focus();
+            await user.keyboard('{ArrowLeft}');
+
+            expect(onNavigate).toHaveBeenCalledWith(0);
         });
     });
 
@@ -908,7 +964,7 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByRole('banner')).not.toBeInTheDocument();
 
         // Test with a vulnerability that would trigger banner in some scenario
-        // We can't directly test the banner without triggering the functions, 
+        // We can't directly test the banner without triggering the functions,
         // but we can test that the banner container is properly structured
         const modalBody = screen.getByText('CVE-2010-1234');
         expect(modalBody).toBeInTheDocument();
@@ -921,6 +977,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -936,7 +993,7 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
 
         // Should show EditAssessment component
@@ -950,6 +1007,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -965,7 +1023,7 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         await user.click(deleteBtn);
 
         // Should show delete confirmation modal
@@ -984,6 +1042,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -999,9 +1058,9 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         await user.click(deleteBtn);
-        
+
         const confirmBtn = screen.getByText(/yes, delete/i);
         await user.click(confirmBtn);
 
@@ -1014,6 +1073,8 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1022,6 +1083,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1037,14 +1099,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         await user.click(deleteBtn);
-        
+
         const confirmBtn = screen.getByText(/yes, delete/i);
         await user.click(confirmBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to delete assessment/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1052,6 +1114,8 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockRejectOnce(new Error('Network error'));
 
         const vulnWithAssessment = {
@@ -1060,6 +1124,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1075,14 +1140,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         await user.click(deleteBtn);
-        
+
         const confirmBtn = screen.getByText(/yes, delete/i);
         await user.click(confirmBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to delete assessment.*network error/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1095,6 +1160,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1110,9 +1176,9 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const deleteBtn = screen.getByTitle(/delete assessment/i);
-        
+
         await user.click(deleteBtn);
-        
+
         const cancelBtn = screen.getByText(/cancel/i);
         await user.click(cancelBtn);
 
@@ -1122,12 +1188,15 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment success', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'fixed',
                 simplified_status: 'resolved',
                 justification: 'updated justification',
@@ -1146,6 +1215,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1161,9 +1231,9 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         // Should show EditAssessment component, simulate save
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
@@ -1173,7 +1243,7 @@ describe('Vulnerability Modal', () => {
             expect.objectContaining({ method: 'PUT' })
         );
         expect(patchVuln).toHaveBeenCalled();
-        
+
         // Check for success banner
         const successBanner = await screen.findByText(/assessment updated successfully/i);
         expect(successBanner).toBeInTheDocument();
@@ -1181,6 +1251,8 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce('Server error', { status: 500 });
 
         const vulnWithAssessment = {
@@ -1189,6 +1261,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1204,14 +1277,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to update assessment/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1219,6 +1292,8 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment invalid response', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             message: 'Invalid data'
@@ -1230,6 +1305,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1245,14 +1321,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner
         const errorBanner = await screen.findByText(/error.*invalid response from server/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1260,6 +1336,8 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockRejectOnce(new Error('Network failure'));
 
         const vulnWithAssessment = {
@@ -1268,6 +1346,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1283,14 +1362,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner
         const errorBanner = await screen.findByText(/failed to update assessment.*network failure/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1303,6 +1382,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1318,9 +1398,9 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const cancelBtn = screen.getByText(/cancel/i);
         await user.click(cancelBtn);
 
@@ -1335,6 +1415,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'not_affected',
                 simplified_status: 'resolved',
                 justification: 'because 42',
@@ -1360,6 +1441,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1385,6 +1467,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1417,7 +1500,7 @@ describe('Vulnerability Modal', () => {
         // Should render CVSS section but no gauges
         const cvssHeading = screen.getByText(/^CVSS$/i);
         expect(cvssHeading).toBeInTheDocument();
-        
+
         // Should not have any CVSS gauges
         expect(screen.queryByText(/CVSS 3\./)).not.toBeInTheDocument();
     });
@@ -1459,6 +1542,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['package1@1.0.0', 'package2@2.0.0', 'package3@3.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1489,30 +1573,29 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        
-        // Make some changes to trigger unsaved state
-        const selects = await screen.getAllByRole('combobox');
-        const selectSource = selects.find((el: any) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
-        if (selectSource) {
-            await user.selectOptions(selectSource, 'fixed');
-        }
+
+        // Type in time estimate field to trigger hasTimeChanges (avoids SELECT element intercepting Escape)
+        const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
+        await user.type(optimistic, '5h');
 
         // Try to close
         await user.keyboard('{Escape}');
 
-        // TODO: Fix unsaved changes detection - placeholder for coverage
-        // Should show confirmation modal
-        // expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
-        // Click cancel
-        // const cancelBtn = screen.getByText(/no, stay/i);
-        // await user.click(cancelBtn);
+        // Confirmation modal should appear
+        const unsavedTitle = await screen.findByText('Unsaved Changes');
+        expect(unsavedTitle).toBeInTheDocument();
+        // Click "No, stay" to cancel
+        const cancelBtn = screen.getByText(/no, stay/i);
+        await user.click(cancelBtn);
 
-        expect(closeCb).toHaveBeenCalledTimes(1); // Placeholder: currently closes directly
-        // expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        expect(closeCb).not.toHaveBeenCalled();
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
     });
 
     test('edit assessment invalid assessment data', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: ['invalid', 'array', 'instead', 'of', 'object']
@@ -1524,6 +1607,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1539,14 +1623,14 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Check for error banner about invalid assessment data
         const errorBanner = await screen.findByText(/error.*invalid assessment data received/i);
         expect(errorBanner).toBeInTheDocument();
@@ -1554,12 +1638,15 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment data mismatch', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessment: {
                 id: 'different-assessment-id',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'fixed',
                 simplified_status: 'resolved',
                 justification: 'updated justification',
@@ -1577,6 +1664,7 @@ describe('Vulnerability Modal', () => {
                 id: 'assessment-1',
                 vuln_id: 'CVE-2010-1234',
                 packages: ['aaabbbccc@1.0.0'],
+                packages_current: [],
                 status: 'affected',
                 simplified_status: 'active',
                 justification: 'because 42',
@@ -1592,21 +1680,21 @@ describe('Vulnerability Modal', () => {
 
         const user = userEvent.setup();
         const editBtn = screen.getByTitle(/edit assessment/i);
-        
+
         await user.click(editBtn);
-        
+
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
         expect(fetchMock).toHaveBeenCalled();
-        
+
         // Since the returned assessment ID doesn't match, it should show success anyway
         await screen.findByText('Assessment updated successfully!');
     });
 
     test('renders modal with view mode by default', () => {
         render(<VulnModal vuln={vulnerability} isEditing={false} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        
+
         expect(screen.getByText('CVE-2010-1234')).toBeInTheDocument();
         expect(screen.queryByText('Edit Assessment')).not.toBeInTheDocument();
     });
@@ -1625,4 +1713,220 @@ describe('Vulnerability Modal', () => {
 
         expect(screen.getByText(/Fixed from version 1.2.3rc4/i)).toBeInTheDocument();
     })
+
+    test('shortcut helper button toggles the keyboard shortcuts dropdown', async () => {
+        const user = userEvent.setup();
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Dropdown is initially hidden
+        expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+
+        // Click the shortcut helper button
+        const helpBtn = screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helpBtn);
+
+        // Dropdown should now be visible
+        expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
+
+        // Click again to hide
+        await user.click(helpBtn);
+        expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
+    });
+
+    test('delete assessment with remaining assessments updates status from most recent', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
+
+        const patchVuln = jest.fn();
+        const vulnWithTwoAssessments = {
+            ...vulnerability,
+            assessments: [
+                {
+                    id: 'assessment-old',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'fixed',
+                    simplified_status: 'Fixed',
+                    justification: 'old fix',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2020-06-01T00:00:00Z',
+                    responses: []
+                },
+                {
+                    id: 'assessment-new',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: 'recent',
+                    impact_statement: 'bad',
+                    status_notes: 'still broken',
+                    workaround: 'none',
+                    timestamp: '2021-06-01T00:00:00Z',
+                    responses: []
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithTwoAssessments} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // Find and click the delete button for the second (most recent) assessment
+        const deleteBtns = screen.getAllByTitle(/delete assessment/i);
+        await user.click(deleteBtns[deleteBtns.length - 1]);
+
+        const confirmBtn = screen.getByText(/yes, delete/i);
+        await user.click(confirmBtn);
+
+        await screen.findByText(/assessment deleted successfully/i);
+        // patchVuln should be called with updated status from remaining assessment
+        expect(patchVuln).toHaveBeenCalled();
+    });
+
+    test('adding assessment to multiple variants shows multi-variant success message', async () => {
+        fetchMock.resetMocks();
+        // Variants endpoint returns two variants
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+            { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        // Two POST responses for two variants
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessment: {
+                id: 'new-assess-v1',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'v1'
+            }
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessment: {
+                id: 'new-assess-v2',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'v2'
+            }
+        }));
+
+        const appendCb = jest.fn();
+        const patchCb = jest.fn();
+        render(<VulnModal vuln={{...vulnerability, assessments: []}} isEditing={true} onClose={() => {}} appendAssessment={appendCb} appendCVSS={() => null} patchVuln={patchCb} />);
+        const user = userEvent.setup();
+
+        // Wait for variants to load, then select both
+        await screen.findByText('Variant Alpha');
+        const variantCheckboxes = screen.getAllByRole('checkbox');
+        // Select both variants
+        for (const cb of variantCheckboxes) {
+            const label = cb.closest('label');
+            if (label?.textContent?.includes('Variant Alpha') || label?.textContent?.includes('Variant Beta')) {
+                await user.click(cb);
+            }
+        }
+
+        const selectSource = screen.getAllByRole('combobox').find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectSource, 'affected');
+        const inputNotes = screen.getByPlaceholderText(/notes/i);
+        await user.type(inputNotes, 'multi test');
+        const btn = screen.getByText(/add assessment/i);
+        await user.click(btn);
+
+        // Should show multi-variant success message
+        const successMsg = await screen.findByText(/successfully added assessment to 2 variants/i);
+        expect(successMsg).toBeInTheDocument();
+        expect(appendCb).toHaveBeenCalledTimes(2);
+        expect(patchCb).toHaveBeenCalledTimes(1);
+    });
+
+    test('renders variant tags on assessments when variants are available', async () => {
+        fetchMock.resetMocks();
+        // Return variants for this vuln
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // Return all assessments (unfiltered) including variant_id
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'test',
+                impact_statement: '',
+                status_notes: '',
+                workaround: '',
+                timestamp: '2025-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v2',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'test',
+                impact_statement: '',
+                status_notes: '',
+                workaround: '',
+                timestamp: '2025-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'var-2'
+            }
+        ]));
+
+        const vulnWithVariantAssessments = {
+            ...vulnerability,
+            assessments: [
+                {
+                    id: 'assess-v1',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: 'test',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2025-01-01T00:00:00Z',
+                    responses: [],
+                    variant_id: 'var-1'
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Wait for variant tags to render
+        await screen.findByText('Production');
+        expect(screen.getByText('Staging')).toBeInTheDocument();
+    });
 });

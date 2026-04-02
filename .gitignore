@@ -11,8 +11,6 @@ src/static/*
 # man page
 vulnscout*.1
 
-docker-compose.yml
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -85,5 +83,8 @@ env.bak/
 venv.bak/
 
 # Vulnscout files
-.vulnscout/*
-!.vulnscout/example/
+.vulnscout
+.vulnscout-npm.pid
+
+# testing .adoc files
+tests/*.adoc

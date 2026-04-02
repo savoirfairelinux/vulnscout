@@ -24,13 +24,17 @@ RUN apk add --no-cache \
     bash \
     curl \
     git \
+    gcompat \
     icu \
     python3 \
     py3-pip \
     ruby \
     shadow \
     sudo \
+    unzip \
     zstd \
+    postgresql-client \
+    libpq-dev \
     && gem install asciidoctor-pdf --version 2.3.15
 
 # Install OSV Scanner
@@ -48,6 +52,14 @@ RUN curl -sSfL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CY
 ARG GRYPE_VERSION=v0.97.2
 RUN curl -sSfL "https://raw.githubusercontent.com/anchore/grype/$GRYPE_VERSION/install.sh" | sh -s -- -b /usr/local/bin
 
+# ARG PYSPY_VERSION=0.4.1
+# RUN curl -sSfL \
+#     "https://github.com/benfred/py-spy/releases/download/v${PYSPY_VERSION}/py_spy-${PYSPY_VERSION}-py2.py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.whl" \
+#     -o /tmp/py_spy.whl \
+#     && unzip -j /tmp/py_spy.whl "py_spy-${PYSPY_VERSION}.data/scripts/py-spy" -d /usr/local/bin/ \
+#     && chmod +x /usr/local/bin/py-spy \
+#     && rm /tmp/py_spy.whl
+
 # Install dependencies for python backend
 COPY requirements/base.txt ./
 RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
@@ -55,7 +67,6 @@ RUN pip3 install --no-cache-dir -r base.txt --break-system-packages
 # Create /scan/src
 RUN mkdir -p src
 COPY src ./src
-RUN chmod +x src/scan.sh
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
 
@@ -67,5 +78,3 @@ LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
 LABEL org.opencontainers.image.version="v0.11.1"
 
 ENTRYPOINT ["/scan/src/entrypoint.sh"]
-
-CMD ["/scan/src/scan.sh"]

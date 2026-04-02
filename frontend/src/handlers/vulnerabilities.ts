@@ -22,8 +22,11 @@ type Vulnerability = {
     found_by: string[];
     datasource: string;
     packages: string[];
+    packages_current: string[];
+    variants: string[];
     urls: string[];
     published?: string;
+    first_scan_date?: string;
     texts: {
         title: string;
         content: string;
@@ -94,6 +97,8 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         found_by: asStringArray(data?.found_by),
         datasource: "unknown",
         packages: asStringArray(data?.packages),
+        packages_current: asStringArray(data?.packages_current),
+        variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
         texts: [],
         severity: {
@@ -136,12 +141,24 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.effort?.pessimistic === "string") vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic)
     if (typeof data?.fix?.state === "string") vuln.fix.state = data.fix.state
     if (typeof data?.published === "string") vuln.published = data.published
+    if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
     return vuln
 }
 
 class Vulnerabilities {
-    static async list(): Promise<Vulnerability[]> {
-        const response = await fetch(import.meta.env.VITE_API_URL + "/api/vulnerabilities?format=list", {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Vulnerability[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
+        url.searchParams.set('format', 'list');
+        if (variantId && compareVariantId) {
+            url.searchParams.set('variant_id', variantId);
+            url.searchParams.set('compare_variant_id', compareVariantId);
+            if (operation) url.searchParams.set('operation', operation);
+        } else if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), {
             mode: "cors",
         });
         const data = await response.json();
@@ -253,14 +270,14 @@ class Vulnerabilities {
         } catch (e) {
             // Suppress expected invalid vector errors (e.g., from tests providing malformed CVSS strings)
             if (!(e instanceof Error && e.message === 'invalid vector')) {
-                 
+
                 console.error(e);
             }
             return null;
         }
     }
 
- 
+
 
 }
 

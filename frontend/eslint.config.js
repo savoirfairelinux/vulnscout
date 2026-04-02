@@ -39,7 +39,8 @@ export default [
         { allowConstantExport: true },
       ],
       "no-undef": "off", // Disable no-undef for TypeScript files
-      "@typescript-eslint/no-explicit-any": "off"
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": ["error", { "ignoreRestSiblings": true, "varsIgnorePattern": "^_", "argsIgnorePattern": "^_" }]
     },
   },
 ];

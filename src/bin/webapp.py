@@ -8,14 +8,51 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
+from ..extensions import db, migrate
 from ..routes import init_app
+from .. import models  # noqa: F401
+from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
 import os
+import threading
 from datetime import datetime, timezone
 import signal
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
+DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
+
+
+def _launch_enrichment(app):
+    """Spawn background threads for EPSS and NVD enrichment.
+
+    Each runs in its own thread so they execute in parallel and neither
+    blocks Flask request handlers (WAL journal mode allows concurrent reads).
+    """
+    def _enrich_epss():
+        with app.app_context():
+            try:
+                from ..controllers.packages import PackagesController
+                from ..controllers.vulnerabilities import VulnerabilitiesController
+                pkgCtrl = PackagesController()
+                vulnCtrl = VulnerabilitiesController(pkgCtrl)
+                post_treatment({"vulnerabilities": vulnCtrl, "packages": pkgCtrl})
+            except Exception as e:
+                print(f"[enrichment/epss] {e}", flush=True)
+
+    def _enrich_nvd():
+        with app.app_context():
+            try:
+                from ..controllers.packages import PackagesController
+                from ..controllers.vulnerabilities import VulnerabilitiesController
+                pkgCtrl = PackagesController()
+                vulnCtrl = VulnerabilitiesController(pkgCtrl)
+                vulnCtrl.fetch_nvd_data()
+            except Exception as e:
+                print(f"[enrichment/nvd] {e}", flush=True)
+
+    threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
+    threading.Thread(target=_enrich_nvd, name="enrichment-nvd", daemon=True).start()
 
 
 def create_app():
@@ -26,6 +63,28 @@ def create_app():
         app.config["SCAN_FILE"] = SCAN_FILE
     app.config["SCAN_DATE"] = "unknown date"
 
+    if "SQLALCHEMY_DATABASE_URI" not in app.config:
+        app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
+
+    db.init_app(app)
+    _migrations_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
+    migrate.init_app(app, db, directory=_migrations_dir)
+
+    # SQLite WAL mode: allows concurrent reads while the background enrichment
+    # thread writes EPSS/NVD data.  Without WAL, SQLite's default DELETE journal
+    # mode serialises all reads behind any active write transaction, blocking
+    # every Flask request while the enrichment thread commits batches.
+    # WAL is a persistent DB-level setting — one-time setup per database file.
+    # PRAGMAs are SQLite-only; skip silently on other DB engines (e.g. MySQL).
+    with app.app_context():
+        if db.engine.dialect.name == "sqlite":
+            try:
+                db.session.execute(db.text("PRAGMA journal_mode=WAL"))
+                db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
+                db.session.commit()
+            except Exception:
+                pass
+
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
             return True
@@ -33,8 +92,9 @@ def create_app():
             if "__END_OF_SCAN_SCRIPT__" in f.read():
                 if os.getenv('DEBUG_SKIP_SCAN', '') != 'true':
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
-
                 app._INT_SCAN_FINISHED = True
+                if not app.config.get("TESTING"):
+                    _launch_enrichment(app)
                 return True
         return False
 
@@ -81,6 +141,7 @@ def create_app():
             return {"error": "Scan not finished"}, 503
 
     init_app(app)
+    init_merger_cli(app)
     return app
 
 

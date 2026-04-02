@@ -168,7 +168,7 @@ const vulnColumns = useMemo(
       header: () => <div className="flex items-center justify-center h-full">Severity</div>,
       cell: (info: any) => (
         <div className="flex items-center justify-center h-full text-center">
-          <SeverityTag severity={info.getValue()} />
+          <SeverityTag severity={info.getValue()} className="!py-0" />
         </div>
       ),
       size: 100,
@@ -182,7 +182,7 @@ const vulnColumns = useMemo(
         return (
           <div className="flex items-center justify-center h-full text-center">
             <button
-              className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
+              className="bg-slate-800 hover:bg-slate-700 px-2 rounded-lg"
               onClick={() => {
                 // Get the current TopVulns list and find the index
                 const currentTopVulns = [...vulnerabilities]
@@ -194,7 +194,7 @@ const vulnColumns = useMemo(
                       id: index + 1,
                       rank: 0,
                       cve: v.id,
-                      package: v.packages.join(", "),
+                      package: v.packages_current.join(", "),
                       severity: v.severity.severity,
                       maxCvss,
                       texts: v.texts,
@@ -410,7 +410,7 @@ const packageColumns = [
   const topVulnerablePackages = useMemo(() => {
     const counts: Record<string, { count: number; version?: string }> = {};
     vulnerabilities.forEach((vuln) => {
-      vuln.packages.forEach((pkg) => {
+      vuln.packages_current.forEach((pkg) => {
         const [pkgName, pkgVersion] = pkg.split("@");
         if (!counts[pkgName]) {
           counts[pkgName] = { count: 0, version: pkgVersion };
@@ -443,7 +443,7 @@ const packageColumns = [
           id: index + 1,
           rank: 0,
           cve: vuln.id,
-          package: vuln.packages.join(", "),
+          package: vuln.packages_current.join(", "),
           severity: vuln.severity.severity,
           maxCvss,
           texts: vuln.texts,
@@ -541,10 +541,10 @@ const packageColumns = [
             }
 
       return (
-        <div className="w-full">
+        <div className="w-full flex flex-col gap-4 pb-8">
 
           {/* === TOP CHART GRID === */}
-          <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
 
             {/* Vulnerabilities by Severity */}
             <div className="p-4">
@@ -627,7 +627,7 @@ const packageColumns = [
           </div>
 
         {/* === TABLES SECTION === */}
-        <div className="w-full grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="w-full grid grid-cols-1 lg:grid-cols-2">
 
           {/* Most Critical Unfixed Vulnerabilities */}
           <div className="p-4">
@@ -646,15 +646,12 @@ const packageColumns = [
 
             {/* Table Body */}
             <div className="bg-zinc-700 p-4 rounded-b-md">
-              <div className="w-full h-full overflow-y-auto">
-                <TableGeneric
-                  columns={vulnColumns}
-                  data={TopVulns}
-                  hoverField="texts"
-                  hasPagination={false}
-                  tableHeight="auto"
-                />
-              </div>
+              <TableGeneric
+                columns={vulnColumns}
+                data={TopVulns}
+                hasPagination={false}
+                tableHeight="auto"
+              />
             </div>
           </div>
 

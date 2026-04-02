@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Assessment } from "../handlers/assessments";
+import type { Variant } from '../handlers/variant';
 import MessageBanner from './MessageBanner';
 
 type EditAssessmentData = {
@@ -9,6 +10,8 @@ type EditAssessmentData = {
     impact_statement?: string;
     status_notes?: string;
     workaround?: string;
+    variant_ids?: string[];
+    packages?: string[];
 }
 
 type Props = {
@@ -18,6 +21,10 @@ type Props = {
     clearFields?: boolean;
     onFieldsChange?: (hasChanges: boolean) => void;
     triggerBanner?: (message: string, type: "error" | "success") => void;
+    availableVariants?: Variant[];
+    defaultSelectedVariantIds?: string[];
+    availablePackages?: string[];
+    defaultSelectedPackages?: string[];
 }
 
 function EditAssessment({
@@ -26,13 +33,28 @@ function EditAssessment({
     onCancel,
     clearFields: shouldClearFields,
     onFieldsChange,
-    triggerBanner
+    triggerBanner,
+    availableVariants,
+    defaultSelectedVariantIds,
+    availablePackages,
+    defaultSelectedPackages
 }: Readonly<Props>) {
+    const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const [status, setStatus] = useState(assessment.status || "under_investigation");
     const [justification, setJustification] = useState(assessment.justification || "none");
-    const [statusNotes, setStatusNotes] = useState(assessment.status_notes || "");
+    // For non-impact statuses (fixed, affected, …) Yocto stores its notes in impact_statement.
+    // Pre-fill status_notes with that value so users see it in the right field.
+    const [statusNotes, setStatusNotes] = useState(
+        assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "")
+    );
     const [workaround, setWorkaround] = useState(assessment.workaround || "");
-    const [impact, setImpact] = useState(assessment.impact_statement || "");
+    const [impact, setImpact] = useState(isImpactStatus ? (assessment.impact_statement || "") : "");
+    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
+        defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : [])
+    );
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(
+        defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
+    );
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -49,15 +71,21 @@ function EditAssessment({
 
     // Check if fields have changes compared to original assessment
     useEffect(() => {
+        const initialStatusNotes = assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "");
         const hasChanges = (
             status !== assessment.status ||
             justification !== (assessment.justification || "none") ||
-            statusNotes !== (assessment.status_notes || "") ||
+            statusNotes !== initialStatusNotes ||
             workaround !== (assessment.workaround || "") ||
-            impact !== (assessment.impact_statement || "")
+            impact !== (isImpactStatus ? (assessment.impact_statement || "") : "")
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, onFieldsChange, assessment]);
+    }, [status, justification, statusNotes, workaround, impact, onFieldsChange, assessment, isImpactStatus]);
+
+    // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
+    useEffect(() => {
+        setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
+    }, [availableVariants, defaultSelectedVariantIds]);
 
     function saveAssessment() {
         if (status == '' || justification == '')
@@ -71,6 +99,23 @@ function EditAssessment({
             return;
         }
 
+        if (availableVariants && availableVariants.length > 0 && selectedVariantIds.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one variant", "error");
+            } else {
+                internalTriggerBanner("You must select at least one variant", "error");
+            }
+            return;
+        }
+        if (availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one package", "error");
+            } else {
+                internalTriggerBanner("You must select at least one package", "error");
+            }
+            return;
+        }
+
         const includeJustificationAndImpact = status == "not_affected";
 
         onSaveAssessment({
@@ -79,17 +124,22 @@ function EditAssessment({
             justification: includeJustificationAndImpact ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: includeJustificationAndImpact ? impact : undefined
+            // For non-impact statuses the value was folded into status_notes; clear impact_statement.
+            impact_statement: includeJustificationAndImpact ? impact : "",
+            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
+            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
         });
     }
 
     const resetToOriginal = useCallback(() => {
         setStatus(assessment.status || "under_investigation");
         setJustification(assessment.justification || "none");
-        setStatusNotes(assessment.status_notes || "");
+        setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
         setWorkaround(assessment.workaround || "");
-        setImpact(assessment.impact_statement || "");
-    }, [assessment]);
+        setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
+        setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
+        setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
+    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -143,16 +193,65 @@ function EditAssessment({
                 </>}
             </h3>
 
-            {(status == "not_affected" || status == "false_positive") && <>
-                    <textarea
+            {availableVariants && availableVariants.length > 0 && (
+                <div className="mt-2 mb-2 ml-1">
+                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                        {availableVariants.map(v => (
+                            <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedVariantIds.includes(v.id)}
+                                    onChange={(e) => {
+                                        if (e.target.checked) {
+                                            setSelectedVariantIds(prev => [...prev, v.id]);
+                                        } else {
+                                            setSelectedVariantIds(prev => prev.filter(id => id !== v.id));
+                                        }
+                                    }}
+                                    className="accent-blue-500"
+                                />
+                                <span className="text-gray-200">{v.name}</span>
+                            </label>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {availablePackages && availablePackages.length > 1 && (
+                <div className="mt-2 mb-2 ml-1">
+                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                        {availablePackages.map(pkg => (
+                            <label key={pkg} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedPackages.includes(pkg)}
+                                    onChange={(e) => {
+                                        if (e.target.checked) {
+                                            setSelectedPackages(prev => [...prev, pkg]);
+                                        } else {
+                                            setSelectedPackages(prev => prev.filter(p => p !== pkg));
+                                        }
+                                    }}
+                                    className="accent-blue-400"
+                                />
+                                <span className="font-mono text-gray-200">{pkg}</span>
+                            </label>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {(status === 'not_affected' || status === 'false_positive') && (
+                <><textarea
                         value={impact}
                         onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
                         name="edit_assessment_impact"
                         className="bg-gray-700 text-white m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 rounded resize-vertical whitespace-pre-wrap"
                         rows={3}
-                        placeholder="why this vulnerability is not exploitable ?"
-                    /><br/>
-            </>}
+                        placeholder="Why this vulnerability is not exploitable?"
+                    /><br/></>
+            )}
 
                 <textarea
                     value={statusNotes}

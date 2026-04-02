@@ -343,3 +343,313 @@ def test_filter_publish_date_include_unknown(extensions):
     # Test with include_unknown=True - should include matching dates + unknown items
     result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01", True)
     assert result == [b, c, d]
+
+
+def test_filter_publish_date_include_unknown_gte(extensions):
+    """Test include_unknown=True with >= operator"""
+    a = {"published": "2026-01-02T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2025-12-31T23:59:59"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_lte(extensions):
+    """Test include_unknown=True with <= operator"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_lt(extensions):
+    """Test include_unknown=True with < operator"""
+    a = {"published": "2025-12-31T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "<2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_range(extensions):
+    """Test include_unknown=True with range operator"""
+    a = {"published": "2026-01-15T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-02-01T00:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-31", True)
+    assert result == [a, b, c]
+
+
+def test_filter_publish_date_include_unknown_exact(extensions):
+    """Test include_unknown=True with exact date"""
+    a = {"published": "2026-01-01T10:00:00"}
+    b = {}  # No published field
+    c = {"published": None}
+    d = {"published": "2026-01-02T10:00:00"}
+    vulns = [a, b, c, d]
+
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01", True)
+    assert result == [a, b, c]
+
+
+def test_filter_last_assessment_date_timezone_aware(extensions):
+    """Test filter_last_assessment_date with timezone-aware timestamps (astimezone branch)"""
+    # timezone-aware timestamps (with +HH:MM) hit the else:.astimezone() branch
+    a = {"last_assessment": {"timestamp": "2026-01-01T12:00:00+02:00"}}  # = 2026-01-01T10:00Z
+    b = {"last_assessment": {"timestamp": "2026-01-02T00:00:00+00:00"}}  # = 2026-01-02T00:00Z
+    c = {"last_assessment": {"timestamp": "2025-12-31T23:00:00-01:00"}}  # = 2026-01-01T00:00Z
+    vulns = [a, b, c]
+
+    # range filter
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01..2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # >= filter
+    result = extensions.filters["last_assessment_date"](vulns, ">=2026-01-02")
+    assert result == [b]
+
+    # > filter
+    result = extensions.filters["last_assessment_date"](vulns, ">2026-01-01")
+    assert result == [b]
+
+    # <= filter
+    result = extensions.filters["last_assessment_date"](vulns, "<=2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # < filter
+    result = extensions.filters["last_assessment_date"](vulns, "<2026-01-01")
+    assert result == []
+
+    # exact filter
+    result = extensions.filters["last_assessment_date"](vulns, "2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+
+def test_filter_publish_date_timezone_aware(extensions):
+    """Test filter_publish_date with timezone-aware published timestamps (astimezone branch)"""
+    a = {"published": "2026-01-01T12:00:00+02:00"}  # = 2026-01-01T10:00Z
+    b = {"published": "2026-01-02T00:00:00+00:00"}  # = 2026-01-02T00:00Z
+    c = {"published": "2025-12-31T23:00:00-01:00"}  # = 2026-01-01T00:00Z
+    vulns = [a, b, c]
+
+    # range filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # >= filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-02")
+    assert result == [b]
+
+    # > filter
+    result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01")
+    assert result == [b]
+
+    # <= filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+    # < filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "<2026-01-01")
+    assert result == []
+
+    # exact filter
+    result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01")
+    assert a in result
+    assert c in result
+    assert b not in result
+
+
+# ---------------------------------------------------------------------------
+# Exception handler coverage for filter_last_assessment_date
+# These tests trigger the defensive except-branches in each filter operator.
+# ---------------------------------------------------------------------------
+
+class TestFilterLastAssessmentDateExceptions:
+    """Cover the inner (invalid timestamp) and outer (invalid filter date) exception handlers."""
+
+    VALID_VULN = {"last_assessment": {"timestamp": "2026-06-15T12:00:00"}}
+    INVALID_TS_VULN = {"last_assessment": {"timestamp": "not-a-date"}}
+    NO_ASSESS_VULN = {"other": "data"}
+
+    def test_range_filter_inner_exception(self, extensions):
+        """Inner exception: invalid timestamp inside range filter (lines 335-336)."""
+        vulns = [self.VALID_VULN, self.INVALID_TS_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "2026-01-01..2026-12-31")
+        assert self.VALID_VULN in result
+        assert self.INVALID_TS_VULN not in result
+
+    def test_range_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable date range returns all (lines 337-338)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "INVALID-DATE..ALSO-INVALID")
+        assert result == vulns
+
+    def test_gte_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable >=filter date returns all (lines 357-358)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, ">=NOT-A-DATE")
+        assert result == vulns
+
+    def test_gt_filter_inner_exception(self, extensions):
+        """Inner exception: invalid timestamp inside > filter (lines 375-376)."""
+        vulns = [self.VALID_VULN, self.INVALID_TS_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, ">2026-01-01")
+        assert self.VALID_VULN in result
+        assert self.INVALID_TS_VULN not in result
+
+    def test_gt_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable >filter date returns all (lines 377-378)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, ">NOT-A-DATE")
+        assert result == vulns
+
+    def test_lte_filter_inner_exception(self, extensions):
+        """Inner exception: invalid timestamp inside <= filter (lines 395-396)."""
+        vulns = [self.VALID_VULN, self.INVALID_TS_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "<=2026-12-31")
+        assert self.VALID_VULN in result
+        assert self.INVALID_TS_VULN not in result
+
+    def test_lte_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable <=filter date returns all (lines 397-398)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "<=NOT-A-DATE")
+        assert result == vulns
+
+    def test_lt_filter_inner_exception(self, extensions):
+        """Inner exception: invalid timestamp inside < filter (lines 415-416)."""
+        vulns = [self.INVALID_TS_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "<2027-01-01")
+        assert result == []
+
+    def test_lt_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable <filter date returns all (lines 417-418)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "<NOT-A-DATE")
+        assert result == vulns
+
+    def test_exact_filter_inner_exception(self, extensions):
+        """Inner exception: invalid timestamp inside exact date filter (covers inner except)."""
+        vulns = [self.VALID_VULN, self.INVALID_TS_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "2026-06-15")
+        assert self.VALID_VULN in result
+        assert self.INVALID_TS_VULN not in result
+
+    def test_exact_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable exact date returns all (lines 437-438)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["last_assessment_date"](vulns, "NOT-A-DATE")
+        assert result == vulns
+
+
+# ---------------------------------------------------------------------------
+# Exception handler coverage for filter_publish_date
+# ---------------------------------------------------------------------------
+
+class TestFilterPublishDateExceptions:
+    """Cover the inner (invalid published date) and outer (invalid filter) exception handlers."""
+
+    VALID_VULN = {"published": "2026-06-15T12:00:00"}
+    INVALID_PUB_VULN = {"published": "not-a-date"}
+    NO_PUB_VULN = {"other": "data"}
+
+    def test_range_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside range filter (lines 499-500)."""
+        vulns = [self.VALID_VULN, self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "2026-01-01..2026-12-31")
+        assert self.VALID_VULN in result
+        assert self.INVALID_PUB_VULN not in result
+
+    def test_range_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable date range returns all (lines 505-506)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "INVALID..INVALID")
+        assert result == vulns
+
+    def test_gte_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside >= filter (lines ~520)."""
+        vulns = [self.VALID_VULN, self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, ">=2026-01-01")
+        assert self.VALID_VULN in result
+        assert self.INVALID_PUB_VULN not in result
+
+    def test_gte_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable >=filter date returns all (lines 529-530)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, ">=NOT-A-DATE")
+        assert result == vulns
+
+    def test_gt_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside > filter (lines ~540)."""
+        vulns = [self.VALID_VULN, self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, ">2026-01-01")
+        assert self.VALID_VULN in result
+        assert self.INVALID_PUB_VULN not in result
+
+    def test_gt_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable >filter date returns all (lines 547-548)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, ">NOT-A-DATE")
+        assert result == vulns
+
+    def test_lte_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside <= filter (lines ~560)."""
+        vulns = [self.VALID_VULN, self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "<=2026-12-31")
+        assert self.VALID_VULN in result
+        assert self.INVALID_PUB_VULN not in result
+
+    def test_lte_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable <=filter date returns all (lines 553-554)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "<=NOT-A-DATE")
+        assert result == vulns
+
+    def test_lt_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside < filter (lines ~575)."""
+        vulns = [self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "<2027-01-01")
+        assert result == []
+
+    def test_lt_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable <filter date returns all (lines 571-572)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "<NOT-A-DATE")
+        assert result == vulns
+
+    def test_exact_filter_inner_exception(self, extensions):
+        """Inner exception: invalid published date inside exact date filter (lines ~590)."""
+        vulns = [self.VALID_VULN, self.INVALID_PUB_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "2026-06-15")
+        assert self.VALID_VULN in result
+        assert self.INVALID_PUB_VULN not in result
+
+    def test_exact_filter_outer_exception(self, extensions):
+        """Outer exception: unparseable exact date returns all (lines 621-622)."""
+        vulns = [self.VALID_VULN]
+        result = extensions.filters["filter_by_publish_date"](vulns, "NOT-A-DATE")
+        assert result == vulns
+

@@ -16,7 +16,10 @@ import TableVulnerabilities from "./TableVulnerabilities";
 import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
-import Assessments from "../handlers/assessments";
+import ScanHistory from "./ScanHistory";
+import Assessments, { removeDuplicateAssessments } from "../handlers/assessments";
+import Config from "../handlers/config";
+import type { AppConfig } from "../handlers/config";
 
 type Props = {
   darkMode: boolean;
@@ -34,6 +37,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
+    const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
+    const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
+    const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -66,7 +74,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         ])
         .then(([patchData, progress]) => {
             setNvdProgress(progress);
-            
+
             if (patchData.db_ready) {
                 setPatchDbReady(true);
                 loadPatchData(vulns_list);
@@ -81,25 +89,61 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         })
     }, [loadPatchData]);
 
-    useEffect(() => {
+    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
+        setIsLoadingData(true);
+
+        const assessPromise: Promise<Assessment[]> = (compareVariantId && variantId)
+            ? Promise.all([
+                Assessments.list(variantId, projectId),
+                Assessments.list(compareVariantId, projectId),
+              ]).then(([a1, a2]) => removeDuplicateAssessments([...a1, ...a2]))
+            : Assessments.list(variantId, projectId);
+
         Promise.allSettled([
-            Packages.list(),
-            Vulnerabilities.list(),
-            Assessments.list()
-        ]).then(([pkgs, vulns, assess]) => {
-            if (pkgs.status === 'rejected' || vulns.status === 'rejected' || assess.status === 'rejected') {
-                console.error(pkgs, vulns);
+            Packages.list(variantId, projectId, compareVariantId, operation),
+            Vulnerabilities.list(variantId, projectId, compareVariantId, operation),
+            assessPromise,
+        ]).then(([pkgsResult, vulnsResult, assessResult]) => {
+            setIsLoadingData(false);
+            if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
+                console.error(pkgsResult, vulnsResult);
                 triggerBanner("Failed to load data", "error");
                 return;
             }
-            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulns.value, assess.value);
+            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
             setVulns(enriched_vulns);
-            setPkgs(
-              Packages.enrich_with_vulns(pkgs.value, enriched_vulns)
-            );
-            setTimeout(() => checkPatchReady(enriched_vulns), 100)
-        })
+            const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
+            setPkgs(enrichedPkgs);
+            setTimeout(() => checkPatchReady(enriched_vulns), 100);
+        });
     }, [checkPatchReady]);
+
+    // On mount: fetch default project/variant from config, then load data
+    useEffect(() => {
+        Config.get()
+            .then(config => {
+                setDefaultConfig(config);
+                const variantId = config.variant?.id || undefined;
+                const projectId = variantId ? undefined : (config.project?.id || undefined);
+                setCurrentVariantId(variantId);
+                loadData(variantId, projectId);
+            })
+            .catch(() => loadData(undefined));
+    }, [loadData]);
+
+    const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
+        const effectiveVariantId = compareVariantId || variantId || undefined;
+        setCurrentVariantId(effectiveVariantId);
+        // Track origin variant and operation separately for MultiEditBar intersection logic
+        setCurrentBaseVariantId(compareVariantId ? (variantId || undefined) : undefined);
+        setCurrentOperation(compareVariantId ? (operation || undefined) : undefined);
+        loadData(
+            variantId || undefined,
+            variantId ? undefined : projectId || undefined,
+            compareVariantId || undefined,
+            operation || undefined,
+        );
+    }, [loadData]);
 
 
 
@@ -170,7 +214,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
-            <NavigationBar tab={tab} changeTab={handleTabChange} darkMode={darkMode} setDarkMode={setDarkMode} />
+            <NavigationBar
+                tab={tab}
+                changeTab={handleTabChange}
+                darkMode={darkMode}
+                setDarkMode={setDarkMode}
+                defaultProject={defaultConfig.project}
+                defaultVariant={defaultConfig.variant}
+                onApply={handleApply}
+            />
 
             <div className="px-8 pt-4">
                 <MessageBanner
@@ -180,6 +232,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     onClose={closeBanner}
                 />
             </div>
+
+            {isLoadingData && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">Loading data...</span>
+                    </div>
+                </div>
+            )}
 
             <div className="p-5 flex-1 overflow-auto">
                 {tab === 'metrics' &&
@@ -201,8 +262,12 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     vulnerabilities={vulns}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
+                    variantId={currentVariantId}
+                    baseVariantId={currentBaseVariantId}
+                    compareOperation={currentOperation}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
+                {tab == 'scans' && <ScanHistory variantId={currentVariantId} />}
                 {tab == 'exports' && <Exports />}
             </div>
             <VersionDisplay />

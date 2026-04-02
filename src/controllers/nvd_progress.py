@@ -6,14 +6,11 @@
 from typing import Optional
 from datetime import datetime, timezone
 from threading import Lock
-import json
-import os
-from pathlib import Path
 
 
 class NVDProgressTracker:
     """
-    Singleton class to track NVD database update progress using file-based storage.
+    Singleton class to track NVD enrichment progress in-memory.
     """
 
     _instance = None
@@ -29,14 +26,7 @@ class NVDProgressTracker:
         if self._initialized:
             return
 
-        cache_dir = os.getenv("NVD_DB_PATH", "/cache/vulnscout/nvd.db")
-        progress_file_path = Path(cache_dir).parent / "nvd_progress.json"
-        self._progress_file = str(progress_file_path)
-
-        # Ensure parent directory exists
-        progress_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self._default_data = {
+        self._data = {
             "in_progress": False,
             "phase": "idle",
             "current": 0,
@@ -45,39 +35,13 @@ class NVDProgressTracker:
             "last_update": None,
             "started_at": None
         }
-
-        # Initialize file if it doesn't exist
-        if not progress_file_path.exists():
-            self._write_progress(self._default_data)
-
         self._initialized = True
 
-    def _read_progress(self) -> dict:
-        """Read progress from file."""
-        try:
-            with open(self._progress_file, 'r') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return self._default_data.copy()
-
-    def _write_progress(self, data: dict):
-        """Write progress to file atomically."""
-        temp_file = f"{self._progress_file}.tmp"
-        try:
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_file, self._progress_file)
-        except Exception as e:
-            # Clean up temp file if it exists
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            raise e
-
-    def start(self, phase: str = "initial_build"):
-        """Mark the start of an update process."""
+    def start(self, phase: str = "enrichment"):
+        """Mark the start of an enrichment process."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            data = {
+            self._data = {
                 "in_progress": True,
                 "phase": phase,
                 "current": 0,
@@ -86,41 +50,34 @@ class NVDProgressTracker:
                 "last_update": now,
                 "started_at": now
             }
-            self._write_progress(data)
 
     def update(self, phase: str, current: int, total: int, message: Optional[str] = None):
         """Update progress information."""
         with self._lock:
-            data = self._read_progress()
-            data["in_progress"] = True
-            data["phase"] = phase
-            data["current"] = current
-            data["total"] = total
-            data["message"] = message or f"{phase}: {current}/{total}"
-            data["last_update"] = datetime.now(timezone.utc).isoformat()
-            self._write_progress(data)
+            self._data["in_progress"] = True
+            self._data["phase"] = phase
+            self._data["current"] = current
+            self._data["total"] = total
+            self._data["message"] = message or f"{phase}: {current}/{total}"
+            self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def complete(self):
-        """Mark the update as complete."""
+        """Mark the enrichment as complete."""
         with self._lock:
-            data = self._read_progress()
-            data["in_progress"] = False
-            data["phase"] = "completed"
-            data["message"] = "Update completed successfully"
-            data["last_update"] = datetime.now(timezone.utc).isoformat()
-            self._write_progress(data)
+            self._data["in_progress"] = False
+            self._data["phase"] = "completed"
+            self._data["message"] = "Enrichment completed successfully"
+            self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def error(self, message: str):
-        """Mark the update as failed."""
+        """Mark the enrichment as failed."""
         with self._lock:
-            data = self._read_progress()
-            data["in_progress"] = False
-            data["phase"] = "error"
-            data["message"] = message
-            data["last_update"] = datetime.now(timezone.utc).isoformat()
-            self._write_progress(data)
+            self._data["in_progress"] = False
+            self._data["phase"] = "error"
+            self._data["message"] = message
+            self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
     def get_progress(self) -> dict:
         """Get current progress information."""
         with self._lock:
-            return self._read_progress()
+            return dict(self._data)
