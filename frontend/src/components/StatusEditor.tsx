@@ -53,6 +53,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setSelectedPackages(availablePackages ?? []);
     }, [availablePackages]);
 
+    // Auto-select single variant when variants load asynchronously (e.g. Edit from Actions column)
+    useEffect(() => {
+        setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
+    }, [variants]);
+
     // Update status when defaultStatus prop changes
     useEffect(() => {
         setStatus(defaultStatus);
