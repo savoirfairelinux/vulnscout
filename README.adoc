@@ -202,8 +202,8 @@ Reports are generated from AsciiDoc templates. VulnScout ships with built-in tem
 # Generate a match-condition report (lists vulnerabilities that triggered the condition)
 ./vulnscout --project demo --match-condition "cvss >= 9.0" --report match_condition.adoc
 
-# Register a custom template permanently in the container
-./vulnscout --add-report-template /path/to/my-custom-report.adoc
+# Register a custom template permanently in the container and generate a report from it
+./vulnscout --report /path/to/my-custom-report.adoc
 
 # Then generate a report from it by name
 ./vulnscout --project demo report my-custom-report.adoc
