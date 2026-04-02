@@ -1991,3 +1991,216 @@ describe('Vulnerability Table', () => {
         });
     });
 });
+
+describe('More Filters dropdown', () => {
+    const vulnerabilities: Vulnerability[] = [
+        {
+            id: 'CVE-2010-1234',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['hardcoded'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
+            packages: ['pkg@1.0.0'],
+            packages_current: ['pkg@1.0.0'],
+            urls: [],
+            texts: [],
+            severity: {
+                severity: 'high',
+                min_score: 7,
+                max_score: 7,
+                cvss: [{
+                    author: 'test',
+                    severity: 'high',
+                    base_score: 7,
+                    vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N',
+                    version: '3.1',
+                    impact_score: 0,
+                    exploitability_score: 0,
+                    attack_vector: 'NETWORK'
+                }]
+            },
+            epss: { score: 0.5, percentile: 0.8 },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: { state: 'unknown' },
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            assessments: [],
+            variants: [],
+            first_scan_date: '2025-01-15T10:00:00Z'
+        },
+        {
+            id: 'CVE-2020-5678',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['scanner'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2020-5678',
+            packages: ['other@2.0.0'],
+            packages_current: ['other@2.0.0'],
+            urls: [],
+            texts: [],
+            severity: {
+                severity: 'low',
+                min_score: 2,
+                max_score: 2,
+                cvss: [{
+                    author: 'test',
+                    severity: 'low',
+                    base_score: 2,
+                    vector_string: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L',
+                    version: '3.1',
+                    impact_score: 0,
+                    exploitability_score: 0,
+                    attack_vector: 'LOCAL'
+                }]
+            },
+            epss: { score: 0.01, percentile: 0.1 },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: { state: 'unknown' },
+            status: 'under_investigation',
+            simplified_status: 'Pending Assessment',
+            assessments: [],
+            variants: [],
+            first_scan_date: '2025-03-20T14:00:00Z'
+        }
+    ];
+
+    Element.prototype.getBoundingClientRect = jest.fn(function () {
+        return getDOMRect(500, 500);
+    });
+
+    beforeEach(() => {
+        fetchMock.resetMocks();
+    });
+
+    test('opens More Filters dropdown and shows EPSS, Attack Vector, and First Scan Date sections', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // More Filters button should exist
+        const moreBtn = screen.getByText('More');
+        expect(moreBtn).toBeInTheDocument();
+
+        // Click to open
+        await user.click(moreBtn);
+
+        // EPSS Range section should appear
+        expect(screen.getByText('EPSS Range (%)')).toBeInTheDocument();
+
+        // Attack Vector section should appear
+        expect(screen.getByText('Attack Vector')).toBeInTheDocument();
+
+        // First Scan Date section should appear
+        expect(screen.getByText('First Scan Date')).toBeInTheDocument();
+    });
+
+    test('toggles Attack Vector checkbox filter', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find "Network" attack vector checkbox and click it
+        const networkLabel = screen.getByText('Network');
+        await user.click(networkLabel);
+
+        // Should show active filter indicator (checkmark)
+        expect(screen.getByText('✓')).toBeInTheDocument();
+    });
+
+    test('toggles First Scan Date checkbox filter', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find scan date checkboxes — there should be 2 dates from our test data
+        const checkboxes = screen.getAllByRole('checkbox');
+        // Find one that's in the First Scan Date section (look for scan date text)
+        const scanDateLabels = checkboxes.filter(cb => {
+            const parent = cb.closest('label');
+            return parent?.textContent?.match(/\d{4}/); // date contains a year
+        });
+        expect(scanDateLabels.length).toBeGreaterThanOrEqual(1);
+
+        // Click to select and then deselect
+        await user.click(scanDateLabels[0]);
+        expect(screen.getByText('✓')).toBeInTheDocument();
+        await user.click(scanDateLabels[0]);
+    });
+
+    test('enables EPSS range filter via checkbox', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find the EPSS Range checkbox
+        const epssCheckbox = screen.getByLabelText('EPSS Range (%)');
+        await user.click(epssCheckbox);
+
+        // Should show active filter indicator
+        expect(screen.getByText('✓')).toBeInTheDocument();
+    });
+
+    test('closes More Filters dropdown on outside click', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('EPSS Range (%)')).toBeInTheDocument();
+
+        // Click outside the dropdown
+        await user.click(document.body);
+
+        // Dropdown content should be gone
+        await waitFor(() => {
+            expect(screen.queryByText('EPSS Range (%)')).not.toBeInTheDocument();
+        });
+    });
+
+    test('shows no scan dates message when none available', async () => {
+        const vulnsNoScanDate: Vulnerability[] = [{
+            ...vulnerabilities[0],
+            first_scan_date: undefined
+        }, {
+            ...vulnerabilities[1],
+            first_scan_date: undefined
+        }];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsNoScanDate} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('No scan dates available')).toBeInTheDocument();
+    });
+
+    test('shows no attack vectors message when none available', async () => {
+        const vulnsNoCvss: Vulnerability[] = [{
+            ...vulnerabilities[0],
+            severity: { ...vulnerabilities[0].severity, cvss: [] }
+        }, {
+            ...vulnerabilities[1],
+            severity: { ...vulnerabilities[1].severity, cvss: [] }
+        }];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsNoCvss} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('No attack vectors available')).toBeInTheDocument();
+    });
+});

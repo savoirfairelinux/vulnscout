@@ -1732,4 +1732,201 @@ describe('Vulnerability Modal', () => {
         await user.click(helpBtn);
         expect(screen.queryByText('Keyboard Shortcuts')).not.toBeInTheDocument();
     });
+
+    test('delete assessment with remaining assessments updates status from most recent', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
+
+        const patchVuln = jest.fn();
+        const vulnWithTwoAssessments = {
+            ...vulnerability,
+            assessments: [
+                {
+                    id: 'assessment-old',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'fixed',
+                    simplified_status: 'Fixed',
+                    justification: 'old fix',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2020-06-01T00:00:00Z',
+                    responses: []
+                },
+                {
+                    id: 'assessment-new',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: 'recent',
+                    impact_statement: 'bad',
+                    status_notes: 'still broken',
+                    workaround: 'none',
+                    timestamp: '2021-06-01T00:00:00Z',
+                    responses: []
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithTwoAssessments} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // Find and click the delete button for the second (most recent) assessment
+        const deleteBtns = screen.getAllByTitle(/delete assessment/i);
+        await user.click(deleteBtns[deleteBtns.length - 1]);
+
+        const confirmBtn = screen.getByText(/yes, delete/i);
+        await user.click(confirmBtn);
+
+        await screen.findByText(/assessment deleted successfully/i);
+        // patchVuln should be called with updated status from remaining assessment
+        expect(patchVuln).toHaveBeenCalled();
+    });
+
+    test('adding assessment to multiple variants shows multi-variant success message', async () => {
+        fetchMock.resetMocks();
+        // Variants endpoint returns two variants
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+            { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        // Two POST responses for two variants
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessment: {
+                id: 'new-assess-v1',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'v1'
+            }
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'success',
+            assessment: {
+                id: 'new-assess-v2',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: '',
+                impact_statement: '',
+                status_notes: 'multi test',
+                workaround: '',
+                timestamp: '2026-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'v2'
+            }
+        }));
+
+        const appendCb = jest.fn();
+        const patchCb = jest.fn();
+        render(<VulnModal vuln={{...vulnerability, assessments: []}} isEditing={true} onClose={() => {}} appendAssessment={appendCb} appendCVSS={() => null} patchVuln={patchCb} />);
+        const user = userEvent.setup();
+
+        // Wait for variants to load, then select both
+        await screen.findByText('Variant Alpha');
+        const variantCheckboxes = screen.getAllByRole('checkbox');
+        // Select both variants
+        for (const cb of variantCheckboxes) {
+            const label = cb.closest('label');
+            if (label?.textContent?.includes('Variant Alpha') || label?.textContent?.includes('Variant Beta')) {
+                await user.click(cb);
+            }
+        }
+
+        const selectSource = screen.getAllByRole('combobox').find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectSource, 'affected');
+        const inputNotes = screen.getByPlaceholderText(/notes/i);
+        await user.type(inputNotes, 'multi test');
+        const btn = screen.getByText(/add assessment/i);
+        await user.click(btn);
+
+        // Should show multi-variant success message
+        const successMsg = await screen.findByText(/successfully added assessment to 2 variants/i);
+        expect(successMsg).toBeInTheDocument();
+        expect(appendCb).toHaveBeenCalledTimes(2);
+        expect(patchCb).toHaveBeenCalledTimes(1);
+    });
+
+    test('renders variant tags on assessments when variants are available', async () => {
+        fetchMock.resetMocks();
+        // Return variants for this vuln
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // Return all assessments (unfiltered) including variant_id
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'test',
+                impact_statement: '',
+                status_notes: '',
+                workaround: '',
+                timestamp: '2025-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v2',
+                vuln_id: 'CVE-2010-1234',
+                packages: ['aaabbbccc@1.0.0'],
+                status: 'affected',
+                simplified_status: 'Exploitable',
+                justification: 'test',
+                impact_statement: '',
+                status_notes: '',
+                workaround: '',
+                timestamp: '2025-01-01T00:00:00Z',
+                responses: [],
+                variant_id: 'var-2'
+            }
+        ]));
+
+        const vulnWithVariantAssessments = {
+            ...vulnerability,
+            assessments: [
+                {
+                    id: 'assess-v1',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    packages_current: [],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: 'test',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2025-01-01T00:00:00Z',
+                    responses: [],
+                    variant_id: 'var-1'
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Wait for variant tags to render
+        await screen.findByText('Production');
+        expect(screen.getByText('Staging')).toBeInTheDocument();
+    });
 });
