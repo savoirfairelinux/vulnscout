@@ -304,21 +304,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedAttackVectors, setSelectedAttackVectors] = useState<string[]>([]);
     const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
-<<<<<<< HEAD
     const [showSearchHelper, setShowSearchHelper] = useState(false);
-=======
     const [showMoreFilters, setShowMoreFilters] = useState(false);
->>>>>>> 08f7ceb (Vulnerabilities: Rework of the existing filters)
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
-<<<<<<< HEAD
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
-=======
     const moreFiltersRef = useRef<HTMLDivElement>(null);
->>>>>>> 08f7ceb (Vulnerabilities: Rework of the existing filters)
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
