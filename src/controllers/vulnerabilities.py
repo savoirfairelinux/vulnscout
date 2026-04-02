@@ -433,6 +433,54 @@ class VulnerabilitiesController:
             print(f"Error for {vuln_id}: {e}")
         return None
 
+    def fetch_published_dates(self):
+        """Fetch published dates for all vulnerabilities from local cache / GHSA API.
+
+        CVE-prefixed IDs are looked up from the local NVD SQLite cache (if
+        available).  GHSA-prefixed IDs are fetched from the GitHub Advisories
+        API via a thread pool.  All errors are silently caught so that a
+        single failure never aborts the whole run.
+        """
+        import sqlite3
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        nvd_db_path = os.path.join(
+            os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout"), "nvd.db"
+        )
+
+        # CVE vulns: try local NVD SQLite cache
+        for vuln in self.vulnerabilities.values():
+            if vuln.id.startswith("CVE-"):
+                try:
+                    conn = sqlite3.connect(nvd_db_path)
+                    cursor = conn.execute(
+                        "SELECT published FROM cves WHERE id = ?", (vuln.id,)
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        vuln.published = row[0]
+                    conn.close()
+                except Exception:
+                    pass
+
+        # GHSA vulns: fetch via GitHub Advisories API
+        ghsa_vulns = {vid: v for vid, v in self.vulnerabilities.items() if "GHSA" in vid}
+        if ghsa_vulns:
+            max_workers = min(10, len(ghsa_vulns))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_id = {
+                    executor.submit(self._fetch_ghsa_published, vid): vid
+                    for vid in ghsa_vulns
+                }
+                for future in as_completed(future_to_id, timeout=60):
+                    vid = future_to_id[future]
+                    try:
+                        published = future.result(timeout=15)
+                        if published:
+                            ghsa_vulns[vid].published = published
+                    except Exception:
+                        pass
+
     def fetch_nvd_data(self):
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
