@@ -272,8 +272,9 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["is_first"] = False
 
             upgraded_pairs = entry["upgraded_pairs"]
-            base["packages_added"] = entry.get("truly_added_p", len(entry["curr_p"] - packages_map.get(prev.id, set())))
-            base["packages_removed"] = entry.get("truly_removed_p", len(packages_map.get(prev.id, set()) - entry["curr_p"]))
+            prev_pkgs = packages_map.get(prev.id, set())
+            base["packages_added"] = entry.get("truly_added_p", len(entry["curr_p"] - prev_pkgs))
+            base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
             base["packages_upgraded"] = len(upgraded_pairs)
 
             raw_added_f = curr_f - prev_f

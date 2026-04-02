@@ -340,6 +340,7 @@ describe('Render patch found', () => {
             vulnerabilities: {},
             maxSeverity: {},
             source: [],
+            variants: [],
         }
     ]
 
