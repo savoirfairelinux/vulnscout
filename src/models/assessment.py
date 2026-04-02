@@ -113,6 +113,7 @@ class Assessment(Base):
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     source = db.Column(db.String, nullable=True)
+    origin = db.Column(db.String, nullable=True)
     status = db.Column(db.String, nullable=True)
     simplified_status = db.Column(db.String, nullable=True)
     status_notes = db.Column(db.Text, nullable=True)
@@ -350,6 +351,7 @@ class Assessment(Base):
         return {
             "id": str(self.id),
             "source": self.source or "",
+            "origin": self.origin or "sbom",
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "variant_id": str(self.variant_id) if self.variant_id else None,
@@ -512,6 +514,7 @@ class Assessment(Base):
         finding_id: Optional[uuid.UUID | str] = None,
         variant_id: Optional[uuid.UUID | str] = None,
         source: Optional[str] = None,
+        origin: Optional[str] = None,
         simplified_status: Optional[str] = None,
         status_notes: Optional[str] = None,
         justification: Optional[str] = None,
@@ -538,6 +541,7 @@ class Assessment(Base):
             finding_id=finding_id,
             variant_id=variant_id,
             source=source,
+            origin=origin,
             simplified_status=simplified_status,
             status_notes=status_notes,
             justification=justification,
@@ -596,6 +600,8 @@ class Assessment(Base):
             existing.impact_statement = assess.impact_statement or existing.impact_statement
             existing.workaround = getattr(assess, "workaround", None) or existing.workaround
             existing.responses = list(assess.responses) if assess.responses else existing.responses
+            if not existing.origin or existing.origin != "sbom":
+                existing.origin = "sbom"
             db.session.flush()
             return existing
 
@@ -606,6 +612,7 @@ class Assessment(Base):
             simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
             variant_id=variant_id,
             finding_id=finding_id,
+            origin="sbom",
             status_notes=assess.status_notes,
             justification=assess.justification,
             impact_statement=assess.impact_statement,
@@ -705,10 +712,26 @@ class Assessment(Base):
             .order_by(Assessment.timestamp)
         ).scalars().all())
 
+    @staticmethod
+    def get_handmade(variant_id: Optional["uuid.UUID | str"] = None) -> list["Assessment"]:
+        """Return assessments created/edited via the web UI (``origin='custom'``)."""
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        query = (
+            db.select(Assessment)
+            .where(Assessment.origin == "custom")
+            .options(joinedload(Assessment.finding).joinedload(Finding.package))
+            .order_by(Assessment.timestamp.desc())
+        )
+        if variant_id is not None:
+            query = query.where(Assessment.variant_id == variant_id)
+        return list(db.session.execute(query).scalars().unique().all())
+
     def update(
         self,
         status: Optional[str] = None,
         source: Optional[str] = None,
+        origin: Optional[str] = None,
         simplified_status: Optional[str] = None,
         status_notes: Optional[str] = None,
         justification: Optional[str] = None,
@@ -722,6 +745,8 @@ class Assessment(Base):
             self.status = status
         if source is not None:
             self.source = source
+        if origin is not None:
+            self.origin = origin
         if simplified_status is not None:
             self.simplified_status = simplified_status
         if status_notes is not None:
