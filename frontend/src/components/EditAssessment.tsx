@@ -82,6 +82,11 @@ function EditAssessment({
         onFieldsChange?.(hasChanges);
     }, [status, justification, statusNotes, workaround, impact, onFieldsChange, assessment, isImpactStatus]);
 
+    // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
+    useEffect(() => {
+        setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
+    }, [availableVariants, defaultSelectedVariantIds]);
+
     function saveAssessment() {
         if (status == '' || justification == '')
             return;
