@@ -40,6 +40,8 @@ Container lifecycle:
   start                           Start VulnScout container (auto-started by other commands)
   stop                            Stop and remove VulnScout container
   restart                         Restart VulnScout container
+  --update                        Pull latest image and restart if a new version is available
+  --version                       Show current version
   --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
 
 Note: The container runs as a daemon. All commands auto-start it if needed and
@@ -335,6 +337,24 @@ parse_and_run() {
                 config_clear "$2"; shift 2 ;;
             help|--help|-h)
                 show_help; shift ;;
+            version|--version)
+                echo "VulnScout $VULNSCOUT_VERSION"
+                shift ;;
+            update)
+                echo "Pulling latest image..."
+                docker pull "$DOCKER_IMAGE"
+                NEW_VERSION="$(docker inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                if [ "$VULNSCOUT_VERSION" != "$NEW_VERSION" ]; then
+                    echo "Updating: $VULNSCOUT_VERSION -> $NEW_VERSION"
+                    config_set VULNSCOUT_VERSION "$NEW_VERSION"
+                    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                        echo "Restarting container with new version..."
+                        do_start
+                    fi
+                else
+                    echo "Already up to date ($VULNSCOUT_VERSION)."
+                fi
+                shift ;;
             *)
                 echo "Unknown command: $1"
                 echo "Run 'vulnscout help' for usage."
