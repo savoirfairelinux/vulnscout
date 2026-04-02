@@ -36,14 +36,14 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         </button>
       </li>
 
-      {/* === Packages === */}
+      {/* === SBOM === */}
       <li className={[bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('packages')}
           className="flex items-center h-full px-4 py-2"
         >
           <FontAwesomeIcon icon={faBox} className="mr-1" />
-          Packages
+          SBOM
         </button>
       </li>
 

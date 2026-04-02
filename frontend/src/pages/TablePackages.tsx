@@ -189,7 +189,8 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             columnHelper.accessor('name', {
                 header: () => <div className="flex items-center justify-center">Name</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
-                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>
+                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
+                size: 300
             }),
             columnHelper.accessor('version', {
                 header: () => <div className="flex items-center justify-center">Version</div>,
@@ -213,7 +214,8 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     </div>
                 );
                 },
-                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, [])
+                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, []),
+                size: 80
             }
             ),
             columnHelper.accessor('variants', {
@@ -237,7 +239,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 row => row.vulnerabilities['Pending Assessment'] ?? 0,
                 {
                     id: 'remainingPendingVulns',
-                    header: () => <div className="flex items-center justify-center">Remaining Pending Vulns</div>,
+                    header: () => <div className="flex items-center justify-center">Remaining Pending Vulnerabilities</div>,
                     cell: info => (
                         <div className="flex items-center justify-center h-full text-center">
                             {info.getValue()}
@@ -247,7 +249,8 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                         const countA = a.original.vulnerabilities['Pending Assessment'] ?? 0;
                         const countB = b.original.vulnerabilities['Pending Assessment'] ?? 0;
                         return countA - countB;
-                    }
+                    },
+                    size: 80
                 }
             ),
             columnHelper.accessor('source', {
