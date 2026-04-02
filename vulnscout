@@ -37,10 +37,13 @@ VulnScout - Vulnerability Scanner
 Usage: vulnscout [--project <name>] [--variant <name>] <command> [options]
 
 Container lifecycle:
-  start                           Start VulnScout container
+  start                           Start VulnScout container (auto-started by other commands)
   stop                            Stop and remove VulnScout container
   restart                         Restart VulnScout container
   --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
+
+Note: The container runs as a daemon. All commands auto-start it if needed and
+leave it running afterward (including --serve). Use 'stop' to remove it.
 
 Global flags:
   --project <name>                Set project name (default: 'default')
@@ -342,22 +345,14 @@ parse_and_run() {
     # Auto-trigger scan if inputs were staged: one entrypoint call handles move + scan
     local _exit=0
     if [ "$SERVE_REQUESTED" = true ]; then
-        if [ ${#PENDING_ARGS[@]} -gt 0 ]; then
-            # Files already staged — keep container alive, just free port 7275
-            ensure_running
-            docker exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
-            sleep 1
-        else
-            # No staged files: full restart to ensure clean state
-            docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-            do_start
-        fi
+        ensure_running
+        # Kill any previous Flask process to free port 7275
+        docker exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
+        sleep 1
         if [ "$DEV_MODE" = true ]; then
             start_frontend_dev
         fi
-        trap "echo; echo 'Stopping container...'; docker rm -f '$CONTAINER_NAME' 2>/dev/null || true" SIGINT SIGTERM EXIT
         exec_container --project "$PROJECT" --variant "$VARIANT" ${PENDING_ARGS[@]+"${PENDING_ARGS[@]}"} --serve || _exit=$?
-        trap - SIGINT SIGTERM EXIT
     elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
         local -a scan_args=()
         [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
