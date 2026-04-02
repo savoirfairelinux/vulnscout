@@ -484,6 +484,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h)
             show_help; exit 0 ;;
+        --version)
+            echo "${VULNSCOUT_VERSION:-unknown}"; exit 0 ;;
         --project)
             PROJECT_NAME="$2"; shift 2 ;;
         --variant)
