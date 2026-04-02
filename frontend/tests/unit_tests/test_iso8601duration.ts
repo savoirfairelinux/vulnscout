@@ -106,4 +106,37 @@ describe('Iso8601Duration', () => {
         const duration = new Iso8601Duration('1y 2m 3w 4d 5h 30m');
         expect(duration.formatAsIso8601()).toEqual('P1Y2M3W4DT5H30M');
     });
+
+    test('gitlab years standalone', () => {
+        const duration = new Iso8601Duration('2years');
+        expect(duration.total_seconds).toEqual(2 * 6912000);
+    });
+    test('gitlab months standalone (mo)', () => {
+        const duration = new Iso8601Duration('3months');
+        expect(duration.total_seconds).toEqual(3 * 576000);
+    });
+    test('gitlab weeks standalone', () => {
+        const duration = new Iso8601Duration('2weeks');
+        expect(duration.total_seconds).toEqual(2 * 144000);
+    });
+    test('gitlab hours standalone', () => {
+        const duration = new Iso8601Duration('4hours');
+        expect(duration.total_seconds).toEqual(4 * 3600);
+    });
+    test('gitlab minutes > 4 treated as minutes', () => {
+        const duration = new Iso8601Duration('30m');
+        expect(duration.total_seconds).toEqual(30 * 60);
+    });
+    test('gitlab minutes <= 4 treated as months', () => {
+        const duration = new Iso8601Duration('3m');
+        expect(duration.total_seconds).toEqual(3 * 576000);
+    });
+    test('formatHumanShort with individual units', () => {
+        expect(new Iso8601Duration('2y').formatHumanShort()).toEqual('2y');
+        expect(new Iso8601Duration('3mo').formatHumanShort()).toEqual('3mo');
+        expect(new Iso8601Duration('1w').formatHumanShort()).toEqual('1w');
+        expect(new Iso8601Duration('5d').formatHumanShort()).toEqual('5d');
+        expect(new Iso8601Duration('PT8H').formatHumanShort()).toEqual('8h');
+        expect(new Iso8601Duration('PT30M').formatHumanShort()).toEqual('30m');
+    });
 });
