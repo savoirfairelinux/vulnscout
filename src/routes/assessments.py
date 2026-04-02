@@ -75,6 +75,20 @@ def init_app(app):
             return {a["id"]: a for a in assessments}
         return assessments
 
+    @app.route('/api/assessments/review')
+    def review_assessments():
+        """Return assessments not linked to any scan (handmade via the web UI)."""
+        import uuid as _uuid
+        variant_id = request.args.get('variant_id')
+        vid = None
+        if variant_id:
+            try:
+                vid = _uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+        assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
+        return assessments
+
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
         item = DBAssessment.get_by_id(assessment_id)
@@ -164,6 +178,7 @@ def init_app(app):
                     simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
                     finding_id=finding.id,
                     variant_id=variant_id,
+                    origin="custom",
                     status_notes=assessment.status_notes,
                     justification=assessment.justification,
                     impact_statement=assessment.impact_statement,
@@ -241,6 +256,7 @@ def init_app(app):
                         simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
                         finding_id=finding.id,
                         variant_id=variant_id,
+                        origin="custom",
                         status_notes=assessment.status_notes,
                         justification=assessment.justification,
                         impact_statement=assessment.impact_statement,
@@ -306,6 +322,7 @@ def init_app(app):
 
         existing.update(
             status=mem_assess.status,
+            origin="custom",
             status_notes=mem_assess.status_notes,
             justification=mem_assess.justification,
             impact_statement=mem_assess.impact_statement,

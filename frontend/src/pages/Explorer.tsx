@@ -17,6 +17,7 @@ import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
+import Review from "./Review";
 import Assessments, { removeDuplicateAssessments } from "../handlers/assessments";
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -268,6 +269,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab == 'scans' && <ScanHistory variantId={currentVariantId} />}
+                {tab == 'review' && <Review variantId={currentVariantId} />}
                 {tab == 'exports' && <Exports />}
             </div>
             <VersionDisplay />
