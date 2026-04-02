@@ -637,7 +637,10 @@ describe('EditAssessment Component', () => {
     });
 
     test('shows external error when no variant selected and variants are available', async () => {
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         const user = userEvent.setup();
         render(
             <EditAssessment
@@ -657,7 +660,10 @@ describe('EditAssessment Component', () => {
     });
 
     test('shows internal error when no variant selected', async () => {
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         const user = userEvent.setup();
         render(
             <EditAssessment
@@ -697,7 +703,10 @@ describe('EditAssessment Component', () => {
     });
 
     test('toggles variant checkbox checked/unchecked', async () => {
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         const user = userEvent.setup();
         render(
             <EditAssessment
@@ -705,19 +714,21 @@ describe('EditAssessment Component', () => {
                 onSaveAssessment={mockOnSave}
                 onCancel={mockOnCancel}
                 availableVariants={variants}
-                defaultSelectedVariantIds={['v1']}
+                defaultSelectedVariantIds={['v1', 'v2']}
                 triggerBanner={mockTriggerBanner}
             />
         );
 
-        const variantCheckbox = screen.getByRole('checkbox');
-        // Uncheck the variant
-        await user.click(variantCheckbox);
+        const variantCheckboxes = screen.getAllByRole('checkbox');
+        // Uncheck the first variant (v1)
+        await user.click(variantCheckboxes[0]);
 
-        // Now save attempt should fail validation (no variant selected)
+        // Save — should only have v2
         const saveButton = screen.getByText('Save Changes');
         await user.click(saveButton);
-        expect(mockTriggerBanner).toHaveBeenCalledWith('You must select at least one variant', 'error');
+        expect(mockOnSave).toHaveBeenCalledWith(
+            expect.objectContaining({ variant_ids: ['v2'] })
+        );
     });
 
     test('renders package checkboxes when two or more packages available', () => {

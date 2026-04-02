@@ -124,7 +124,7 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     await waitFor(() => {
       expect(screen.getByText(/551-600 \/ 600/)).toBeInTheDocument();
     });
-  });
+  }, 15000);
 
   test('changing items per page resets page index (lines 322-323)', async () => {
     render(

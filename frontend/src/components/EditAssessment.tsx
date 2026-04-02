@@ -134,7 +134,7 @@ function EditAssessment({
         setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
         setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages]);
+    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages]);
 
     useEffect(() => {
         if (shouldClearFields) {

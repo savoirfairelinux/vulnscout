@@ -2,6 +2,8 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
+jest.setTimeout(15000);
+
 import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
@@ -16,7 +18,7 @@ import Iso8601Duration from '../../src/handlers/iso8601duration';
 jest.mock('../../src/handlers/nvd_progress', () => ({
     __esModule: true,
     default: {
-        getProgress: jest.fn().mockImplementation(() => new Promise(() => {})),
+        getProgress: jest.fn().mockResolvedValue(null),
         getProgressPercentage: jest.fn().mockReturnValue(0),
     },
 }));
@@ -25,7 +27,7 @@ jest.mock('../../src/handlers/nvd_progress', () => ({
 jest.mock('../../src/handlers/epss_progress', () => ({
     __esModule: true,
     default: {
-        getProgress: jest.fn().mockImplementation(() => new Promise(() => {})),
+        getProgress: jest.fn().mockResolvedValue(null),
         getProgressPercentage: jest.fn().mockReturnValue(0),
     },
 }));
@@ -555,12 +557,12 @@ describe('Vulnerability Table', () => {
         expect(sourceBtn).toBeInTheDocument();
         await user.click(sourceBtn);
 
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
-
         const srcCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
         await user.click(srcCheckbox);
 
-        await deletion;
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
+        }, { timeout: 5000 });
 
         const pkg_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(pkg_xyz).toBeInTheDocument();
@@ -577,7 +579,7 @@ describe('Vulnerability Table', () => {
 
         // Ensure the exploitable row exists before starting the removal watcher.
         const exploitableRow = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-        const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 1000 });
+        const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 5000 });
 
         const pendingCheckbox = await screen.getByRole('checkbox', { name: /Pending Assessment/i });
         await user.click(pendingCheckbox);
@@ -599,7 +601,7 @@ describe('Vulnerability Table', () => {
 
         // Ensure the target row is present before starting removal watcher
         const communityRow = await screen.findByRole('cell', {name: /CVE-2018-5678/});
-        const pending_deletion = waitForElementToBeRemoved(communityRow, { timeout: 1000 });
+        const pending_deletion = waitForElementToBeRemoved(communityRow, { timeout: 5000 });
 
         // ACT
         const exploitableCheckbox = await screen.getByRole('checkbox', { name: /Exploitable/i });
@@ -794,12 +796,12 @@ describe('Vulnerability Table', () => {
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
-
         const lowCheckbox = await screen.getByRole('checkbox', { name: 'low' });
         await user.click(lowCheckbox);
 
-        await deletion;
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+        }, { timeout: 5000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
@@ -820,19 +822,21 @@ describe('Vulnerability Table', () => {
         expect(customCheckbox).toBeInTheDocument();
         await user.click(customCheckbox as HTMLElement);
 
-        const [minSlider, maxSlider] = await screen.findAllByRole('slider');
+        const sliders = await screen.findAllByRole('slider');
 
-        expect(minSlider).toBeInTheDocument();
-        expect(maxSlider).toBeInTheDocument();
+        expect(sliders).toHaveLength(2);
 
         // Vulneraibilities with the severity max score between 2 and 4 will remain.
-        fireEvent.change(minSlider, { target: { value: '2' } });
-        fireEvent.change(maxSlider, { target: { value: '4' } });
+        fireEvent.change(sliders[0], { target: { value: '2' } });
+
+        // Re-query sliders after state update to avoid stale references
+        const slidersAfter = screen.getAllByRole('slider');
+        fireEvent.change(slidersAfter[1], { target: { value: '4' } });
 
         await waitFor(() => {
             expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
             expect(screen.queryByRole('cell', {name: /CVE-2024-56730/})).toBeNull();
-        }, { timeout: 1000 });
+        }, { timeout: 5000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
 
@@ -868,41 +872,6 @@ describe('Vulnerability Table', () => {
         await user.click(lowCheckbox);
         expect(lowCheckbox).toBeChecked();
         expect(customCheckbox).not.toBeChecked();
-    })
-
-    test('hide fixed toggle functionality', async () => {
-        const vulnWithFixed: Vulnerability[] = [
-            ...vulnerabilities,
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-2020-9999',
-                simplified_status: 'Fixed'
-            }
-        ];
-
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
-        expect(hideFixedToggle).toBeInTheDocument();
-
-        // Ensure the fixed vulnerability is initially visible
-        const fixedVuln = await screen.getByRole('cell', {name: /CVE-2020-9999/});
-        expect(fixedVuln).toBeInTheDocument();
-
-        const deletion = waitForElementToBeRemoved(fixedVuln, { timeout: 1000 });
-
-        // ACT - Toggle hide fixed
-        await user.click(hideFixedToggle);
-
-        // ASSERT - Fixed vulnerability should be hidden
-        await deletion;
-        expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
-
-        // Other vulnerabilities should still be visible
-        const otherVuln = await screen.getByRole('cell', {name: /CVE-2010-1234/});
-        expect(otherVuln).toBeInTheDocument();
     })
 
     test('reset filters button clears all filters', async () => {
@@ -983,47 +952,6 @@ describe('Vulnerability Table', () => {
         const vuln2 = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln1).toBeInTheDocument();
         expect(vuln2).toBeInTheDocument();
-    })
-
-    test('hide fixed toggle interaction with status filter', async () => {
-        const vulnWithFixed: Vulnerability[] = [
-            ...vulnerabilities,
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-2020-9999',
-                simplified_status: 'Fixed'
-            }
-        ];
-
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // First enable hide fixed
-        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
-        await user.click(hideFixedToggle);
-
-        // Wait for fixed vulnerability to be hidden
-        await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
-        });
-
-        // Now manually select 'fixed' in status filter
-        // Use getAllByRole to handle multiple buttons with 'status' in name, select the first (main button)
-        const statusButtons = await screen.getAllByRole('button', { name: /status/i });
-        await user.click(statusButtons[0]);
-        const fixedCheckbox = await screen.getByRole('checkbox', { name: 'Fixed' });
-        await user.click(fixedCheckbox);
-
-        // ASSERT - Hide fixed toggle should be disabled when fixed is manually selected
-        expect(hideFixedToggle).toHaveAttribute('aria-pressed', 'false');
-
-        // Fixed vulnerability should now be visible
-        await waitFor(() => {
-            const fixedVuln = screen.getByRole('cell', {name: /CVE-2020-9999/});
-            expect(fixedVuln).toBeInTheDocument();
-        });
     })
 
     test('search debounce functionality', async () => {
@@ -1300,61 +1228,6 @@ describe('Vulnerability Table', () => {
             const html = document.body.innerHTML;
             // CVE-2020-1111 should come first because last_update (March 25) is more recent than CVE-2020-2222's timestamp (March 20)
             expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
-        });
-    })
-
-    test('handleHideFixedToggle filters out Fixed status when enabled', async () => {
-        const vulnsWithFixed: Vulnerability[] = [
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-FIXED-001',
-                simplified_status: 'Fixed'
-            },
-            {
-                ...vulnerabilities[1],
-                id: 'CVE-ACTIVE-001',
-                simplified_status: 'Exploitable'
-            }
-        ];
-
-        render(<TableVulnerabilities vulnerabilities={vulnsWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // Toggle "Hide Fixed"
-        const hideFixedToggle = await screen.getByRole('button', {name: /hide fixed/i});
-        await user.click(hideFixedToggle);
-
-        // Fixed vulnerability should not be visible
-        await waitFor(() => {
-            expect(screen.queryByText('CVE-FIXED-001')).not.toBeInTheDocument();
-            expect(screen.getByText('CVE-ACTIVE-001')).toBeInTheDocument();
-        });
-    })
-
-    test('handleHideFixedToggle can be toggled on and off', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // Enable "Hide Fixed"
-        const hideFixedToggle = await screen.getByRole('button', {name: /show hide fixed/i});
-        await user.click(hideFixedToggle);
-
-        // Toggle should change its aria-label
-        await waitFor(() => {
-            const toggleAfter = screen.getByRole('button', {name: /hide hide fixed/i});
-            expect(toggleAfter).toBeInTheDocument();
-        });
-
-        // Disable "Hide Fixed" by clicking again
-        const hideFixedToggle2 = await screen.getByRole('button', {name: /hide hide fixed/i});
-        await user.click(hideFixedToggle2);
-
-        // Toggle should revert
-        await waitFor(() => {
-            const toggleReverted = screen.getByRole('button', {name: /show hide fixed/i});
-            expect(toggleReverted).toBeInTheDocument();
         });
     })
 

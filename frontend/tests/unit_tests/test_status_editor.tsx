@@ -303,7 +303,10 @@ describe('StatusEditor', () => {
     test('should show external error when no variant selected and variants are available', async () => {
         const triggerBanner = jest.fn();
         const user = userEvent.setup();
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         render(<StatusEditor {...defaultProps} variants={variants} triggerBanner={triggerBanner} />);
 
         const statusSelect = screen.getByRole('combobox');
@@ -317,7 +320,10 @@ describe('StatusEditor', () => {
 
     test('should show internal error when no variant selected and variants are available', async () => {
         const user = userEvent.setup();
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         render(<StatusEditor {...defaultProps} variants={variants} />);
 
         const statusSelect = screen.getByRole('combobox');
@@ -332,12 +338,15 @@ describe('StatusEditor', () => {
 
     test('should submit with selected variant_ids when a variant is checked', async () => {
         const user = userEvent.setup();
-        const variants = [{ id: 'v1', name: 'default', project_id: 'p1' }];
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
         render(<StatusEditor {...defaultProps} variants={variants} />);
 
-        // Check the variant checkbox
-        const variantCheckbox = screen.getByRole('checkbox');
-        await user.click(variantCheckbox);
+        // Check the first variant checkbox
+        const variantCheckboxes = screen.getAllByRole('checkbox');
+        await user.click(variantCheckboxes[0]);
 
         // Change status away from under_investigation (to pass validation)
         const statusSelect = screen.getByRole('combobox');
@@ -421,6 +430,31 @@ describe('StatusEditor', () => {
         // Both packages checked → should include both in the call
         expect(defaultProps.onAddAssessment).toHaveBeenCalledWith(
             expect.objectContaining({ packages: expect.arrayContaining(['pkg1@1.0.0', 'pkg2@2.0.0']) })
+        );
+    });
+
+    test('should uncheck a variant and submit with remaining variants', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        render(<StatusEditor {...defaultProps} variants={variants} />);
+
+        const variantCheckboxes = screen.getAllByRole('checkbox');
+        // Check both variants
+        await user.click(variantCheckboxes[0]);
+        await user.click(variantCheckboxes[1]);
+        // Uncheck the first variant
+        await user.click(variantCheckboxes[0]);
+
+        const statusSelect = screen.getByRole('combobox');
+        await user.selectOptions(statusSelect, 'affected');
+        const addButton = screen.getByRole('button', { name: 'Add assessment' });
+        await user.click(addButton);
+
+        expect(defaultProps.onAddAssessment).toHaveBeenCalledWith(
+            expect.objectContaining({ variant_ids: ['v2'] })
         );
     });
 });

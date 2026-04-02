@@ -51,6 +51,9 @@ describe('Exports Page', () => {
         // ASSERT - Component should still render without crashing
         const exportTitle = await screen.findByText(/export/i);
         expect(exportTitle).toBeInTheDocument();
+        await waitFor(() => {
+            expect(consoleSpy).toHaveBeenCalledWith('Error:', expect.any(Error));
+        });
         consoleSpy.mockRestore();
     })
 
@@ -240,5 +243,25 @@ describe('Exports Page', () => {
 
         const exportTitle = await screen.findByText(/export/i);
         expect(exportTitle).toBeInTheDocument();
+    })
+
+    test('clicking a file tag toggles its opened state', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: "report.adoc", category: ['built-in'], extension: "adoc" }
+        ]));
+
+        render(<Exports />);
+
+        const fileButton = await screen.findByText(/report\.adoc/i);
+        fireEvent.click(fileButton);
+
+        // Clicking the file tag should toggle the download options
+        await waitFor(() => {
+            expect(screen.getByText(/Download/i)).toBeInTheDocument();
+        });
+
+        // Clicking again should close it
+        fireEvent.click(fileButton);
     })
 });

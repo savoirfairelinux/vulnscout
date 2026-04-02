@@ -109,4 +109,21 @@ describe('PopupExportOptions component', () => {
        expect(mockOnClose).toHaveBeenCalled();
    });
 
+   test('renders without onClose prop (uses default)', async () => {
+       render(<PopupExportOptions docName="report.txt" extension="adoc" />);
+       expect(screen.getByText(/Exporting/i)).toBeInTheDocument();
+       // Click close button to exercise the default no-op onClose
+       const closeBtn = screen.getByRole('button', { name: /close export options/i });
+       await userEvent.click(closeBtn);
+   });
+
+   test('changing export date updates generate link', async () => {
+       render(<PopupExportOptions docName="report.txt" extension="adoc" onClose={() => {}} />);
+       const exportDate = screen.getByLabelText(/export date/i) as HTMLInputElement;
+       fireEvent.change(exportDate, { target: { value: '2025-06-15' } });
+       expect(exportDate.value).toBe('2025-06-15');
+       const link = screen.getByRole('link', { name: /generate/i }) as HTMLAnchorElement;
+       expect(link.href).toContain('export_date=2025-06-15');
+   });
+
 });
