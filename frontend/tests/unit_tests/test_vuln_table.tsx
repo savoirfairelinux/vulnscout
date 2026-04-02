@@ -2041,13 +2041,13 @@ describe('Vulnerability Table', () => {
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
         const scrollContainer = container.querySelector('.overflow-auto');
 
-        // No tooltip before hovering
-        expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
+        // No portal tooltip before hovering (inline td[role="tooltip"] may exist but is CSS-hidden)
+        expect(document.body.querySelector('div[role="tooltip"]')).toBeNull();
 
         fireEvent.mouseEnter(rows[0]);
 
         await waitFor(() => {
-            const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+            const tooltip = document.body.querySelector('div[role="tooltip"]') as HTMLElement;
             // Rendered into document.body via portal — not clipped by overflow-auto
             expect(tooltip).toBeInTheDocument();
             expect(scrollContainer?.contains(tooltip)).toBe(false);
@@ -2058,7 +2058,7 @@ describe('Vulnerability Table', () => {
 
         fireEvent.mouseLeave(rows[0]);
         await waitFor(() => {
-            expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
+            expect(document.body.querySelector('div[role="tooltip"]')).toBeNull();
         });
     });
 
@@ -2069,7 +2069,7 @@ describe('Vulnerability Table', () => {
         fireEvent.mouseEnter(rows[0]);
 
         await waitFor(() => {
-            const tooltip = document.body.querySelector('[role="tooltip"]');
+            const tooltip = document.body.querySelector('div[role="tooltip"]');
             const contentDiv = tooltip?.querySelector('div') as HTMLElement;
             expect(contentDiv).toBeInTheDocument();
             expect(contentDiv.style.overflow).toBe('hidden');
