@@ -237,6 +237,8 @@ describe('Vulnerability Table', () => {
         found_by: ['hardcoded'],
         datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2099-9999',
         packages: ['pkg@1.0.0'],
+        packages_current: ['pkg@1.0.0'],
+        variants: [],
         urls: [],
         texts: [{ title: 'description', content: longContent }],
         severity: { severity: 'low', min_score: 1, max_score: 1, cvss: [] },
