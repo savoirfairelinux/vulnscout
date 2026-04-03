@@ -44,6 +44,8 @@ Scan & output commands:
   --export-spdx             Export project as SPDX 3.0 SBOM to /scan/outputs/
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
+  --export-custom-assessments  Export custom (review) assessments as tar.gz to /scan/outputs/
+  --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
 
 Configuration commands:
@@ -352,6 +354,22 @@ cmd_export() {
     flask --app src.bin.webapp export --format "$fmt" --output-dir "$output_dir"
 }
 
+cmd_export_custom_assessments() {
+    setup_user
+    cd "$BASE_DIR"
+    local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp export-custom-assessments --output-dir "$output_dir"
+}
+
+cmd_import_custom_assessments() {
+    local file="$1"
+    setup_user
+    cd "$BASE_DIR"
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp import-custom-assessments "$file"
+}
+
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
         echo "Config ($CONFIG_FILE):"
@@ -524,6 +542,10 @@ while [[ $# -gt 0 ]]; do
             EXPORT_FORMATS+=("cdx16"); shift ;;
         --export-openvex)
             EXPORT_FORMATS+=("openvex"); shift ;;
+        --export-custom-assessments)
+            EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
+        --import-custom-assessments)
+            IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
         --list-projects)
             cmd_list_projects; exit 0 ;;
         --config)
@@ -559,5 +581,13 @@ rm -f /tmp/vulnscout_matched_vulns.json
 for _fmt in "${EXPORT_FORMATS[@]:-}"; do
     [[ -n "$_fmt" ]] && cmd_export "$_fmt"
 done
+
+# Step 4: Export/import custom assessments
+if [[ "${EXPORT_CUSTOM_ASSESSMENTS:-false}" == "true" ]]; then
+    cmd_export_custom_assessments
+fi
+if [[ -n "${IMPORT_CUSTOM_ASSESSMENTS_FILE:-}" ]]; then
+    cmd_import_custom_assessments "$IMPORT_CUSTOM_ASSESSMENTS_FILE"
+fi
 
 exit $match_exit
