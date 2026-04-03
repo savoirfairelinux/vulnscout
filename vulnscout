@@ -17,7 +17,21 @@ fi
 # Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
-VULNSCOUT_VERSION="$(docker inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+if command -v podman &> /dev/null; then
+    CONTAIENR_ENGINE="podman"
+elif command -v docker &> /dev/null; then
+    CONTAIENR_ENGINE="docker"
+else
+    echo "Error: \"podman\" or \"docker\" is not installed or not in PATH."
+    exit 1
+fi
+
+# Run a container command using the detected container engine on the host (podman or docker)
+call_container_engine() {
+    $CONTAIENR_ENGINE "$@"
+}
+
+VULNSCOUT_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
 VARIANT="default"
 PROJECT="default"
 MATCH_CONDITION=""
@@ -94,11 +108,11 @@ EOF
 }
 
 exec_container() {
-    docker exec "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
+    call_container_engine exec "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
 }
 
 ensure_running() {
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    if ! call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "Container not running, starting..."
         do_start
     fi
@@ -110,7 +124,7 @@ add_input() {
     file="$(readlink -f "$2")"
     local staged="/tmp/vulnscout_stage_$(basename "$file")"
 
-    docker cp "$file" "$CONTAINER_NAME:$staged"
+    call_container_engine cp "$file" "$CONTAINER_NAME:$staged"
     PENDING_ARGS+=("--${cmd}" "$staged")
 }
 
@@ -133,7 +147,7 @@ config_set() {
     rm -f "$tmp"
     echo "Config set: $key=$value"
     # Restart the container so volume mounts reflect the new cache dir
-    if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
         VULNSCOUT_CACHE_DIR="$value"
         do_start
@@ -165,20 +179,23 @@ _detect_legacy() {
 LEGACY_SETUP_DETECTED=false
 
 do_start() {
-    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
-    # Docker bind-mounts create root-owned directories on the host when a path
-    # doesn't exist yet. Use a temporary container (running as root) to clean up
-    # any such stale paths and re-chown the cache/outputs dirs to the current user.
-    local uid gid
-    uid="$(id -u)"; gid="$(id -g)"
-    docker run --rm \
-        --entrypoint sh \
-        -v "$VULNSCOUT_CACHE_DIR:/mnt/cache" \
-        -v "$VULNSCOUT_OUTPUTS_DIR:/mnt/outputs" \
-        "$DOCKER_IMAGE" \
-        -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
-        2>/dev/null || true
+
+    if [[ $CONTAIENR_ENGINE = "docker" ]]; then
+        # Docker bind-mounts create root-owned directories on the host when a path
+        # doesn't exist yet. Use a temporary container (running as root) to clean up
+        # any such stale paths and re-chown the cache/outputs dirs to the current user.
+        local uid gid
+        uid="$(id -u)"; gid="$(id -g)"
+        docker run --rm \
+            --entrypoint sh \
+            -v "$VULNSCOUT_CACHE_DIR:/mnt/cache" \
+            -v "$VULNSCOUT_OUTPUTS_DIR:/mnt/outputs" \
+            "$DOCKER_IMAGE" \
+            -c "rm -rf /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
+            2>/dev/null || true
+    fi
     if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
         cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
 FLASK_RUN_PORT=7275
@@ -202,9 +219,9 @@ EOF
     done < "$VULNSCOUT_CONFIG_FILE"
     [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
     local -a vol_args=(
-        -v "$VULNSCOUT_CACHE_DIR":/cache/vulnscout
-        -v "$VULNSCOUT_OUTPUTS_DIR":/scan/outputs
-        -v "$VULNSCOUT_CONFIG_FILE":/etc/vulnscout/config.env
+        -v "$VULNSCOUT_CACHE_DIR":/cache/vulnscout:Z
+        -v "$VULNSCOUT_OUTPUTS_DIR":/scan/outputs:Z
+        -v "$VULNSCOUT_CONFIG_FILE":/etc/vulnscout/config.env:ro,Z
     )
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src)
@@ -212,17 +229,17 @@ EOF
         echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
     fi
 
-    docker run -d --name "$CONTAINER_NAME" \
+    call_container_engine run -d --name "$CONTAINER_NAME" \
         -p 7275:7275 \
         "${env_args[@]}" \
         "${vol_args[@]}" \
         "$DOCKER_IMAGE" daemon
     # Wait for the container process to be ready to accept exec calls
     local retries=15
-    until docker exec "$CONTAINER_NAME" true 2>/dev/null; do
+    until call_container_engine exec "$CONTAINER_NAME" true 2>/dev/null; do
         retries=$((retries - 1))
         if [ "$retries" -le 0 ]; then
-            echo "Error: container failed to start. Check 'docker logs $CONTAINER_NAME'."
+            echo "Error: container failed to start. Check '$CONTAIENR_ENGINE logs $CONTAINER_NAME'."
             exit 1
         fi
         sleep 1
@@ -306,7 +323,7 @@ parse_and_run() {
                     local tpl_abs tpl_staged
                     tpl_abs="$(readlink -f "$tpl")"
                     tpl_staged="/tmp/vulnscout_stage_$(basename "$tpl_abs")"
-                    docker cp "$tpl_abs" "$CONTAINER_NAME:$tpl_staged"
+                    call_container_engine cp "$tpl_abs" "$CONTAINER_NAME:$tpl_staged"
                     tpl="$tpl_staged"
                 elif [[ "$tpl" == */* ]]; then
                     echo "Error: template file not found: $tpl" >&2; exit 1
@@ -320,9 +337,9 @@ parse_and_run() {
                 fi
                 shift ;;
             stop)
-                docker rm -f "$CONTAINER_NAME"; shift ;;
+                call_container_engine rm -f "$CONTAINER_NAME"; shift ;;
             restart)
-                docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+                call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
                 do_start
                 if [ "$DEV_MODE" = true ]; then
                     start_frontend_dev
@@ -342,12 +359,12 @@ parse_and_run() {
                 shift ;;
             update)
                 echo "Pulling latest image..."
-                docker pull "$DOCKER_IMAGE"
-                NEW_VERSION="$(docker inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                call_container_engine pull "$DOCKER_IMAGE"
+                NEW_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
                 if [ "$VULNSCOUT_VERSION" != "$NEW_VERSION" ]; then
                     echo "Updating: $VULNSCOUT_VERSION -> $NEW_VERSION"
                     config_set VULNSCOUT_VERSION "$NEW_VERSION"
-                    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                    if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
                         echo "Restarting container with new version..."
                         do_start
                     fi
@@ -367,7 +384,7 @@ parse_and_run() {
     if [ "$SERVE_REQUESTED" = true ]; then
         ensure_running
         # Kill any previous Flask process to free port 7275
-        docker exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
+        call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
         sleep 1
         if [ "$DEV_MODE" = true ]; then
             start_frontend_dev
