@@ -287,6 +287,11 @@ def init_app(app):
                 return {"error": "Invalid variant_id"}, 400
 
         # Persist to DB — one Assessment record per package
+        # Use a single timestamp so grouped rows share the exact same value.
+        # Prefer the timestamp from the payload (allows frontend to synchronise
+        # across multiple requests); fall back to server time.
+        from datetime import datetime as _dt, timezone as _tz
+        shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
         created = []
         for pkg_string_id in (assessment.packages or []):
             try:
@@ -310,6 +315,7 @@ def init_app(app):
                     impact_statement=assessment.impact_statement,
                     workaround=getattr(assessment, "workaround", None),
                     responses=list(assessment.responses) if assessment.responses else [],
+                    timestamp=shared_timestamp,
                     commit=True,
                 )
                 created.append(db_a.to_dict())

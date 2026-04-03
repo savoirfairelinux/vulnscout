@@ -254,6 +254,9 @@ type AssessmentGroup = {
         if (!editingGroup) return;
         setSubmittingMessage('Editing assessment...');
 
+        // Share a single timestamp across all created rows in this edit action
+        const editSharedTimestamp = new Date().toISOString();
+
         // Build target (package × variantId) combos from form selection
         const targetVariantIds: Array<string | undefined> =
             data.variant_ids && data.variant_ids.length > 0
@@ -353,46 +356,56 @@ type AssessmentGroup = {
             }
         }
 
-        // 2. POST-create newly-added combos
+        // 2. POST-create newly-added combos — batch packages per variant so
+        //    all Assessment rows share the exact same timestamp.
+        const newPkgsByVariant = new Map<string | undefined, string[]>();
         for (const pkg of targetPackages) {
             for (const vid of targetVariantIds) {
                 const key = `${pkg}::${vid ?? ''}`;
                 if (!existingByKey.has(key)) {
-                    try {
-                        const body: Record<string, unknown> = {
-                            vuln_id: vuln.id,
-                            packages: [pkg],
-                            status: data.status,
-                            justification: data.justification,
-                            impact_statement: data.impact_statement,
-                            status_notes: data.status_notes,
-                            workaround: data.workaround
-                        };
-                        if (vid) body.variant_id = vid;
-                        const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                            method: 'POST', mode: 'cors',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(body)
-                        });
-                        const rd = await res.json();
-                        if (rd?.status === 'success') {
-                            const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
-                            for (const raw of rawList) {
-                                const casted = normalise(raw);
-                                if (casted) {
-                                    vuln.assessments.push(casted);
-                                    setAllVulnAssessments(prev => [...prev, casted]);
-                                }
-                            }
-                        } else {
-                            anyError = true;
-                            showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
-                        }
-                    } catch (e) {
-                        anyError = true;
-                        showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
-                    }
+                    const arr = newPkgsByVariant.get(vid) ?? [];
+                    arr.push(pkg);
+                    newPkgsByVariant.set(vid, arr);
                 }
+            }
+        }
+
+        for (const [vid, pkgs] of newPkgsByVariant) {
+            if (pkgs.length === 0) continue;
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: vuln.id,
+                    packages: pkgs,
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround,
+                    timestamp: editSharedTimestamp,
+                };
+                if (vid) body.variant_id = vid;
+                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                    method: 'POST', mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const rd = await res.json();
+                if (rd?.status === 'success') {
+                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
+                    for (const raw of rawList) {
+                        const casted = normalise(raw);
+                        if (casted) {
+                            vuln.assessments.push(casted);
+                            setAllVulnAssessments(prev => [...prev, casted]);
+                        }
+                    }
+                } else {
+                    anyError = true;
+                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
+                }
+            } catch (e) {
+                anyError = true;
+                showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
             }
         }
 
@@ -502,13 +515,17 @@ type AssessmentGroup = {
 
         const { variant_ids: _, ...baseContent } = content;
 
+        // Share a single timestamp across all variant requests so grouped
+        // assessment rows get the exact same value in the database.
+        const sharedTimestamp = new Date().toISOString();
+
         let successCount = 0;
         let lastCasted: Assessment | null = null;
 
         setSubmittingMessage('Adding assessment...');
         try {
         for (const vid of variantIds) {
-            const body = vid ? { ...baseContent, variant_id: vid } : baseContent;
+            const body = vid ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp } : { ...baseContent, timestamp: sharedTimestamp };
             const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
                 method: 'POST',
                 mode: 'cors',
