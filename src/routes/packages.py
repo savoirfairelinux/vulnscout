@@ -6,10 +6,10 @@ import uuid
 
 from sqlalchemy import func
 from ..models.package import Package
-from ..models.finding import Finding
-from ..models.observation import Observation
 from ..models.scan import Scan
 from ..models.variant import Variant
+from ..models.sbom_document import SBOMDocument
+from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 
 
@@ -61,9 +61,9 @@ def init_app(app):
             def _pkg_ids_for_variant(variant_uuid):
                 return set(db.session.execute(
                     db.select(Package.id)
-                    .join(Finding, Package.id == Finding.package_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
+                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .join(Scan, SBOMDocument.scan_id == Scan.id)
                     .where(Scan.variant_id == variant_uuid)
                     .distinct()
                 ).scalars().all())
@@ -81,9 +81,9 @@ def init_app(app):
                 exclude_ids = list(_pkg_ids_for_variant(base_uuid))
                 query = (
                     db.select(Package)
-                    .join(Finding, Package.id == Finding.package_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
+                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .join(Scan, SBOMDocument.scan_id == Scan.id)
                     .where(Scan.variant_id == compare_uuid)
                     .distinct()
                     .order_by(Package.name)
@@ -102,9 +102,9 @@ def init_app(app):
             else:
                 pkgs = list(db.session.execute(
                     db.select(Package)
-                    .join(Finding, Package.id == Finding.package_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id == latest_id)
+                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .where(SBOMDocument.scan_id == latest_id)
                     .distinct()
                     .order_by(Package.name)
                 ).scalars().all())
@@ -119,15 +119,52 @@ def init_app(app):
             else:
                 pkgs = list(db.session.execute(
                     db.select(Package)
-                    .join(Finding, Package.id == Finding.package_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id.in_(latest_ids))
+                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .where(SBOMDocument.scan_id.in_(latest_ids))
                     .distinct()
                     .order_by(Package.name)
                 ).scalars().all())
         else:
             pkgs = Package.get_all()
         result = [pkg.to_dict() for pkg in pkgs]
+
+        # Enrich each package with its variants and sources derived from the
+        # SBOMPackage → SBOMDocument → Scan → Variant chain so that the
+        # frontend can display them even for packages with 0 vulnerabilities.
+        pkg_ids = [pkg.id for pkg in pkgs]
+        if pkg_ids:
+            rows = db.session.execute(
+                db.select(
+                    Package.name,
+                    Package.version,
+                    Variant.name.label("variant_name"),
+                    SBOMDocument.format.label("doc_format"),
+                )
+                .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                .join(Scan, SBOMDocument.scan_id == Scan.id)
+                .join(Variant, Scan.variant_id == Variant.id)
+                .where(Package.id.in_(pkg_ids))
+            ).all()
+
+            # Build lookup: "name@version" → {variants: set, sources: set}
+            meta: dict = {}
+            for row in rows:
+                key = f"{row.name}@{row.version}"
+                if key not in meta:
+                    meta[key] = {"variants": set(), "sources": set()}
+                if row.variant_name:
+                    meta[key]["variants"].add(row.variant_name)
+                if row.doc_format:
+                    meta[key]["sources"].add(row.doc_format)
+
+            for p in result:
+                key = f"{p['name']}@{p['version']}"
+                info = meta.get(key, {})
+                p["variants"] = sorted(info.get("variants", set()))
+                p["sources"] = sorted(info.get("sources", set()))
+
         if request.args.get('format', 'list') == "dict":
             return {p["name"] + "@" + p["version"]: p for p in result}
         return result

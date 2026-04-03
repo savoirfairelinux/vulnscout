@@ -38,6 +38,12 @@ const asPackage = (data: any): Package | [] => {
     if (Array.isArray(data?.purl)) {
         for (const purl of data.purl) if (typeof purl === "string") pkg.purl.push(purl);
     }
+    if (Array.isArray(data?.variants)) {
+        for (const v of data.variants) if (typeof v === "string") pkg.variants.push(v);
+    }
+    if (Array.isArray(data?.sources)) {
+        for (const s of data.sources) if (typeof s === "string") pkg.source.push(s);
+    }
     return pkg
 };
 
@@ -97,8 +103,8 @@ class Packages {
                 ...pkg,
                 vulnerabilities: counts,
                 maxSeverity: severities,
-                source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by).flat())],
-                variants: [...new Set(vulnerabilities.flatMap((vuln) => vuln.variants || []))],
+                source: [...new Set([...pkg.source, ...vulnerabilities.map((vuln) => vuln.found_by).flat()])],
+                variants: [...new Set([...pkg.variants, ...vulnerabilities.flatMap((vuln) => vuln.variants || [])])],
             };
         });
     }
