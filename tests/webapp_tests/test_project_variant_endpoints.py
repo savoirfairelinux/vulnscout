@@ -350,14 +350,16 @@ class TestPackagesFiltering:
         assert "cairo" in names
         assert "busybox" not in names
 
-    def test_packages_filter_variant_b_returns_empty(self, client_and_data):
-        """VariantB has no findings/observations so filtering returns empty."""
+    def test_packages_filter_variant_b_returns_busybox(self, client_and_data):
+        """VariantB has busybox (no vulnerabilities) linked via SBOMPackage."""
         client, data = client_and_data
         variant_b_id = data["variant_b_id"]
         response = client.get(f"/api/packages?variant_id={variant_b_id}&format=list")
         assert response.status_code == 200
         body = json.loads(response.data)
-        assert body == []
+        names = [p["name"] for p in body]
+        assert "busybox" in names
+        assert "cairo" not in names
 
     def test_packages_invalid_variant_uuid(self, client):
         response = client.get("/api/packages?variant_id=not-a-uuid&format=list")
@@ -394,8 +396,8 @@ class TestPackagesFiltering:
         names = [p["name"] for p in body]
         assert "cairo" in names
 
-    def test_packages_compare_difference_empty_when_compare_has_no_unique(self, client_and_data):
-        """difference(base=VA, compare=VB): pkgs in VB but NOT in VA → empty."""
+    def test_packages_compare_difference_returns_busybox(self, client_and_data):
+        """difference(base=VA, compare=VB): pkgs in VB but NOT in VA → busybox."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
         variant_b_id = data["variant_b_id"]
@@ -406,7 +408,9 @@ class TestPackagesFiltering:
         )
         assert response.status_code == 200
         body = json.loads(response.data)
-        assert body == []
+        names = [p["name"] for p in body]
+        assert "busybox" in names
+        assert "cairo" not in names
 
     def test_packages_compare_intersection_empty_when_no_common(self, client_and_data):
         """intersection(VA, VB): no common packages → empty."""
