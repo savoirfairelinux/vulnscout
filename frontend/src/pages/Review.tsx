@@ -23,18 +23,21 @@ type ReviewRow = Assessment & {
     texts: { title: string; content: string }[];
     /** All assessment IDs in this group (for bulk delete). */
     _allIds: string[];
+    /** All variant IDs merged into this group. */
+    _variantIds: string[];
 };
 
 const columnHelper = createColumnHelper<ReviewRow>();
 
 /**
- * Group assessments that were created from the same user action
- * (same vuln, status, justification, notes, workaround, impact, timestamp)
- * into a single row, merging their packages.
+ * Group assessments that share the same CVE, status, justification, notes,
+ * workaround and impact into a single row — merging packages, variants and
+ * keeping the most recent timestamp.
  */
 function groupAssessments(assessments: Assessment[]): Assessment[] {
     const groups = new Map<string, Assessment>();
     const allIds = new Map<string, string[]>();
+    const variantIds = new Map<string, Set<string>>();
     for (const a of assessments) {
         const key = [
             a.vuln_id,
@@ -43,25 +46,28 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
             a.status_notes ?? '',
             a.impact_statement ?? '',
             a.workaround ?? '',
-            a.timestamp,
-            a.variant_id ?? '',
         ].join('\0');
         const existing = groups.get(key);
         if (existing) {
             // Merge packages (avoid duplicates)
             const pkgSet = new Set([...existing.packages, ...a.packages]);
             existing.packages = [...pkgSet];
+            // Keep the most recent timestamp
+            if (a.timestamp > existing.timestamp) existing.timestamp = a.timestamp;
             allIds.get(key)!.push(a.id);
+            if (a.variant_id) variantIds.get(key)!.add(a.variant_id);
         } else {
-            // Clone so we don't mutate the original
             groups.set(key, { ...a, packages: [...a.packages] });
             allIds.set(key, [a.id]);
+            const vs = new Set<string>();
+            if (a.variant_id) vs.add(a.variant_id);
+            variantIds.set(key, vs);
         }
     }
-    // Attach all IDs to each group representative
     const result: Assessment[] = [];
     for (const [key, group] of groups) {
         (group as any)._allIds = allIds.get(key)!;
+        (group as any)._variantIds = [...variantIds.get(key)!];
         result.push(group);
     }
     return result;
@@ -359,14 +365,19 @@ function Review({ variantId }: Readonly<Props>) {
             header: () => <div className="flex items-center justify-center">Variants</div>,
             size: 180,
             cell: info => {
-                const vid = info.getValue();
-                if (!vid) return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
-                const name = variantNames[vid] ?? vid.slice(0, 8);
+                const row = info.row.original as ReviewRow;
+                const vids = row._variantIds ?? (row.variant_id ? [row.variant_id] : []);
+                if (vids.length === 0) return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
                 return (
-                    <div className="flex items-center justify-center h-full">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
-                            {name}
-                        </span>
+                    <div className="flex flex-wrap gap-1 items-center justify-center h-full">
+                        {vids.map(vid => {
+                            const name = variantNames[vid] ?? vid.slice(0, 8);
+                            return (
+                                <span key={vid} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                    {name}
+                                </span>
+                            );
+                        })}
                     </div>
                 );
             },
@@ -631,6 +642,7 @@ function Review({ variantId }: Readonly<Props>) {
                     ...a,
                     texts: vulnDescriptions[a.vuln_id] ?? [],
                     _allIds: (a as any)._allIds ?? [a.id],
+                    _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
                 }))}
                 search={search}
                 fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround"]}
