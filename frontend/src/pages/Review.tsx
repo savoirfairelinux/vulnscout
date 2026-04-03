@@ -15,6 +15,7 @@ import Variants from '../handlers/variant';
 
 type Props = {
     variantId?: string;
+    projectId?: string;
 };
 
 /** Extended assessment row that carries hover texts for the tooltip. */
@@ -84,7 +85,7 @@ function formatDate(iso: string): string {
     });
 }
 
-function Review({ variantId }: Readonly<Props>) {
+function Review({ variantId, projectId }: Readonly<Props>) {
     const [assessments, setAssessments] = useState<Assessment[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
@@ -128,7 +129,7 @@ function Review({ variantId }: Readonly<Props>) {
     useEffect(() => {
         setLoading(true);
         setError(null);
-        Assessments.listReview(variantId)
+        Assessments.listReview(variantId, projectId)
             .then(data => {
                 setAssessments(groupAssessments(data));
                 setLoading(false);
@@ -163,7 +164,7 @@ function Review({ variantId }: Readonly<Props>) {
                 setError("Failed to load review assessments");
                 setLoading(false);
             });
-    }, [variantId]);
+    }, [variantId, projectId]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -271,7 +272,7 @@ function Review({ variantId }: Readonly<Props>) {
             .then(data => {
                 if (data.status === 'success') {
                     // Reload the assessments list
-                    Assessments.listReview(variantId).then(data => setAssessments(groupAssessments(data)));
+                    Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
                 } else {
                     setImportStatus(`Error: ${data.error || 'Unknown error'}`);
                     setTimeout(() => setImportStatus(null), 4000);
@@ -288,7 +289,7 @@ function Review({ variantId }: Readonly<Props>) {
                 // Reset file input so the same file can be re-selected
                 if (fileInputRef.current) fileInputRef.current.value = '';
             });
-    }, [variantId]);
+    }, [variantId, projectId]);
 
     const handleVulnClick = useCallback(async (vulnId: string) => {
         try {

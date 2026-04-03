@@ -79,14 +79,27 @@ def init_app(app):
     def review_assessments():
         """Return assessments not linked to any scan (handmade via the web UI)."""
         import uuid as _uuid
+        from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
         vid = None
         if variant_id:
             try:
                 vid = _uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
-        assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
+        elif project_id:
+            try:
+                pid = _uuid.UUID(project_id)
+            except ValueError:
+                return {"error": "Invalid project_id"}, 400
+            variants = DBVariant.get_by_project(pid)
+            assessments = []
+            for v in variants:
+                assessments.extend(a.to_dict() for a in DBAssessment.get_handmade(v.id))
+        else:
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
         return assessments
 
     @app.route('/api/assessments/review/export')
