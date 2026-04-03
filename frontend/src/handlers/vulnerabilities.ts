@@ -283,4 +283,4 @@ class Vulnerabilities {
 
 
 export default Vulnerabilities;
-export { SEVERITY_ORDER };
+export { SEVERITY_ORDER, asVulnerability };
