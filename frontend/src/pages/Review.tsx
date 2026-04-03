@@ -3,16 +3,69 @@ import { createColumnHelper } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { Assessment } from "../handlers/assessments";
+import { asAssessment } from "../handlers/assessments";
+import type { Vulnerability } from "../handlers/vulnerabilities";
+import { asVulnerability } from "../handlers/vulnerabilities";
+import VulnModal from "../components/VulnModal";
+import ConfirmationModal from "../components/ConfirmationModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faXmark } from '@fortawesome/free-solid-svg-icons';
+import Variants from '../handlers/variant';
 
 type Props = {
     variantId?: string;
 };
 
-const columnHelper = createColumnHelper<Assessment>();
+/** Extended assessment row that carries hover texts for the tooltip. */
+type ReviewRow = Assessment & {
+    texts: { title: string; content: string }[];
+    /** All assessment IDs in this group (for bulk delete). */
+    _allIds: string[];
+};
+
+const columnHelper = createColumnHelper<ReviewRow>();
+
+/**
+ * Group assessments that were created from the same user action
+ * (same vuln, status, justification, notes, workaround, impact, timestamp)
+ * into a single row, merging their packages.
+ */
+function groupAssessments(assessments: Assessment[]): Assessment[] {
+    const groups = new Map<string, Assessment>();
+    const allIds = new Map<string, string[]>();
+    for (const a of assessments) {
+        const key = [
+            a.vuln_id,
+            a.status,
+            a.justification ?? '',
+            a.status_notes ?? '',
+            a.impact_statement ?? '',
+            a.workaround ?? '',
+            a.timestamp,
+            a.variant_id ?? '',
+        ].join('\0');
+        const existing = groups.get(key);
+        if (existing) {
+            // Merge packages (avoid duplicates)
+            const pkgSet = new Set([...existing.packages, ...a.packages]);
+            existing.packages = [...pkgSet];
+            allIds.get(key)!.push(a.id);
+        } else {
+            // Clone so we don't mutate the original
+            groups.set(key, { ...a, packages: [...a.packages] });
+            allIds.set(key, [a.id]);
+        }
+    }
+    // Attach all IDs to each group representative
+    const result: Assessment[] = [];
+    for (const [key, group] of groups) {
+        (group as any)._allIds = allIds.get(key)!;
+        result.push(group);
+    }
+    return result;
+}
 
 function formatDate(iso: string): string {
     const d = new Date(iso);
@@ -28,6 +81,7 @@ function formatDate(iso: string): string {
 
 function Review({ variantId }: Readonly<Props>) {
     const [assessments, setAssessments] = useState<Assessment[]>([]);
+    const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState<string>('');
@@ -36,6 +90,10 @@ function Review({ variantId }: Readonly<Props>) {
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
+    const [variantNames, setVariantNames] = useState<Record<string, string>>({});
+    const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [assessmentToDelete, setAssessmentToDelete] = useState<ReviewRow | null>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -57,12 +115,45 @@ function Review({ variantId }: Readonly<Props>) {
     ];
 
     useEffect(() => {
+        Variants.listAll().then(variants => {
+            const map: Record<string, string> = {};
+            for (const v of variants) map[v.id] = v.name;
+            setVariantNames(map);
+        }).catch(() => {});
+    }, []);
+
+    useEffect(() => {
         setLoading(true);
         setError(null);
         Assessments.listReview(variantId)
             .then(data => {
-                setAssessments(data);
+                setAssessments(groupAssessments(data));
                 setLoading(false);
+                // Fetch vulnerability descriptions for hover tooltips
+                const vulnIds = [...new Set(data.map(a => a.vuln_id))];
+                if (vulnIds.length > 0) {
+                    Promise.all(
+                        vulnIds.map(vid =>
+                            fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vid)}`, { mode: 'cors' })
+                                .then(r => r.ok ? r.json() : null)
+                                .then(d => {
+                                    if (!d) return null;
+                                    const v = asVulnerability(d);
+                                    if (Array.isArray(v)) return null;
+                                    return v;
+                                })
+                                .catch(() => null)
+                        )
+                    ).then(results => {
+                        const descMap: Record<string, { title: string; content: string }[]> = {};
+                        for (const v of results) {
+                            if (v) {
+                                descMap[v.id] = v.texts.length > 0 ? v.texts : [{ title: "description", content: "No description available" }];
+                            }
+                        }
+                        setVulnDescriptions(descMap);
+                    });
+                }
             })
             .catch(err => {
                 console.error(err);
@@ -166,7 +257,7 @@ function Review({ variantId }: Readonly<Props>) {
                 if (data.status === 'success') {
                     setImportStatus(`Imported ${data.imported} assessment(s)`);
                     // Reload the assessments list
-                    Assessments.listReview(variantId).then(setAssessments);
+                    Assessments.listReview(variantId).then(data => setAssessments(groupAssessments(data)));
                 } else {
                     setImportStatus(`Error: ${data.error || 'Unknown error'}`);
                 }
@@ -183,12 +274,66 @@ function Review({ variantId }: Readonly<Props>) {
             });
     }, [variantId]);
 
+    const handleVulnClick = useCallback(async (vulnId: string) => {
+        try {
+            const [vulnRes, assessRes] = await Promise.all([
+                fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vulnId)}`, { mode: 'cors' }),
+                fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vulnId)}/assessments`, { mode: 'cors' }),
+            ]);
+            if (!vulnRes.ok) throw new Error(`HTTP ${vulnRes.status}`);
+            const vulnData = await vulnRes.json();
+            const vuln = asVulnerability(vulnData);
+            if (Array.isArray(vuln)) return;
+
+            if (assessRes.ok) {
+                const assessData = await assessRes.json();
+                vuln.assessments = (assessData as any[]).flatMap(asAssessment);
+            }
+            setModalVuln(vuln);
+        } catch (err) {
+            console.error("Failed to load vulnerability:", err);
+        }
+    }, []);
+
+    const handleDeleteClick = useCallback((row: ReviewRow) => {
+        setAssessmentToDelete(row);
+        setShowDeleteConfirm(true);
+    }, []);
+
+    const handleConfirmDelete = useCallback(async () => {
+        if (!assessmentToDelete) return;
+        const idsToDelete: string[] = (assessmentToDelete as ReviewRow)._allIds ?? [assessmentToDelete.id];
+        try {
+            await Promise.all(idsToDelete.map(id =>
+                fetch(
+                    `${import.meta.env.VITE_API_URL}/api/assessments/${encodeURIComponent(id)}`,
+                    { method: 'DELETE', mode: 'cors' }
+                )
+            ));
+            const idSet = new Set(idsToDelete);
+            setAssessments(prev => prev.filter(a => !idSet.has(a.id)));
+        } catch (err) {
+            console.error("Failed to delete assessment:", err);
+        }
+        setShowDeleteConfirm(false);
+        setAssessmentToDelete(null);
+    }, [assessmentToDelete]);
+
+    const handleCancelDelete = useCallback(() => {
+        setShowDeleteConfirm(false);
+        setAssessmentToDelete(null);
+    }, []);
+
     const columns = useMemo(() => [
         columnHelper.accessor("vuln_id", {
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
-            size: 180,
+            size: 160,
             cell: info => (
-                <div className="flex items-center justify-center h-full">
+                <div
+                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                    onClick={() => handleVulnClick(info.getValue())}
+                    title="Click to view details"
+                >
                     <span className="font-mono text-sm">{info.getValue()}</span>
                 </div>
             ),
@@ -206,6 +351,22 @@ function Review({ variantId }: Readonly<Props>) {
                                 {p}
                             </span>
                         ))}
+                    </div>
+                );
+            },
+        }),
+        columnHelper.accessor("variant_id", {
+            header: () => <div className="flex items-center justify-center">Variants</div>,
+            size: 180,
+            cell: info => {
+                const vid = info.getValue();
+                if (!vid) return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
+                const name = variantNames[vid] ?? vid.slice(0, 8);
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                            {name}
+                        </span>
                     </div>
                 );
             },
@@ -228,20 +389,6 @@ function Review({ variantId }: Readonly<Props>) {
                     <div className="flex items-center justify-center h-full">
                         {val
                             ? <span className="text-sm">{val.replace(/_/g, " ")}</span>
-                            : <span className="text-gray-500 italic">—</span>}
-                    </div>
-                );
-            },
-        }),
-        columnHelper.accessor("workaround", {
-            header: () => <div className="flex items-center justify-center">Workaround</div>,
-            size: 250,
-            cell: info => {
-                const val = info.getValue();
-                return (
-                    <div className="flex items-center justify-center h-full">
-                        {val
-                            ? <span className="text-sm line-clamp-2">{val}</span>
                             : <span className="text-gray-500 italic">—</span>}
                     </div>
                 );
@@ -275,6 +422,20 @@ function Review({ variantId }: Readonly<Props>) {
                 );
             },
         }),
+        columnHelper.accessor("workaround", {
+            header: () => <div className="flex items-center justify-center">Workaround</div>,
+            size: 250,
+            cell: info => {
+                const val = info.getValue();
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        {val
+                            ? <span className="text-sm line-clamp-2">{val}</span>
+                            : <span className="text-gray-500 italic">—</span>}
+                    </div>
+                );
+            },
+        }),
         columnHelper.accessor("timestamp", {
             header: () => <div className="flex items-center justify-center">Assessment Date</div>,
             size: 160,
@@ -284,7 +445,23 @@ function Review({ variantId }: Readonly<Props>) {
                 </div>
             ),
         }),
-    ], []);
+        columnHelper.display({
+            id: "delete",
+            header: () => <div className="flex items-center justify-center">Delete</div>,
+            size: 70,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <button
+                        onClick={() => handleDeleteClick(info.row.original)}
+                        className="text-red-500 hover:text-red-300 transition-colors"
+                        title="Delete assessment"
+                    >
+                        <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                </div>
+            ),
+        }),
+    ], [handleVulnClick, handleDeleteClick, variantNames]);
 
     if (loading) {
         return (
@@ -448,13 +625,38 @@ function Review({ variantId }: Readonly<Props>) {
                     </span>
                 </h2>
             </div>
-            <TableGeneric<Assessment>
+            <TableGeneric<ReviewRow>
                 columns={columns}
-                data={filteredAssessments}
+                data={filteredAssessments.map(a => ({
+                    ...a,
+                    texts: vulnDescriptions[a.vuln_id] ?? [],
+                    _allIds: (a as any)._allIds ?? [a.id],
+                }))}
                 search={search}
                 fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround"]}
                 estimateRowHeight={50}
                 hasPagination={true}
+                hoverField="texts"
+                hoverIdField="vuln_id"
+            />
+
+            {modalVuln && (
+                <VulnModal
+                    vuln={modalVuln}
+                    readOnly={true}
+                    appendAssessment={() => {}}
+                    appendCVSS={() => null}
+                    patchVuln={() => {}}
+                    onClose={() => setModalVuln(undefined)}
+                />
+            )}
+
+            <ConfirmationModal
+                isOpen={showDeleteConfirm}
+                title="Delete Assessment"
+                message={`Are you sure you want to delete the assessment for ${assessmentToDelete?.vuln_id ?? "this vulnerability"}?`}
+                onConfirm={handleConfirmDelete}
+                onCancel={handleCancelDelete}
             />
         </div>
     );

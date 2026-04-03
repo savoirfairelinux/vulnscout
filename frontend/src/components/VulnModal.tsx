@@ -24,6 +24,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 type Props = {
     vuln: Vulnerability;
     isEditing?: boolean;
+    readOnly?: boolean;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
@@ -51,7 +52,7 @@ type AssessmentGroup = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -701,7 +702,7 @@ type AssessmentGroup = {
                                 )}
                             </div>
 
-                            <button
+                            {!readOnly && <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
                                 className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
@@ -713,7 +714,7 @@ type AssessmentGroup = {
                             >
                                 <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
                                 {isEditing ? "Exit editing" : "Edit"}
-                            </button>
+                            </button>}
                             <button
                                 onClick={handleClose}
                                 type="button"
