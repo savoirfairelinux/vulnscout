@@ -41,6 +41,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
+    const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
 
@@ -127,6 +128,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 const variantId = config.variant?.id || undefined;
                 const projectId = variantId ? undefined : (config.project?.id || undefined);
                 setCurrentVariantId(variantId);
+                setCurrentProjectId(config.project?.id || undefined);
                 loadData(variantId, projectId);
             })
             .catch(() => loadData(undefined));
@@ -135,6 +137,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
         setCurrentVariantId(effectiveVariantId);
+        setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
         setCurrentBaseVariantId(compareVariantId ? (variantId || undefined) : undefined);
         setCurrentOperation(compareVariantId ? (operation || undefined) : undefined);
@@ -268,8 +271,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     compareOperation={currentOperation}
                 />}
                 {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab == 'scans' && <ScanHistory variantId={currentVariantId} />}
-                {tab == 'review' && <Review variantId={currentVariantId} />}
+                {tab == 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab == 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
                 {tab == 'exports' && <Exports />}
             </div>
             <VersionDisplay />

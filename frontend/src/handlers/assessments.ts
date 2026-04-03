@@ -116,9 +116,10 @@ class Assessments {
     /**
      * Fetch assessments not linked to any scan (handmade via the web UI)
      */
-    static async listReview(variantId?: string): Promise<Assessment[]> {
+    static async listReview(variantId?: string, projectId?: string): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review", window.location.href);
         if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), { mode: "cors" });
         const data = await response.json();
         return data.flatMap(asAssessment);

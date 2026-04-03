@@ -369,11 +369,19 @@ def init_app(app):
                     v["packages_current"] = list(v["packages"])
 
             # Enrich each vuln dict with sorted variant names, restricted to latest scans
-            latest_ts_sub = (
+            # and scoped to the current project/variant to avoid cross-project leaks.
+            latest_ts_base = (
                 db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-                .group_by(Scan.variant_id)
-                .subquery()
             )
+            if _scope_variant is not None:
+                latest_ts_base = latest_ts_base.where(Scan.variant_id == _scope_variant)
+            elif _scope_project is not None:
+                latest_ts_base = (
+                    latest_ts_base
+                    .join(Variant, Scan.variant_id == Variant.id)
+                    .where(Variant.project_id == _scope_project)
+                )
+            latest_ts_sub = latest_ts_base.group_by(Scan.variant_id).subquery()
             latest_scan_sub = (
                 db.select(Scan.id)
                 .join(
