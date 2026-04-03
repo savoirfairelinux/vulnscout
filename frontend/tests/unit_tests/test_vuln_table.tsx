@@ -220,6 +220,7 @@ describe('Vulnerability Table', () => {
                     workaround_timestamp: '',
                     timestamp: '2026-02-06T17:43:14.254534+00:00',
                     last_update: '2026-02-06T17:43:14.254537+00:00',
+                    origin: 'custom',
                     responses: []
                 }
             ],
@@ -1051,6 +1052,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1087,6 +1089,7 @@ describe('Vulnerability Table', () => {
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
                         last_update: '2024-02-20T14:45:00Z', // More recent than timestamp
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1113,6 +1116,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     },
                     {
@@ -1122,6 +1126,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-10T16:20:00Z', // Most recent
+                        origin: 'custom',
                         responses: []
                     },
                     {
@@ -1131,6 +1136,7 @@ describe('Vulnerability Table', () => {
                         status: 'under_investigation',
                         simplified_status: 'Pending Assessment',
                         timestamp: '2024-02-05T12:15:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1158,6 +1164,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1173,6 +1180,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-20T15:45:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1223,6 +1231,7 @@ describe('Vulnerability Table', () => {
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
                         last_update: '2024-03-25T12:00:00Z', // Most recent overall
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1238,6 +1247,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-20T15:45:00Z', // Only timestamp, no last_update
+                        origin: 'custom',
                         responses: []
                     }
                 ]
