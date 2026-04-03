@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
@@ -6,7 +6,7 @@ import type { Assessment } from "../handlers/assessments";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     variantId?: string;
@@ -35,11 +35,13 @@ function Review({ variantId }: Readonly<Props>) {
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
+    const [importStatus, setImportStatus] = useState<string | null>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -140,6 +142,47 @@ function Review({ variantId }: Readonly<Props>) {
         setSelectedJustifications([]);
     };
 
+    const handleExportReview = useCallback(() => {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/export", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        window.open(url.toString(), '_blank');
+    }, [variantId]);
+
+    const handleImportReview = useCallback(() => {
+        fileInputRef.current?.click();
+    }, []);
+
+    const handleFileSelected = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append('file', file);
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        setImportStatus("Importing...");
+        fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    setImportStatus(`Imported ${data.imported} assessment(s)`);
+                    // Reload the assessments list
+                    Assessments.listReview(variantId).then(setAssessments);
+                } else {
+                    setImportStatus(`Error: ${data.error || 'Unknown error'}`);
+                }
+                setTimeout(() => setImportStatus(null), 4000);
+            })
+            .catch(err => {
+                console.error(err);
+                setImportStatus("Import failed");
+                setTimeout(() => setImportStatus(null), 4000);
+            })
+            .finally(() => {
+                // Reset file input so the same file can be re-selected
+                if (fileInputRef.current) fileInputRef.current.value = '';
+            });
+    }, [variantId]);
+
     const columns = useMemo(() => [
         columnHelper.accessor("vuln_id", {
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -192,6 +235,20 @@ function Review({ variantId }: Readonly<Props>) {
         }),
         columnHelper.accessor("workaround", {
             header: () => <div className="flex items-center justify-center">Workaround</div>,
+            size: 250,
+            cell: info => {
+                const val = info.getValue();
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        {val
+                            ? <span className="text-sm line-clamp-2">{val}</span>
+                            : <span className="text-gray-500 italic">—</span>}
+                    </div>
+                );
+            },
+        }),
+        columnHelper.accessor("impact_statement", {
+            header: () => <div className="flex items-center justify-center">Impact</div>,
             size: 250,
             cell: info => {
                 const val = info.getValue();
@@ -349,8 +406,39 @@ function Review({ variantId }: Readonly<Props>) {
                     >
                         Reset Filters
                     </button>
+
+                    <button
+                        onClick={handleImportReview}
+                        className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
+                        title="Import assessments from an OpenVEX file"
+                    >
+                        <FontAwesomeIcon icon={faFileImport} />
+                        Import Review
+                    </button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={handleFileSelected}
+                    />
+
+                    <button
+                        onClick={handleExportReview}
+                        className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
+                        title="Export review assessments as OpenVEX"
+                    >
+                        <FontAwesomeIcon icon={faFileExport} />
+                        Export Review
+                    </button>
                 </div>
             </div>
+
+            {importStatus && (
+                <div className="mb-3 px-3 py-2 rounded bg-green-900/50 border border-green-600 text-green-300 text-sm">
+                    {importStatus}
+                </div>
+            )}
 
             <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-200">

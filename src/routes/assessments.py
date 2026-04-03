@@ -89,6 +89,132 @@ def init_app(app):
         assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
         return assessments
 
+    @app.route('/api/assessments/review/export')
+    def export_review_openvex():
+        """Export handmade (review) assessments as an OpenVEX JSON document."""
+        import uuid as _uuid
+        import json
+        from datetime import datetime as _dt, timezone as _tz
+
+        variant_id = request.args.get('variant_id')
+        vid = None
+        if variant_id:
+            try:
+                vid = _uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+
+        handmade = DBAssessment.get_handmade(vid)
+        author = request.args.get('author', 'Savoir-faire Linux')
+
+        statements = []
+        for assess in handmade:
+            stmt = assess.to_openvex_dict()
+            if stmt is None:
+                continue
+            statements.append(stmt)
+
+        doc = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(str(_uuid.uuid4())),
+            "author": author,
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+            "version": 1,
+            "statements": statements,
+        }
+
+        return json.dumps(doc, indent=2), 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": "attachment; filename=review_openvex.json",
+        }
+
+    @app.route('/api/assessments/review/import', methods=['POST'])
+    def import_review_openvex():
+        """Import an OpenVEX JSON document and create handmade review assessments."""
+        import json
+
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            file = request.files.get('file')
+            if not file:
+                return {"error": "No file uploaded"}, 400
+            try:
+                data = json.load(file)
+            except Exception:
+                return {"error": "Invalid JSON file"}, 400
+        else:
+            data = request.get_json()
+            if not data:
+                return {"error": "Invalid request data"}, 400
+
+        if "statements" not in data or not isinstance(data["statements"], list):
+            return {"error": "Invalid OpenVEX document: missing 'statements' array"}, 400
+
+        # Parse optional variant_id for scoping imported assessments
+        variant_id_raw = request.args.get('variant_id')
+        variant_id = None
+        if variant_id_raw:
+            try:
+                import uuid as _uuid
+                variant_id = _uuid.UUID(variant_id_raw)
+            except (ValueError, AttributeError):
+                return {"error": "Invalid variant_id"}, 400
+
+        created = []
+        errors = []
+        for stmt in data["statements"]:
+            if not isinstance(stmt, dict):
+                continue
+            vuln_name = None
+            vuln_obj = stmt.get("vulnerability", {})
+            if isinstance(vuln_obj, dict):
+                vuln_name = vuln_obj.get("name")
+            if not vuln_name:
+                errors.append({"error": "Missing vulnerability name", "statement": stmt})
+                continue
+
+            status = stmt.get("status")
+            if not status:
+                errors.append({"vuln_id": vuln_name, "error": "Missing status"})
+                continue
+
+            products = stmt.get("products", [])
+            pkg_ids = []
+            for prod in products:
+                if isinstance(prod, dict) and "@id" in prod:
+                    pkg_ids.append(prod["@id"])
+                elif isinstance(prod, str):
+                    pkg_ids.append(prod)
+
+            if not pkg_ids:
+                errors.append({"vuln_id": vuln_name, "error": "No products/packages found"})
+                continue
+
+            for pkg_string_id in pkg_ids:
+                try:
+                    name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                    db_pkg = Package.find_or_create(name, version)
+                    DBVuln.get_or_create(vuln_name)
+                    finding = Finding.get_or_create(db_pkg.id, vuln_name)
+                    db_a = DBAssessment.create(
+                        status=status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        origin="custom",
+                        status_notes=stmt.get("status_notes", ""),
+                        justification=stmt.get("justification", ""),
+                        impact_statement=stmt.get("impact_statement", ""),
+                        workaround=stmt.get("action_statement", ""),
+                        responses=[],
+                        commit=True,
+                    )
+                    created.append(db_a.to_dict())
+                except Exception as e:
+                    errors.append({"vuln_id": vuln_name, "package": pkg_string_id, "error": str(e)})
+
+        _save_openvex()
+        return {"status": "success", "imported": len(created), "errors": errors}, 200
+
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
         item = DBAssessment.get_by_id(assessment_id)
