@@ -521,6 +521,7 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list] = None,
+        timestamp: Optional[datetime] = None,
         commit: bool = True,
     ) -> "Assessment":
         """Create a new assessment, persist it and return it.
@@ -549,6 +550,8 @@ class Assessment(Base):
             workaround=workaround,
             responses=responses or [],
         )
+        if timestamp is not None:
+            assessment.timestamp = timestamp
         if assessment_id is not None:
             assessment.id = assessment_id
         assessment._init_transient()  # ensure transient attrs initialised on new objects
