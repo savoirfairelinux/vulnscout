@@ -129,6 +129,7 @@ def init_app(app):
 
         # Pre-fetch vulnerability objects for descriptions / aliases / urls
         vuln_cache: dict[str, DBVuln | None] = {}
+
         def _get_vuln(vuln_id: str):
             if vuln_id not in vuln_cache:
                 vuln_cache[vuln_id] = DBVuln.get_by_id(vuln_id)
@@ -182,7 +183,6 @@ def init_app(app):
                     # Enrich products with identifiers
                     products = []
                     for pkg_str in assess.packages:
-                        name_ver = pkg_str
                         if "@" in pkg_str:
                             name, version = pkg_str.rsplit("@", 1)
                         else:
@@ -268,7 +268,7 @@ def init_app(app):
             ctx = doc.get("@context", "")
             return "openvex" in ctx and isinstance(doc.get("statements"), list)
 
-        def _import_statements(statements: list, variant_id) -> tuple[list, list]:
+        def _import_statements(statements: list, variant_id) -> tuple[list, list, int]:
             created: list[dict] = []
             errors: list[dict] = []
             skipped = 0
@@ -397,7 +397,12 @@ def init_app(app):
                 }, 400
 
             _save_openvex()
-            return {"status": "success", "imported": len(total_created), "skipped": total_skipped, "errors": total_errors}, 200
+            return {
+                "status": "success",
+                "imported": len(total_created),
+                "skipped": total_skipped,
+                "errors": total_errors,
+            }, 200
 
         # ---- single .json handling ----
         if filename.endswith(".json"):
@@ -416,7 +421,11 @@ def init_app(app):
                 return {"error": "Invalid JSON file"}, 400
 
             if not _is_openvex(data):
-                return {"error": "Not a valid OpenVEX document (missing @context with 'openvex' or 'statements' array)"}, 400
+                return {
+                    "error": "Not a valid OpenVEX document "
+                             "(missing @context with 'openvex' "
+                             "or 'statements' array)"
+                }, 400
 
             created, errors, skipped = _import_statements(data["statements"], variant.id)
             _save_openvex()

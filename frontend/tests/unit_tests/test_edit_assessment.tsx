@@ -19,6 +19,7 @@ describe('EditAssessment Component', () => {
         status_notes: 'test notes',
         workaround: 'test workaround',
         timestamp: '2023-01-01T00:00:00Z',
+            origin: 'custom',
         responses: []
     };
 
@@ -213,6 +214,7 @@ describe('EditAssessment Component', () => {
             status: 'under_investigation',
             simplified_status: 'active',
             timestamp: '2023-01-01T00:00:00Z',
+            origin: 'custom',
             responses: []
             // Missing optional fields
         };
@@ -294,6 +296,7 @@ describe('EditAssessment Component', () => {
             status_notes: undefined,
             workaround: undefined,
             timestamp: '2023-01-01T00:00:00Z',
+            origin: 'custom',
             responses: []
         };
 
