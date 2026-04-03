@@ -7,11 +7,10 @@ import { asAssessment } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
-import ConfirmationModal from "../components/ConfirmationModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport } from '@fortawesome/free-solid-svg-icons';
 import Variants from '../handlers/variant';
 
 type Props = {
@@ -98,8 +97,6 @@ function Review({ variantId }: Readonly<Props>) {
     const [importStatus, setImportStatus] = useState<string | null>(null);
     const [variantNames, setVariantNames] = useState<Record<string, string>>({});
     const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
-    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [assessmentToDelete, setAssessmentToDelete] = useState<ReviewRow | null>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -301,35 +298,6 @@ function Review({ variantId }: Readonly<Props>) {
         }
     }, []);
 
-    const handleDeleteClick = useCallback((row: ReviewRow) => {
-        setAssessmentToDelete(row);
-        setShowDeleteConfirm(true);
-    }, []);
-
-    const handleConfirmDelete = useCallback(async () => {
-        if (!assessmentToDelete) return;
-        const idsToDelete: string[] = (assessmentToDelete as ReviewRow)._allIds ?? [assessmentToDelete.id];
-        try {
-            await Promise.all(idsToDelete.map(id =>
-                fetch(
-                    `${import.meta.env.VITE_API_URL}/api/assessments/${encodeURIComponent(id)}`,
-                    { method: 'DELETE', mode: 'cors' }
-                )
-            ));
-            const idSet = new Set(idsToDelete);
-            setAssessments(prev => prev.filter(a => !idSet.has(a.id)));
-        } catch (err) {
-            console.error("Failed to delete assessment:", err);
-        }
-        setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
-    }, [assessmentToDelete]);
-
-    const handleCancelDelete = useCallback(() => {
-        setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
-    }, []);
-
     const columns = useMemo(() => [
         columnHelper.accessor("vuln_id", {
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -456,23 +424,7 @@ function Review({ variantId }: Readonly<Props>) {
                 </div>
             ),
         }),
-        columnHelper.display({
-            id: "delete",
-            header: () => <div className="flex items-center justify-center">Delete</div>,
-            size: 70,
-            cell: info => (
-                <div className="flex items-center justify-center h-full">
-                    <button
-                        onClick={() => handleDeleteClick(info.row.original)}
-                        className="text-red-500 hover:text-red-300 transition-colors"
-                        title="Delete assessment"
-                    >
-                        <FontAwesomeIcon icon={faXmark} />
-                    </button>
-                </div>
-            ),
-        }),
-    ], [handleVulnClick, handleDeleteClick, variantNames]);
+    ], [handleVulnClick, variantNames]);
 
     if (loading) {
         return (
@@ -631,9 +583,6 @@ function Review({ variantId }: Readonly<Props>) {
             <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-200">
                     Review Assessments
-                    <span className="ml-2 text-sm font-normal text-gray-400">
-                        ({filteredAssessments.length} handmade assessment{filteredAssessments.length !== 1 ? "s" : ""})
-                    </span>
                 </h2>
             </div>
             <TableGeneric<ReviewRow>
@@ -662,14 +611,6 @@ function Review({ variantId }: Readonly<Props>) {
                     onClose={() => setModalVuln(undefined)}
                 />
             )}
-
-            <ConfirmationModal
-                isOpen={showDeleteConfirm}
-                title="Delete Assessment"
-                message={`Are you sure you want to delete the assessment for ${assessmentToDelete?.vuln_id ?? "this vulnerability"}?`}
-                onConfirm={handleConfirmDelete}
-                onCancel={handleCancelDelete}
-            />
         </div>
     );
 }
