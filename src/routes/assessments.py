@@ -258,6 +258,7 @@ def init_app(app):
         def _import_statements(statements: list, variant_id) -> tuple[list, list]:
             created: list[dict] = []
             errors: list[dict] = []
+            skipped = 0
             for stmt in statements:
                 if not isinstance(stmt, dict):
                     continue
@@ -282,6 +283,11 @@ def init_app(app):
                     errors.append({"vuln_id": vuln_name, "error": "No products/packages found"})
                     continue
 
+                justification = stmt.get("justification", "")
+                impact_statement = stmt.get("impact_statement", "")
+                status_notes = stmt.get("status_notes", "")
+                workaround = stmt.get("action_statement", "")
+
                 for pkg_string_id in pkg_ids:
                     try:
                         name, version = (pkg_string_id.rsplit("@", 1)
@@ -289,23 +295,40 @@ def init_app(app):
                         db_pkg = Package.find_or_create(name, version)
                         DBVuln.get_or_create(vuln_name)
                         finding = Finding.get_or_create(db_pkg.id, vuln_name)
+
+                        # Check for an existing identical assessment to avoid duplicates
+                        existing = db.session.execute(
+                            db.select(DBAssessment).where(
+                                DBAssessment.finding_id == finding.id,
+                                DBAssessment.variant_id == variant_id,
+                                DBAssessment.status == status,
+                                DBAssessment.justification == justification,
+                                DBAssessment.impact_statement == impact_statement,
+                                DBAssessment.status_notes == status_notes,
+                                DBAssessment.workaround == workaround,
+                            )
+                        ).scalar_one_or_none()
+                        if existing is not None:
+                            skipped += 1
+                            continue
+
                         db_a = DBAssessment.create(
                             status=status,
                             simplified_status=STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
                             finding_id=finding.id,
                             variant_id=variant_id,
                             origin="custom",
-                            status_notes=stmt.get("status_notes", ""),
-                            justification=stmt.get("justification", ""),
-                            impact_statement=stmt.get("impact_statement", ""),
-                            workaround=stmt.get("action_statement", ""),
+                            status_notes=status_notes,
+                            justification=justification,
+                            impact_statement=impact_statement,
+                            workaround=workaround,
                             responses=[],
                             commit=True,
                         )
                         created.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_name, "package": pkg_string_id, "error": str(e)})
-            return created, errors
+            return created, errors, skipped
 
         # ---- .tar.gz handling ----
         if filename.endswith(".tar.gz") or filename.endswith(".tgz"):
@@ -317,6 +340,7 @@ def init_app(app):
 
             total_created: list[dict] = []
             total_errors: list[dict] = []
+            total_skipped = 0
             variant_files_found = 0
 
             for member in tar.getmembers():
@@ -346,9 +370,10 @@ def init_app(app):
                     continue
 
                 variant_files_found += 1
-                c, e = _import_statements(doc["statements"], variant.id)
+                c, e, s = _import_statements(doc["statements"], variant.id)
                 total_created.extend(c)
                 total_errors.extend(e)
+                total_skipped += s
 
             tar.close()
 
@@ -359,7 +384,7 @@ def init_app(app):
                 }, 400
 
             _save_openvex()
-            return {"status": "success", "imported": len(total_created), "errors": total_errors}, 200
+            return {"status": "success", "imported": len(total_created), "skipped": total_skipped, "errors": total_errors}, 200
 
         # ---- single .json handling ----
         if filename.endswith(".json"):
@@ -380,9 +405,9 @@ def init_app(app):
             if not _is_openvex(data):
                 return {"error": "Not a valid OpenVEX document (missing @context with 'openvex' or 'statements' array)"}, 400
 
-            created, errors = _import_statements(data["statements"], variant.id)
+            created, errors, skipped = _import_statements(data["statements"], variant.id)
             _save_openvex()
-            return {"status": "success", "imported": len(created), "errors": errors}, 200
+            return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
 

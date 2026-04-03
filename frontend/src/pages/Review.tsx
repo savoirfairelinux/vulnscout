@@ -313,6 +313,7 @@ function Review({ variantId }: Readonly<Props>) {
 
     const columns = useMemo(() => [
         columnHelper.accessor("vuln_id", {
+            id: 'id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
             size: 160,
             cell: info => (
