@@ -62,7 +62,7 @@ type AssessmentGroup = {
     const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
+    const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
@@ -198,56 +198,60 @@ type AssessmentGroup = {
         setEditingGroup(null);
     };
 
-    const handleDeleteAssessment = (assessment: Assessment) => {
-        setAssessmentToDelete(assessment);
+    const handleDeleteAssessment = (group: AssessmentGroup) => {
+        setGroupToDelete(group);
         setShowDeleteConfirm(true);
     };
 
     const handleConfirmDelete = async () => {
-        if (assessmentToDelete) {
-            try {
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentToDelete.id)}`, {
-                    method: 'DELETE',
-                    mode: 'cors',
-                    headers: {
-                        'Content-Type': 'application/json'
+        if (groupToDelete) {
+            const idsToDelete = groupToDelete.assessments.map(a => a.id);
+            let anyError = false;
+
+            for (const id of idsToDelete) {
+                try {
+                    const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`, {
+                        method: 'DELETE',
+                        mode: 'cors',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.ok) {
+                        vuln.assessments = vuln.assessments.filter(a => a.id !== id);
+                        setAllVulnAssessments(prev => prev.filter(a => a.id !== id));
+                    } else {
+                        anyError = true;
+                        const errorData = await response.text();
+                        showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
                     }
-                });
-
-                if (response.ok) {
-                    // Remove assessment from vuln.assessments array
-                    const updatedAssessments = vuln.assessments.filter(
-                        assessment => assessment.id !== assessmentToDelete.id
-                    );
-                    vuln.assessments = updatedAssessments;
-
-                    if (updatedAssessments.length > 0) {
-                        const sortedAssessments = [...updatedAssessments].sort(
-                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-                        );
-                        vuln.status = sortedAssessments[0].status;
-                        vuln.simplified_status = sortedAssessments[0].simplified_status;
-                    }
-
-                    // Update the vuln object in the parent component
-                    patchVuln(vuln.id, vuln);
-
-                    showMessage("Assessment deleted successfully!", "success");
-                } else {
-                    const errorData = await response.text();
-                    showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+                } catch (error) {
+                    anyError = true;
+                    showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
                 }
-            } catch (error) {
-                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
+            }
+
+            if (!anyError) {
+                if (vuln.assessments.length > 0) {
+                    const sortedAssessments = [...vuln.assessments].sort(
+                        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                    );
+                    vuln.status = sortedAssessments[0].status;
+                    vuln.simplified_status = sortedAssessments[0].simplified_status;
+                }
+
+                patchVuln(vuln.id, vuln);
+                showMessage("Assessment deleted successfully!", "success");
             }
         }
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const handleCancelDelete = () => {
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const saveEditedAssessment = async (data: EditAssessmentData) => {
@@ -967,7 +971,7 @@ type AssessmentGroup = {
                                                                     <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
                                                                 </button>
                                                                 <button
-                                                                    onClick={() => handleDeleteAssessment(firstAssess)}
+                                                                    onClick={() => handleDeleteAssessment(group)}
                                                                     className="text-red-400 hover:text-red-300 transition-colors"
                                                                     title="Delete assessment"
                                                                 >
