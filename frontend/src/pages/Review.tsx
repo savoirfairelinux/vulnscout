@@ -238,9 +238,22 @@ function Review({ variantId }: Readonly<Props>) {
 
     const handleExportReview = useCallback(() => {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/export", window.location.href);
-        if (variantId) url.searchParams.set('variant_id', variantId);
-        window.open(url.toString(), '_blank');
-    }, [variantId]);
+        fetch(url.toString(), { mode: 'cors' })
+            .then(res => {
+                if (!res.ok) throw new Error(`Export failed (${res.status})`);
+                return res.blob();
+            })
+            .then(blob => {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'review_openvex.tar.gz';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(a.href);
+            })
+            .catch(err => console.error('Export error:', err));
+    }, []);
 
     const handleImportReview = useCallback(() => {
         fileInputRef.current?.click();
@@ -252,19 +265,19 @@ function Review({ variantId }: Readonly<Props>) {
         const formData = new FormData();
         formData.append('file', file);
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-        if (variantId) url.searchParams.set('variant_id', variantId);
         setImportStatus("Importing...");
         fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
-                    setImportStatus(`Imported ${data.imported} assessment(s)`);
                     // Reload the assessments list
                     Assessments.listReview(variantId).then(data => setAssessments(groupAssessments(data)));
                 } else {
                     setImportStatus(`Error: ${data.error || 'Unknown error'}`);
+                    setTimeout(() => setImportStatus(null), 4000);
+                    return;
                 }
-                setTimeout(() => setImportStatus(null), 4000);
+                setImportStatus(null);
             })
             .catch(err => {
                 console.error(err);
@@ -558,7 +571,7 @@ function Review({ variantId }: Readonly<Props>) {
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".json,application/json"
+                        accept=".json,.tar.gz,.tgz,application/json,application/gzip"
                         className="hidden"
                         onChange={handleFileSelected}
                     />
@@ -575,8 +588,13 @@ function Review({ variantId }: Readonly<Props>) {
             </div>
 
             {importStatus && (
-                <div className="mb-3 px-3 py-2 rounded bg-green-900/50 border border-green-600 text-green-300 text-sm">
-                    {importStatus}
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        {importStatus === "Importing..." && (
+                            <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        )}
+                        <span className="text-sm font-semibold">{importStatus}</span>
+                    </div>
                 </div>
             )}
 
