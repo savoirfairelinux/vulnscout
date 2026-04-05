@@ -104,7 +104,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const [importVariantId, setImportVariantId] = useState<string>("");
   const [importVariants, setImportVariants] = useState<Variant[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importFormat, setImportFormat] = useState<string>("");
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<{
     type: "success" | "error" | "info";
@@ -113,8 +112,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
-  const [showNewVariant, setShowNewVariant] = useState(false);
-  const [newVariantName, setNewVariantName] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -148,20 +145,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     }
   };
 
-  const handleCreateVariant = async () => {
-    if (!newVariantName.trim() || !importProjectId) return;
-    try {
-      const created = await Variants.create(importProjectId, newVariantName.trim());
-      Variants.list(importProjectId).then(setImportVariants);
-      setImportVariantId(created.id);
-      setShowNewVariant(false);
-      setNewVariantName("");
-      onDataChanged?.();
-    } catch (e: any) {
-      setImportMsg({ type: "error", text: e.message });
-    }
-  };
-
   const handleUploadSBOM = async () => {
     if (!importProjectId || !importVariantId || !importFile) return;
     setImportBusy(true);
@@ -170,8 +153,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
       const result = await Variants.uploadSBOM(
         importProjectId,
         importVariantId,
-        importFile,
-        importFormat || undefined
+        importFile
       );
       setImportMsg({ type: "info", text: "Processing SBOM..." });
 
@@ -427,68 +409,19 @@ function Settings({ onDataChanged }: Readonly<Props>) {
               </div>
             </div>
 
-            {/* ---- Variant selector + new ---- */}
+            {/* ---- Variant selector ---- */}
             <div>
               <label className="block text-sm text-zinc-300 mb-1">Variant</label>
-              <div className="flex gap-2">
-                <select
-                  value={importVariantId}
-                  onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
-                  disabled={!importProjectId || showNewVariant}
-                  className={selectClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
-                >
-                  <option value="">— select a variant —</option>
-                  {importVariants.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
-                {!showNewVariant ? (
-                  <button
-                    onClick={() => setShowNewVariant(true)}
-                    disabled={!importProjectId}
-                    className={btnSecondary + " disabled:opacity-40 disabled:cursor-not-allowed"}
-                    title="Create new variant"
-                  >
-                    <FontAwesomeIcon icon={faPlus} />
-                  </button>
-                ) : (
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      value={newVariantName}
-                      onChange={(e) => setNewVariantName(e.target.value)}
-                      placeholder="New variant name"
-                      className={inputClass + " !w-40"}
-                      onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
-                    />
-                    <button onClick={handleCreateVariant} className={btnPrimary + " !px-2"}>
-                      <FontAwesomeIcon icon={faCheck} />
-                    </button>
-                    <button
-                      onClick={() => { setShowNewVariant(false); setNewVariantName(""); }}
-                      className={btnSecondary + " !px-2"}
-                    >
-                      <FontAwesomeIcon icon={faXmark} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* ---- Format selector ---- */}
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">Format (optional)</label>
               <select
-                value={importFormat}
-                onChange={(e) => setImportFormat(e.target.value)}
-                className={selectClass}
+                value={importVariantId}
+                onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
+                disabled={!importProjectId}
+                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
               >
-                <option value="">Auto-detect</option>
-                <option value="spdx">SPDX (2 or 3)</option>
-                <option value="cdx">CycloneDX</option>
-                <option value="openvex">OpenVEX</option>
-                <option value="yocto_cve_check">Yocto CVE check</option>
-                <option value="grype">Grype</option>
+                <option value="">— select a variant —</option>
+                {importVariants.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
               </select>
             </div>
 
