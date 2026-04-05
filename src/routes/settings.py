@@ -73,11 +73,11 @@ def _detect_format(filename: str, data: dict) -> str:
     return "spdx"
 
 
-def _process_sbom_background(app, upload_id: str, file_path: str, scan_id, variant_id):
-    """Run SBOM parsing in a background thread."""
+def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
+    """Run SBOM parsing in a background thread for one or more files."""
     with app.app_context():
         try:
-            _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file..."}
+            _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file(s)..."}
 
             from ..bin.merger_ci import read_inputs, post_treatment
             from sqlalchemy import and_, exists
@@ -153,11 +153,12 @@ def _process_sbom_background(app, upload_id: str, file_path: str, scan_id, varia
         except Exception as e:
             _upload_status[upload_id] = {"status": "error", "message": str(e)}
         finally:
-            # Clean up the temporary file
-            try:
-                os.unlink(file_path)
-            except OSError:
-                pass
+            # Clean up the temporary files
+            for fp in file_paths:
+                try:
+                    os.unlink(fp)
+                except OSError:
+                    pass
 
 
 def init_app(app):
@@ -289,19 +290,21 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload', methods=['POST'])
     def upload_sbom():
-        """Upload an SBOM file and process it asynchronously.
+        """Upload one or more SBOM files and process them asynchronously.
+
+        All files are registered under a single scan so they are treated as
+        one logical import.
 
         Expects a multipart/form-data request with:
-        - file: the SBOM file (.json)
+        - files: one or more SBOM files (.json)  (field name ``files``)
         - project_id: UUID of the target project
         - variant_id: UUID of the target variant
-        - format (optional): explicit format hint (spdx, cdx, openvex, yocto_cve_check, grype)
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return jsonify({"error": "Expected multipart/form-data with a file upload."}), 400
 
-        uploaded = request.files.get('file')
-        if not uploaded or not uploaded.filename:
+        uploaded_files = request.files.getlist('files')
+        if not uploaded_files or not any(f.filename for f in uploaded_files):
             return jsonify({"error": "No file uploaded."}), 400
 
         project_id = request.form.get('project_id', '').strip()
@@ -322,33 +325,45 @@ def init_app(app):
         if str(variant.project_id) != project_id:
             return jsonify({"error": "Variant does not belong to the specified project."}), 400
 
-        filename = uploaded.filename
-        fmt = request.form.get('format', '').strip() or None
-
-        # Save the uploaded file to a temp location
-        suffix = os.path.splitext(filename)[1] or '.json'
-        fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="vulnscout_upload_")
-        try:
-            uploaded.save(tmp_path)
-            os.close(fd)
-        except Exception:
-            os.close(fd)
-            os.unlink(tmp_path)
-            raise
-
-        # Auto-detect format if not provided
-        if not fmt:
-            try:
-                with open(tmp_path, "r") as f:
-                    data = json.load(f)
-                fmt = _detect_format(filename, data)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                os.unlink(tmp_path)
-                return jsonify({"error": "Could not parse the file as JSON."}), 400
-
-        # Create scan + register SBOM document
+        # Create a single scan for all the files
         scan = ScanController.create("", variant.id)
-        SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
+        tmp_paths: list[str] = []
+
+        for uploaded in uploaded_files:
+            if not uploaded.filename:
+                continue
+            filename = uploaded.filename
+            fmt = request.form.get('format', '').strip() or None
+
+            # Save the uploaded file to a temp location
+            suffix = os.path.splitext(filename)[1] or '.json'
+            fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="vulnscout_upload_")
+            try:
+                uploaded.save(tmp_path)
+                os.close(fd)
+            except Exception:
+                os.close(fd)
+                os.unlink(tmp_path)
+                raise
+
+            # Auto-detect format if not provided
+            if not fmt:
+                try:
+                    with open(tmp_path, "r") as f:
+                        data = json.load(f)
+                    fmt = _detect_format(filename, data)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Clean up all temp files saved so far
+                    for p in tmp_paths:
+                        try:
+                            os.unlink(p)
+                        except OSError:
+                            pass
+                    os.unlink(tmp_path)
+                    return jsonify({"error": f"Could not parse '{filename}' as JSON."}), 400
+
+            SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
+            tmp_paths.append(tmp_path)
 
         upload_id = str(uuid.uuid4())
         _upload_status[upload_id] = {"status": "processing", "message": "Starting..."}
@@ -356,7 +371,7 @@ def init_app(app):
         # Process in background
         threading.Thread(
             target=_process_sbom_background,
-            args=(app, upload_id, tmp_path, scan.id, variant.id),
+            args=(app, upload_id, tmp_paths, scan.id, variant.id),
             name=f"sbom-upload-{upload_id}",
             daemon=True,
         ).start()

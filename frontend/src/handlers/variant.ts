@@ -103,14 +103,14 @@ class Variants {
     static async uploadSBOM(
         projectId: string,
         variantId: string,
-        file: File,
-        format?: string,
+        files: File[],
     ): Promise<{ upload_id: string; scan_id: string; message: string }> {
         const formData = new FormData();
-        formData.append("file", file);
+        for (const file of files) {
+            formData.append("files", file);
+        }
         formData.append("project_id", projectId);
         formData.append("variant_id", variantId);
-        if (format) formData.append("format", format);
 
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/sbom/upload",
