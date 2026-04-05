@@ -250,6 +250,46 @@ Export commands can be chained with inputs and reports in a single invocation:
   --report summary.adoc
 ----
 
+===  Exporting and Importing Custom Assessments
+
+VulnScout lets you export and re-import the assessments you have manually created through the web interface (review / triage decisions). This is useful for:
+
+* Backing up your review work before re-importing SBOMs.
+* Sharing assessment decisions across different VulnScout instances.
+* Restoring triage state in CI pipelines after a database reset.
+
+==== Exporting Custom Assessments
+
+The `--export-custom-assessments` flag produces a `.tar.gz` archive containing one OpenVEX JSON file per variant. The archive is written to the outputs directory (default: `.vulnscout/outputs/`).
+
+[source,shell]
+----
+./vulnscout --project demo --export-custom-assessments
+----
+
+==== Importing Custom Assessments
+
+The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
+
+[source,shell]
+----
+# Import from a single OpenVEX JSON file
+./vulnscout --project demo --import-custom-assessments /path/to/assessments.json
+
+# Import from a tar.gz archive previously exported
+./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
+----
+
+Both commands can be combined with other flags:
+
+[source,shell]
+----
+./vulnscout --project demo \
+  --add-spdx /path/to/sbom.spdx.json \
+  --import-custom-assessments /path/to/custom_assessments.tar.gz \
+  --export-spdx --report summary.adoc
+----
+
 === Configuration
 
 ==== Configuration Commands
