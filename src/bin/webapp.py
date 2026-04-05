@@ -100,6 +100,7 @@ def create_app():
     # concurrent writes from background threads don't immediately fail.
     try:
         from sqlalchemy import event as _sa_event
+
         @_sa_event.listens_for(db.engine, "connect")
         def _set_sqlite_busy_timeout(dbapi_conn, _rec):
             dbapi_conn.execute("PRAGMA busy_timeout=30000")

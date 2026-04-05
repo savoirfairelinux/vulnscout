@@ -102,7 +102,8 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
 
             # Populate observations table
             try:
-                scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
+                scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
+                    else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
                 if scan:
                     package_ids_in_scan = list(db.session.execute(
                         db.select(SBOMPkg.package_id)
