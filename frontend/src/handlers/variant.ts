@@ -89,6 +89,17 @@ class Variants {
         return response.json();
     }
 
+    static async delete(variantId: string): Promise<void> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}`,
+            { mode: "cors", method: "DELETE" }
+        );
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Delete failed (${response.status})`);
+        }
+    }
+
     static async uploadSBOM(
         projectId: string,
         variantId: string,

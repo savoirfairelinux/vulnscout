@@ -33,13 +33,17 @@ _upload_status: dict[str, dict] = {}
 
 
 def _retry_on_lock(fn, max_retries=5, delay=0.5):
-    """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'."""
+    """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'.
+
+    Between retries the session is removed (not just rolled back) so the next
+    attempt gets a completely fresh session and connection from the pool.
+    """
     for attempt in range(max_retries):
         try:
             return fn()
         except OperationalError as exc:
             if "database is locked" in str(exc) and attempt < max_retries - 1:
-                db.session.rollback()
+                db.session.remove()
                 time.sleep(delay * (attempt + 1))
             else:
                 raise
@@ -257,6 +261,28 @@ def init_app(app):
 
         variant = _retry_on_lock(lambda: VariantController.create(new_name, project_id))
         return jsonify(VariantController.serialize(variant)), 201
+
+    # ------------------------------------------------------------------
+    # Delete project
+    # ------------------------------------------------------------------
+    @app.route('/api/projects/<project_id>', methods=['DELETE'])
+    def delete_project(project_id):
+        project = ProjectController.get(project_id)
+        if project is None:
+            return jsonify({"error": "Project not found."}), 404
+        _retry_on_lock(lambda: ProjectController.delete(project))
+        return jsonify({"message": "Project deleted."}), 200
+
+    # ------------------------------------------------------------------
+    # Delete variant
+    # ------------------------------------------------------------------
+    @app.route('/api/variants/<variant_id>', methods=['DELETE'])
+    def delete_variant(variant_id):
+        variant = VariantController.get(variant_id)
+        if variant is None:
+            return jsonify({"error": "Variant not found."}), 404
+        _retry_on_lock(lambda: VariantController.delete(variant))
+        return jsonify({"message": "Variant deleted."}), 200
 
     # ------------------------------------------------------------------
     # Upload SBOM
