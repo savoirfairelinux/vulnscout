@@ -18,10 +18,11 @@ import type { Variant } from "../handlers/variant";
 import ConfirmationModal from "../components/ConfirmationModal";
 
 type Props = {
-  onDataChanged?: () => void;
+  onDataChanged?: (message?: string) => void;
+  onLoadingMessage?: (message: string | null) => void;
 };
 
-function Settings({ onDataChanged }: Readonly<Props>) {
+function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Shared data ----
   const [projects, setProjects] = useState<Project[]>([]);
 
@@ -39,10 +40,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const [renameProjectId, setRenameProjectId] = useState<string>("");
   const [renameProjectName, setRenameProjectName] = useState<string>("");
   const [renameProjectBusy, setRenameProjectBusy] = useState(false);
-  const [projectMsg, setProjectMsg] = useState<{
-    type: "success" | "error";
-    text: string;
-  } | null>(null);
+  const [projectMsg, setProjectMsg] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState("");
   const [createProjectBusy, setCreateProjectBusy] = useState(false);
   const [deleteProjectId, setDeleteProjectId] = useState<string>("");
@@ -54,11 +52,10 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setProjectMsg(null);
     try {
       await Projects.rename(renameProjectId, renameProjectName.trim());
-      setProjectMsg({ type: "success", text: "Project renamed." });
       loadProjects();
-      onDataChanged?.();
+      onDataChanged?.("Renaming project...");
     } catch (e: any) {
-      setProjectMsg({ type: "error", text: e.message });
+      setProjectMsg(e.message);
     } finally {
       setRenameProjectBusy(false);
     }
@@ -70,12 +67,11 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setProjectMsg(null);
     try {
       await Projects.create(newProjectName.trim());
-      setProjectMsg({ type: "success", text: "Project created." });
       setNewProjectName("");
       loadProjects();
-      onDataChanged?.();
+      onDataChanged?.("Creating project...");
     } catch (e: any) {
-      setProjectMsg({ type: "error", text: e.message });
+      setProjectMsg(e.message);
     } finally {
       setCreateProjectBusy(false);
     }
@@ -86,7 +82,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setProjectMsg(null);
     try {
       await Projects.delete(deleteProjectId);
-      setProjectMsg({ type: "success", text: "Project deleted." });
       setDeleteProjectId("");
       setConfirmDeleteProject(false);
       if (renameProjectId === deleteProjectId) {
@@ -94,9 +89,9 @@ function Settings({ onDataChanged }: Readonly<Props>) {
         setRenameProjectName("");
       }
       loadProjects();
-      onDataChanged?.();
+      onDataChanged?.("Deleting project...");
     } catch (e: any) {
-      setProjectMsg({ type: "error", text: e.message });
+      setProjectMsg(e.message);
       setConfirmDeleteProject(false);
     }
   };
@@ -107,10 +102,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const [renameVariantId, setRenameVariantId] = useState<string>("");
   const [renameVariantName, setRenameVariantName] = useState<string>("");
   const [renameVariantBusy, setRenameVariantBusy] = useState(false);
-  const [variantMsg, setVariantMsg] = useState<{
-    type: "success" | "error";
-    text: string;
-  } | null>(null);
+  const [variantMsg, setVariantMsg] = useState<string | null>(null);
   const [newVariantName, setNewVariantName] = useState("");
   const [createVariantBusy, setCreateVariantBusy] = useState(false);
   const [deleteVariantId, setDeleteVariantId] = useState<string>("");
@@ -133,11 +125,10 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setVariantMsg(null);
     try {
       await Variants.rename(renameVariantId, renameVariantName.trim());
-      setVariantMsg({ type: "success", text: "Variant renamed." });
       reloadVariants(variantProjectId);
-      onDataChanged?.();
+      onDataChanged?.("Renaming variant...");
     } catch (e: any) {
-      setVariantMsg({ type: "error", text: e.message });
+      setVariantMsg(e.message);
     } finally {
       setRenameVariantBusy(false);
     }
@@ -149,12 +140,11 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setVariantMsg(null);
     try {
       await Variants.create(variantProjectId, newVariantName.trim());
-      setVariantMsg({ type: "success", text: "Variant created." });
       setNewVariantName("");
       reloadVariants(variantProjectId);
-      onDataChanged?.();
+      onDataChanged?.("Creating variant...");
     } catch (e: any) {
-      setVariantMsg({ type: "error", text: e.message });
+      setVariantMsg(e.message);
     } finally {
       setCreateVariantBusy(false);
     }
@@ -165,7 +155,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     setVariantMsg(null);
     try {
       await Variants.delete(deleteVariantId);
-      setVariantMsg({ type: "success", text: "Variant deleted." });
       if (renameVariantId === deleteVariantId) {
         setRenameVariantId("");
         setRenameVariantName("");
@@ -173,9 +162,9 @@ function Settings({ onDataChanged }: Readonly<Props>) {
       setDeleteVariantId("");
       setConfirmDeleteVariant(false);
       reloadVariants(variantProjectId);
-      onDataChanged?.();
+      onDataChanged?.("Deleting variant...");
     } catch (e: any) {
-      setVariantMsg({ type: "error", text: e.message });
+      setVariantMsg(e.message);
       setConfirmDeleteVariant(false);
     }
   };
@@ -186,10 +175,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const [importVariants, setImportVariants] = useState<Variant[]>([]);
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importBusy, setImportBusy] = useState(false);
-  const [importMsg, setImportMsg] = useState<{
-    type: "success" | "error" | "info";
-    text: string;
-  } | null>(null);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!importProjectId) {
@@ -225,15 +211,16 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const handleUploadSBOM = async () => {
     if (!importProjectId || !importVariantId || importFiles.length === 0) return;
     setImportBusy(true);
+    setImportMsg(null);
     const count = importFiles.length;
-    setImportMsg({ type: "info", text: `Uploading ${count} file${count > 1 ? "s" : ""}...` });
+    onLoadingMessage?.(`Uploading ${count} file${count > 1 ? "s" : ""}...`);
     try {
       const result = await Variants.uploadSBOM(
         importProjectId,
         importVariantId,
         importFiles
       );
-      setImportMsg({ type: "info", text: "Processing SBOM..." });
+      onLoadingMessage?.("Processing SBOM...");
 
       const uploadId = result.upload_id;
       const poll = async () => {
@@ -241,22 +228,25 @@ function Settings({ onDataChanged }: Readonly<Props>) {
           await new Promise((r) => setTimeout(r, 1000));
           const status = await Variants.getUploadStatus(uploadId);
           if (status.status === "done") {
-            setImportMsg({ type: "success", text: status.message });
             setImportFiles([]);
-            onDataChanged?.();
+            onLoadingMessage?.(null);
+            onDataChanged?.("Importing SBOM...");
             return;
           }
           if (status.status === "error") {
-            setImportMsg({ type: "error", text: status.message });
+            setImportMsg(status.message);
+            onLoadingMessage?.(null);
             return;
           }
-          setImportMsg({ type: "info", text: status.message });
+          onLoadingMessage?.(status.message);
         }
-        setImportMsg({ type: "error", text: "Upload processing timed out." });
+        setImportMsg("Upload processing timed out.");
+        onLoadingMessage?.(null);
       };
       await poll();
     } catch (e: any) {
-      setImportMsg({ type: "error", text: e.message });
+      setImportMsg(e.message);
+      onLoadingMessage?.(null);
     } finally {
       setImportBusy(false);
     }
@@ -383,12 +373,9 @@ function Settings({ onDataChanged }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {projectMsg && (
-              <span className={projectMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
-                <FontAwesomeIcon
-                  icon={projectMsg.type === "success" ? faCheck : faTriangleExclamation}
-                  className="mr-1"
-                />
-                {projectMsg.text}
+              <span className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                {projectMsg}
               </span>
             )}
           </div>
@@ -527,12 +514,9 @@ function Settings({ onDataChanged }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {variantMsg && (
-              <span className={variantMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
-                <FontAwesomeIcon
-                  icon={variantMsg.type === "success" ? faCheck : faTriangleExclamation}
-                  className="mr-1"
-                />
-                {variantMsg.text}
+              <span className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                {variantMsg}
               </span>
             )}
           </div>
@@ -630,27 +614,9 @@ function Settings({ onDataChanged }: Readonly<Props>) {
                 Import
               </button>
               {importMsg && (
-                <span
-                  className={
-                    importMsg.type === "success"
-                      ? "text-green-400 text-sm"
-                      : importMsg.type === "error"
-                        ? "text-red-400 text-sm"
-                        : "text-cyan-400 text-sm"
-                  }
-                >
-                  <FontAwesomeIcon
-                    icon={
-                      importMsg.type === "success"
-                        ? faCheck
-                        : importMsg.type === "error"
-                          ? faTriangleExclamation
-                          : faSpinner
-                    }
-                    spin={importMsg.type === "info"}
-                    className="mr-1"
-                  />
-                  {importMsg.text}
+                <span className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                  {importMsg}
                 </span>
               )}
             </div>
