@@ -496,9 +496,9 @@ class TestDetectFormat:
         from src.routes.settings import _detect_format
         assert _detect_format("doc.json", {"@context": "https://spdx.org/"}) == "spdx"
 
-    def test_fallback_returns_spdx(self):
+    def test_fallback_returns_unknown(self):
         from src.routes.settings import _detect_format
-        assert _detect_format("unknown.json", {}) == "spdx"
+        assert _detect_format("unknown.json", {}) == "unknown"
 
 
 # ---------------------------------------------------------------------------

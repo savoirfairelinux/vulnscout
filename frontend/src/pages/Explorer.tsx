@@ -262,7 +262,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     setTab={setTab}
                     appendCVSS={appendCVSS}
                 />}
-                {tab == 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
@@ -275,11 +275,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                 />}
-                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab == 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'exports' && <Exports />}
-                {tab == 'settings' && <Settings onDataChanged={(message) => {
+                {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
+                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'exports' && <Exports />}
+                {tab === 'settings' && <Settings onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});
                     setSelectorKey(k => k + 1);

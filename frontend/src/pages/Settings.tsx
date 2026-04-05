@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
@@ -23,6 +23,12 @@ type Props = {
 };
 
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
+  // ---- Unmount guard for async operations ----
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    return () => { unmountedRef.current = true; };
+  }, []);
+
   // ---- Shared data ----
   const [projects, setProjects] = useState<Project[]>([]);
 
@@ -45,6 +51,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [createProjectBusy, setCreateProjectBusy] = useState(false);
   const [deleteProjectId, setDeleteProjectId] = useState<string>("");
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
+  const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
 
   const handleRenameProject = async () => {
     if (!renameProjectId || !renameProjectName.trim()) return;
@@ -78,21 +85,38 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   };
 
   const handleDeleteProject = async () => {
-    if (!deleteProjectId) return;
+    if (!deleteProjectId || deleteProjectBusy) return;
+    setDeleteProjectBusy(true);
     setProjectMsg(null);
     try {
       await Projects.delete(deleteProjectId);
-      setDeleteProjectId("");
-      setConfirmDeleteProject(false);
+      // Invalidate variant section if it references the deleted project
+      if (variantProjectId === deleteProjectId) {
+        setVariantProjectId("");
+        setVariantProjectVariants([]);
+        setRenameVariantId("");
+        setRenameVariantName("");
+        setDeleteVariantId("");
+      }
+      // Invalidate import section if it references the deleted project
+      if (importProjectId === deleteProjectId) {
+        setImportProjectId("");
+        setImportVariantId("");
+        setImportVariants([]);
+      }
       if (renameProjectId === deleteProjectId) {
         setRenameProjectId("");
         setRenameProjectName("");
       }
+      setDeleteProjectId("");
+      setConfirmDeleteProject(false);
       loadProjects();
       onDataChanged?.("Deleting project...");
     } catch (e: any) {
       setProjectMsg(e.message);
       setConfirmDeleteProject(false);
+    } finally {
+      setDeleteProjectBusy(false);
     }
   };
 
@@ -107,6 +131,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [createVariantBusy, setCreateVariantBusy] = useState(false);
   const [deleteVariantId, setDeleteVariantId] = useState<string>("");
   const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
+  const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
 
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
@@ -151,7 +176,8 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   };
 
   const handleDeleteVariant = async () => {
-    if (!deleteVariantId) return;
+    if (!deleteVariantId || deleteVariantBusy) return;
+    setDeleteVariantBusy(true);
     setVariantMsg(null);
     try {
       await Variants.delete(deleteVariantId);
@@ -166,6 +192,8 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     } catch (e: any) {
       setVariantMsg(e.message);
       setConfirmDeleteVariant(false);
+    } finally {
+      setDeleteVariantBusy(false);
     }
   };
 
@@ -191,7 +219,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         }
       })
       .catch(() => setImportVariants([]));
-  }, [importProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [importProjectId, importVariantId]);
 
   const handleFileSelected = (index: number, file: File | null) => {
     setImportMsg(null);
@@ -225,7 +253,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       const uploadId = result.upload_id;
       const poll = async () => {
         for (let i = 0; i < 600; i++) {
+          if (unmountedRef.current) return;
           await new Promise((r) => setTimeout(r, 1000));
+          if (unmountedRef.current) return;
           const status = await Variants.getUploadStatus(uploadId);
           if (status.status === "done") {
             setImportFiles([]);
@@ -398,6 +428,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   setVariantProjectId(e.target.value);
                   setRenameVariantId("");
                   setRenameVariantName("");
+                  setDeleteVariantId("");
                   setVariantMsg(null);
                   setConfirmDeleteVariant(false);
                 }}

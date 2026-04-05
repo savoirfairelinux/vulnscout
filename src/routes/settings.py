@@ -28,8 +28,21 @@ from ..models.sbom_document import SBOMDocument as SBOMDoc
 from ..helpers.verbose import verbose
 
 
-# Tracks in-progress SBOM uploads: upload_id → {status, message, error}
+# Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
+_UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
+
+
+def _prune_upload_status():
+    """Remove completed/errored entries older than _UPLOAD_STATUS_TTL."""
+    now = time.time()
+    stale = [
+        uid for uid, info in _upload_status.items()
+        if info.get("status") in ("done", "error")
+        and now - info.get("ts", 0) > _UPLOAD_STATUS_TTL
+    ]
+    for uid in stale:
+        _upload_status.pop(uid, None)
 
 
 def _retry_on_lock(fn, max_retries=5, delay=0.5):
@@ -70,7 +83,7 @@ def _detect_format(filename: str, data: dict) -> str:
     # SPDX 3.0 detection
     if "@context" in data or "spdxDocument" in str(data.get("type", "")):
         return "spdx"
-    return "spdx"
+    return "unknown"
 
 
 def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
@@ -149,10 +162,19 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
             except Exception as e:
                 verbose(f"settings/upload: EPSS enrichment failed: {e}")
 
-            _upload_status[upload_id] = {"status": "done", "message": "SBOM imported successfully."}
+            _upload_status[upload_id] = {
+                "status": "done",
+                "message": "SBOM imported successfully.",
+                "ts": time.time(),
+            }
 
         except Exception as e:
-            _upload_status[upload_id] = {"status": "error", "message": str(e)}
+            verbose(f"settings/upload: SBOM import failed: {e}")
+            _upload_status[upload_id] = {
+                "status": "error",
+                "message": "SBOM import failed. Check server logs for details.",
+                "ts": time.time(),
+            }
         finally:
             # Clean up the temporary files
             for fp in file_paths:
@@ -177,6 +199,11 @@ def init_app(app):
         if not new_name:
             return jsonify({"error": "Project name must not be empty."}), 400
 
+        try:
+            uuid.UUID(project_id)
+        except ValueError:
+            return jsonify({"error": "Invalid project ID."}), 400
+
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found."}), 404
@@ -187,7 +214,12 @@ def init_app(app):
             if p.name == new_name and str(p.id) != project_id:
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
-        _retry_on_lock(lambda: project.update(new_name))
+        def _do_rename():
+            p = ProjectController.get(project_id)
+            p.update(new_name)
+            return p
+
+        project = _retry_on_lock(_do_rename)
         return jsonify(ProjectController.serialize(project))
 
     # ------------------------------------------------------------------
@@ -203,6 +235,11 @@ def init_app(app):
         if not new_name:
             return jsonify({"error": "Variant name must not be empty."}), 400
 
+        try:
+            uuid.UUID(variant_id)
+        except ValueError:
+            return jsonify({"error": "Invalid variant ID."}), 400
+
         variant = VariantController.get(variant_id)
         if variant is None:
             return jsonify({"error": "Variant not found."}), 404
@@ -213,7 +250,12 @@ def init_app(app):
             if v.name == new_name and str(v.id) != variant_id:
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
-        _retry_on_lock(lambda: VariantController.update(variant, new_name))
+        def _do_rename():
+            v = VariantController.get(variant_id)
+            VariantController.update(v, new_name)
+            return v
+
+        variant = _retry_on_lock(_do_rename)
         return jsonify(VariantController.serialize(variant))
 
     # ------------------------------------------------------------------
@@ -243,6 +285,11 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/variants', methods=['POST'])
     def create_variant(project_id):
+        try:
+            uuid.UUID(project_id)
+        except ValueError:
+            return jsonify({"error": "Invalid project ID."}), 400
+
         data = request.get_json(silent=True)
         if not data or not isinstance(data.get("name"), str):
             return jsonify({"error": "Missing or invalid 'name' field."}), 400
@@ -269,10 +316,21 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
     def delete_project(project_id):
+        try:
+            uuid.UUID(project_id)
+        except ValueError:
+            return jsonify({"error": "Invalid project ID."}), 400
+
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found."}), 404
-        _retry_on_lock(lambda: ProjectController.delete(project))
+
+        def _do_delete():
+            p = ProjectController.get(project_id)
+            if p is not None:
+                ProjectController.delete(p)
+
+        _retry_on_lock(_do_delete)
         return jsonify({"message": "Project deleted."}), 200
 
     # ------------------------------------------------------------------
@@ -280,10 +338,21 @@ def init_app(app):
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
     def delete_variant(variant_id):
+        try:
+            uuid.UUID(variant_id)
+        except ValueError:
+            return jsonify({"error": "Invalid variant ID."}), 400
+
         variant = VariantController.get(variant_id)
         if variant is None:
             return jsonify({"error": "Variant not found."}), 404
-        _retry_on_lock(lambda: VariantController.delete(variant))
+
+        def _do_delete():
+            v = VariantController.get(variant_id)
+            if v is not None:
+                VariantController.delete(v)
+
+        _retry_on_lock(_do_delete)
         return jsonify({"message": "Variant deleted."}), 200
 
     # ------------------------------------------------------------------
@@ -353,6 +422,16 @@ def init_app(app):
                     with open(tmp_path, "r") as f:
                         data = json.load(f)
                     fmt = _detect_format(filename, data)
+                    if fmt == "unknown":
+                        for p in tmp_paths:
+                            try:
+                                os.unlink(p)
+                            except OSError:
+                                pass
+                        os.unlink(tmp_path)
+                        return jsonify({
+                            "error": f"Unrecognized SBOM format for '{filename}'.",
+                        }), 400
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     # Clean up all temp files saved so far
                     for p in tmp_paths:
@@ -365,6 +444,8 @@ def init_app(app):
 
             SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
             tmp_paths.append(tmp_path)
+
+        _prune_upload_status()
 
         upload_id = str(uuid.uuid4())
         _upload_status[upload_id] = {"status": "processing", "message": "Starting..."}

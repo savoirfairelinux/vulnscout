@@ -10,6 +10,7 @@ class Projects {
         const response = await fetch(import.meta.env.VITE_API_URL + "/api/projects", {
             mode: "cors",
         });
+        if (!response.ok) return [];
         const data = await response.json();
         if (!Array.isArray(data)) return [];
         return data.filter(
