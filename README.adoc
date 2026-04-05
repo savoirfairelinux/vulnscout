@@ -155,6 +155,16 @@ To be short, a simple `inherit vulnscout` in your image recipe will be enough to
 
 The vulnscout web interface can be started with a `bitbake <image-recipe> -c vulnscout` command.
 
+=== Web Interface Settings
+
+The web interface includes a *Settings* tab that provides:
+
+* *Rename Project* — Select a project and give it a new name (must be unique across all projects).
+* *Rename Variant* — Select a variant within a project and rename it (must be unique within the project).
+* *Import SBOM* — Upload an SBOM file directly from the browser instead of using CLI flags like `--add-spdx` or `--add-cve-check`.
+  When importing, you must select (or create) the target project and variant.
+  Supported formats are auto-detected or can be specified explicitly: SPDX (2/3), CycloneDX, OpenVEX, Yocto CVE check, and Grype.
+
 === Run VulnScout in non-interactive mode
 
 If you want to use the non-interactive mode, without the web interface, you can use the command with the `--match-condition` argument:

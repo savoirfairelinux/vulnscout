@@ -81,9 +81,20 @@ def create_app():
             try:
                 db.session.execute(db.text("PRAGMA journal_mode=WAL"))
                 db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
+                db.session.execute(db.text("PRAGMA busy_timeout=5000"))
                 db.session.commit()
             except Exception:
                 pass
+
+    # Ensure every new SQLite connection inherits the busy timeout so that
+    # concurrent writes from background threads don't immediately fail.
+    try:
+        from sqlalchemy import event as _sa_event
+        @_sa_event.listens_for(db.engine, "connect")
+        def _set_sqlite_busy_timeout(dbapi_conn, _rec):
+            dbapi_conn.execute("PRAGMA busy_timeout=5000")
+    except Exception:
+        pass
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:
