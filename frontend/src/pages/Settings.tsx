@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
@@ -9,6 +9,7 @@ import {
   faTriangleExclamation,
   faTrash,
   faLayerGroup,
+  faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -183,14 +184,12 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const [importProjectId, setImportProjectId] = useState<string>("");
   const [importVariantId, setImportVariantId] = useState<string>("");
   const [importVariants, setImportVariants] = useState<Variant[]>([]);
-  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<{
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!importProjectId) {
@@ -208,15 +207,31 @@ function Settings({ onDataChanged }: Readonly<Props>) {
       .catch(() => setImportVariants([]));
   }, [importProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handleFileSelected = (index: number, file: File | null) => {
+    setImportMsg(null);
+    if (!file) return;
+    setImportFiles((prev) => {
+      const next = [...prev];
+      next[index] = file;
+      return next;
+    });
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setImportFiles((prev) => prev.filter((_, i) => i !== index));
+    setImportMsg(null);
+  };
+
   const handleUploadSBOM = async () => {
-    if (!importProjectId || !importVariantId || !importFile) return;
+    if (!importProjectId || !importVariantId || importFiles.length === 0) return;
     setImportBusy(true);
-    setImportMsg({ type: "info", text: "Uploading file..." });
+    const count = importFiles.length;
+    setImportMsg({ type: "info", text: `Uploading ${count} file${count > 1 ? "s" : ""}...` });
     try {
       const result = await Variants.uploadSBOM(
         importProjectId,
         importVariantId,
-        importFile
+        importFiles
       );
       setImportMsg({ type: "info", text: "Processing SBOM..." });
 
@@ -227,8 +242,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
           const status = await Variants.getUploadStatus(uploadId);
           if (status.status === "done") {
             setImportMsg({ type: "success", text: status.message });
-            setImportFile(null);
-            if (fileInputRef.current) fileInputRef.current.value = "";
+            setImportFiles([]);
             onDataChanged?.();
             return;
           }
@@ -567,14 +581,33 @@ function Settings({ onDataChanged }: Readonly<Props>) {
               </select>
             </div>
 
-            {/* ---- File picker ---- */}
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">SBOM File</label>
+            {/* ---- File picker(s) ---- */}
+            <div className="space-y-2">
+              <label className="block text-sm text-zinc-300 mb-1">SBOM Files</label>
+              {/* Existing files */}
+              {importFiles.map((file, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span className="flex-1 truncate text-sm text-zinc-200 bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5">
+                    {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveFile(idx)}
+                    disabled={importBusy}
+                    className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+                    title="Remove file"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+              ))}
+              {/* New file browse row */}
               <input
-                ref={fileInputRef}
+                key={importFiles.length}
                 type="file"
                 accept=".json,.spdx,.cdx,.xml"
-                onChange={(e) => { setImportFile(e.target.files?.[0] ?? null); setImportMsg(null); }}
+                onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
+                disabled={importBusy}
                 className={
                   inputClass +
                   " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
@@ -586,7 +619,7 @@ function Settings({ onDataChanged }: Readonly<Props>) {
             <div className="flex items-center gap-3 pt-1">
               <button
                 onClick={handleUploadSBOM}
-                disabled={importBusy || !importProjectId || !importVariantId || !importFile}
+                disabled={importBusy || !importProjectId || !importVariantId || importFiles.length === 0}
                 className={btnPrimary}
               >
                 {importBusy ? (
