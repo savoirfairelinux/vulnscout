@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
@@ -104,6 +104,17 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         >
           <FontAwesomeIcon icon={faFileExport} className="mr-1" />
           Export
+        </button>
+      </li>
+
+      {/* === Settings === */}
+      <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('settings')}
+          className="flex items-center h-full px-4 py-2"
+        >
+          <FontAwesomeIcon icon={faGear} className="mr-1" />
+          Settings
         </button>
       </li>
 

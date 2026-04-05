@@ -17,8 +17,9 @@ import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
-import Review from "./Review";
-import Assessments, { removeDuplicateAssessments } from "../handlers/assessments";
+import Review from './Review';
+import Settings from './Settings';
+import Assessments, { removeDuplicateAssessments } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
@@ -28,6 +29,7 @@ type Props = {
 }
 
 function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
+    const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
@@ -219,6 +221,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
             <NavigationBar
+                key={selectorKey}
                 tab={tab}
                 changeTab={handleTabChange}
                 darkMode={darkMode}
@@ -274,6 +277,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab == 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
                 {tab == 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
                 {tab == 'exports' && <Exports />}
+                {tab == 'settings' && <Settings onDataChanged={() => {
+                    Config.get().then(config => setDefaultConfig(config)).catch(() => {});
+                    setSelectorKey(k => k + 1);
+                    loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+                }} />}
             </div>
             <VersionDisplay />
         </div>
