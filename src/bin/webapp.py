@@ -66,6 +66,16 @@ def create_app():
     if "SQLALCHEMY_DATABASE_URI" not in app.config:
         app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
 
+    # Set the busy-timeout at the sqlite3.connect() level so every connection
+    # is guaranteed to wait up to 30 s for the write lock before raising
+    # "database is locked".  This is more reliable than PRAGMA busy_timeout
+    # set after the connection is opened.
+    db_uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if db_uri.startswith("sqlite"):
+        engine_opts = app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", {})
+        connect_args = engine_opts.setdefault("connect_args", {})
+        connect_args.setdefault("timeout", 30)
+
     db.init_app(app)
     _migrations_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
     migrate.init_app(app, db, directory=_migrations_dir)

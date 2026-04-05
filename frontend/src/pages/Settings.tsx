@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faPen,
   faFolderOpen,
   faFileImport,
   faPlus,
   faCheck,
-  faXmark,
   faSpinner,
   faTriangleExclamation,
+  faTrash,
+  faLayerGroup,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import ConfirmationModal from "../components/ConfirmationModal";
 
 type Props = {
   onDataChanged?: () => void;
@@ -33,69 +34,148 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     loadProjects();
   }, [loadProjects]);
 
-  // ---- Rename Project ----
+  // ---- Manage Projects ----
   const [renameProjectId, setRenameProjectId] = useState<string>("");
   const [renameProjectName, setRenameProjectName] = useState<string>("");
   const [renameProjectBusy, setRenameProjectBusy] = useState(false);
-  const [renameProjectMsg, setRenameProjectMsg] = useState<{
+  const [projectMsg, setProjectMsg] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [createProjectBusy, setCreateProjectBusy] = useState(false);
+  const [deleteProjectId, setDeleteProjectId] = useState<string>("");
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
 
   const handleRenameProject = async () => {
     if (!renameProjectId || !renameProjectName.trim()) return;
     setRenameProjectBusy(true);
-    setRenameProjectMsg(null);
+    setProjectMsg(null);
     try {
       await Projects.rename(renameProjectId, renameProjectName.trim());
-      setRenameProjectMsg({ type: "success", text: "Project renamed successfully." });
+      setProjectMsg({ type: "success", text: "Project renamed." });
       loadProjects();
-      setRenameProjectName("");
       onDataChanged?.();
     } catch (e: any) {
-      setRenameProjectMsg({ type: "error", text: e.message });
+      setProjectMsg({ type: "error", text: e.message });
     } finally {
       setRenameProjectBusy(false);
     }
   };
 
-  // ---- Rename Variant ----
-  const [renameVariantProjectId, setRenameVariantProjectId] = useState<string>("");
-  const [renameVariantProjectVariants, setRenameVariantProjectVariants] = useState<Variant[]>([]);
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim()) return;
+    setCreateProjectBusy(true);
+    setProjectMsg(null);
+    try {
+      await Projects.create(newProjectName.trim());
+      setProjectMsg({ type: "success", text: "Project created." });
+      setNewProjectName("");
+      loadProjects();
+      onDataChanged?.();
+    } catch (e: any) {
+      setProjectMsg({ type: "error", text: e.message });
+    } finally {
+      setCreateProjectBusy(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!deleteProjectId) return;
+    setProjectMsg(null);
+    try {
+      await Projects.delete(deleteProjectId);
+      setProjectMsg({ type: "success", text: "Project deleted." });
+      setDeleteProjectId("");
+      setConfirmDeleteProject(false);
+      if (renameProjectId === deleteProjectId) {
+        setRenameProjectId("");
+        setRenameProjectName("");
+      }
+      loadProjects();
+      onDataChanged?.();
+    } catch (e: any) {
+      setProjectMsg({ type: "error", text: e.message });
+      setConfirmDeleteProject(false);
+    }
+  };
+
+  // ---- Manage Variants ----
+  const [variantProjectId, setVariantProjectId] = useState<string>("");
+  const [variantProjectVariants, setVariantProjectVariants] = useState<Variant[]>([]);
   const [renameVariantId, setRenameVariantId] = useState<string>("");
   const [renameVariantName, setRenameVariantName] = useState<string>("");
   const [renameVariantBusy, setRenameVariantBusy] = useState(false);
-  const [renameVariantMsg, setRenameVariantMsg] = useState<{
+  const [variantMsg, setVariantMsg] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [newVariantName, setNewVariantName] = useState("");
+  const [createVariantBusy, setCreateVariantBusy] = useState(false);
+  const [deleteVariantId, setDeleteVariantId] = useState<string>("");
+  const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
+
+  const reloadVariants = useCallback((projectId: string) => {
+    if (!projectId) { setVariantProjectVariants([]); return; }
+    Variants.list(projectId)
+      .then(setVariantProjectVariants)
+      .catch(() => setVariantProjectVariants([]));
+  }, []);
 
   useEffect(() => {
-    if (!renameVariantProjectId) {
-      setRenameVariantProjectVariants([]);
-      return;
-    }
-    Variants.list(renameVariantProjectId)
-      .then(setRenameVariantProjectVariants)
-      .catch(() => setRenameVariantProjectVariants([]));
-  }, [renameVariantProjectId]);
+    reloadVariants(variantProjectId);
+  }, [variantProjectId, reloadVariants]);
 
   const handleRenameVariant = async () => {
     if (!renameVariantId || !renameVariantName.trim()) return;
     setRenameVariantBusy(true);
-    setRenameVariantMsg(null);
+    setVariantMsg(null);
     try {
       await Variants.rename(renameVariantId, renameVariantName.trim());
-      setRenameVariantMsg({ type: "success", text: "Variant renamed successfully." });
-      Variants.list(renameVariantProjectId)
-        .then(setRenameVariantProjectVariants)
-        .catch(() => setRenameVariantProjectVariants([]));
-      setRenameVariantName("");
+      setVariantMsg({ type: "success", text: "Variant renamed." });
+      reloadVariants(variantProjectId);
       onDataChanged?.();
     } catch (e: any) {
-      setRenameVariantMsg({ type: "error", text: e.message });
+      setVariantMsg({ type: "error", text: e.message });
     } finally {
       setRenameVariantBusy(false);
+    }
+  };
+
+  const handleCreateVariant = async () => {
+    if (!newVariantName.trim() || !variantProjectId) return;
+    setCreateVariantBusy(true);
+    setVariantMsg(null);
+    try {
+      await Variants.create(variantProjectId, newVariantName.trim());
+      setVariantMsg({ type: "success", text: "Variant created." });
+      setNewVariantName("");
+      reloadVariants(variantProjectId);
+      onDataChanged?.();
+    } catch (e: any) {
+      setVariantMsg({ type: "error", text: e.message });
+    } finally {
+      setCreateVariantBusy(false);
+    }
+  };
+
+  const handleDeleteVariant = async () => {
+    if (!deleteVariantId) return;
+    setVariantMsg(null);
+    try {
+      await Variants.delete(deleteVariantId);
+      setVariantMsg({ type: "success", text: "Variant deleted." });
+      if (renameVariantId === deleteVariantId) {
+        setRenameVariantId("");
+        setRenameVariantName("");
+      }
+      setDeleteVariantId("");
+      setConfirmDeleteVariant(false);
+      reloadVariants(variantProjectId);
+      onDataChanged?.();
+    } catch (e: any) {
+      setVariantMsg({ type: "error", text: e.message });
+      setConfirmDeleteVariant(false);
     }
   };
 
@@ -109,9 +189,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
-
-  const [showNewProject, setShowNewProject] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -130,20 +207,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
       })
       .catch(() => setImportVariants([]));
   }, [importProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleCreateProject = async () => {
-    if (!newProjectName.trim()) return;
-    try {
-      const created = await Projects.create(newProjectName.trim());
-      loadProjects();
-      setImportProjectId(created.id);
-      setShowNewProject(false);
-      setNewProjectName("");
-      onDataChanged?.();
-    } catch (e: any) {
-      setImportMsg({ type: "error", text: e.message });
-    }
-  };
 
   const handleUploadSBOM = async () => {
     if (!importProjectId || !importVariantId || !importFile) return;
@@ -191,8 +254,6 @@ function Settings({ onDataChanged }: Readonly<Props>) {
   const selectClass = inputClass;
   const btnPrimary =
     "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
-  const btnSecondary =
-    "px-3 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150";
 
   return (
     <div className="w-full flex justify-center pt-8">
@@ -202,20 +263,49 @@ function Settings({ onDataChanged }: Readonly<Props>) {
           Manage projects, variants, and import SBOM files.
         </p>
 
-        {/* ======== Rename Project ======== */}
+        {/* ======== Manage Projects ======== */}
         <div>
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faPen} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Rename Project</h2>
+            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" />
+            <h2 className="text-xl font-bold text-white">Manage Projects</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">Project</label>
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+
+            {/* -- Create project -- */}
+            <div className="space-y-2">
+              <label className="block text-sm text-zinc-300 font-semibold">Add Project</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => { setNewProjectName(e.target.value); setProjectMsg(null); }}
+                  placeholder="New project name"
+                  className={inputClass + " flex-1"}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
+                />
+                <button
+                  onClick={handleCreateProject}
+                  disabled={createProjectBusy || !newProjectName.trim()}
+                  className={btnPrimary}
+                >
+                  {createProjectBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                  ) : (
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                  )}
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* -- Rename project -- */}
+            <div className="border-t border-zinc-600 pt-4 space-y-2">
+              <label className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
               <select
                 value={renameProjectId}
                 onChange={(e) => {
                   setRenameProjectId(e.target.value);
-                  setRenameProjectMsg(null);
+                  setProjectMsg(null);
                   const p = projects.find((x) => x.id === e.target.value);
                   setRenameProjectName(p?.name ?? "");
                 }}
@@ -226,62 +316,89 @@ function Settings({ onDataChanged }: Readonly<Props>) {
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={renameProjectName}
+                  onChange={(e) => setRenameProjectName(e.target.value)}
+                  placeholder="Enter new name"
+                  className={inputClass + " flex-1"}
+                  disabled={!renameProjectId}
+                  onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
+                />
+                <button
+                  onClick={handleRenameProject}
+                  disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
+                  className={btnPrimary}
+                >
+                  {renameProjectBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                  ) : (
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                  )}
+                  Rename
+                </button>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">New Name</label>
-              <input
-                type="text"
-                value={renameProjectName}
-                onChange={(e) => setRenameProjectName(e.target.value)}
-                placeholder="Enter new project name"
-                className={inputClass}
-                disabled={!renameProjectId}
-              />
+            {/* -- Delete project -- */}
+            <div className="border-t border-zinc-600 pt-4 space-y-2">
+              <label className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
+              <div className="flex gap-2">
+                <select
+                  value={deleteProjectId}
+                  onChange={(e) => { setDeleteProjectId(e.target.value); setProjectMsg(null); }}
+                  className={selectClass + " flex-1"}
+                >
+                  <option value="">— select a project —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setConfirmDeleteProject(true)}
+                  disabled={!deleteProjectId}
+                  className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                >
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                  Delete
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={handleRenameProject}
-                disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
-                className={btnPrimary}
-              >
-                {renameProjectBusy ? (
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
-                ) : (
-                  <FontAwesomeIcon icon={faCheck} className="mr-1" />
-                )}
-                Rename
-              </button>
-              {renameProjectMsg && (
-                <span className={renameProjectMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
-                  <FontAwesomeIcon
-                    icon={renameProjectMsg.type === "success" ? faCheck : faTriangleExclamation}
-                    className="mr-1"
-                  />
-                  {renameProjectMsg.text}
-                </span>
-              )}
-            </div>
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span className={projectMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
+                <FontAwesomeIcon
+                  icon={projectMsg.type === "success" ? faCheck : faTriangleExclamation}
+                  className="mr-1"
+                />
+                {projectMsg.text}
+              </span>
+            )}
           </div>
         </div>
 
-        {/* ======== Rename Variant ======== */}
+        {/* ======== Manage Variants ======== */}
         <div>
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
             <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Rename Variant</h2>
+            <h2 className="text-xl font-bold text-white">Manage Variants</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+
+            {/* -- Project picker -- */}
             <div>
               <label className="block text-sm text-zinc-300 mb-1">Project</label>
               <select
-                value={renameVariantProjectId}
+                value={variantProjectId}
                 onChange={(e) => {
-                  setRenameVariantProjectId(e.target.value);
+                  setVariantProjectId(e.target.value);
                   setRenameVariantId("");
                   setRenameVariantName("");
-                  setRenameVariantMsg(null);
+                  setVariantMsg(null);
+                  setConfirmDeleteVariant(false);
                 }}
                 className={selectClass}
               >
@@ -292,61 +409,118 @@ function Settings({ onDataChanged }: Readonly<Props>) {
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">Variant</label>
-              <select
-                value={renameVariantId}
-                onChange={(e) => {
-                  setRenameVariantId(e.target.value);
-                  setRenameVariantMsg(null);
-                  const v = renameVariantProjectVariants.find((x) => x.id === e.target.value);
-                  setRenameVariantName(v?.name ?? "");
-                }}
-                disabled={!renameVariantProjectId}
-                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-              >
-                <option value="">— select a variant —</option>
-                {renameVariantProjectVariants.map((v) => (
-                  <option key={v.id} value={v.id}>{v.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">New Name</label>
-              <input
-                type="text"
-                value={renameVariantName}
-                onChange={(e) => setRenameVariantName(e.target.value)}
-                placeholder="Enter new variant name"
-                className={inputClass}
-                disabled={!renameVariantId}
-              />
-            </div>
-
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={handleRenameVariant}
-                disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
-                className={btnPrimary}
-              >
-                {renameVariantBusy ? (
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
-                ) : (
-                  <FontAwesomeIcon icon={faCheck} className="mr-1" />
-                )}
-                Rename
-              </button>
-              {renameVariantMsg && (
-                <span className={renameVariantMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
-                  <FontAwesomeIcon
-                    icon={renameVariantMsg.type === "success" ? faCheck : faTriangleExclamation}
-                    className="mr-1"
+            {/* -- Create variant -- */}
+            {variantProjectId && (
+              <div className="space-y-2">
+                <label className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newVariantName}
+                    onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
+                    placeholder="New variant name"
+                    className={inputClass + " flex-1"}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
                   />
-                  {renameVariantMsg.text}
-                </span>
-              )}
-            </div>
+                  <button
+                    onClick={handleCreateVariant}
+                    disabled={createVariantBusy || !newVariantName.trim()}
+                    className={btnPrimary}
+                  >
+                    {createVariantBusy ? (
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    ) : (
+                      <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                    )}
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* -- Rename variant -- */}
+            {variantProjectId && (
+              <div className="border-t border-zinc-600 pt-4 space-y-2">
+                <label className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+                <select
+                  value={renameVariantId}
+                  onChange={(e) => {
+                    setRenameVariantId(e.target.value);
+                    setVariantMsg(null);
+                    const v = variantProjectVariants.find((x) => x.id === e.target.value);
+                    setRenameVariantName(v?.name ?? "");
+                  }}
+                  className={selectClass}
+                >
+                  <option value="">— select a variant —</option>
+                  {variantProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={renameVariantName}
+                    onChange={(e) => setRenameVariantName(e.target.value)}
+                    placeholder="Enter new name"
+                    className={inputClass + " flex-1"}
+                    disabled={!renameVariantId}
+                    onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
+                  />
+                  <button
+                    onClick={handleRenameVariant}
+                    disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
+                    className={btnPrimary}
+                  >
+                    {renameVariantBusy ? (
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    ) : (
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                    )}
+                    Rename
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* -- Delete variant -- */}
+            {variantProjectId && (
+              <div className="border-t border-zinc-600 pt-4 space-y-2">
+                <label className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
+                <div className="flex gap-2">
+                  <select
+                    value={deleteVariantId}
+                    onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
+                    className={selectClass + " flex-1"}
+                  >
+                    <option value="">— select a variant —</option>
+                    {variantProjectVariants.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setConfirmDeleteVariant(true)}
+                    disabled={!deleteVariantId}
+                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                  >
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span className={variantMsg.type === "success" ? "text-green-400 text-sm" : "text-red-400 text-sm"}>
+                <FontAwesomeIcon
+                  icon={variantMsg.type === "success" ? faCheck : faTriangleExclamation}
+                  className="mr-1"
+                />
+                {variantMsg.text}
+              </span>
+            )}
           </div>
         </div>
 
@@ -358,55 +532,23 @@ function Settings({ onDataChanged }: Readonly<Props>) {
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
 
-            {/* ---- Project selector + new ---- */}
+            {/* ---- Project selector ---- */}
             <div>
               <label className="block text-sm text-zinc-300 mb-1">Project</label>
-              <div className="flex gap-2">
-                <select
-                  value={importProjectId}
-                  onChange={(e) => {
-                    setImportProjectId(e.target.value);
-                    setImportVariantId("");
-                    setImportMsg(null);
-                  }}
-                  className={selectClass + " flex-1"}
-                  disabled={showNewProject}
-                >
-                  <option value="">— select a project —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-                {!showNewProject ? (
-                  <button
-                    onClick={() => setShowNewProject(true)}
-                    className={btnSecondary}
-                    title="Create new project"
-                  >
-                    <FontAwesomeIcon icon={faPlus} />
-                  </button>
-                ) : (
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      value={newProjectName}
-                      onChange={(e) => setNewProjectName(e.target.value)}
-                      placeholder="New project name"
-                      className={inputClass + " !w-40"}
-                      onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
-                    />
-                    <button onClick={handleCreateProject} className={btnPrimary + " !px-2"}>
-                      <FontAwesomeIcon icon={faCheck} />
-                    </button>
-                    <button
-                      onClick={() => { setShowNewProject(false); setNewProjectName(""); }}
-                      className={btnSecondary + " !px-2"}
-                    >
-                      <FontAwesomeIcon icon={faXmark} />
-                    </button>
-                  </div>
-                )}
-              </div>
+              <select
+                value={importProjectId}
+                onChange={(e) => {
+                  setImportProjectId(e.target.value);
+                  setImportVariantId("");
+                  setImportMsg(null);
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
             </div>
 
             {/* ---- Variant selector ---- */}
@@ -482,6 +624,28 @@ function Settings({ onDataChanged }: Readonly<Props>) {
           </div>
         </div>
       </div>
+
+      {/* ======== Confirmation Modals ======== */}
+      <ConfirmationModal
+        isOpen={confirmDeleteProject}
+        title="Delete Project"
+        message={`Are you sure you want to delete this project and all its variants? This action cannot be undone.`}
+        confirmText="Yes, delete"
+        cancelText="Cancel"
+        showTitleIcon={true}
+        onConfirm={handleDeleteProject}
+        onCancel={() => setConfirmDeleteProject(false)}
+      />
+      <ConfirmationModal
+        isOpen={confirmDeleteVariant}
+        title="Delete Variant"
+        message={`Are you sure you want to delete this variant and all its data? This action cannot be undone.`}
+        confirmText="Yes, delete"
+        cancelText="Cancel"
+        showTitleIcon={true}
+        onConfirm={handleDeleteVariant}
+        onCancel={() => setConfirmDeleteVariant(false)}
+      />
     </div>
   );
 }

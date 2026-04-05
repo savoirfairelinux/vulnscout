@@ -50,6 +50,17 @@ class Projects {
         }
         return response.json();
     }
+
+    static async delete(projectId: string): Promise<void> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/projects/${encodeURIComponent(projectId)}`,
+            { mode: "cors", method: "DELETE" }
+        );
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Delete failed (${response.status})`);
+        }
+    }
 }
 
 export default Projects;
