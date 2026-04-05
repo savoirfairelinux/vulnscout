@@ -81,7 +81,7 @@ def create_app():
             try:
                 db.session.execute(db.text("PRAGMA journal_mode=WAL"))
                 db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
-                db.session.execute(db.text("PRAGMA busy_timeout=5000"))
+                db.session.execute(db.text("PRAGMA busy_timeout=30000"))
                 db.session.commit()
             except Exception:
                 pass
@@ -92,7 +92,7 @@ def create_app():
         from sqlalchemy import event as _sa_event
         @_sa_event.listens_for(db.engine, "connect")
         def _set_sqlite_busy_timeout(dbapi_conn, _rec):
-            dbapi_conn.execute("PRAGMA busy_timeout=5000")
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
 

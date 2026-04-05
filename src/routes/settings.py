@@ -5,10 +5,12 @@
 import os
 import json
 import uuid
+import time
 import tempfile
 import threading
 
 from flask import jsonify, request
+from sqlalchemy.exc import OperationalError
 
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
@@ -28,6 +30,19 @@ from ..helpers.verbose import verbose
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, error}
 _upload_status: dict[str, dict] = {}
+
+
+def _retry_on_lock(fn, max_retries=5, delay=0.5):
+    """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except OperationalError as exc:
+            if "database is locked" in str(exc) and attempt < max_retries - 1:
+                db.session.rollback()
+                time.sleep(delay * (attempt + 1))
+            else:
+                raise
 
 
 def _detect_format(filename: str, data: dict) -> str:
@@ -166,7 +181,7 @@ def init_app(app):
             if p.name == new_name and str(p.id) != project_id:
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
-        project.update(new_name)
+        _retry_on_lock(lambda: project.update(new_name))
         return jsonify(ProjectController.serialize(project))
 
     # ------------------------------------------------------------------
@@ -192,7 +207,7 @@ def init_app(app):
             if v.name == new_name and str(v.id) != variant_id:
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
-        VariantController.update(variant, new_name)
+        _retry_on_lock(lambda: VariantController.update(variant, new_name))
         return jsonify(VariantController.serialize(variant))
 
     # ------------------------------------------------------------------
@@ -214,7 +229,7 @@ def init_app(app):
             if p.name == new_name:
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
-        project = ProjectController.create(new_name)
+        project = _retry_on_lock(lambda: ProjectController.create(new_name))
         return jsonify(ProjectController.serialize(project)), 201
 
     # ------------------------------------------------------------------
@@ -240,7 +255,7 @@ def init_app(app):
             if v.name == new_name:
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
-        variant = VariantController.create(new_name, project_id)
+        variant = _retry_on_lock(lambda: VariantController.create(new_name, project_id))
         return jsonify(VariantController.serialize(variant)), 201
 
     # ------------------------------------------------------------------
@@ -306,7 +321,7 @@ def init_app(app):
                 return jsonify({"error": "Could not parse the file as JSON."}), 400
 
         # Create scan + register SBOM document
-        scan = ScanController.create("Uploaded via web interface", variant.id)
+        scan = ScanController.create("", variant.id)
         SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
 
         upload_id = str(uuid.uuid4())
