@@ -124,7 +124,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         });
     }, [checkPatchReady]);
 
-    // On mount: fetch default project/variant from config, then load data
+    // On mount: fetch default project/variant from config
     useEffect(() => {
         Config.get()
             .then(config => {
@@ -133,10 +133,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 const projectId = variantId ? undefined : (config.project?.id || undefined);
                 setCurrentVariantId(variantId);
                 setCurrentProjectId(projectId);
-                loadData(variantId, projectId);
             })
-            .catch(() => loadData(undefined));
-    }, [loadData]);
+            .catch(() => {});
+    }, []);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
