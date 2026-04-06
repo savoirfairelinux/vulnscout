@@ -132,7 +132,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 const variantId = config.variant?.id || undefined;
                 const projectId = variantId ? undefined : (config.project?.id || undefined);
                 setCurrentVariantId(variantId);
-                setCurrentProjectId(config.project?.id || undefined);
+                setCurrentProjectId(projectId);
                 loadData(variantId, projectId);
             })
             .catch(() => loadData(undefined));
@@ -140,8 +140,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
+        const effectiveProjectId = effectiveVariantId ? undefined : (projectId || undefined);
         setCurrentVariantId(effectiveVariantId);
-        setCurrentProjectId(projectId || undefined);
+        setCurrentProjectId(effectiveProjectId);
         // Track origin variant and operation separately for MultiEditBar intersection logic
         setCurrentBaseVariantId(compareVariantId ? (variantId || undefined) : undefined);
         setCurrentOperation(compareVariantId ? (operation || undefined) : undefined);
@@ -254,8 +255,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             <div className="p-5 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
-                    packages={pkgs}
-                    vulnerabilities={vulns}
+                    variantId={currentVariantId}
+                    projectId={currentProjectId}
                     goToVulnsTabWithFilter={goToVulnsTabWithFilter}
                     appendAssessment={appendAssessment}
                     patchVuln={patchVuln}
