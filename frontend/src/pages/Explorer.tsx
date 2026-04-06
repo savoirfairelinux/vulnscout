@@ -38,7 +38,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
-    const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+    const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
@@ -120,7 +120,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         });
     }, [checkPatchReady]);
 
-    // On mount: fetch default project/variant from config, then load data
+    // On mount: fetch default project/variant from config
     useEffect(() => {
         Config.get()
             .then(config => {
@@ -129,10 +129,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 const projectId = variantId ? undefined : (config.project?.id || undefined);
                 setCurrentVariantId(variantId);
                 setCurrentProjectId(projectId);
-                loadData(variantId, projectId);
             })
-            .catch(() => loadData(undefined));
-    }, [loadData]);
+            .catch(() => {});
+    }, []);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
