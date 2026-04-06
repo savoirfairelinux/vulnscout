@@ -15,6 +15,7 @@ from .scans import init_app as init_scans_app
 from .config import init_app as init_config_app
 from .notifications import init_app as init_notifications_app
 from .frontpage import init_app as init_front_app
+from .metrics import init_app as init_metrics_app
 
 
 def init_app(app):
@@ -30,6 +31,7 @@ def init_app(app):
     init_scans_app(app)
     init_config_app(app)
     init_notifications_app(app)
+    init_metrics_app(app)
     # keep front endpoint at the end
     init_front_app(app)
     return app
