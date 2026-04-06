@@ -79,18 +79,21 @@ def init_app(app):
                 ).scalars().all()) if result_ids else []
             else:  # difference (default): packages in compare but NOT in base
                 exclude_ids = list(_pkg_ids_for_variant(base_uuid))
-                query = (
-                    db.select(Package)
+                pkg_ids_sub = (
+                    db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
                     .join(Scan, SBOMDocument.scan_id == Scan.id)
                     .where(Scan.variant_id == compare_uuid)
                     .distinct()
-                    .order_by(Package.name)
                 )
                 if exclude_ids:
-                    query = query.where(~Package.id.in_(exclude_ids))
-                pkgs = list(db.session.execute(query).scalars().all())
+                    pkg_ids_sub = pkg_ids_sub.where(~Package.id.in_(exclude_ids))
+                pkgs = list(db.session.execute(
+                    db.select(Package)
+                    .where(Package.id.in_(pkg_ids_sub))
+                    .order_by(Package.name)
+                ).scalars().all())
         elif variant_id:
             try:
                 variant_uuid = uuid.UUID(variant_id)
@@ -100,12 +103,16 @@ def init_app(app):
             if latest_id is None:
                 pkgs = []
             else:
-                pkgs = list(db.session.execute(
-                    db.select(Package)
+                pkg_ids_sub = (
+                    db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
                     .where(SBOMDocument.scan_id == latest_id)
                     .distinct()
+                )
+                pkgs = list(db.session.execute(
+                    db.select(Package)
+                    .where(Package.id.in_(pkg_ids_sub))
                     .order_by(Package.name)
                 ).scalars().all())
         elif project_id:
@@ -117,12 +124,16 @@ def init_app(app):
             if not latest_ids:
                 pkgs = []
             else:
-                pkgs = list(db.session.execute(
-                    db.select(Package)
+                pkg_ids_sub = (
+                    db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
                     .where(SBOMDocument.scan_id.in_(latest_ids))
                     .distinct()
+                )
+                pkgs = list(db.session.execute(
+                    db.select(Package)
+                    .where(Package.id.in_(pkg_ids_sub))
                     .order_by(Package.name)
                 ).scalars().all())
         else:
