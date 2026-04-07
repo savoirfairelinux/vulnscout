@@ -458,10 +458,7 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     pkgCtrl = PackagesController()
     vulnCtrl = VulnerabilitiesController(pkgCtrl)
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
-    # Populate controllers from DB (needed for evaluate_condition and template rendering)
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
-    vulnCtrl.fetch_epss_scores()
-    vulnCtrl.fetch_nvd_data()
 
     controllers = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
     templ = Templates(controllers)
