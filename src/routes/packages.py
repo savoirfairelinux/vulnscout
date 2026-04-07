@@ -10,7 +10,25 @@ from ..models.scan import Scan
 from ..models.variant import Variant
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
+from ..models.finding import Finding
+from ..models.observation import Observation
+from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED as _S2S
+from ..models.metrics import Metrics as DBMetrics
 from ..extensions import db
+
+_SEVERITY_INDEX = {"NONE": 0, "UNKNOWN": 1, "LOW": 2, "MEDIUM": 3, "HIGH": 4, "CRITICAL": 5}
+
+
+def _score_to_severity(score) -> str:
+    if score is None or score == 0:
+        return "NONE"
+    if score < 4.0:
+        return "LOW"
+    if score < 7.0:
+        return "MEDIUM"
+    if score < 9.0:
+        return "HIGH"
+    return "CRITICAL"
 
 
 def _latest_scan_id_for_variant(variant_uuid):
@@ -50,6 +68,7 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
+        current_scan_ids: list = []
         if variant_id and compare_variant_id:
             try:
                 base_uuid = uuid.UUID(variant_id)
@@ -67,6 +86,9 @@ def init_app(app):
                     .where(Scan.variant_id == variant_uuid)
                     .distinct()
                 ).scalars().all())
+
+            compare_latest_id = _latest_scan_id_for_variant(compare_uuid)
+            current_scan_ids = [compare_latest_id] if compare_latest_id else []
 
             if operation == 'intersection':
                 base_ids = _pkg_ids_for_variant(base_uuid)
@@ -100,6 +122,7 @@ def init_app(app):
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
             latest_id = _latest_scan_id_for_variant(variant_uuid)
+            current_scan_ids = [latest_id] if latest_id else []
             if latest_id is None:
                 pkgs = []
             else:
@@ -121,6 +144,7 @@ def init_app(app):
             except ValueError:
                 return {"error": "Invalid project_id"}, 400
             latest_ids = _latest_scan_ids_for_project(project_uuid)
+            current_scan_ids = latest_ids
             if not latest_ids:
                 pkgs = []
             else:
@@ -190,6 +214,95 @@ def init_app(app):
                 info = meta.get(key, {})
                 p["variants"] = sorted(info.get("variants", set()))
                 p["sources"] = sorted(info.get("sources", set()))
+
+            # Enrich each package with vulnerability counts per simplified_status
+            # and highest severity per simplified_status group.
+            finding_q = (
+                db.select(Finding.package_id, Finding.vulnerability_id)
+                .where(Finding.package_id.in_(pkg_ids))
+                .distinct()
+            )
+            if current_scan_ids:
+                finding_q = (
+                    finding_q
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .where(Observation.scan_id.in_(current_scan_ids))
+                )
+            pkg_vuln_pairs = db.session.execute(finding_q).all()
+
+            all_linked_vuln_ids = list({str(r.vulnerability_id) for r in pkg_vuln_pairs})
+
+            # Latest assessment simplified_status per vulnerability
+            # Use a GROUP BY subquery so we only fetch one row per vuln (latest timestamp).
+            vuln_status: dict[str, str] = {}
+            if all_linked_vuln_ids:
+                latest_ts_sub = (
+                    db.select(
+                        Finding.vulnerability_id.label("v_id"),
+                        func.max(DBAssessment.timestamp).label("max_ts"),
+                    )
+                    .join(Finding, DBAssessment.finding_id == Finding.id)
+                    .where(Finding.vulnerability_id.in_(all_linked_vuln_ids))
+                    .group_by(Finding.vulnerability_id)
+                    .subquery()
+                )
+                assess_rows = db.session.execute(
+                    db.select(
+                        Finding.vulnerability_id,
+                        DBAssessment.simplified_status,
+                        DBAssessment.status,
+                    )
+                    .join(Finding, DBAssessment.finding_id == Finding.id)
+                    .join(
+                        latest_ts_sub,
+                        (Finding.vulnerability_id == latest_ts_sub.c.v_id)
+                        & (DBAssessment.timestamp == latest_ts_sub.c.max_ts),
+                    )
+                    .distinct()
+                ).all()
+                for row in assess_rows:
+                    vid = str(row.vulnerability_id)
+                    simplified = row.simplified_status or _S2S.get(row.status or "", "Pending Assessment")
+                    vuln_status[vid] = simplified
+
+            # Max CVSS score per vulnerability
+            vuln_max_score: dict[str, float] = {}
+            if all_linked_vuln_ids:
+                score_rows = db.session.execute(
+                    db.select(
+                        DBMetrics.vulnerability_id,
+                        func.max(DBMetrics.score).label("max_score"),
+                    )
+                    .where(DBMetrics.vulnerability_id.in_(all_linked_vuln_ids))
+                    .group_by(DBMetrics.vulnerability_id)
+                ).all()
+                for row in score_rows:
+                    if row.max_score is not None:
+                        vuln_max_score[str(row.vulnerability_id)] = float(row.max_score)
+
+            # Aggregate counts and max severity per (package, simplified_status)
+            pkg_vuln_counts: dict[str, dict[str, int]] = {}
+            pkg_max_sev: dict[str, dict[str, dict]] = {}
+            for row in pkg_vuln_pairs:
+                pid = str(row.package_id)
+                vid = str(row.vulnerability_id)
+                status = vuln_status.get(vid, "Pending Assessment")
+
+                pkg_vuln_counts.setdefault(pid, {})
+                pkg_vuln_counts[pid][status] = pkg_vuln_counts[pid].get(status, 0) + 1
+
+                pkg_max_sev.setdefault(pid, {})
+                score = vuln_max_score.get(vid)
+                sev_label = _score_to_severity(score)
+                sev_idx = _SEVERITY_INDEX.get(sev_label, 0)
+                current_sev = pkg_max_sev[pid].get(status, {"label": "NONE", "index": 0})
+                if sev_idx > current_sev["index"]:
+                    pkg_max_sev[pid][status] = {"label": sev_label, "index": sev_idx}
+
+            for p, pkg in zip(result, pkgs):
+                pid = str(pkg.id)
+                p["vulnerabilities"] = pkg_vuln_counts.get(pid, {})
+                p["maxSeverity"] = pkg_max_sev.get(pid, {})
 
         if request.args.get('format', 'list') == "dict":
             return {p["name"] + "@" + p["version"]: p for p in result}

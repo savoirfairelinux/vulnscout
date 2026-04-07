@@ -16,6 +16,8 @@ export type { Package, VulnCounts, Severities };
 import type { Vulnerability } from "./vulnerabilities";
 import { SEVERITY_ORDER } from "./vulnerabilities";
 
+const _SEVERITY_INDEX: {[key: string]: number} = {NONE: 0, UNKNOWN: 1, LOW: 2, MEDIUM: 3, HIGH: 4, CRITICAL: 5};
+
 const asPackage = (data: any): Package | [] => {
     if (typeof data !== "object") return [];
     if (typeof data?.name !== "string") return [];
@@ -43,6 +45,22 @@ const asPackage = (data: any): Package | [] => {
     }
     if (Array.isArray(data?.sources)) {
         for (const s of data.sources) if (typeof s === "string") pkg.source.push(s);
+    }
+    if (typeof data?.vulnerabilities === "object" && !Array.isArray(data.vulnerabilities)) {
+        for (const [status, count] of Object.entries(data.vulnerabilities)) {
+            if (typeof count === "number") pkg.vulnerabilities[status] = count;
+        }
+    }
+    if (typeof data?.maxSeverity === "object" && !Array.isArray(data.maxSeverity)) {
+        for (const [status, sev] of Object.entries(data.maxSeverity)) {
+            const s = sev as any;
+            if (typeof s?.label === "string") {
+                pkg.maxSeverity[status] = {
+                    label: s.label,
+                    index: _SEVERITY_INDEX[s.label?.toUpperCase()] ?? 0,
+                };
+            }
+        }
     }
     return pkg
 };
