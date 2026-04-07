@@ -76,6 +76,7 @@ function _asAssessmentFromVuln(data: any): Assessment {
         workaround: data?.workaround ?? undefined,
         timestamp: data?.timestamp ?? "",
         last_update: data?.last_update ?? undefined,
+        origin: data?.origin ?? "",
         responses: asStringArray(data?.responses),
     };
 }
