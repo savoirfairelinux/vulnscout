@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CVSS } from "../handlers/vulnerabilities";
-import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
 import { Pie, Line, Bar } from 'react-chartjs-2';
 import TableGeneric from "../components/TableGeneric";
@@ -328,5 +327,4 @@ function Metrics({ variantId, projectId, goToVulnsTabWithFilter, appendAssessmen
     );
 }
 
-export { SEVERITY_ORDER };
 export default Metrics;

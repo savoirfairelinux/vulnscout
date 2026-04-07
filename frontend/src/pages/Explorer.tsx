@@ -245,6 +245,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} />}
                 {tab === 'exports' && <Exports />}
+                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentProjectId} />}
             </div>
             <VersionDisplay />
         </div>

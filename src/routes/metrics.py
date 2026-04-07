@@ -472,7 +472,10 @@ def init_app(app):
                 assess_dicts = []
                 for row in top_assess_rows:
                     ts = row.timestamp
-                    ts_str = ts.isoformat() if ts is not None and hasattr(ts, 'isoformat') else (str(ts) if ts else None)
+                    ts_str = (
+                        ts.isoformat() if ts is not None and hasattr(ts, 'isoformat')
+                        else (str(ts) if ts else None)
+                    )
                     sstat = row.simplified_status or STATUS_TO_SIMPLIFIED.get(row.status or '', 'Pending Assessment')
                     assess_dicts.append({
                         "id": str(row.assess_id),
