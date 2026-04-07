@@ -34,6 +34,7 @@ Input commands:
   --add-cve-check <path>    Add a Yocto CVE check JSON file
   --add-openvex <path>      Add an OpenVEX JSON file
   --add-cdx <path>          Add a CycloneDX file
+  --add-grype <path>        Add a Grype results file
   --add-report-template <path>  Add a custom report template to /scan/templates/
   --perform-grype-scan      Perform a Grype scan on the added inputs
 
@@ -503,6 +504,8 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file openvex "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
             cmd_add_file cdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+        --add-grype)
+            cmd_add_file grype "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
