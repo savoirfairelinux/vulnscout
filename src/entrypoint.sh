@@ -79,7 +79,7 @@ setup_user() {
             useradd -s /bin/sh -oN -u "$USER_UID" -g "$USER_GID" -d /builder builder
         fi
         mkdir -p /builder
-        chown "$USER_UID:$USER_GID" /builder /scan /cache
+        chown -Rf "$USER_UID:$USER_GID" /builder /scan /cache
     fi
 }
 
@@ -339,36 +339,36 @@ cmd_serve() {
 
 cmd_report() {
     local template="$1"
-    setup_user
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp report "$template" --output-dir "$output_dir"
+    setup_user
 }
 
 cmd_export() {
     local fmt="$1"
-    setup_user
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export --format "$fmt" --output-dir "$output_dir"
+    setup_user
 }
 
 cmd_export_custom_assessments() {
-    setup_user
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp export-custom-assessments --output-dir "$output_dir"
+    setup_user
 }
 
 cmd_import_custom_assessments() {
     local file="$1"
-    setup_user
     cd "$BASE_DIR"
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp import-custom-assessments "$file"
+    setup_user
 }
 
 cmd_config_list() {
