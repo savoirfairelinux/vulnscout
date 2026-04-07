@@ -43,6 +43,7 @@ declare -A INPUT_PATHS=(
     [add-cve-check]="yocto_cve_check"
     [add-openvex]="openvex"
     [add-cdx]="cdx"
+    [add-grype]="grype"
 )
 
 show_help() {
@@ -70,6 +71,7 @@ Input commands (can be chained, triggers scan automatically):
   --add-cve-check <path>          Add a Yocto CVE check JSON file
   --add-openvex <path>            Add an OpenVEX JSON file
   --add-cdx <path>                Add a CycloneDX file
+  --add-grype <path>              Add a Grype results file
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
 
 Scan & output commands:
@@ -306,7 +308,7 @@ parse_and_run() {
                 VARIANT="$2"; shift 2 ;;
             --match-condition)
                 MATCH_CONDITION="$2"; shift 2 ;;
-            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-openvex|--add-openvex|add-cdx|--add-cdx)
+            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;

@@ -121,6 +121,9 @@ VulnScout accepts multiple input file types. Commands can be chained and will au
 
 # OpenVEX file
 ./vulnscout --add-openvex <path>
+
+# Grype file
+./vulnscout --add-grype <path>
 ----
 
 Multiple inputs can be chained in a single command:
@@ -138,6 +141,7 @@ Multiple inputs can be chained in a single command:
 - `.tar`, `.tar.gz`, `.tar.zst` archives are supported as SPDX 2 input.
 - `.spdx` files (tag-value format) are supported as SPDX 2 input.
 - `.spdx.json` is supported as SPDX 3 input.
+- Grype scan files should end with `.grype.json`.
 - To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ====
 
