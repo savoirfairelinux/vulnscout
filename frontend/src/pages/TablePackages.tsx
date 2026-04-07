@@ -1,6 +1,7 @@
 import type { Package, VulnCounts, Severities } from "../handlers/packages";
+import Packages from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
@@ -11,7 +12,10 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
-    packages: Package[];
+    variantId?: string;
+    projectId?: string;
+    compareVariantId?: string;
+    compareOperation?: string;
     onShowVulns?: (packageId: string) => void;
 };
 
@@ -88,7 +92,9 @@ function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
     );
 }
 
-function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
+function TablePackages({ variantId, projectId, compareVariantId, compareOperation, onShowVulns }: Readonly<Props>) {
+    const [packages, setPackages] = useState<Package[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -113,6 +119,18 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
     ];
+
+    const fetchPackages = useCallback(() => {
+        setIsLoading(true);
+        Packages.list(variantId, projectId, compareVariantId, compareOperation)
+            .then(pkgs => setPackages(pkgs))
+            .catch(err => console.error('Failed to load packages', err))
+            .finally(() => setIsLoading(false));
+    }, [variantId, projectId, compareVariantId, compareOperation]);
+
+    useEffect(() => {
+        fetchPackages();
+    }, [fetchPackages]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -374,7 +392,10 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            {isLoading
+                ? <div className="flex items-center justify-center h-32 text-white text-sm">Loading packages…</div>
+                : <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            }
         </div>
     </>);
 }

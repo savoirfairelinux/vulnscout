@@ -3,6 +3,7 @@ import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
+import Vulnerabilities from "../handlers/vulnerabilities";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
@@ -21,17 +22,14 @@ import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo 
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
-    vulnerabilities: Vulnerability[];
-    appendAssessment: (added: Assessment) => void;
-    appendCVSS: (vulnId: string, vector: string) => CVSS | null;
-    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    filterLabel?: "Source" | "Severity" | "Status" | "Package";
-    filterValue?: string;
     variantId?: string;
+    projectId?: string;
     /** Origin variant when compare mode is active */
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    filterLabel?: "Source" | "Severity" | "Status" | "Package";
+    filterValue?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -269,8 +267,10 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue, baseVariantId, compareOperation }: Readonly<Props>) {
 
+    const [vulnerabilities, setVulnerabilities] = useState<Vulnerability[]>([]);
+    const [isLoadingVulns, setIsLoadingVulns] = useState(false);
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
@@ -337,6 +337,38 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Fetch vulnerabilities (including inline assessments) when scope changes
+    const fetchVulns = useCallback(() => {
+        setIsLoadingVulns(true);
+        // Compare mode: baseVariantId is the "from" variant, variantId is the "to" variant
+        const compareVariantId = baseVariantId ? variantId : undefined;
+        const effectiveVariantId = baseVariantId || variantId;
+        Vulnerabilities.list(effectiveVariantId, projectId, compareVariantId, compareOperation)
+            .then(data => setVulnerabilities(data))
+            .catch(err => console.error('Failed to load vulnerabilities', err))
+            .finally(() => setIsLoadingVulns(false));
+    }, [variantId, projectId, baseVariantId, compareOperation]);
+
+    useEffect(() => {
+        fetchVulns();
+    }, [fetchVulns]);
+
+    const appendAssessment = useCallback((added: Assessment) => {
+        setVulnerabilities(prev => Vulnerabilities.append_assessment(prev, added));
+    }, []);
+
+    const appendCVSS = useCallback((vulnId: string, vector: string): CVSS | null => {
+        const cvss = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
+        if (cvss !== null) {
+            setVulnerabilities(prev => Vulnerabilities.append_cvss(prev, vulnId, cvss));
+        }
+        return cvss;
+    }, []);
+
+    const patchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
+        setVulnerabilities(prev => prev.map(v => v.id === vulnId ? replace_vuln : v));
+    }, []);
 
     // Fetch NVD progress on mount and periodically
     useEffect(() => {
@@ -1078,7 +1110,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
 
     return (<>
-        {bannerVisible && (
+        {isLoadingVulns && (
+            <div className="flex items-center justify-center h-32 text-white text-sm">Loading vulnerabilities…</div>
+        )}
+        {!isLoadingVulns && bannerVisible && (
             <MessageBanner
                 type={bannerType}
                 message={bannerMessage}
@@ -1087,6 +1122,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             />
         )}
 
+        <div className={isLoadingVulns ? 'hidden' : undefined}>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
@@ -1408,6 +1444,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             onNavigate={handleModalNavigation}
             variantId={variantId}
         ></VulnModal>}
+        </div>
     </>)
 }
 

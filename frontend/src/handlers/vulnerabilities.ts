@@ -1,5 +1,5 @@
 import type { Assessment } from "./assessments";
-import { asStringArray } from "./assessments";
+import { asStringArray, asAssessment } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
 import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
@@ -142,6 +142,9 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.fix?.state === "string") vuln.fix.state = data.fix.state
     if (typeof data?.published === "string") vuln.published = data.published
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
+    if (typeof data?.status === "string") vuln.status = data.status
+    if (typeof data?.simplified_status === "string") vuln.simplified_status = data.simplified_status
+    if (Array.isArray(data?.assessments)) vuln.assessments = data.assessments.flatMap(asAssessment)
     return vuln
 }
 
