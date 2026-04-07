@@ -496,3 +496,327 @@ class TestHelperFunctions:
             assert d["package_name"] == "testpkg"
             assert d["package_version"] == "9.9.9"
             assert "package_id" in d
+
+
+# ---------------------------------------------------------------------------
+# Package-upgrade scenario (covers _classify_package_changes,
+# _classify_finding_changes, and the upgrade path in _serialize_list_with_diff
+# and /api/scans/<id>/diff)
+# ---------------------------------------------------------------------------
+
+def _build_upgrade_scan_db(app):
+    """Build a scenario where a package is upgraded between two scans.
+
+    ScanA: cairo@1.16.0 with CVE-2020-35492
+    ScanB: cairo@1.17.0 with CVE-2020-35492 (same vuln, new pkg version)
+           + brand-new-lib@1.0.0 (purely added)
+    """
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+
+    with app.app_context():
+        _db.drop_all()
+        _db.create_all()
+
+        project = Project.create("UpgradeProject")
+        variant = Variant.create("UpgradeVariant", project.id)
+
+        scan_a = Scan.create("before upgrade", variant.id)
+        scan_b = Scan.create("after upgrade", variant.id)
+
+        # Old package version
+        pkg_old = Package.find_or_create("cairo", "1.16.0")
+        # New package version (upgraded)
+        pkg_new = Package.find_or_create("cairo", "1.17.0")
+        # Brand-new package (only in scan B)
+        pkg_added = Package.find_or_create("brand-new-lib", "1.0.0")
+
+        vuln = Vulnerability.create_record(
+            id="CVE-2020-35492", description="cairo vuln"
+        )
+        finding_old = Finding.get_or_create(pkg_old.id, vuln.id)
+        finding_new = Finding.get_or_create(pkg_new.id, vuln.id)
+        _db.session.commit()
+
+        # SBOMDocuments
+        sbom_a = SBOMDocument.create("/a/sbom.json", "grype", scan_a.id)
+        SBOMPackage.create(sbom_a.id, pkg_old.id)
+        sbom_b = SBOMDocument.create("/b/sbom.json", "grype", scan_b.id)
+        SBOMPackage.create(sbom_b.id, pkg_new.id)
+        SBOMPackage.create(sbom_b.id, pkg_added.id)
+        _db.session.commit()
+
+        # Observations
+        Observation.create(finding_id=finding_old.id, scan_id=scan_a.id)
+        Observation.create(finding_id=finding_new.id, scan_id=scan_b.id)
+        _db.session.commit()
+
+        return {
+            "project_id": str(project.id),
+            "variant_id": str(variant.id),
+            "scan_a_id": str(scan_a.id),
+            "scan_b_id": str(scan_b.id),
+        }
+
+
+@pytest.fixture()
+def upgrade_app(tmp_path):
+    import os
+    scan_file = tmp_path / "scan_status.txt"
+    scan_file.write_text("__END_OF_SCAN_SCRIPT__")
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": str(scan_file),
+        })
+        ids = _build_upgrade_scan_db(application)
+        application._test_ids = ids
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+
+
+@pytest.fixture()
+def upgrade_client(upgrade_app):
+    return upgrade_app.test_client()
+
+
+@pytest.fixture()
+def upgrade_ids(upgrade_app):
+    return upgrade_app._test_ids
+
+
+class TestPackageUpgradeListScans:
+    """Tests for the list-scans endpoint when package upgrades are present."""
+
+    def test_list_scans_detects_upgrade(self, upgrade_client, upgrade_ids):
+        """GET /api/scans shows packages_upgraded > 0 for the second scan."""
+        resp = upgrade_client.get("/api/scans")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        scan_b = next(d for d in data if d["id"] == upgrade_ids["scan_b_id"])
+        assert scan_b["is_first"] is False
+        assert scan_b["packages_upgraded"] >= 1
+
+    def test_list_scans_upgraded_findings(self, upgrade_client, upgrade_ids):
+        """The second scan has findings_upgraded >= 1 because the same CVE
+        moved from cairo@1.16.0 to cairo@1.17.0."""
+        resp = upgrade_client.get("/api/scans")
+        data = json.loads(resp.data)
+        scan_b = next(d for d in data if d["id"] == upgrade_ids["scan_b_id"])
+        assert scan_b["findings_upgraded"] >= 1
+
+    def test_list_scans_packages_added(self, upgrade_client, upgrade_ids):
+        """brand-new-lib@1.0.0 is a truly-added package (not upgrade)."""
+        resp = upgrade_client.get("/api/scans")
+        data = json.loads(resp.data)
+        scan_b = next(d for d in data if d["id"] == upgrade_ids["scan_b_id"])
+        # brand-new-lib is truly added, cairo is upgraded
+        assert scan_b["packages_added"] >= 1
+
+
+class TestPackageUpgradeDiff:
+    """Tests for /api/scans/<id>/diff with package upgrades."""
+
+    def test_diff_packages_upgraded(self, upgrade_client, upgrade_ids):
+        """GET diff for the upgraded scan shows packages_upgraded entries."""
+        resp = upgrade_client.get(
+            f"/api/scans/{upgrade_ids['scan_b_id']}/diff"
+        )
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert isinstance(data["packages_upgraded"], list)
+        assert len(data["packages_upgraded"]) >= 1
+        up = data["packages_upgraded"][0]
+        assert up["package_name"] == "cairo"
+        assert up["old_version"] == "1.16.0"
+        assert up["new_version"] == "1.17.0"
+
+    def test_diff_findings_upgraded(self, upgrade_client, upgrade_ids):
+        """The CVE that moved from old to new cairo shows as upgraded."""
+        resp = upgrade_client.get(
+            f"/api/scans/{upgrade_ids['scan_b_id']}/diff"
+        )
+        data = json.loads(resp.data)
+        assert isinstance(data["findings_upgraded"], list)
+        assert len(data["findings_upgraded"]) >= 1
+        fu = data["findings_upgraded"][0]
+        assert fu["vulnerability_id"] == "CVE-2020-35492"
+        assert fu["old_version"] == "1.16.0"
+        assert fu["new_version"] == "1.17.0"
+
+    def test_diff_truly_added_pkg(self, upgrade_client, upgrade_ids):
+        """brand-new-lib appears in packages_added, not packages_upgraded."""
+        resp = upgrade_client.get(
+            f"/api/scans/{upgrade_ids['scan_b_id']}/diff"
+        )
+        data = json.loads(resp.data)
+        added_names = [p["package_name"] for p in data["packages_added"]]
+        upgraded_names = [p["package_name"] for p in data["packages_upgraded"]]
+        assert "brand-new-lib" in added_names
+        assert "brand-new-lib" not in upgraded_names
+
+    def test_diff_cairo_not_in_added(self, upgrade_client, upgrade_ids):
+        """cairo should be in packages_upgraded, not packages_added."""
+        resp = upgrade_client.get(
+            f"/api/scans/{upgrade_ids['scan_b_id']}/diff"
+        )
+        data = json.loads(resp.data)
+        added_names = [p["package_name"] for p in data["packages_added"]]
+        upgraded_names = [p["package_name"] for p in data["packages_upgraded"]]
+        assert "cairo" not in added_names
+        assert "cairo" in upgraded_names
+
+    def test_diff_packages_removed_empty(self, upgrade_client, upgrade_ids):
+        """No packages were purely removed (cairo was upgraded, not removed)."""
+        resp = upgrade_client.get(
+            f"/api/scans/{upgrade_ids['scan_b_id']}/diff"
+        )
+        data = json.loads(resp.data)
+        removed_names = [p["package_name"] for p in data["packages_removed"]]
+        assert "cairo" not in removed_names
+
+
+class TestClassifyPackageChangesUnit:
+    """Unit tests for _classify_package_changes."""
+
+    def test_upgrade_detected(self, upgrade_app):
+        from src.routes.scans import _classify_package_changes, _package_rows
+        from src.models.package import Package
+        with upgrade_app.app_context():
+            pkg_old = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.16.0"
+                )
+            ).scalar_one()
+            pkg_new = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.17.0"
+                )
+            ).scalar_one()
+            added = {pkg_new.id}
+            removed = {pkg_old.id}
+            lookup = _package_rows(added | removed)
+            truly_add, truly_rem, pairs = _classify_package_changes(
+                added, removed, lookup
+            )
+            assert len(pairs) == 1
+            assert pairs[0][0].version == "1.16.0"
+            assert pairs[0][1].version == "1.17.0"
+            assert len(truly_add) == 0
+            assert len(truly_rem) == 0
+
+    def test_no_overlap(self, upgrade_app):
+        """When added and removed names don't overlap, no upgrades."""
+        from src.routes.scans import _classify_package_changes, _package_rows
+        from src.models.package import Package
+        with upgrade_app.app_context():
+            pkg_new = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "brand-new-lib"
+                )
+            ).scalar_one()
+            pkg_old = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.16.0"
+                )
+            ).scalar_one()
+            added = {pkg_new.id}
+            removed = {pkg_old.id}
+            lookup = _package_rows(added | removed)
+            truly_add, truly_rem, pairs = _classify_package_changes(
+                added, removed, lookup
+            )
+            assert len(pairs) == 0
+            assert pkg_new.id in truly_add
+            assert pkg_old.id in truly_rem
+
+
+class TestClassifyFindingChangesUnit:
+    """Unit tests for _classify_finding_changes."""
+
+    def test_finding_upgrade_matched(self, upgrade_app):
+        """A finding moving from old pkg to new pkg is classified as upgraded."""
+        from src.routes.scans import _classify_finding_changes
+        from src.models.package import Package
+        with upgrade_app.app_context():
+            pkg_old = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.16.0"
+                )
+            ).scalar_one()
+            pkg_new = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.17.0"
+                )
+            ).scalar_one()
+
+            added = [{
+                "finding_id": "f-new",
+                "package_id": str(pkg_new.id),
+                "package_name": "cairo",
+                "package_version": "1.17.0",
+                "vulnerability_id": "CVE-2020-35492",
+            }]
+            removed = [{
+                "finding_id": "f-old",
+                "package_id": str(pkg_old.id),
+                "package_name": "cairo",
+                "package_version": "1.16.0",
+                "vulnerability_id": "CVE-2020-35492",
+            }]
+            truly_add, truly_rem, upgraded = _classify_finding_changes(
+                added, removed, [(pkg_old, pkg_new)]
+            )
+            assert len(upgraded) == 1
+            assert upgraded[0]["vulnerability_id"] == "CVE-2020-35492"
+            assert upgraded[0]["old_version"] == "1.16.0"
+            assert upgraded[0]["new_version"] == "1.17.0"
+            assert len(truly_add) == 0
+            assert len(truly_rem) == 0
+
+    def test_no_upgrade_different_vuln(self, upgrade_app):
+        """Findings on different vulns don't match as upgrades."""
+        from src.routes.scans import _classify_finding_changes
+        from src.models.package import Package
+        with upgrade_app.app_context():
+            pkg_old = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.16.0"
+                )
+            ).scalar_one()
+            pkg_new = _db.session.execute(
+                _db.select(Package).where(
+                    Package.name == "cairo", Package.version == "1.17.0"
+                )
+            ).scalar_one()
+
+            added = [{
+                "finding_id": "f-new",
+                "package_id": str(pkg_new.id),
+                "package_name": "cairo",
+                "package_version": "1.17.0",
+                "vulnerability_id": "CVE-NEW-ONLY",
+            }]
+            removed = [{
+                "finding_id": "f-old",
+                "package_id": str(pkg_old.id),
+                "package_name": "cairo",
+                "package_version": "1.16.0",
+                "vulnerability_id": "CVE-2020-35492",
+            }]
+            truly_add, truly_rem, upgraded = _classify_finding_changes(
+                added, removed, [(pkg_old, pkg_new)]
+            )
+            assert len(upgraded) == 0
+            assert len(truly_add) == 1
+            assert len(truly_rem) == 1
