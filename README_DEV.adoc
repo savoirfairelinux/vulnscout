@@ -198,6 +198,25 @@ cqfd -b test_backend
 cqfd -b test_frontend
 ----
 
+=== Setting a custom version
+
+The container version is set at build time via the `VULNSCOUT_VERSION` Docker build argument (defined in the `Dockerfile`).
+It is baked into the image as both an environment variable (`ENV VULNSCOUT_VERSION`) and the OCI label `org.opencontainers.image.version`.
+
+To build the image with a custom version:
+
+[source,bash]
+----
+docker build --build-arg VULNSCOUT_VERSION=v1.2.3 -t vulnscout:v1.2.3 .
+----
+
+The version is then available at runtime:
+
+* Inside the container: via the `VULNSCOUT_VERSION` environment variable (used by the Flask `/api/version` endpoint and `entrypoint.sh --version`).
+* From the host: via `docker inspect` on the image label (used by `./vulnscout --version`).
+
+NOTE: The `ci/release_tag.sh` script automates version bumps by updating the `ARG VULNSCOUT_VERSION` line in the `Dockerfile` along with other version references.
+
 === Testing the Docker image
 
 You can test the Docker image using the provided `tests` Makefile.

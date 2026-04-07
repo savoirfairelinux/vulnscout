@@ -18,9 +18,9 @@ fi
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 
 if command -v podman &> /dev/null; then
-    CONTAIENR_ENGINE="podman"
+    CONTAINER_ENGINE="podman"
 elif command -v docker &> /dev/null; then
-    CONTAIENR_ENGINE="docker"
+    CONTAINER_ENGINE="docker"
 else
     echo "Error: \"podman\" or \"docker\" is not installed or not in PATH."
     exit 1
@@ -28,10 +28,9 @@ fi
 
 # Run a container command using the detected container engine on the host (podman or docker)
 call_container_engine() {
-    $CONTAIENR_ENGINE "$@"
+    $CONTAINER_ENGINE "$@"
 }
 
-VULNSCOUT_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
 VARIANT="default"
 PROJECT="default"
 MATCH_CONDITION=""
@@ -186,7 +185,7 @@ do_start() {
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
 
-    if [[ $CONTAIENR_ENGINE = "docker" ]]; then
+    if [[ $CONTAINER_ENGINE = "docker" ]]; then
         # Docker bind-mounts create root-owned directories on the host when a path
         # doesn't exist yet. Use a temporary container (running as root) to clean up
         # any such stale paths and re-chown the cache/outputs dirs to the current user.
@@ -208,7 +207,6 @@ IGNORE_PARSING_ERRORS=false
 VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
-VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 VITE_API_URL=http://localhost:7275
 REFRESH_REMOTE_DELAY=2w
 EOF
@@ -243,7 +241,7 @@ EOF
     until call_container_engine exec "$CONTAINER_NAME" true 2>/dev/null; do
         retries=$((retries - 1))
         if [ "$retries" -le 0 ]; then
-            echo "Error: container failed to start. Check '$CONTAIENR_ENGINE logs $CONTAINER_NAME'."
+            echo "Error: container failed to start. Check '$CONTAINER_ENGINE logs $CONTAINER_NAME'."
             exit 1
         fi
         sleep 1
@@ -369,21 +367,35 @@ parse_and_run() {
             help|--help|-h)
                 show_help; shift ;;
             version|--version)
-                echo "VulnScout $VULNSCOUT_VERSION"
+                local _v
+                _v="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                echo "VulnScout $_v"
                 shift ;;
             update)
-                echo "Pulling latest image..."
-                call_container_engine pull "$DOCKER_IMAGE"
-                NEW_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
-                if [ "$VULNSCOUT_VERSION" != "$NEW_VERSION" ]; then
-                    echo "Updating: $VULNSCOUT_VERSION -> $NEW_VERSION"
-                    config_set VULNSCOUT_VERSION "$NEW_VERSION"
-                    if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-                        echo "Restarting container with new version..."
-                        do_start
+                local _cur_ver _new_ver _running_img
+                _cur_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then
+                    _new_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                    if [ "$_cur_ver" != "$_new_ver" ]; then
+                        echo "Updated image: $_cur_ver -> $_new_ver"
+                    else
+                        echo "Image already up to date ($_cur_ver)."
                     fi
                 else
-                    echo "Already up to date ($VULNSCOUT_VERSION)."
+                    echo "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
+                fi
+                # Restart the container if it is running on a different image
+                if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                    _running_img="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Config.Image}}' 2>/dev/null || true)"
+                    local _running_id _target_id
+                    _running_id="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
+                    _target_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+                    if [ -n "$_target_id" ] && [ "$_running_id" != "$_target_id" ]; then
+                        echo "Restarting container on $DOCKER_IMAGE ($(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown))..."
+                        do_start
+                    else
+                        echo "Container already running on the target image."
+                    fi
                 fi
                 shift ;;
             *)

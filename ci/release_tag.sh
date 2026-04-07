@@ -30,8 +30,7 @@ sed -i "s/\"version\": \".*\",/\"version\": \"${version}\",/i" frontend/package.
 sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" README.adoc
 sed -Ei "3s/^[0-9]+(\.[0-9]+){0,2}/${semversion}/" WRITING_REPORT_TEMPLATE.adoc
 sed -Ei "3s/^v[0-9]+(\.[0-9]+){0,2}/v${semversion}/" WRITING_MATCH_CONDITION.adoc
-sed -i "s/LABEL org.opencontainers.image.version=\".*\"/LABEL org.opencontainers.image.version=\"${version}\"/i" Dockerfile
-sed -i "s/^VULNSCOUT_VERSION=\".*\"$/VULNSCOUT_VERSION=\"${version}\"/i" bin/vulnscout.sh
+sed -i "s/ARG VULNSCOUT_VERSION=.*/ARG VULNSCOUT_VERSION=${version}/" Dockerfile
 
 # Commit the changes
 git add frontend/package.json
@@ -39,7 +38,6 @@ git add README.adoc
 git add WRITING_REPORT_TEMPLATE.adoc
 git add WRITING_MATCH_CONDITION.adoc
 git add Dockerfile
-git add bin/vulnscout.sh
 
 
 # Is there anything to commit?
