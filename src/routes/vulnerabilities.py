@@ -374,7 +374,17 @@ def init_app(app):
                 db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
             )
             if _scope_variant is not None:
-                latest_ts_base = latest_ts_base.where(Scan.variant_id == _scope_variant)
+                _v = db.session.get(Variant, _scope_variant)
+                if _v and _v.project_id:
+                    latest_ts_base = (
+                        latest_ts_base
+                        .join(Variant, Scan.variant_id == Variant.id)
+                        .where(Variant.project_id == _v.project_id)
+                    )
+                else:
+                    latest_ts_base = latest_ts_base.where(
+                        Scan.variant_id == _scope_variant
+                    )
             elif _scope_project is not None:
                 latest_ts_base = (
                     latest_ts_base

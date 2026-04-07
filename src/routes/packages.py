@@ -161,7 +161,15 @@ def init_app(app):
                 .where(Package.id.in_(pkg_ids))
             )
             if variant_id:
-                enrich_query = enrich_query.where(Scan.variant_id == uuid.UUID(variant_id))
+                _v = db.session.get(Variant, uuid.UUID(variant_id))
+                if _v and _v.project_id:
+                    enrich_query = enrich_query.where(
+                        Variant.project_id == _v.project_id
+                    )
+                else:
+                    enrich_query = enrich_query.where(
+                        Scan.variant_id == uuid.UUID(variant_id)
+                    )
             elif project_id:
                 enrich_query = enrich_query.where(Variant.project_id == uuid.UUID(project_id))
             rows = db.session.execute(enrich_query).all()
