@@ -24,6 +24,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 type Props = {
     vuln: Vulnerability;
     isEditing?: boolean;
+    readOnly?: boolean;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
@@ -51,7 +52,7 @@ type AssessmentGroup = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -61,7 +62,7 @@ type AssessmentGroup = {
     const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
+    const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
@@ -197,61 +198,68 @@ type AssessmentGroup = {
         setEditingGroup(null);
     };
 
-    const handleDeleteAssessment = (assessment: Assessment) => {
-        setAssessmentToDelete(assessment);
+    const handleDeleteAssessment = (group: AssessmentGroup) => {
+        setGroupToDelete(group);
         setShowDeleteConfirm(true);
     };
 
     const handleConfirmDelete = async () => {
-        if (assessmentToDelete) {
-            try {
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentToDelete.id)}`, {
-                    method: 'DELETE',
-                    mode: 'cors',
-                    headers: {
-                        'Content-Type': 'application/json'
+        if (groupToDelete) {
+            const idsToDelete = groupToDelete.assessments.map(a => a.id);
+            let anyError = false;
+
+            for (const id of idsToDelete) {
+                try {
+                    const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`, {
+                        method: 'DELETE',
+                        mode: 'cors',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.ok) {
+                        vuln.assessments = vuln.assessments.filter(a => a.id !== id);
+                        setAllVulnAssessments(prev => prev.filter(a => a.id !== id));
+                    } else {
+                        anyError = true;
+                        const errorData = await response.text();
+                        showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
                     }
-                });
-
-                if (response.ok) {
-                    // Remove assessment from vuln.assessments array
-                    const updatedAssessments = vuln.assessments.filter(
-                        assessment => assessment.id !== assessmentToDelete.id
-                    );
-                    vuln.assessments = updatedAssessments;
-
-                    if (updatedAssessments.length > 0) {
-                        const sortedAssessments = [...updatedAssessments].sort(
-                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-                        );
-                        vuln.status = sortedAssessments[0].status;
-                        vuln.simplified_status = sortedAssessments[0].simplified_status;
-                    }
-
-                    // Update the vuln object in the parent component
-                    patchVuln(vuln.id, vuln);
-
-                    showMessage("Assessment deleted successfully!", "success");
-                } else {
-                    const errorData = await response.text();
-                    showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+                } catch (error) {
+                    anyError = true;
+                    showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
                 }
-            } catch (error) {
-                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
+            }
+
+            if (!anyError) {
+                if (vuln.assessments.length > 0) {
+                    const sortedAssessments = [...vuln.assessments].sort(
+                        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                    );
+                    vuln.status = sortedAssessments[0].status;
+                    vuln.simplified_status = sortedAssessments[0].simplified_status;
+                }
+
+                patchVuln(vuln.id, vuln);
+                showMessage("Assessment deleted successfully!", "success");
             }
         }
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const handleCancelDelete = () => {
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const saveEditedAssessment = async (data: EditAssessmentData) => {
         if (!editingGroup) return;
         setSubmittingMessage('Editing assessment...');
+
+        // Share a single timestamp across all created rows in this edit action
+        const editSharedTimestamp = new Date().toISOString();
 
         // Build target (package × variantId) combos from form selection
         const targetVariantIds: Array<string | undefined> =
@@ -352,46 +360,56 @@ type AssessmentGroup = {
             }
         }
 
-        // 2. POST-create newly-added combos
+        // 2. POST-create newly-added combos — batch packages per variant so
+        //    all Assessment rows share the exact same timestamp.
+        const newPkgsByVariant = new Map<string | undefined, string[]>();
         for (const pkg of targetPackages) {
             for (const vid of targetVariantIds) {
                 const key = `${pkg}::${vid ?? ''}`;
                 if (!existingByKey.has(key)) {
-                    try {
-                        const body: Record<string, unknown> = {
-                            vuln_id: vuln.id,
-                            packages: [pkg],
-                            status: data.status,
-                            justification: data.justification,
-                            impact_statement: data.impact_statement,
-                            status_notes: data.status_notes,
-                            workaround: data.workaround
-                        };
-                        if (vid) body.variant_id = vid;
-                        const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                            method: 'POST', mode: 'cors',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(body)
-                        });
-                        const rd = await res.json();
-                        if (rd?.status === 'success') {
-                            const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
-                            for (const raw of rawList) {
-                                const casted = normalise(raw);
-                                if (casted) {
-                                    vuln.assessments.push(casted);
-                                    setAllVulnAssessments(prev => [...prev, casted]);
-                                }
-                            }
-                        } else {
-                            anyError = true;
-                            showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
-                        }
-                    } catch (e) {
-                        anyError = true;
-                        showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
-                    }
+                    const arr = newPkgsByVariant.get(vid) ?? [];
+                    arr.push(pkg);
+                    newPkgsByVariant.set(vid, arr);
                 }
+            }
+        }
+
+        for (const [vid, pkgs] of newPkgsByVariant) {
+            if (pkgs.length === 0) continue;
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: vuln.id,
+                    packages: pkgs,
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround,
+                    timestamp: editSharedTimestamp,
+                };
+                if (vid) body.variant_id = vid;
+                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                    method: 'POST', mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const rd = await res.json();
+                if (rd?.status === 'success') {
+                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
+                    for (const raw of rawList) {
+                        const casted = normalise(raw);
+                        if (casted) {
+                            vuln.assessments.push(casted);
+                            setAllVulnAssessments(prev => [...prev, casted]);
+                        }
+                    }
+                } else {
+                    anyError = true;
+                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
+                }
+            } catch (e) {
+                anyError = true;
+                showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
             }
         }
 
@@ -501,13 +519,17 @@ type AssessmentGroup = {
 
         const { variant_ids: _, ...baseContent } = content;
 
+        // Share a single timestamp across all variant requests so grouped
+        // assessment rows get the exact same value in the database.
+        const sharedTimestamp = new Date().toISOString();
+
         let successCount = 0;
         let lastCasted: Assessment | null = null;
 
         setSubmittingMessage('Adding assessment...');
         try {
         for (const vid of variantIds) {
-            const body = vid ? { ...baseContent, variant_id: vid } : baseContent;
+            const body = vid ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp } : { ...baseContent, timestamp: sharedTimestamp };
             const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
                 method: 'POST',
                 mode: 'cors',
@@ -701,7 +723,7 @@ type AssessmentGroup = {
                                 )}
                             </div>
 
-                            <button
+                            {!readOnly && <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
                                 className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
@@ -713,7 +735,7 @@ type AssessmentGroup = {
                             >
                                 <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
                                 {isEditing ? "Exit editing" : "Edit"}
-                            </button>
+                            </button>}
                             <button
                                 onClick={handleClose}
                                 type="button"
@@ -949,7 +971,7 @@ type AssessmentGroup = {
                                                                     <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
                                                                 </button>
                                                                 <button
-                                                                    onClick={() => handleDeleteAssessment(firstAssess)}
+                                                                    onClick={() => handleDeleteAssessment(group)}
                                                                     className="text-red-400 hover:text-red-300 transition-colors"
                                                                     title="Delete assessment"
                                                                 >

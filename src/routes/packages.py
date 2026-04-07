@@ -143,9 +143,11 @@ def init_app(app):
         # Enrich each package with its variants and sources derived from the
         # SBOMPackage → SBOMDocument → Scan → Variant chain so that the
         # frontend can display them even for packages with 0 vulnerabilities.
+        # Restrict to the current project/variant scope to avoid showing
+        # variant names from other projects.
         pkg_ids = [pkg.id for pkg in pkgs]
         if pkg_ids:
-            rows = db.session.execute(
+            enrich_query = (
                 db.select(
                     Package.name,
                     Package.version,
@@ -157,7 +159,12 @@ def init_app(app):
                 .join(Scan, SBOMDocument.scan_id == Scan.id)
                 .join(Variant, Scan.variant_id == Variant.id)
                 .where(Package.id.in_(pkg_ids))
-            ).all()
+            )
+            if variant_id:
+                enrich_query = enrich_query.where(Scan.variant_id == uuid.UUID(variant_id))
+            elif project_id:
+                enrich_query = enrich_query.where(Variant.project_id == uuid.UUID(project_id))
+            rows = db.session.execute(enrich_query).all()
 
             # Build lookup: "name@version" → {variants: set, sources: set}
             meta: dict = {}

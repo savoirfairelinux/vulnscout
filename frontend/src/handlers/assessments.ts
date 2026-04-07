@@ -15,6 +15,7 @@ type Assessment = {
     vuln_id: string;
     packages: string[];
     variant_id?: string;
+    origin: string;
     status: string;
     simplified_status: string;
     status_notes?: string;
@@ -45,6 +46,7 @@ const asAssessment = (data: any): Assessment | [] => {
         vuln_id: data.vuln_id,
         packages: asStringArray(data?.packages),
         variant_id: undefined,
+        origin: typeof data?.origin === "string" ? data.origin : "sbom",
         status: data.status,
         simplified_status: `[invalid status] ${data.status}`,
         status_notes: undefined,
@@ -109,6 +111,18 @@ class Assessments {
         const data = await response.json();
         const assessments = data.flatMap(asAssessment);
         return removeDuplicateAssessments(assessments);
+    }
+
+    /**
+     * Fetch assessments not linked to any scan (handmade via the web UI)
+     */
+    static async listReview(variantId?: string, projectId?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        return data.flatMap(asAssessment);
     }
 }
 

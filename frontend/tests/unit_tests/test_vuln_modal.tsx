@@ -62,6 +62,7 @@ describe('Vulnerability Modal', () => {
             status_notes: 'this is a fictive status note',
             workaround: 'update dependency',
             timestamp: '2021-01-01T00:00:00Z',
+            origin: 'custom',
             responses: []
         }]
     };
@@ -184,6 +185,7 @@ describe('Vulnerability Modal', () => {
                         status_notes: 'patched by upgrading layer version',
                         workadound: 'upgrade layer version',
                         timestamp: '2021-01-02T00:00:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 })
@@ -248,6 +250,7 @@ describe('Vulnerability Modal', () => {
                 likely: 'P2DT4H',
                 pessimistic: 'P2W3D'
             },
+            origin: 'custom',
             responses: []
         })); // estimation save response
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
@@ -512,6 +515,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -985,6 +989,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1015,6 +1020,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1050,6 +1056,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1091,6 +1098,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1132,6 +1140,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1168,6 +1177,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1204,6 +1214,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'updated notes',
                 workaround: 'updated workaround',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }
         }), { status: 200 });
@@ -1223,6 +1234,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1269,6 +1281,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1313,6 +1326,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1354,6 +1368,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1390,6 +1405,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1423,6 +1439,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1449,6 +1466,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: undefined,
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1475,6 +1493,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'some notes',
                 workaround: undefined,
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1550,6 +1569,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1615,6 +1635,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1654,6 +1675,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'updated notes',
                 workaround: 'updated workaround',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }
         }), { status: 200 });
@@ -1672,6 +1694,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'this is a fictive status note',
                 workaround: 'update dependency',
                 timestamp: '2021-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: []
             }]
         };
@@ -1755,6 +1778,7 @@ describe('Vulnerability Modal', () => {
                     status_notes: '',
                     workaround: '',
                     timestamp: '2020-06-01T00:00:00Z',
+                    origin: 'custom',
                     responses: []
                 },
                 {
@@ -1769,6 +1793,7 @@ describe('Vulnerability Modal', () => {
                     status_notes: 'still broken',
                     workaround: 'none',
                     timestamp: '2021-06-01T00:00:00Z',
+                    origin: 'custom',
                     responses: []
                 }
             ]
@@ -1811,6 +1836,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'multi test',
                 workaround: '',
                 timestamp: '2026-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: [],
                 variant_id: 'v1'
             }
@@ -1828,6 +1854,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: 'multi test',
                 workaround: '',
                 timestamp: '2026-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: [],
                 variant_id: 'v2'
             }
@@ -1883,6 +1910,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: '',
                 workaround: '',
                 timestamp: '2025-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: [],
                 variant_id: 'var-1'
             },
@@ -1897,6 +1925,7 @@ describe('Vulnerability Modal', () => {
                 status_notes: '',
                 workaround: '',
                 timestamp: '2025-01-01T00:00:00Z',
+                origin: 'custom',
                 responses: [],
                 variant_id: 'var-2'
             }
@@ -1917,6 +1946,7 @@ describe('Vulnerability Modal', () => {
                     status_notes: '',
                     workaround: '',
                     timestamp: '2025-01-01T00:00:00Z',
+                    origin: 'custom',
                     responses: [],
                     variant_id: 'var-1'
                 }

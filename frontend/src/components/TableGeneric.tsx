@@ -3,7 +3,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable,
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState, useEffect, useCallback, Fragment } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
@@ -14,6 +14,7 @@ type Props<DataType> = {
     search?: string;
     fuseKeys?: string[];
     hoverField?: string;
+    hoverIdField?: string;
     estimateRowHeight?: number;
     tableHeight?: string;
     selected?: RowSelectionState;
@@ -30,6 +31,7 @@ function TableGeneric<DataType> ({
     search,
     fuseKeys = ['id'],
     hoverField = undefined,
+    hoverIdField = undefined,
     estimateRowHeight = 66,
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
     selected = undefined,
@@ -393,25 +395,6 @@ function TableGeneric<DataType> ({
                                                 )}
                                             </td>)
                                         })}
-                                    </tr>,
-                                    hoverField != undefined && <tr
-                                        className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
-                                        key={`${row.id}_hoverpanel`}
-                                        style={{
-                                            transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll
-                                                `translateY(calc(${virtualRow.start}px - 100%))` :
-                                                `translateY(calc(${virtualRow.end}px))`
-                                        }}
-                                    >
-                                        <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
-                                            {(row.original as any)?.[hoverField]?.length > 0 ?(row.original as any)?.[hoverField]?.map((a: any, index: number) => {
-                                            return <Fragment key={index}>
-                                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, c => c.toUpperCase()))} of {row.id}</b><br/>
-                                                {a?.content ?? "N/A"}
-                                                {index < (row.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
-                                                </Fragment>
-                                        }) : "No description was provided"}
-                                        </td>
                                     </tr>
                                 ]
                             })
@@ -578,7 +561,7 @@ function TableGeneric<DataType> ({
                     {(tooltipInfo.original as any)?.[hoverField]?.length > 0
                         ? (tooltipInfo.original as any)?.[hoverField]?.map((a: any, index: number) => (
                             <span key={index}>
-                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, (c: string) => c.toUpperCase()))} of {tooltipInfo.id}</b><br/>
+                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, (c: string) => c.toUpperCase()))} of {hoverIdField ? (tooltipInfo.original as any)?.[hoverIdField] ?? tooltipInfo.id : tooltipInfo.id}</b><br/>
                                 {a?.content ?? "N/A"}
                                 {index < (tooltipInfo.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
                             </span>
