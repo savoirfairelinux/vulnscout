@@ -31,7 +31,6 @@ call_container_engine() {
     $CONTAIENR_ENGINE "$@"
 }
 
-VULNSCOUT_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
 VARIANT="default"
 PROJECT="default"
 MATCH_CONDITION=""
@@ -208,7 +207,6 @@ IGNORE_PARSING_ERRORS=false
 VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
-VULNSCOUT_VERSION=$VULNSCOUT_VERSION
 VITE_API_URL=http://localhost:7275
 REFRESH_REMOTE_DELAY=2w
 EOF
@@ -369,21 +367,35 @@ parse_and_run() {
             help|--help|-h)
                 show_help; shift ;;
             version|--version)
-                echo "VulnScout $VULNSCOUT_VERSION"
+                local _v
+                _v="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                echo "VulnScout $_v"
                 shift ;;
             update)
-                echo "Pulling latest image..."
-                call_container_engine pull "$DOCKER_IMAGE"
-                NEW_VERSION="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
-                if [ "$VULNSCOUT_VERSION" != "$NEW_VERSION" ]; then
-                    echo "Updating: $VULNSCOUT_VERSION -> $NEW_VERSION"
-                    config_set VULNSCOUT_VERSION "$NEW_VERSION"
-                    if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-                        echo "Restarting container with new version..."
-                        do_start
+                local _cur_ver _new_ver _running_img
+                _cur_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then
+                    _new_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
+                    if [ "$_cur_ver" != "$_new_ver" ]; then
+                        echo "Updated image: $_cur_ver -> $_new_ver"
+                    else
+                        echo "Image already up to date ($_cur_ver)."
                     fi
                 else
-                    echo "Already up to date ($VULNSCOUT_VERSION)."
+                    echo "Could not pull '$DOCKER_IMAGE' (local-only or registry not reachable)."
+                fi
+                # Restart the container if it is running on a different image
+                if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                    _running_img="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Config.Image}}' 2>/dev/null || true)"
+                    local _running_id _target_id
+                    _running_id="$(call_container_engine inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
+                    _target_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+                    if [ -n "$_target_id" ] && [ "$_running_id" != "$_target_id" ]; then
+                        echo "Restarting container on $DOCKER_IMAGE ($(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown))..."
+                        do_start
+                    else
+                        echo "Container already running on the target image."
+                    fi
                 fi
                 shift ;;
             *)

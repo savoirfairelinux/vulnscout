@@ -72,9 +72,12 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
+ARG VULNSCOUT_VERSION=v0.12
+ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
+
 LABEL org.opencontainers.image.title="VulnScout"
 LABEL org.opencontainers.image.description="SFL Vulnerability Scanner"
 LABEL org.opencontainers.image.authors="Savoir-faire Linux, Inc."
-LABEL org.opencontainers.image.version="v0.11.1"
+LABEL org.opencontainers.image.version="${VULNSCOUT_VERSION}"
 
 ENTRYPOINT ["/scan/src/entrypoint.sh"]
