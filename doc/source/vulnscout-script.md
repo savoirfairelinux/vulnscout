@@ -396,4 +396,3 @@ Once migration is complete, start VulnScout normally:
 ./vulnscout --serve
 ```
 
----

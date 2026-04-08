@@ -19,14 +19,6 @@ extensions = ["myst_parser", "sphinx.ext.intersphinx"]
 templates_path = ['_templates']
 exclude_patterns = []
 
-# -- Intersphinx mapping -----------------------------------------------------
-intersphinx_mapping = {
-    'meta-vulnscout': (
-        'https://meta-vulnscout.readthedocs.io/en/latest/',
-        None,
-    ),
-}
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
