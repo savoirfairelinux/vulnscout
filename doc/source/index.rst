@@ -11,5 +11,5 @@ VulnScout Documentation
    container-entrypoint
    templates
    ci_conditions
-   rest-api
+   api
    dev_guide

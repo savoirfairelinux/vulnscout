@@ -1,6 +1,6 @@
-# REST API
+# API
 
-VulnScout exposes a REST API served by the Flask backend, available at `http://localhost:7275/api/` by default.
+VulnScout exposes an API served by the Flask backend, available at `http://localhost:7275/api/` by default.
 All endpoints return JSON unless otherwise noted. Routes are registered directly on the Flask application without URL prefixes or blueprints.
 
 ---
