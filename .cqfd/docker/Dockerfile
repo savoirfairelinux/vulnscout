@@ -16,7 +16,6 @@ COPY requirements/dev.txt /tmp/dev.txt
 RUN mkdir -p /cache/vulnscout && chmod -R 777 /cache
 
 RUN pip install --no-cache-dir -r /tmp/dev.txt \
-    && pip install --no-cache-dir sphinx myst-parser sphinx-rtd-theme \
     && rm -rf /tmp/dev.txt
 
 # Install Docker CLI only (no daemon)
