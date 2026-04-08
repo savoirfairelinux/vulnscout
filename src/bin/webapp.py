@@ -66,6 +66,16 @@ def create_app():
     if "SQLALCHEMY_DATABASE_URI" not in app.config:
         app.config["SQLALCHEMY_DATABASE_URI"] = DEFAULT_DB_URI
 
+    # Set the busy-timeout at the sqlite3.connect() level so every connection
+    # is guaranteed to wait up to 30 s for the write lock before raising
+    # "database is locked".  This is more reliable than PRAGMA busy_timeout
+    # set after the connection is opened.
+    db_uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    if db_uri.startswith("sqlite"):
+        engine_opts = app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", {})
+        connect_args = engine_opts.setdefault("connect_args", {})
+        connect_args.setdefault("timeout", 30)
+
     db.init_app(app)
     _migrations_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
     migrate.init_app(app, db, directory=_migrations_dir)
@@ -81,9 +91,21 @@ def create_app():
             try:
                 db.session.execute(db.text("PRAGMA journal_mode=WAL"))
                 db.session.execute(db.text("PRAGMA synchronous=NORMAL"))
+                db.session.execute(db.text("PRAGMA busy_timeout=30000"))
                 db.session.commit()
             except Exception:
                 pass
+
+    # Ensure every new SQLite connection inherits the busy timeout so that
+    # concurrent writes from background threads don't immediately fail.
+    try:
+        from sqlalchemy import event as _sa_event
+
+        @_sa_event.listens_for(db.engine, "connect")
+        def _set_sqlite_busy_timeout(dbapi_conn, _rec):
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
+    except Exception:
+        pass
 
     def is_scan_finished():
         if app._INT_SCAN_FINISHED:

@@ -17,8 +17,9 @@ import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
-import Review from "./Review";
-import Assessments, { removeDuplicateAssessments } from "../handlers/assessments";
+import Review from './Review';
+import Settings from './Settings';
+import Assessments, { removeDuplicateAssessments } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
@@ -28,6 +29,7 @@ type Props = {
 }
 
 function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
+    const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
@@ -39,6 +41,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
+    const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
@@ -107,6 +110,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             assessPromise,
         ]).then(([pkgsResult, vulnsResult, assessResult]) => {
             setIsLoadingData(false);
+            setLoadingMessage("Loading data...");
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
                 console.error(pkgsResult, vulnsResult);
                 triggerBanner("Failed to load data", "error");
@@ -219,6 +223,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
             <NavigationBar
+                key={selectorKey}
                 tab={tab}
                 changeTab={handleTabChange}
                 darkMode={darkMode}
@@ -241,7 +246,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
                     <div className="flex flex-col items-center gap-3 text-white">
                         <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">Loading data...</span>
+                        <span className="text-sm font-semibold">{loadingMessage}</span>
                     </div>
                 </div>
             )}
@@ -257,7 +262,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     setTab={setTab}
                     appendCVSS={appendCVSS}
                 />}
-                {tab == 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
@@ -270,10 +275,24 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                 />}
-                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab == 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'exports' && <Exports />}
+                {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
+                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'exports' && <Exports />}
+                {tab === 'settings' && <Settings onDataChanged={(message) => {
+                    if (message) setLoadingMessage(message);
+                    Config.get().then(config => setDefaultConfig(config)).catch(() => {});
+                    setSelectorKey(k => k + 1);
+                    loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+                }} onLoadingMessage={(msg) => {
+                    if (msg) {
+                        setLoadingMessage(msg);
+                        setIsLoadingData(true);
+                    } else {
+                        setIsLoadingData(false);
+                        setLoadingMessage("Loading data...");
+                    }
+                }} />}
             </div>
             <VersionDisplay />
         </div>
