@@ -18,6 +18,8 @@ from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
+from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED as _S2S
+from ..models.time_estimate import TimeEstimate
 from ..extensions import db
 from ..helpers.verbose import verbose
 
@@ -265,7 +267,6 @@ def init_app(app):
             if not latest_ids:
                 records = []
             else:
-                from ..models.time_estimate import TimeEstimate
 
                 # Subquery for vulnerability IDs visible in these scans,
                 # used to avoid huge literal IN-lists in secondary queries.
@@ -420,6 +421,64 @@ def init_app(app):
             for v in vulns:
                 v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
 
+            # Bulk-load assessments and enrich each vuln with status/simplified_status/assessments
+            assess_rows = db.session.execute(
+                db.select(
+                    Finding.vulnerability_id,
+                    DBAssessment.id,
+                    DBAssessment.status,
+                    DBAssessment.simplified_status,
+                    DBAssessment.status_notes,
+                    DBAssessment.justification,
+                    DBAssessment.impact_statement,
+                    DBAssessment.workaround,
+                    DBAssessment.timestamp,
+                    DBAssessment.responses,
+                    DBAssessment.variant_id,
+                    DBAssessment.finding_id,
+                    Package.name,
+                    Package.version,
+                )
+                .join(Finding, DBAssessment.finding_id == Finding.id)
+                .join(Package, Finding.package_id == Package.id, isouter=True)
+                .where(Finding.vulnerability_id.in_(vuln_ids))
+                .order_by(Finding.vulnerability_id, DBAssessment.timestamp)
+            ).all()
+
+            assessments_by_vuln: dict = {}
+            for row in assess_rows:
+                vid = str(row.vulnerability_id)
+                ts = row.timestamp.isoformat() if row.timestamp else ""
+                pkg_str = f"{row.name}@{row.version}" if row.name else ""
+                simplified = row.simplified_status or _S2S.get(row.status or "", "Pending Assessment")
+                assessments_by_vuln.setdefault(vid, []).append({
+                    "id": str(row.id),
+                    "vuln_id": vid,
+                    "packages": [pkg_str] if pkg_str else [],
+                    "variant_id": str(row.variant_id) if row.variant_id else None,
+                    "status": row.status or "",
+                    "simplified_status": simplified,
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                    "timestamp": ts,
+                    "last_update": ts,
+                })
+
+            for v in vulns:
+                vid = v["id"]
+                v_assessments = assessments_by_vuln.get(vid, [])
+                v["assessments"] = v_assessments
+                if v_assessments:
+                    latest = v_assessments[-1]
+                    v["status"] = latest["status"]
+                    v["simplified_status"] = latest["simplified_status"]
+                else:
+                    v["status"] = "unknown"
+                    v["simplified_status"] = "Pending Assessment"
+
         if request.args.get('format', 'list') == "dict":
             return {v["id"]: v for v in vulns}
         return vulns
@@ -455,7 +514,6 @@ def init_app(app):
                     except (ValueError, AttributeError):
                         return {"error": "Invalid variant_id"}, 400
                 try:
-                    from ..models.time_estimate import TimeEstimate
                     for finding in (record.findings or []):
                         if variant_id is not None:
                             existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
@@ -529,7 +587,6 @@ def init_app(app):
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
                 try:
-                    from ..models.time_estimate import TimeEstimate
                     for finding in (record.findings or []):
                         if item_variant_id is not None:
                             existing = TimeEstimate.get_by_finding_and_variant(finding.id, item_variant_id)

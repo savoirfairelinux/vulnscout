@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
 import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
-import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
+import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { PackageVulnerabilities } from "../handlers/patch_finder";
 import type { NVDProgress } from "../handlers/nvd_progress";
@@ -28,22 +28,27 @@ type Props = {
 }
 
 function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
+    // PatchFinder data (lazily loaded when navigating to patch-finder tab)
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
     const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
+    const [isLoadingPatchData, setIsLoadingPatchData] = useState<boolean>(false);
+    // Stored apply params for lazy PatchFinder loading
+    const lastApplyParamsRef = useRef<{variantId?: string, projectId?: string, compareVariantId?: string, operation?: string} | null>(null);
+
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
-    const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
+    const [tab, setTab] = useState("metrics");
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -69,14 +74,12 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }, []);
 
     const checkPatchReady = useCallback((vulns_list: Vulnerability[]) => {
-        // Check both patch status and NVD progress
         Promise.all([
             PatchFinderLogic.status(),
             NVDProgressHandler.getProgress()
         ])
         .then(([patchData, progress]) => {
             setNvdProgress(progress);
-
             if (patchData.db_ready) {
                 setPatchDbReady(true);
                 loadPatchData(vulns_list);
@@ -88,11 +91,12 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         .catch((err) => {
             console.error(err);
             triggerBanner("Failed to load patch data", "error");
-        })
+        });
     }, [loadPatchData]);
 
-    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
-        setIsLoadingData(true);
+    // Load packages + vulns + assessments for PatchFinder only
+    const loadDataForPatchFinder = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
+        setIsLoadingPatchData(true);
 
         const assessPromise: Promise<Assessment[]> = (compareVariantId && variantId)
             ? Promise.all([
@@ -106,21 +110,19 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             Vulnerabilities.list(variantId, projectId, compareVariantId, operation),
             assessPromise,
         ]).then(([pkgsResult, vulnsResult, assessResult]) => {
-            setIsLoadingData(false);
+            setIsLoadingPatchData(false);
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
-                console.error(pkgsResult, vulnsResult);
-                triggerBanner("Failed to load data", "error");
+                triggerBanner("Failed to load patch data", "error");
                 return;
             }
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
             setVulns(enriched_vulns);
-            const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
-            setPkgs(enrichedPkgs);
+            setPkgs(Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns));
             setTimeout(() => checkPatchReady(enriched_vulns), 100);
         });
     }, [checkPatchReady]);
 
-    // On mount: fetch default project/variant from config, then load data
+    // On mount: fetch default project/variant from config
     useEffect(() => {
         Config.get()
             .then(config => {
@@ -128,72 +130,36 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 const variantId = config.variant?.id || undefined;
                 const projectId = variantId ? undefined : (config.project?.id || undefined);
                 setCurrentVariantId(variantId);
-                setCurrentProjectId(config.project?.id || undefined);
-                loadData(variantId, projectId);
+                setCurrentProjectId(projectId);
+                lastApplyParamsRef.current = { variantId, projectId };
             })
-            .catch(() => loadData(undefined));
-    }, [loadData]);
+            .catch(() => {});
+    }, []);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string) => {
         const effectiveVariantId = compareVariantId || variantId || undefined;
+        const effectiveProjectId = effectiveVariantId ? undefined : (projectId || undefined);
         setCurrentVariantId(effectiveVariantId);
-        setCurrentProjectId(projectId || undefined);
-        // Track origin variant and operation separately for MultiEditBar intersection logic
+        setCurrentProjectId(effectiveProjectId);
         setCurrentBaseVariantId(compareVariantId ? (variantId || undefined) : undefined);
         setCurrentOperation(compareVariantId ? (operation || undefined) : undefined);
-        loadData(
-            variantId || undefined,
-            variantId ? undefined : projectId || undefined,
-            compareVariantId || undefined,
-            operation || undefined,
-        );
-    }, [loadData]);
-
-
-
-    function appendAssessment(added: Assessment) {
-        const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
-        setVulns(updatedVulns);
-
-        // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-
-        // Update patch data if db is ready (status changes might affect patch relevance)
-        if (patchDbReady) {
-            loadPatchData(updatedVulns);
+        // Store params so PatchFinder can lazily load them
+        lastApplyParamsRef.current = {
+            variantId: variantId || undefined,
+            projectId: variantId ? undefined : projectId || undefined,
+            compareVariantId: compareVariantId || undefined,
+            operation: operation || undefined,
+        };
+        // New: if already on patch-finder tab, load immediately
+        if (tab === 'patch-finder') {
+            loadDataForPatchFinder(
+                variantId || undefined,
+                variantId ? undefined : projectId || undefined,
+                compareVariantId || undefined,
+                operation || undefined,
+            );
         }
-    }
-
-    function appendCVSS(vulnId: string, vector: string) {
-        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
-        if (cvss !== null) {
-            const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
-            setVulns(updatedVulns);
-
-            // Update packages with the new vulnerability data
-            setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-            return cvss;
-        }
-        return null;
-    }
-
-    function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
-        const updatedVulns = vulns.map(vuln => {
-            if (vuln.id === vulnId) {
-                return replace_vuln;
-            }
-            return vuln;
-        });
-        setVulns(updatedVulns);
-
-        // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-
-        // Update patch data if db is ready (status changes might affect patch relevance)
-        if (patchDbReady) {
-            loadPatchData(updatedVulns);
-        }
-    }
+    }, [loadDataForPatchFinder, tab]);
 
     function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {
         setFilterLabel(filterType);
@@ -205,13 +171,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         goToVulnsTabWithFilter("Package", packageId);
     }
 
-    const [tab, setTab] = useState("metrics");
-
-    // This function ensures vulns get reset when switching outside filtering context
     function handleTabChange(newTab: string) {
         if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
             setFilterLabel(undefined);
             setFilterValue(undefined);
+        }
+        // Lazy-load PatchFinder data on first navigation to that tab
+        if (newTab === 'patch-finder' && tab !== 'patch-finder') {
+            const params = lastApplyParamsRef.current;
+            loadDataForPatchFinder(params?.variantId, params?.projectId, params?.compareVariantId, params?.operation);
         }
         setTab(newTab);
     }
@@ -237,11 +205,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />
             </div>
 
-            {isLoadingData && (
+            {isLoadingPatchData && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
                     <div className="flex flex-col items-center gap-3 text-white">
                         <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">Loading data...</span>
+                        <span className="text-sm font-semibold">Loading patch data...</span>
                     </div>
                 </div>
             )}
@@ -249,31 +217,35 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             <div className="p-5 flex-1 overflow-auto">
                 {tab === 'metrics' &&
                 <Metrics
-                    packages={pkgs}
-                    vulnerabilities={vulns}
+                    variantId={currentVariantId}
+                    projectId={currentProjectId}
                     goToVulnsTabWithFilter={goToVulnsTabWithFilter}
-                    appendAssessment={appendAssessment}
-                    patchVuln={patchVuln}
+                    appendAssessment={() => {}}
+                    patchVuln={() => {}}
                     setTab={setTab}
-                    appendCVSS={appendCVSS}
+                    appendCVSS={() => null}
                 />}
-                {tab == 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' &&
+                <TablePackages
+                    variantId={currentVariantId}
+                    projectId={currentProjectId}
+                    compareVariantId={currentBaseVariantId ? currentVariantId : undefined}
+                    compareOperation={currentOperation}
+                    onShowVulns={showVulnsForPackage}
+                />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
-                    appendAssessment={appendAssessment}
-                    appendCVSS={appendCVSS}
-                    patchVuln={patchVuln}
-                    vulnerabilities={vulns}
+                    variantId={currentBaseVariantId ? currentBaseVariantId : currentVariantId}
+                    projectId={currentProjectId}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
-                    variantId={currentVariantId}
-                    baseVariantId={currentBaseVariantId}
+                    baseVariantId={currentBaseVariantId ? currentVariantId : undefined}
                     compareOperation={currentOperation}
                 />}
-                {tab == 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab == 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab == 'exports' && <Exports />}
+                {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
+                {tab === 'scans' && <ScanHistory variantId={currentVariantId} />}
+                {tab === 'exports' && <Exports />}
+                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentProjectId} />}
             </div>
             <VersionDisplay />
         </div>

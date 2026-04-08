@@ -32,6 +32,20 @@ jest.mock('../../src/handlers/epss_progress', () => ({
     },
 }));
 
+// Mock Vulnerabilities handler so the component doesn't make real fetch calls
+jest.mock('../../src/handlers/vulnerabilities', () => ({
+    __esModule: true,
+    default: {
+        list: jest.fn(),
+        enrich_with_assessments: jest.requireActual('../../src/handlers/vulnerabilities').default.enrich_with_assessments,
+        append_assessment: jest.requireActual('../../src/handlers/vulnerabilities').default.append_assessment,
+        append_cvss: jest.requireActual('../../src/handlers/vulnerabilities').default.append_cvss,
+        calculate_cvss_from_vector: jest.requireActual('../../src/handlers/vulnerabilities').default.calculate_cvss_from_vector,
+    },
+    asVulnerability: jest.requireActual('../../src/handlers/vulnerabilities').asVulnerability,
+    SEVERITY_ORDER: jest.requireActual('../../src/handlers/vulnerabilities').SEVERITY_ORDER,
+}));
+
 
 const getDOMRect = (width: number, height: number) => ({
     width,
@@ -261,13 +275,17 @@ describe('Vulnerability Table', () => {
         return getDOMRect(500, 500)
     })
 
+    const Vulnerabilities = require('../../src/handlers/vulnerabilities').default;
+
     beforeEach(() => {
         fetchMock.resetMocks();
+        Vulnerabilities.list.mockResolvedValue(vulnerabilities);
     });
 
     test('render headers with empty array', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce([]);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
@@ -309,12 +327,12 @@ describe('Vulnerability Table', () => {
 
     test('render with vulnerabilities', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
         // ACT - Check default visible columns
-        const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const id_col = await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const severity_col = await screen.getByRole('cell', {name: /low/});
         const epss_col = await screen.getByRole('cell', {name: /35\.68%/});
         const packages_col = await screen.getByRole('cell', {name: /aaabbbccc@1\.0\.0/i});
@@ -353,7 +371,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
@@ -373,7 +391,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by severity', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
@@ -393,7 +411,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by attack vector', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
@@ -422,7 +440,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by exploitability score', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
@@ -442,7 +460,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by efforts needed', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
@@ -471,7 +489,7 @@ describe('Vulnerability Table', () => {
 
     test('sorting by status', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
@@ -491,7 +509,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for vulnerability ID', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -510,7 +528,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for package name', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -527,7 +545,7 @@ describe('Vulnerability Table', () => {
 
     test('searching with negation text', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -544,7 +562,7 @@ describe('Vulnerability Table', () => {
 
     test('searching with a combination of queries', async () => {
         // ARRANGE
-         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+         render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -563,7 +581,7 @@ describe('Vulnerability Table', () => {
 
     test('searching for description', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -580,7 +598,7 @@ describe('Vulnerability Table', () => {
 
     test('filter by source', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const sourceBtn = await screen.getByRole('button', { name: /source/i });
@@ -600,7 +618,7 @@ describe('Vulnerability Table', () => {
 
     test('filter out Exploitable', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const statusBtn = await screen.getByRole('button', { name: /status/i });
@@ -622,7 +640,7 @@ describe('Vulnerability Table', () => {
 
     test('filter out Pending Assessment', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const statusBtn = await screen.getByRole('button', { name: /status/i });
@@ -645,16 +663,18 @@ describe('Vulnerability Table', () => {
 
     test('select all in table and unselecting', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for data to load before selecting all
+        await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const select_all = await screen.getByTitle(/select all/i);
         expect(select_all).toBeInTheDocument();
 
         await user.click(select_all)
         expect(select_all).toBeChecked();
 
-        const uniques_selections = await screen.getAllByTitle(/unselect/i);
+        const uniques_selections = await screen.findAllByTitle(/unselect/i);
         expect(uniques_selections.length).toBeGreaterThanOrEqual(1);
         uniques_selections.forEach((el) => expect(el).toBeChecked());
 
@@ -665,10 +685,10 @@ describe('Vulnerability Table', () => {
 
     test('select using ctrl+click and reset selection', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
-        const id_col = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const id_col = await screen.findByRole('cell', {name: /CVE-2010-1234/});
         expect(id_col).toBeInTheDocument();
 
         await user.keyboard('[ControlLeft>]')
@@ -709,9 +729,11 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for data to load before selecting
+        await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const select_all = await screen.getByTitle(/select all/i);
         expect(select_all).toBeInTheDocument();
 
@@ -773,9 +795,11 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for data to load before selecting
+        await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const select_all = await screen.getByTitle(/select all/i);
         expect(select_all).toBeInTheDocument();
 
@@ -802,9 +826,9 @@ describe('Vulnerability Table', () => {
 
     test('show description when hovering vulnerability', async () => {
         // ARRANGE
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
-        const id_col = screen.getByRole('cell', {name: vulnerabilities[0].id});
+        const id_col = await screen.findByRole('cell', {name: vulnerabilities[0].id});
         expect(id_col).toBeInTheDocument();
 
         // Tooltip is portal-based: content only appears after mouseenter on the row
@@ -819,7 +843,7 @@ describe('Vulnerability Table', () => {
 
     test('filter by severity', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const severityBtn = await screen.getByRole('button', { name: /severity/i });
@@ -839,7 +863,7 @@ describe('Vulnerability Table', () => {
 
     test('filter by custom severity range', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const severityBtn = await screen.getByRole('button', { name: /severity/i });
@@ -875,7 +899,7 @@ describe('Vulnerability Table', () => {
 
     test('custom severity filter and other severity filters cannot be checked at the same time', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const severityBtn = await screen.getByRole('button', { name: /severity/i });
@@ -906,7 +930,7 @@ describe('Vulnerability Table', () => {
 
     test('reset filters button clears all filters', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
@@ -945,10 +969,6 @@ describe('Vulnerability Table', () => {
         // ARRANGE - Render with initial filter props
         render(
             <TableVulnerabilities
-                vulnerabilities={vulnerabilities}
-                appendAssessment={() => {}}
-                appendCVSS={() => null}
-                patchVuln={() => {}}
                 filterLabel="Source"
                 filterValue="hardcoded"
             />
@@ -964,7 +984,7 @@ describe('Vulnerability Table', () => {
 
     test('multiple source selection works', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const sourceBtn = await screen.getByRole('button', { name: /source/i });
@@ -986,7 +1006,7 @@ describe('Vulnerability Table', () => {
 
     test('search debounce functionality', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -995,7 +1015,7 @@ describe('Vulnerability Table', () => {
         await user.type(search_bar, '2');
 
         // ASSERT - Both vulnerabilities should still be visible (no filtering with < 2 chars)
-        const vuln1 = await screen.getByRole('cell', {name: /CVE-2010-1234/});
+        const vuln1 = await screen.findByRole('cell', {name: /CVE-2010-1234/});
         const vuln2 = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln1).toBeInTheDocument();
         expect(vuln2).toBeInTheDocument();
@@ -1003,9 +1023,11 @@ describe('Vulnerability Table', () => {
 
     test('sorting by packages column is disabled', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for data to load
+        await screen.findByRole('cell', {name: /aaabbbccc/});
         const packagesHeader = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
 
         // Store initial order
@@ -1033,12 +1055,12 @@ describe('Vulnerability Table', () => {
             }
         ];
 
-        render(<TableVulnerabilities vulnerabilities={vulnWithoutAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithoutAssessments);
+        render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Vulnerability has empty assessments array, should show "No assessment"
-        const noAssessmentCell = await screen.getByText(/no assessment/i);
-        expect(noAssessmentCell).toBeInTheDocument();
-    })
+        await screen.findByText(/no assessment/i);
+    });
 
     test('last updated column displays assessment timestamp when assessments exist', async () => {
         const vulnWithAssessments: Vulnerability[] = [
@@ -1064,19 +1086,18 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithAssessments);
+        render(<TableVulnerabilities />);
 
         // ACT & ASSERT
         // First vulnerability should show formatted date
-        const formattedDate = await screen.getByText(/january 15, 2024/i);
-        expect(formattedDate).toBeInTheDocument();
+        await screen.findByText(/january 15, 2024/i);
 
         // Second vulnerability should still show "No assessment"
-        const noAssessment = await screen.getByText(/no assessment/i);
-        expect(noAssessment).toBeInTheDocument();
-    })
+        await screen.findByText(/no assessment/i);
+    });
 
-    test('last updated column uses last_update field when available', async () => {
+    test('uses last_update field when available', async () => {
         const vulnWithUpdatedAssessments: Vulnerability[] = [
             {
                 ...vulnerabilities[0],
@@ -1097,14 +1118,14 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithUpdatedAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithUpdatedAssessments);
+        render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Should show the more recent last_update date
-        const formattedDate = await screen.getByText(/february 20, 2024/i);
-        expect(formattedDate).toBeInTheDocument();
+        await screen.findByText(/february 20, 2024/i);
     })
 
-    test('last updated column shows most recent assessment across multiple assessments', async () => {
+    test('last updated column shows most recent assessment when multiple assessments exist', async () => {
         const vulnWithMultipleAssessments: Vulnerability[] = [
             {
                 ...vulnerabilities[0],
@@ -1144,11 +1165,11 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithMultipleAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithMultipleAssessments);
+        render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Should show the most recent assessment date (March 10)
-        const formattedDate = await screen.getByText(/march 10, 2024/i);
-        expect(formattedDate).toBeInTheDocument();
+        await screen.findByText(/march 10, 2024/i);
     })
 
     test('sorting by last updated column', async () => {
@@ -1193,10 +1214,11 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithDifferentDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithDifferentDates);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.findByRole('columnheader', {name: /last updated/i});
 
         // ACT - Sort by last updated (first click: descending - newest first, then older, then no assessments)
         await user.click(lastUpdatedHeader);
@@ -1255,10 +1277,11 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithMixedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnWithMixedDates);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
-        const lastUpdatedHeader = await screen.getByRole('columnheader', {name: /last updated/i});
+        const lastUpdatedHeader = await screen.findByRole('columnheader', {name: /last updated/i});
 
         // ACT - Sort descending (newest first) - should only need one click
         await user.click(lastUpdatedHeader);
@@ -1271,13 +1294,16 @@ describe('Vulnerability Table', () => {
     })
 
     test('modal navigation works correctly', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
-        // Open modal for first vulnerability
-        const firstVulnId = await screen.getByText('CVE-2010-1234');
-        await user.click(firstVulnId);
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
+
+        // Click vulnerability ID cell to open modal
+        const vulnIdCells = await screen.findAllByTitle('Click to view details');
+        await user.click(vulnIdCells[0]);
 
         // Modal should be open
         await waitFor(() => {
@@ -1289,12 +1315,15 @@ describe('Vulnerability Table', () => {
     })
 
     test('clicking Edit button opens modal in edit mode', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
+
         // Click Edit button for first vulnerability
-        const editButtons = await screen.getAllByRole('button', { name: /^edit$/i });
+        const editButtons = await screen.findAllByRole('button', { name: /^edit$/i });
         await user.click(editButtons[0]);
 
         // Modal should be open in edit mode
@@ -1305,12 +1334,15 @@ describe('Vulnerability Table', () => {
     })
 
     test('clicking vulnerability ID opens modal in view mode', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
+
         // Click on vulnerability ID cell
-        const vulnIdCells = await screen.getAllByText('CVE-2010-1234');
+        const vulnIdCells = await screen.findAllByTitle('Click to view details');
         await user.click(vulnIdCells[0]);
 
         // Modal should be open
@@ -1325,7 +1357,7 @@ describe('Vulnerability Table', () => {
 
     test('published date filter button is disabled when NVD sync is not completed', async () => {
         // NVD progress mock defaults to phase: 'idle', which means not completed
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const publishedDateBtn = await screen.getByRole('button', { name: /published date/i });
         expect(publishedDateBtn).toBeInTheDocument();
@@ -1344,7 +1376,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         await waitFor(() => {
             const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
@@ -1363,7 +1395,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1398,7 +1430,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1438,7 +1470,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1474,7 +1506,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1510,7 +1542,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1550,7 +1582,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1621,7 +1653,8 @@ describe('Vulnerability Table', () => {
             }
         ];
 
-        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnsWithMissing);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // All three vulnerabilities should be visible initially
@@ -1661,7 +1694,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1703,7 +1736,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1738,7 +1771,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1771,7 +1804,7 @@ describe('Vulnerability Table', () => {
     });
 
     test('published date column can be disabled', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // Published Date column is visible by default
@@ -1832,7 +1865,8 @@ describe('Vulnerability Table', () => {
             }
         ];
 
-        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce(vulnsWithMissing);
+        render(<TableVulnerabilities />);
 
         // "Unknown" should appear for the vuln without published date
         await waitFor(() => {
@@ -1851,7 +1885,7 @@ describe('Vulnerability Table', () => {
             message: 'Done',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await waitFor(() => {
@@ -1885,7 +1919,7 @@ describe('Vulnerability Table', () => {
             message: 'Downloading...',
         });
 
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         // Button should remain disabled because NVD is in progress
         await waitFor(() => {
@@ -1895,14 +1929,14 @@ describe('Vulnerability Table', () => {
     });
 
     test('shortcut helper icon is visible', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
         expect(helperBtn).toBeInTheDocument();
     });
 
     test('shortcut helper shows keyboard shortcuts content', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
@@ -1922,7 +1956,7 @@ describe('Vulnerability Table', () => {
     });
 
     test('search syntax helper is visible and shows syntax content when clicked', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
@@ -1938,7 +1972,7 @@ describe('Vulnerability Table', () => {
     });
 
     test('pressing / focuses vulnerability search bar', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
         const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
@@ -1951,12 +1985,12 @@ describe('Vulnerability Table', () => {
     });
 
     test('ArrowDown and ArrowUp navigate focused vulnerability row', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for table rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThanOrEqual(3));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
-
-        expect(rows.length).toBeGreaterThanOrEqual(3);
 
         const firstRow = rows[0] as HTMLElement;
         const secondRow = rows[1] as HTMLElement;
@@ -1976,12 +2010,12 @@ describe('Vulnerability Table', () => {
     });
 
     test('Home and End navigate to first and last vulnerability row', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for table rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThanOrEqual(3));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
-
-        expect(rows.length).toBeGreaterThanOrEqual(3);
 
         const firstRow = rows[0] as HTMLElement;
         const secondRow = rows[1] as HTMLElement;
@@ -2002,9 +2036,11 @@ describe('Vulnerability Table', () => {
     });
 
     test('pressing e opens edit modal for focused vulnerability', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
         const firstRow = rows[0] as HTMLElement;
 
@@ -2024,9 +2060,11 @@ describe('Vulnerability Table', () => {
     });
 
     test('pressing v opens view modal for focused vulnerability', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThanOrEqual(2));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
         const firstRow = rows[0] as HTMLElement;
         const secondRow = rows[1] as HTMLElement;
@@ -2047,7 +2085,9 @@ describe('Vulnerability Table', () => {
     });
 
     test('tooltip portal behaviour: appears on hover with correct content and styles, disappears on mouseleave', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities />);
+        // Wait for rows to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
         const scrollContainer = container.querySelector('.overflow-auto');
 
@@ -2073,7 +2113,10 @@ describe('Vulnerability Table', () => {
     });
 
     test('tooltip truncates long descriptions via overflow-hidden and webkit line-clamp', async () => {
-        const { container } = render(<TableVulnerabilities vulnerabilities={[vulnWithLongText]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        Vulnerabilities.list.mockResolvedValueOnce([vulnWithLongText]);
+        const { container } = render(<TableVulnerabilities />);
+        // Wait for the row to appear
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThan(0));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
 
         fireEvent.mouseEnter(rows[0]);
@@ -2090,7 +2133,7 @@ describe('Vulnerability Table', () => {
     });
 
      test('filter buttons have no active border by default', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const sourceBtn = screen.getByRole('button', { name: /^source$/i });
         const severityBtn = screen.getByRole('button', { name: /^severity$/i });
@@ -2105,7 +2148,7 @@ describe('Vulnerability Table', () => {
     });
 
     test('filter buttons show active border when a filter option is selected', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
 
@@ -2218,12 +2261,15 @@ describe('More Filters dropdown', () => {
         return getDOMRect(500, 500);
     });
 
+    const VulnerabilitiesMoreFilters = require('../../src/handlers/vulnerabilities').default;
+
     beforeEach(() => {
         fetchMock.resetMocks();
+        VulnerabilitiesMoreFilters.list.mockResolvedValue(vulnerabilities);
     });
 
     test('opens More Filters dropdown and shows EPSS, Attack Vector, and First Scan Date sections', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // More Filters button should exist
@@ -2244,14 +2290,14 @@ describe('More Filters dropdown', () => {
     });
 
     test('toggles Attack Vector checkbox filter', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // Open More Filters
         await user.click(screen.getByText('More'));
 
         // Find "Network" attack vector checkbox and click it
-        const networkLabel = screen.getByText('Network');
+        const networkLabel = await screen.findByText('Network');
         await user.click(networkLabel);
 
         // Should show active filter indicator (checkmark)
@@ -2259,14 +2305,14 @@ describe('More Filters dropdown', () => {
     });
 
     test('toggles First Scan Date checkbox filter', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // Open More Filters
         await user.click(screen.getByText('More'));
 
         // Find scan date checkboxes — there should be 2 dates from our test data
-        const checkboxes = screen.getAllByRole('checkbox');
+        const checkboxes = await screen.findAllByRole('checkbox');
         // Find one that's in the First Scan Date section (look for scan date text)
         const scanDateLabels = checkboxes.filter(cb => {
             const parent = cb.closest('label');
@@ -2281,7 +2327,7 @@ describe('More Filters dropdown', () => {
     });
 
     test('enables EPSS range filter via checkbox', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // Open More Filters
@@ -2296,7 +2342,7 @@ describe('More Filters dropdown', () => {
     });
 
     test('closes More Filters dropdown on outside click', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         // Open More Filters
@@ -2321,11 +2367,12 @@ describe('More Filters dropdown', () => {
             first_scan_date: undefined
         }];
 
-        render(<TableVulnerabilities vulnerabilities={vulnsNoScanDate} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        VulnerabilitiesMoreFilters.list.mockResolvedValueOnce(vulnsNoScanDate);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await user.click(screen.getByText('More'));
-        expect(screen.getByText('No scan dates available')).toBeInTheDocument();
+        expect(await screen.findByText('No scan dates available')).toBeInTheDocument();
     });
 
     test('shows no attack vectors message when none available', async () => {
@@ -2337,10 +2384,11 @@ describe('More Filters dropdown', () => {
             severity: { ...vulnerabilities[1].severity, cvss: [] }
         }];
 
-        render(<TableVulnerabilities vulnerabilities={vulnsNoCvss} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        VulnerabilitiesMoreFilters.list.mockResolvedValueOnce(vulnsNoCvss);
+        render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
         await user.click(screen.getByText('More'));
-        expect(screen.getByText('No attack vectors available')).toBeInTheDocument();
+        expect(await screen.findByText('No attack vectors available')).toBeInTheDocument();
     });
 });

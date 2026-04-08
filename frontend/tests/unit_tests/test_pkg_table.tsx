@@ -8,6 +8,14 @@ expect.extend(matchers);
 import type { Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
 
+// Mock Packages handler so the component doesn't make real fetch calls
+jest.mock('../../src/handlers/packages', () => ({
+    __esModule: true,
+    default: {
+        list: jest.fn(),
+    },
+}));
+
 
 const getDOMRect = (width: number, height: number) => ({
     width,
@@ -73,12 +81,19 @@ describe('Packages Table', () => {
         return getDOMRect(500, 500)
     }
 
+    const Packages = require('../../src/handlers/packages').default;
+
+    beforeEach(() => {
+        Packages.list.mockResolvedValue(packages);
+    });
+
     test('render headers with empty array', async () => {
         // ARRANGE
-        render(<TablePackages packages={[]} />);
+        Packages.list.mockResolvedValueOnce([]);
+        render(<TablePackages />);
 
         // ACT
-        const name_header = await screen.getByRole('columnheader', {name: /name/i});
+        const name_header = await screen.findByRole('columnheader', {name: /name/i});
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
         const vuln_count_header = await screen.getByRole('columnheader', {name: /^Vulnerabilities$/i});
         const sources_header = await screen.getByRole('columnheader', {name: /sources/i});
@@ -92,10 +107,10 @@ describe('Packages Table', () => {
 
     test('render with packages', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         // ACT
-        const name_col = await screen.getByRole('cell', {name: /aaabbbccc/});
+        const name_col = await screen.findByRole('cell', {name: /aaabbbccc/});
         const version_col = await screen.getByRole('cell', {name: /1.0.0/});
         const vuln_count_col = await screen.getByRole('cell', {name: /^8$/});
         const source_col = await screen.getByRole('cell', {name: /^hardcoded$/});
@@ -109,7 +124,7 @@ describe('Packages Table', () => {
 
     test('render severity when toggle activated', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         // ACT
         const user = userEvent.setup();
@@ -117,7 +132,7 @@ describe('Packages Table', () => {
 
         await user.click(severity_toggle); // switch to enabled mode
 
-        const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
+        const btn_enabled = await screen.findByRole('button', {name: /hide severity/i});
         const severity_high = await screen.getByText('high');
         const severity_mediums = await screen.getAllByText('medium');
 
@@ -129,10 +144,10 @@ describe('Packages Table', () => {
 
     test('sorting by name', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
-        const name_header = await screen.getByRole('columnheader', {name: /name/i});
+        const name_header = await screen.findByRole('columnheader', {name: /name/i});
 
         await user.click(name_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
@@ -149,10 +164,10 @@ describe('Packages Table', () => {
 
     test('sorting by version', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
-        const version_header = await screen.getByRole('columnheader', {name: /version/i});
+        const version_header = await screen.findByRole('columnheader', {name: /version/i});
 
         await user.click(version_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
@@ -169,10 +184,10 @@ describe('Packages Table', () => {
 
     test('sorting by vulnerabilities count', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
-        const vuln_count_header = await screen.getByRole('columnheader', {name: /^Vulnerabilities$/i});
+        const vuln_count_header = await screen.findByRole('columnheader', {name: /^Vulnerabilities$/i});
 
         await user.click(vuln_count_header); // numerical order -> reverse numerical order
         await waitFor(() => {
@@ -189,10 +204,13 @@ describe('Packages Table', () => {
 
     test('searching for package name', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
+
+        // Wait for data to load before typing
+        await screen.findByRole('cell', {name: /aaabbbccc/});
 
         await user.type(search_bar, 'yyy');
 
@@ -204,7 +222,7 @@ describe('Packages Table', () => {
 
     test('searching with negation text', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
@@ -224,10 +242,13 @@ describe('Packages Table', () => {
 
     test('searching with a combination of queries', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
+
+        // Wait for data to load before typing
+        await screen.findByRole('cell', {name: /aaabbbccc/});
 
         await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
 
@@ -243,9 +264,12 @@ describe('Packages Table', () => {
 
     test('filter by source', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
+
+        // Wait for data to load
+        await screen.findByRole('cell', {name: /aaabbbccc/});
 
         // Open the "Source" filter dropdown
         const source_btn = await screen.getByRole('button', { name: /source/i });
@@ -272,7 +296,7 @@ describe('Packages Table', () => {
 
     test('reset filters button clears all filters', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
@@ -301,12 +325,12 @@ describe('Packages Table', () => {
 
     test('CPE button shows popup with CPE IDs', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
         // ACT: Click CPE button
-        const cpeButtons = await screen.getAllByText('CPE');
+        const cpeButtons = await screen.findAllByText('CPE');
         await user.click(cpeButtons[0]);
 
         // ASSERT: CPE ID should be visible in popup
@@ -316,12 +340,12 @@ describe('Packages Table', () => {
 
     test('CPE popup close button works', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
         // Open CPE popup
-        const cpeButtons = await screen.getAllByText('CPE');
+        const cpeButtons = await screen.findAllByText('CPE');
         await user.click(cpeButtons[0]);
 
         // ACT: Click close button in popup
@@ -337,12 +361,12 @@ describe('Packages Table', () => {
 
     test('CPE popup closes when clicking CPE button again', async () => {
         // ARRANGE
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
         // Open CPE popup
-        const cpeButtons = await screen.getAllByText('CPE');
+        const cpeButtons = await screen.findAllByText('CPE');
         await user.click(cpeButtons[0]);
 
         // Verify popup is open
@@ -362,12 +386,12 @@ describe('Packages Table', () => {
     test('show vulnerabilities button calls onShowVulns', async () => {
         // ARRANGE
         const mockOnShowVulns = jest.fn();
-        render(<TablePackages packages={packages} onShowVulns={mockOnShowVulns} />);
+        render(<TablePackages onShowVulns={mockOnShowVulns} />);
 
         const user = userEvent.setup();
 
         // ACT: Click show vulnerabilities button
-        const showVulnsButtons = await screen.getAllByRole('button', { name: /show vulnerabilities/i });
+        const showVulnsButtons = await screen.findAllByRole('button', { name: /show vulnerabilities/i });
         await user.click(showVulnsButtons[0]);
 
         // ASSERT
@@ -390,7 +414,11 @@ describe('Packages Table', () => {
             }
         ];
 
-        render(<TablePackages packages={packagesNoCpe} />);
+        Packages.list.mockResolvedValueOnce(packagesNoCpe);
+        render(<TablePackages />);
+
+        // Wait for loading to complete
+        await waitFor(() => expect(screen.queryByText(/loading packages/i)).toBeNull());
 
         // ACT & ASSERT
         const cpeButtons = screen.queryAllByText('CPE');
@@ -416,12 +444,13 @@ describe('Packages Table', () => {
             }
         ];
 
-        render(<TablePackages packages={packagesMultiCpe} />);
+        Packages.list.mockResolvedValueOnce(packagesMultiCpe);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
         // ACT: Click CPE button
-        const cpeButton = await screen.getByText('CPE');
+        const cpeButton = await screen.findByText('CPE');
         await user.click(cpeButton);
 
         // ASSERT: Both CPE IDs should be visible
@@ -432,14 +461,14 @@ describe('Packages Table', () => {
     });
 
     test('shortcut helper icon is visible', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
         expect(helperBtn).toBeTruthy();
     });
 
     test('shortcut helper shows keyboard shortcuts content', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
@@ -455,7 +484,7 @@ describe('Packages Table', () => {
     });
 
     test('search syntax helper is visible and shows syntax content when clicked', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
@@ -471,7 +500,7 @@ describe('Packages Table', () => {
     });
 
     test('pressing / focuses search bar', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
@@ -484,7 +513,7 @@ describe('Packages Table', () => {
     });
 
     test('pressing / while search bar is focused types slash in search', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
         const searchBar = await screen.getByRole('searchbox') as HTMLInputElement;
@@ -499,9 +528,11 @@ describe('Packages Table', () => {
     });
 
     test('ArrowDown and ArrowUp navigate focused table row', async () => {
-        const { container } = render(<TablePackages packages={packages} />);
+        const { container } = render(<TablePackages />);
 
         const user = userEvent.setup();
+        // Wait for table rows to be rendered
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThanOrEqual(3));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
 
         expect(rows.length).toBeGreaterThanOrEqual(3);
@@ -524,9 +555,11 @@ describe('Packages Table', () => {
     });
 
     test('Home and End navigate to first and last focused table row', async () => {
-        const { container } = render(<TablePackages packages={packages} />);
+        const { container } = render(<TablePackages />);
 
         const user = userEvent.setup();
+        // Wait for table rows to be rendered
+        await waitFor(() => expect(container.querySelectorAll('tr.row-with-hover-effect').length).toBeGreaterThanOrEqual(3));
         const rows = container.querySelectorAll('tr.row-with-hover-effect');
 
         expect(rows.length).toBeGreaterThanOrEqual(3);
@@ -564,7 +597,8 @@ describe('Packages Table', () => {
             }
         ];
 
-        render(<TablePackages packages={packagesWithVariants} />);
+        Packages.list.mockResolvedValueOnce(packagesWithVariants);
+        render(<TablePackages />);
 
         expect(await screen.findByText('variant-A')).toBeTruthy();
         expect(screen.getByText('variant-B')).toBeTruthy();
@@ -596,15 +630,16 @@ describe('Packages Table', () => {
             }
         ];
 
-        render(<TablePackages packages={packagesWithPending} />);
+        Packages.list.mockResolvedValueOnce(packagesWithPending);
+        render(<TablePackages />);
 
         // Verify both pending values are rendered
-        const cells = screen.getAllByRole('cell');
+        const cells = await screen.findAllByRole('cell');
         const pendingValues = cells.filter(c => c.textContent === '5' || c.textContent === '1');
         expect(pendingValues.length).toBeGreaterThanOrEqual(2);
 
         const user = userEvent.setup();
-        const pendingHeader = await screen.getByRole('columnheader', {name: /remaining pending/i});
+        const pendingHeader = await screen.findByRole('columnheader', {name: /remaining pending/i});
 
         // Click to sort
         await user.click(pendingHeader);
@@ -622,11 +657,11 @@ describe('Packages Table', () => {
     });
 
     test('CPE popup closes on Escape key', async () => {
-        render(<TablePackages packages={packages} />);
+        render(<TablePackages />);
 
         const user = userEvent.setup();
 
-        const cpeButtons = await screen.getAllByText('CPE');
+        const cpeButtons = await screen.findAllByText('CPE');
         await user.click(cpeButtons[0]);
 
         const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
