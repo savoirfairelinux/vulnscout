@@ -22,9 +22,11 @@ VulnScout also provides a **web interface** for visualisation, triage and assess
 - Detect and enrich vulnerabilities from NVD, EPSS, and Grype
 - Manage **projects and variants** for multi-target builds
 - Web interface for visualisation, triage, and assessment
+- **Vulnerability review** — assess, justify, and track the status of each vulnerability
+- **Scan and enrichment** — automatically enrich imported data with NVD, EPSS, and Grype
 - Non-interactive / CI mode with configurable **match conditions**
 - Generate customisable reports (AsciiDoc, HTML, PDF, CSV)
-- Export enriched SBOMs (SPDX 3.0, CycloneDX 1.6, OpenVEX)
+- Export enriched SBOMs (SPDX 2.3, SPDX 3.0, CycloneDX 1.4–1.6, OpenVEX)
 - Custom CVSS scoring per vulnerability
 - Time estimation tracking for remediation effort
 - Import and export custom assessments for backup and sharing
@@ -45,7 +47,7 @@ VulnScout also provides a **web interface** for visualisation, triage and assess
 
 ### Supported Output Files
 
-- SPDX 2.3 (Packages)
+- SPDX 2.3 (Packages) — JSON, XML
 - SPDX 3.0 (Packages + vulnerabilities)
 - CycloneDX 1.4, 1.5, 1.6 (Packages + vulnerabilities)
 - OpenVEX (vulnerabilities + assessments)
@@ -87,4 +89,4 @@ Copyright (C) 2017–2026 Savoir-faire Linux, Inc.
 
 VulnScout is released under the **GPL-3.0 license**.
 
-![SFL](_static/SFL.jpeg)
+[Savoir-faire Linux](https://savoirfairelinux.com/fr)
