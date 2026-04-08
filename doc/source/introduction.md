@@ -81,12 +81,6 @@ VulnScout allows you to add a **custom CVSS vector string** to a vulnerability, 
 
 ---
 
-## Yocto Integration
-
-For Yocto / BitBake integration, see the [meta-vulnscout documentation](https://meta-vulnscout.readthedocs.io/en/latest/).
-
----
-
 ## Licence
 
 Copyright (C) 2017–2026 Savoir-faire Linux, Inc.
