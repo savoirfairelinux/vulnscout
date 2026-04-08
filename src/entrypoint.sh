@@ -35,7 +35,6 @@ Input commands:
   --add-openvex <path>      Add an OpenVEX JSON file
   --add-cdx <path>          Add a CycloneDX file
   --add-grype <path>        Add a Grype results file
-  --add-report-template <path>  Add a custom report template to /scan/templates/
   --perform-grype-scan      Perform a Grype scan on the added inputs
 
 Scan & output commands:

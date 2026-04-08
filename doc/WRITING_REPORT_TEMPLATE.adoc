@@ -20,7 +20,7 @@ Templates can produce any text-based format: AsciiDoc, HTML, Markdown, CSV, plai
 |Built-in templates shipped with VulnScout.
 
 |`/scan/templates/`
-|Custom templates installed into the container (via `--add-report-template`).
+|Custom templates inside the container (staged automatically when a path is passed to `--report`).
 
 |`.vulnscout/templates/`
 |Per-project host-side templates (mounted automatically if the directory exists).
@@ -28,15 +28,7 @@ Templates can produce any text-based format: AsciiDoc, HTML, Markdown, CSV, plai
 
 === Adding a Custom Template
 
-To register and immediately use a local template file:
-
-[source,shell]
-----
-./vulnscout --add-report-template /path/to/my-report.adoc
-./vulnscout --project demo report my-report.adoc
-----
-
-Or pass the file path directly to `report` — it registers and runs the template in one step:
+Pass the file path directly to `report` — it stages and runs the template in one step:
 
 [source,shell]
 ----
