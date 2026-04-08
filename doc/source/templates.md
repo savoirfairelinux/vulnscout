@@ -9,7 +9,6 @@ VulnScout uses [Jinja2](https://jinja.palletsprojects.com/) as its templating en
 | Path | Purpose |
 |------|---------|
 | `src/views/templates/` | Built-in templates shipped with VulnScout. |
-| `/scan/templates/` | Custom templates inside the container (staged automatically when a path is passed to `--report`). |
 | `.vulnscout/templates/` | Per-project host-side templates (mounted automatically if the directory exists). |
 
 ### Adding a Custom Template

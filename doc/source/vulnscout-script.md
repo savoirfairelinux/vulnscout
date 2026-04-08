@@ -1,4 +1,4 @@
-# VulnScout Script
+# VulnScout CLI
 
 The `./vulnscout` script is the main host-side entry point for running VulnScout.
 It manages the container lifecycle (Docker or Podman) and forwards commands to the container's entrypoint.
@@ -28,10 +28,9 @@ The `vulnscout` script manages the container automatically (using Docker or Podm
 
 ## Updating VulnScout
 
-When a new release is published, pull the latest version of the repository and update the container:
+To update VulnScout to the latest version, pull the latest container image and restart:
 
 ```bash
-git pull
 ./vulnscout --update
 ```
 
@@ -161,18 +160,16 @@ Multiple inputs can be chained in a single command:
 ```
 
 ```{tip}
-- `.tar`, `.tar.gz`, `.tar.zst` archives are supported as SPDX 2 input.
-- `.spdx` files (tag-value format) are supported as SPDX 2 input.
-- `.spdx.json` is supported as SPDX 3 input.
-- Grype scan files should end with `.grype.json`.
-- To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
+The input format is determined by the CLI flag used (`--add-spdx`, `--add-cdx`, etc.), not by the file extension.
+The only exception is SPDX archive inputs (`.tar`, `.tar.gz`, `.tar.zst`), which are automatically extracted and their `.spdx.json` contents imported.
+To ignore parsing errors for malformed SBOMs, set: `IGNORE_PARSING_ERRORS=true`
 ```
 
 ---
 
 ## Performing a Grype Scan
 
-VulnScout can run Grype on the current database contents. This exports the current state as a CycloneDX SBOM, runs Grype against it, and merges the results back:
+VulnScout can run Grype on the current database contents:
 
 ```bash
 ./vulnscout --project demo --variant x86 --perform-grype-scan
@@ -316,6 +313,12 @@ Example — set an NVD API key for higher rate limits:
 
 The following environment variables can be set via `vulnscout config` or exported before running.
 
+Example:
+
+```bash
+./vulnscout config NVD_API_KEY abc123
+```
+
 #### Container & Runtime
 
 | Variable | Description | Default |
@@ -363,13 +366,18 @@ VulnScout supports HTTP proxies. Set them via the config command:
 ./vulnscout config NO_PROXY localhost,127.0.0.1
 ```
 
-Or pass them directly as environment variables when calling `vulnscout`.
+Or set them as environment variables in the shell before running `vulnscout`:
+
+```bash
+export HTTP_PROXY=http://proxy.example.com:8080
+./vulnscout --serve
+```
 
 ---
 
 ## Migrating from the Legacy docker-compose Workflow
 
-If you were previously running VulnScout with a `docker-compose.yml` file per variant, use `migration.sh` to import all your existing data into the new SQLite database.
+If you were previously running VulnScout with a `docker-compose.yml` file per variant or with `vulnscout.sh`, use `migration.sh` to import all your existing data into the new SQLite database.
 
 ```bash
 # Migrate specifying the directory explicitly

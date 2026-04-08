@@ -1,7 +1,7 @@
 # Using Container Entrypoint
 
 The VulnScout container ships with an entrypoint script at `/scan/src/entrypoint.sh`.
-This script is used internally by the `./vulnscout` host wrapper, but can also be called directly via `docker exec` (or `podman exec`) for advanced workflows or when integrating VulnScout into custom CI pipelines.
+This is what the `./vulnscout` host wrapper calls under the hood. You can also invoke it directly via `docker exec` (or `podman exec`) for advanced workflows or CI pipeline integration where you manage the container yourself.
 
 ```bash
 docker exec <container> /scan/src/entrypoint.sh [OPTIONS]
@@ -169,4 +169,4 @@ If the container detects a legacy docker-compose setup (an `openvex.json` output
 - In interactive mode: display a warning notification in the web UI
 - In non-interactive mode: exit with code 2 and print migration instructions
 
-Use the `migration.sh` script on the host to import legacy data into the new database format. See the [VulnScout Script](vulnscout-script.md) page for details.
+Use the `migration.sh` script on the host to import legacy data into the new database format. See the [VulnScout CLI](vulnscout-script.md) page for details.

@@ -72,6 +72,58 @@ If `node_modules` are not yet installed, the script will run `npm install` autom
 
 We use [CQFD](https://github.com/savoirfairelinux/cqfd) to run testing tools in a container.
 
+### Quick Setup with CQFD
+
+#### Step 1: Setup CQFD and Docker/Podman
+
+- Install Docker: [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)
+- Or install Podman: [https://podman.io/docs/installation](https://podman.io/docs/installation)
+
+If using Docker, make sure it runs without requiring `sudo`. To do so, add your user to the `docker` group:
+
+```bash
+sudo groupadd docker
+sudo usermod -aG docker $USER
+```
+
+Log out and log back in to apply the changes.
+
+- Install CQFD:
+
+```bash
+git clone https://github.com/savoirfairelinux/cqfd.git
+cd cqfd
+sudo make install
+```
+
+For more information, visit the [CQFD GitHub repository](https://github.com/savoirfairelinux/cqfd).
+
+#### Step 2: Initialise CQFD for this Project
+
+Once installed, initialise the container image:
+
+```bash
+cqfd init
+```
+
+> **Note:** This only needs to be done once, unless the container definition (`.cqfd/docker/Dockerfile`) is modified.
+
+#### Step 3: Run Tests with CQFD
+
+To run all tests using CQFD, execute the following command:
+
+```bash
+cqfd
+```
+
+You can also run the tests separately:
+
+```bash
+cqfd -b test_backend
+cqfd -b test_frontend
+cqfd -b test_ci
+```
+
 ### Running Tests Locally (without CQFD)
 
 #### Backend
@@ -112,57 +164,6 @@ npm run test          # unit tests
 npm run coverage      # tests + coverage report
 npm run lint          # ESLint
 npm run build         # production build check
-```
-
-### Quick Setup with CQFD
-
-#### Step 1: Setup CQFD and Docker/Podman
-
-- Install Docker: [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)
-- Or install Podman: [https://podman.io/docs/installation](https://podman.io/docs/installation)
-
-If using Docker, make sure it runs without requiring `sudo`. To do so, add your user to the `docker` group:
-
-```bash
-sudo groupadd docker
-sudo usermod -aG docker $USER
-```
-
-Log out and log back in to apply the changes.
-
-- Install CQFD:
-
-```bash
-git clone https://github.com/savoirfairelinux/cqfd.git
-cd cqfd
-sudo make install
-```
-
-For more information, visit the [CQFD GitHub repository](https://github.com/savoirfairelinux/cqfd).
-
-#### Step 2: Initialise CQFD for this Project
-
-Once installed, initialise the container image:
-
-```bash
-cqfd init
-```
-
-> **Note:** This only needs to be done once, unless the container definition (`.cqfd/docker/Dockerfile`) is modified.
-
-#### Step 3: Run All the Tests with CQFD
-
-To run all tests using CQFD, execute the following command:
-
-```bash
-cqfd
-```
-
-You can also run the tests separately:
-
-```bash
-cqfd -b test_backend
-cqfd -b test_frontend
 ```
 
 ### Setting a Custom Version
