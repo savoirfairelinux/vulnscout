@@ -395,9 +395,8 @@ def init_app(app):
         if str(variant.project_id) != project_id:
             return jsonify({"error": "Variant does not belong to the specified project."}), 400
 
-        # Create a single scan for all the files
-        scan = ScanController.create("", variant.id)
-        tmp_paths: list[str] = []
+        # Validate all files and detect formats before creating the scan
+        validated_files: list[tuple[str, str, str]] = []  # (tmp_path, filename, fmt)
 
         for uploaded in uploaded_files:
             if not uploaded.filename:
@@ -423,7 +422,7 @@ def init_app(app):
                         data = json.load(f)
                     fmt = _detect_format(filename, data)
                     if fmt == "unknown":
-                        for p in tmp_paths:
+                        for p, _, _ in validated_files:
                             try:
                                 os.unlink(p)
                             except OSError:
@@ -434,7 +433,7 @@ def init_app(app):
                         }), 400
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     # Clean up all temp files saved so far
-                    for p in tmp_paths:
+                    for p, _, _ in validated_files:
                         try:
                             os.unlink(p)
                         except OSError:
@@ -442,6 +441,16 @@ def init_app(app):
                     os.unlink(tmp_path)
                     return jsonify({"error": f"Could not parse '{filename}' as JSON."}), 400
 
+            validated_files.append((tmp_path, filename, fmt))
+
+        if not validated_files:
+            return jsonify({"error": "No valid SBOM files provided."}), 400
+
+        # All files validated — now create the scan and register documents
+        scan = ScanController.create("", variant.id)
+        tmp_paths: list[str] = []
+
+        for tmp_path, filename, fmt in validated_files:
             SBOMDocumentController.create(tmp_path, filename, scan.id, format=fmt)
             tmp_paths.append(tmp_path)
 
