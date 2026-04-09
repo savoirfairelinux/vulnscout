@@ -317,15 +317,15 @@ cmd_scan() {
     fi
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+        local _port="${FLASK_RUN_PORT:-7275}"
+        local _host="${FLASK_RUN_HOST:-localhost}"
+        # 0.0.0.0 means "all interfaces" — show localhost in the URL instead
+        [[ "$_host" == "0.0.0.0" ]] && _host="localhost"
+        local _url="http://${_host}:${_port}"
         set_status "2" "<!-- __END_OF_SCAN_SCRIPT__ -->"
         echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "---------- Initialization Done - Loading is over and WebUI is ready ----------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
+        echo "Initialization Done - Loading is over and WebUI is ready !!!"
+        echo "Open  $_url in your browser to access VulnScout"
         echo "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
