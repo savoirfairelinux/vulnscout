@@ -14,6 +14,8 @@ type Assessment = {
     id: string;
     vuln_id: string;
     packages: string[];
+    variant_id?: string;
+    origin: string;
     status: string;
     simplified_status: string;
     status_notes?: string;
@@ -43,6 +45,8 @@ const asAssessment = (data: any): Assessment | [] => {
         id: data.id,
         vuln_id: data.vuln_id,
         packages: asStringArray(data?.packages),
+        variant_id: undefined,
+        origin: typeof data?.origin === "string" ? data.origin : "sbom",
         status: data.status,
         simplified_status: `[invalid status] ${data.status}`,
         status_notes: undefined,
@@ -56,6 +60,7 @@ const asAssessment = (data: any): Assessment | [] => {
     };
     if (typeof STATUS_VEX_TO_GRAPH?.[data.status] === "string")
         item.simplified_status = STATUS_VEX_TO_GRAPH[data.status];
+    if (typeof data?.variant_id === "string") item.variant_id = data.variant_id;
     if (typeof data?.status_notes === "string") item.status_notes = data.status_notes;
     if (typeof data?.justification === "string") item.justification = data.justification;
     if (typeof data?.impact_statement === "string") item.impact_statement = data.impact_statement;
@@ -79,7 +84,7 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
             assessment.workaround || ''
         ].join('|');
 
-        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}`;
+        const duplicateKey = `${assessment.vuln_id}::${packagesKey}::${assessment.status}::${descriptionsKey}::${assessment.variant_id ?? ''}`;
 
         if (!seen.has(duplicateKey)) {
             seen.add(duplicateKey);
@@ -95,13 +100,29 @@ class Assessments {
      * Fetch server API to list all packages
      * @returns {Promise<Assessment[]>} A promise that resolves to a list of packages
      */
-    static async list(): Promise<Assessment[]> {
-        const response = await fetch(import.meta.env.VITE_API_URL + "/api/assessments?format=list", {
+    static async list(variantId?: string, projectId?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments", window.location.href);
+        url.searchParams.set('format', 'list');
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), {
             mode: "cors",
         });
         const data = await response.json();
         const assessments = data.flatMap(asAssessment);
         return removeDuplicateAssessments(assessments);
+    }
+
+    /**
+     * Fetch assessments not linked to any scan (handmade via the web UI)
+     */
+    static async listReview(variantId?: string, projectId?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        return data.flatMap(asAssessment);
     }
 }
 

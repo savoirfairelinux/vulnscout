@@ -39,7 +39,8 @@ describe('Packages Table', () => {
                 "active": {label: 'low', index: 2},
                 "fixed": {label: 'medium', index: 3}
             },
-            source: ['hardcoded']
+            source: ['hardcoded'],
+            variants: []
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -49,7 +50,8 @@ describe('Packages Table', () => {
             purl: ['pkg:vendor/xxxyyyzzz@2.0.0'],
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
-            source: ['cve-finder']
+            source: ['cve-finder'],
+            variants: []
         },
         {
             id: 'dddeeefff@1.5.0',
@@ -62,7 +64,8 @@ describe('Packages Table', () => {
                 "active": {label: 'medium', index: 3},
                 "fixed": {label: 'low', index: 2}
             },
-            source: ['cve-finder', 'hardcoded']
+            source: ['cve-finder', 'hardcoded'],
+            variants: []
         }
     ];
 
@@ -77,7 +80,7 @@ describe('Packages Table', () => {
         // ACT
         const name_header = await screen.getByRole('columnheader', {name: /name/i});
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
-        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
+        const vuln_count_header = await screen.getByRole('columnheader', {name: /^Vulnerabilities$/i});
         const sources_header = await screen.getByRole('columnheader', {name: /sources/i});
 
         // ASSERT
@@ -169,7 +172,7 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
-        const vuln_count_header = await screen.getByRole('columnheader', {name: /vulnerabilities/i});
+        const vuln_count_header = await screen.getByRole('columnheader', {name: /^Vulnerabilities$/i});
 
         await user.click(vuln_count_header); // numerical order -> reverse numerical order
         await waitFor(() => {
@@ -382,7 +385,8 @@ describe('Packages Table', () => {
                 purl: [],
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
-                source: ['test']
+                source: ['test'],
+                variants: []
             }
         ];
 
@@ -407,7 +411,8 @@ describe('Packages Table', () => {
                 purl: [],
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
-                source: ['test']
+                source: ['test'],
+                variants: []
             }
         ];
 
@@ -447,6 +452,22 @@ describe('Packages Table', () => {
         expect(screen.getByText('Navigate focused table row')).toBeTruthy();
         expect(screen.getByText('Home / End')).toBeTruthy();
         expect(screen.getByText('Navigate to first/last table row')).toBeTruthy();
+    });
+
+    test('search syntax helper is visible and shows syntax content when clicked', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        expect(helperBtn).toBeTruthy();
+
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeTruthy();
+        expect(screen.getByText('Match rows containing term')).toBeTruthy();
+        expect(screen.getByText('AND: both terms must match')).toBeTruthy();
+        expect(screen.getByText('OR: either term matches')).toBeTruthy();
+        expect(screen.getByText('NOT: exclude rows with term')).toBeTruthy();
     });
 
     test('pressing / focuses search bar', async () => {
@@ -525,6 +546,96 @@ describe('Packages Table', () => {
         await user.keyboard('{Home}');
         await waitFor(() => {
             expect(document.activeElement).toBe(firstRow);
+        });
+    });
+
+    test('renders variant badges when packages have variants', async () => {
+        const packagesWithVariants: Package[] = [
+            {
+                id: 'pkg-var@1.0.0',
+                name: 'pkg-var',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {"active": 1},
+                maxSeverity: {"active": {label: 'low', index: 2}},
+                source: ['test'],
+                variants: ['variant-A', 'variant-B']
+            }
+        ];
+
+        render(<TablePackages packages={packagesWithVariants} />);
+
+        expect(await screen.findByText('variant-A')).toBeTruthy();
+        expect(screen.getByText('variant-B')).toBeTruthy();
+    });
+
+    test('sorting by remaining pending vulnerabilities', async () => {
+        const packagesWithPending: Package[] = [
+            {
+                id: 'pkg-a@1.0.0',
+                name: 'pkg-a',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {"Pending Assessment": 5, "active": 1},
+                maxSeverity: {"active": {label: 'low', index: 2}},
+                source: ['test'],
+                variants: []
+            },
+            {
+                id: 'pkg-b@1.0.0',
+                name: 'pkg-b',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {"Pending Assessment": 1, "active": 2},
+                maxSeverity: {"active": {label: 'medium', index: 3}},
+                source: ['test'],
+                variants: []
+            }
+        ];
+
+        render(<TablePackages packages={packagesWithPending} />);
+
+        // Verify both pending values are rendered
+        const cells = screen.getAllByRole('cell');
+        const pendingValues = cells.filter(c => c.textContent === '5' || c.textContent === '1');
+        expect(pendingValues.length).toBeGreaterThanOrEqual(2);
+
+        const user = userEvent.setup();
+        const pendingHeader = await screen.getByRole('columnheader', {name: /remaining pending/i});
+
+        // Click to sort
+        await user.click(pendingHeader);
+
+        // Click again to sort in other direction
+        await user.click(pendingHeader);
+
+        // Verify sorting by checking the sort icon changed (sort was applied)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            // Both names should still be present
+            expect(html).toContain('pkg-a');
+            expect(html).toContain('pkg-b');
+        });
+    });
+
+    test('CPE popup closes on Escape key', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        const cpeButtons = await screen.getAllByText('CPE');
+        await user.click(cpeButtons[0]);
+
+        const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+        expect(cpeId).toBeTruthy();
+
+        await user.keyboard('{Escape}');
+
+        await waitFor(() => {
+            expect(screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/)).toBeNull();
         });
     });
 });

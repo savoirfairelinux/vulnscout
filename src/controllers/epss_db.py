@@ -1,104 +1,85 @@
-import sqlite3
-import csv
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
 import urllib.request
-import gzip
-from datetime import datetime
-import os
+import urllib.parse
+import urllib.error
+from typing import Optional
+from ..helpers.base_api_client import BaseAPIClient
 
-EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+EPSS_API_URL = "https://api.first.org/data/v1/epss"
 
 
-class EPSS_DB:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self.cursor = self.conn.cursor()
-        self._init_db()
+class EPSS_DB(BaseAPIClient):
+    """
+    API client for EPSS (Exploit Prediction Scoring System).
+    Fetches scores directly from the FIRST.org API without local caching.
+    """
 
-    def _init_db(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS epss_scores (
-                cve TEXT PRIMARY KEY NOT NULL,
-                epss REAL,
-                percentile REAL
-            )
-        """)
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS epss_metadata (
-                key TEXT PRIMARY KEY NOT NULL,
-                value TEXT
-            )
-        """)
-        self.conn.commit()
+    def api_get_epss(self, cve_id: str) -> Optional[dict]:
+        """
+        Fetch the EPSS score for a single CVE directly from the FIRST.org API.
 
-    def update_epss(self):
-        tmp_gz = "/tmp/epss.csv.gz"
-
-        # Set up proxy handler if proxy environment variables are set
-        proxies = {}
-        if os.getenv('HTTP_PROXY') or os.getenv('http_proxy'):
-            proxies['http'] = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
-        if os.getenv('HTTPS_PROXY') or os.getenv('https_proxy'):
-            proxies['https'] = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
-
-        if proxies:
-            proxy_handler = urllib.request.ProxyHandler(proxies)
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-
-        urllib.request.urlretrieve(EPSS_URL, tmp_gz)
-
-        with gzip.open(tmp_gz, "rt") as f:
-            while True:
-                pos = f.tell()
-                line = f.readline()
-                if not line:
-                    raise ValueError("No valid header found in the CSV file")
-                lower_line = line.strip().lower()
-                if 'cve' in lower_line and 'epss' in lower_line and 'percentile' in lower_line:
-                    f.seek(pos)
-                    break
-
-            reader = csv.DictReader(f, skipinitialspace=True)
-            rows = []
-            for row in reader:
-                cve = row.get('cve') or row.get('CVE')
-                epss = row.get('epss')
-                percentile = row.get('percentile')
-                if cve and cve.startswith("CVE") and epss and percentile:
-                    try:
-                        rows.append((cve, float(epss), float(percentile)))
-                    except ValueError:
-                        continue
-
-        self.cursor.execute("DELETE FROM epss_scores")
-        self.cursor.executemany(
-            "INSERT OR REPLACE INTO epss_scores (cve, epss, percentile) VALUES (?, ?, ?);",
-            rows
-        )
-        self.cursor.execute(
-            "INSERT OR REPLACE INTO epss_metadata (key, value) VALUES ('last_updated', ?);",
-            (datetime.utcnow().isoformat(),)
-        )
-        self.conn.commit()
-
-    def get_score(self, cve_id: str):
-        row = self.cursor.execute(
-            "SELECT epss, percentile FROM epss_scores WHERE cve = ?;",
-            (cve_id,)
-        ).fetchone()
-        if row:
-            return {"score": row[0], "percentile": row[1]}
-        return None
-
-    def needs_update(self, days: int = 1) -> bool:
-        res = self.cursor.execute(
-            "SELECT value FROM epss_metadata WHERE key = 'last_updated';"
-        ).fetchone()
-        if not res:
-            return True
+        Returns a dict with keys ``score`` (float) and ``percentile`` (float),
+        or ``None`` if the CVE has no EPSS entry or on any failure.
+        """
         try:
-            last_updated = datetime.fromisoformat(res[0])
-            return (datetime.utcnow() - last_updated).days >= days
-        except Exception:
-            return True
+            url = f"{EPSS_API_URL}?cve={urllib.parse.quote(cve_id, safe='')}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status != 200:
+                    return None
+                data = self._decode_response_json(response)
+                entries = data.get("data", [])
+                if entries:
+                    entry = entries[0]
+                    return {
+                        "score": float(entry["epss"]),
+                        "percentile": float(entry["percentile"]),
+                    }
+                return None
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None  # CVE has no EPSS score — not an error
+            print(f"Error fetching EPSS for {cve_id}: {e}", flush=True)
+            return None
+        except Exception as e:
+            print(f"Error fetching EPSS for {cve_id}: {e}", flush=True)
+            return None
+
+    def api_get_epss_batch(self, cve_ids: list[str]) -> dict[str, dict]:
+        """
+        Fetch EPSS scores for a batch of CVE IDs in a single API call.
+
+        The FIRST.org API accepts up to 100 comma-separated CVE IDs per request.
+        Returns a dict mapping each CVE ID that has a score to
+        ``{"score": float, "percentile": float}``.
+        CVE IDs with no score are absent from the returned dict.
+        """
+        if not cve_ids:
+            return {}
+        try:
+            encoded = ",".join(urllib.parse.quote(c, safe='') for c in cve_ids)
+            url = f"{EPSS_API_URL}?cve={encoded}&limit={len(cve_ids)}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status != 200:
+                    return {}
+                data = self._decode_response_json(response)
+                results = {}
+                for entry in data.get("data", []):
+                    cve = entry.get("cve")
+                    if cve:
+                        results[cve] = {
+                            "score": float(entry["epss"]),
+                            "percentile": float(entry["percentile"]),
+                        }
+                return results
+        except urllib.error.HTTPError as e:
+            print(f"Error fetching EPSS batch: {e}", flush=True)
+            return {}
+        except Exception as e:
+            print(f"Error fetching EPSS batch: {e}", flush=True)
+            return {}

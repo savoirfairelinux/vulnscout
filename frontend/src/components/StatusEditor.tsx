@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import MessageBanner from './MessageBanner';
+import type { Variant } from '../handlers/variant';
 
 type PostAssessment = {
     vuln_id?: string,
@@ -8,7 +9,8 @@ type PostAssessment = {
     justification?: string,
     impact_statement?: string,
     status_notes?: string,
-    workaround?: string
+    workaround?: string,
+    variant_ids?: string[]
 }
 
 type Props = {
@@ -18,14 +20,20 @@ type Props = {
     onFieldsChange?: (hasChanges: boolean) => void;
     triggerBanner?: (message: string, type: "error" | "success") => void;
     defaultStatus?: string;
+    variants?: Variant[];
+    availablePackages?: string[];
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation"}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages}: Readonly<Props>) {
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
     const [workaround, setWorkaround] = useState("");
     const [impact, setImpact] = useState("");
+    const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
+        variants?.length === 1 ? [variants[0].id] : []
+    );
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(availablePackages ?? []);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -39,6 +47,16 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const closeBanner = () => {
         setBannerVisible(false);
     };
+
+    // Reset selected packages when the available list changes (e.g. navigating to a different vuln)
+    useEffect(() => {
+        setSelectedPackages(availablePackages ?? []);
+    }, [availablePackages]);
+
+    // Auto-select single variant when variants load asynchronously (e.g. Edit from Actions column)
+    useEffect(() => {
+        setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
+    }, [variants]);
 
     // Update status when defaultStatus prop changes
     useEffect(() => {
@@ -76,12 +94,30 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             }
             return;
         }
+        if (variants && variants.length > 0 && selectedVariantIds.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one variant", "error");
+            } else {
+                internalTriggerBanner("You must select at least one variant", "error");
+            }
+            return;
+        }
+        if (availablePackages && availablePackages.length > 0 && selectedPackages.length === 0) {
+            if (triggerBanner) {
+                triggerBanner("You must select at least one package", "error");
+            } else {
+                internalTriggerBanner("You must select at least one package", "error");
+            }
+            return;
+        }
         onAddAssessment({
             status,
             justification: status == "not_affected" ? justification : undefined,
             status_notes: statusNotes,
             workaround,
-            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined
+            impact_statement: (status == "not_affected" || status == "false_positive") ? impact : undefined,
+            variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
+            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
         });
     }
 
@@ -91,7 +127,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setStatusNotes("");
         setWorkaround("");
         setImpact("");
-    }, [defaultStatus]);
+        setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
+        setSelectedPackages(availablePackages ?? []);
+    }, [defaultStatus, availablePackages, variants]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -141,6 +179,54 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </select>
             </>}
         </h3>
+        {variants && variants.length > 0 && (
+            <div className="mt-2 mb-2 ml-1">
+                <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {variants.map(v => (
+                        <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedVariantIds.includes(v.id)}
+                                onChange={(e) => {
+                                    if (e.target.checked) {
+                                        setSelectedVariantIds(prev => [...prev, v.id]);
+                                    } else {
+                                        setSelectedVariantIds(prev => prev.filter(id => id !== v.id));
+                                    }
+                                }}
+                                className="accent-blue-500"
+                            />
+                            <span className="text-gray-200">{v.name}</span>
+                        </label>
+                    ))}
+                </div>
+            </div>
+        )}
+        {availablePackages && availablePackages.length > 1 && (
+            <div className="mt-2 mb-2 ml-1">
+                <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {availablePackages.map(pkg => (
+                        <label key={pkg} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedPackages.includes(pkg)}
+                                onChange={(e) => {
+                                    if (e.target.checked) {
+                                        setSelectedPackages(prev => [...prev, pkg]);
+                                    } else {
+                                        setSelectedPackages(prev => prev.filter(p => p !== pkg));
+                                    }
+                                }}
+                                className="accent-blue-400"
+                            />
+                            <span className="font-mono text-gray-200">{pkg}</span>
+                        </label>
+                    ))}
+                </div>
+            </div>
+        )}
         {(status == "not_affected" || status == "false_positive") && <>
             <textarea
                 value={impact}

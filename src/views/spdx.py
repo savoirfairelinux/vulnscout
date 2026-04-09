@@ -73,8 +73,8 @@ class SPDX:
             pkg.generate_generic_purl()
 
             if package.spdx_id:
-                self.ref_dict[package.spdx_id] = pkg.id
-                self.pkg_to_ref[pkg.id] = package.spdx_id
+                self.ref_dict[package.spdx_id] = pkg.string_id
+                self.pkg_to_ref[pkg.string_id] = package.spdx_id
 
             self.packagesCtrl.add(pkg)
 
@@ -88,13 +88,13 @@ class SPDX:
         Copy components from controller into SBOM.
         """
         for pkg in self.packagesCtrl:
-            if pkg.id not in self.pkg_to_ref:
+            if pkg.string_id not in self.pkg_to_ref:
                 newid = f"SPDXRef-{uuid7(as_type='str')}"
-                self.pkg_to_ref[pkg.id] = newid
-                self.ref_dict[newid] = pkg.id
+                self.pkg_to_ref[pkg.string_id] = newid
+                self.ref_dict[newid] = pkg.string_id
                 package = SpdxPackage(
                     name=pkg.name,
-                    spdx_id=self.pkg_to_ref[pkg.id],
+                    spdx_id=self.pkg_to_ref[pkg.string_id],
                     primary_package_purpose=PackagePurpose.APPLICATION,
                     download_location=SpdxNoAssertion(),
                     files_analyzed=False

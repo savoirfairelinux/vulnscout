@@ -23,37 +23,23 @@ class TestVerbose:
         assert captured.out == ""
         assert captured.err == ""
 
-    @patch.dict(os.environ, {"VERBOSE_MODE": "false"})
-    def test_verbose_disabled_when_false(self, capsys):
-        """Test that verbose does not print when VERBOSE_MODE is 'false'."""
-        verbose("test message")
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert captured.err == ""
+    @pytest.mark.parametrize("casing", ["false", "0", "abcd"])
+    def test_verbose_disabled_when_false(self, capsys, casing):
+        """Test that verbose does not print when VERBOSE_MODE is not 'true' or '1'."""
+        with patch.dict(os.environ, {"VERBOSE_MODE": casing}):
+            verbose("test message")
+            captured = capsys.readouterr()
+            assert captured.out == ""
+            assert captured.err == ""
 
-    @patch.dict(os.environ, {"VERBOSE_MODE": "true"})
-    def test_verbose_enabled_when_true(self, capsys):
-        """Test that verbose prints when VERBOSE_MODE is 'true'."""
-        verbose("test message")
-        captured = capsys.readouterr()
-        assert captured.out == "test message\n"
-        assert captured.err == ""
-
-    @patch.dict(os.environ, {"VERBOSE_MODE": "True"})
-    def test_verbose_disabled_case_sensitive(self, capsys):
-        """Test that verbose is case-sensitive and only 'true' enables it."""
-        verbose("test message")
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert captured.err == ""
-
-    @patch.dict(os.environ, {"VERBOSE_MODE": "TRUE"})
-    def test_verbose_disabled_uppercase(self, capsys):
-        """Test that verbose does not work with uppercase 'TRUE'."""
-        verbose("test message")
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert captured.err == ""
+    @pytest.mark.parametrize("casing", ["true", "True", "TRUE", "1"])
+    def test_verbose_enabled_when_true(self, capsys, casing):
+        """Test that verbose prints when VERBOSE_MODE is any casing of 'true' or '1'."""
+        with patch.dict(os.environ, {"VERBOSE_MODE": casing}):
+            verbose("test message")
+            captured = capsys.readouterr()
+            assert captured.out == "test message\n"
+            assert captured.err == ""
 
     @patch.dict(os.environ, {"VERBOSE_MODE": "true"})
     def test_verbose_multiple_objects(self, capsys):

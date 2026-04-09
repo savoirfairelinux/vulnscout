@@ -8,7 +8,7 @@ import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import Popup from "../components/Popup";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
 type Props = {
     packages: Package[];
@@ -46,15 +46,15 @@ const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
     const [showCpeBox, setShowCpeBox] = useState(false);
     const buttonRef = useRef<HTMLSpanElement>(null);
-    
+
     return (
         <div className="flex items-center justify-center h-full text-center gap-1">
             <span>{version}</span>
             {cpe && cpe.length > 0 && (
                 <>
-                    <span 
+                    <span
                         ref={buttonRef}
-                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold" 
+                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold"
                         onClick={() => setShowCpeBox(!showCpeBox)}
                     >
                         CPE
@@ -93,15 +93,25 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
+    const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
         { key: '↑ / ↓', description: 'Navigate focused table row' },
         { key: 'Home / End', description: 'Navigate to first/last table row' },
+    ];
+
+    const searchSyntaxHelp = [
+        { syntax: 'term', description: 'Match rows containing term' },
+        { syntax: 'term1 term2', description: 'AND: both terms must match' },
+        { syntax: 'term1 | term2', description: 'OR: either term matches' },
+        { syntax: '-term', description: 'NOT: exclude rows with term' },
     ];
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -114,7 +124,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
             // Only trigger if not typing in an input/textarea
-            if (event.target instanceof HTMLInputElement || 
+            if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
             }
@@ -140,16 +150,24 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             ) {
                 setShowShortcutHelper(false);
             }
+            if (
+                searchHelperDropdownRef.current &&
+                searchHelperButtonRef.current &&
+                !searchHelperDropdownRef.current.contains(event.target as Node) &&
+                !searchHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowSearchHelper(false);
+            }
         };
 
-        if (showShortcutHelper) {
+        if (showShortcutHelper || showSearchHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper]);
+    }, [showShortcutHelper, showSearchHelper]);
 
     const sources_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const source of pkg.source) {
@@ -171,7 +189,8 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             columnHelper.accessor('name', {
                 header: () => <div className="flex items-center justify-center">Name</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
-                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>
+                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
+                size: 300
             }),
             columnHelper.accessor('version', {
                 header: () => <div className="flex items-center justify-center">Version</div>,
@@ -195,8 +214,44 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     </div>
                 );
                 },
-                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, [])
+                sortingFn: (a, b) => sortVunerabilitiesFn(a, b, []),
+                size: 80
             }
+            ),
+            columnHelper.accessor('variants', {
+                id: 'variants',
+                header: () => <div className="flex items-center justify-center">Variants</div>,
+                cell: info => (
+                    <div className="flex items-center justify-center h-full">
+                        <div className="flex flex-wrap gap-1 justify-center">
+                            {info.getValue().map((name: string) => (
+                                <span key={name} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-900 text-green-300">
+                                    {name}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                ),
+                enableSorting: false,
+                size: 120
+            }),
+            columnHelper.accessor(
+                row => row.vulnerabilities['Pending Assessment'] ?? 0,
+                {
+                    id: 'remainingPendingVulns',
+                    header: () => <div className="flex items-center justify-center">Remaining Pending Vulnerabilities</div>,
+                    cell: info => (
+                        <div className="flex items-center justify-center h-full text-center">
+                            {info.getValue()}
+                        </div>
+                    ),
+                    sortingFn: (a, b) => {
+                        const countA = a.original.vulnerabilities['Pending Assessment'] ?? 0;
+                        const countB = b.original.vulnerabilities['Pending Assessment'] ?? 0;
+                        return countA - countB;
+                    },
+                    size: 80
+                }
             ),
             columnHelper.accessor('source', {
                 header: () => <div className="flex items-center justify-center">Sources</div>,
@@ -236,6 +291,35 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
+
+            <div className="relative">
+                <button
+                    ref={searchHelperButtonRef}
+                    aria-label="search syntax helper"
+                    title="View search syntax"
+                    type="button"
+                    className="text-white hover:text-blue-300 transition-colors"
+                    onClick={() => setShowSearchHelper(!showSearchHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleInfo} />
+                </button>
+                {showSearchHelper && (
+                    <div
+                        ref={searchHelperDropdownRef}
+                        className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                    >
+                        <h3 className="font-bold text-white mb-3">Search Syntax</h3>
+                        <div className="space-y-2">
+                            {searchSyntaxHelp.map((item, index) => (
+                                <div key={index} className="flex justify-between gap-4">
+                                    <code className="text-cyan-300 min-w-[100px]">{item.syntax}</code>
+                                    <span className="text-gray-100">{item.description}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
 
             <FilterOption
                 label="Source"

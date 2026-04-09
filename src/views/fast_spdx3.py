@@ -8,7 +8,7 @@ import logging
 import re
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability, CVSS
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.packages import PackagesController
 from ..controllers.assessments import AssessmentsController
@@ -113,7 +113,7 @@ class FastSPDX3:
             # Store mapping from URI to package ID
             spdx_id = component.get('spdxId')
             if spdx_id:
-                self.uri_to_package[spdx_id] = package.id
+                self.uri_to_package[spdx_id] = package.string_id
 
             self.packagesCtrl.add(package)
 
@@ -414,6 +414,17 @@ class FastSPDX3:
         if not graph:
             return
 
+        # Pre-warm the in-memory assessment index for all packages in this document,
+        # filtered to the current variant, so that the deduplication check below is
+        # variant-scoped and does not treat another variant's assessments as matches.
+        _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
+        for pkg_string_id in self.uri_to_package.values():
+            if pkg_string_id not in self.assessmentsCtrl._db_queried_pkgs:
+                for a in Assessment.get_by_package(pkg_string_id):
+                    if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                        self.assessmentsCtrl._index_existing(a)
+                self.assessmentsCtrl._db_queried_pkgs.add(pkg_string_id)
+
         for rel in graph:
             if not isinstance(rel, dict):
                 continue
@@ -422,9 +433,21 @@ class FastSPDX3:
 
             assessment = self._parse_vex_relationship(rel)
             if assessment:
-                self.assessmentsCtrl.add(assessment)
+                # Skip if a compatible assessment already exists for this (vuln, pkg) pair
+                # and the current variant — avoids overwriting re-processed or manually
+                # updated assessments, matching the deduplication behaviour in YoctoVulns.
+                found = False
+                for pkg_id in assessment.packages:
+                    for existing in self.assessmentsCtrl.gets_by_vuln_pkg(assessment.vuln_id, pkg_id):
+                        if existing.is_compatible_status(assessment.status or ""):
+                            found = True
+                            break
+                    if found:
+                        break
+                if not found:
+                    self.assessmentsCtrl.add(assessment)
 
-    def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[VulnAssessment]:
+    def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[Assessment]:
         """
         Extract relevant information from VulnAssessmentRelationship element.
         """
@@ -446,7 +469,7 @@ class FastSPDX3:
             self.logger.warning(f"Package URI {package_uri} not found in package mapping for assessment")
             return None
 
-        assessment = VulnAssessment(vuln_id, [package_id])
+        assessment = Assessment.new_dto(vuln_id, [package_id])
 
         # Set status based on relationship type
         relationship_type = element.get('relationshipType', '')
@@ -472,12 +495,13 @@ class FastSPDX3:
         Remove vulnerabilities that don't have any assessments.
         Because report generation fails for vulnerabilities without assessments.
         """
-        vulnerabilities_to_remove = []
-
-        for vuln in self.vulnerabilitiesCtrl.vulnerabilities.values():
-            assessments = self.assessmentsCtrl.gets_by_vuln(vuln.id)
-            if not assessments:
-                vulnerabilities_to_remove.append(vuln.id)
+        # Use the pre-built _by_vuln index for O(1) lookups instead of a
+        # per-vulnerability gets_by_vuln() call that does a linear scan + DB query.
+        vulns_with_assessments = set(self.assessmentsCtrl._by_vuln.keys())
+        vulnerabilities_to_remove = [
+            vid for vid in list(self.vulnerabilitiesCtrl.vulnerabilities.keys())
+            if vid not in vulns_with_assessments
+        ]
 
         for vuln_id in vulnerabilities_to_remove:
             self.vulnerabilitiesCtrl.remove(vuln_id)

@@ -9,7 +9,7 @@ import os
 import random
 import string
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
 
 
@@ -77,12 +77,12 @@ class Templates:
                 vuln_obj['last_assessment'] = vuln_assessments[0]
                 vuln_obj['status'] = vuln_assessments[0]['status']
 
-            if len(vuln_obj['assessments']) > 0:
+            if len(vuln_obj.get('assessments', [])) > 0:
                 try:
                     epss_score = float((vuln_obj.get("epss", {}).get("score")) or 0.0)
                     if (filter_epss is None or epss_score >= filter_epss):
                         kwargs["vulnerabilities"][vuln_obj['id']] = vuln_obj
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         if filter_date is not None:
@@ -108,7 +108,7 @@ class Templates:
                 os.remove(f"{random_name}.adoc")
                 os.remove(f"{random_name}.pdf")
             finally:
-                raise Exception("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
+                raise RuntimeError("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
 
         with open(f"{random_name}.pdf", "rb") as f:
             pdf = f.read()
@@ -134,7 +134,7 @@ class Templates:
                 if os.path.exists(html_path):
                     os.remove(html_path)
             finally:
-                raise Exception("Error converting adoc to html: asciidoctor returned non-zero exit code")
+                raise RuntimeError("Error converting adoc to html: asciidoctor returned non-zero exit code")
 
         with open(html_path, "rb") as f:
             html = f.read()
@@ -252,7 +252,7 @@ class TemplatesExtensions:
             try:
                 epss_raw = (v.get("epss") or {}).get("score")
                 score = float(epss_raw or 0.0) * 100
-            except Exception:
+            except (ValueError, TypeError):
                 score = 0.0
             if score >= minimum:
                 result.append(v)
@@ -283,11 +283,131 @@ class TemplatesExtensions:
         return sorted(value, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)  # type: ignore
 
     @staticmethod
+    def _filter_by_date(
+        vals: List[dict],
+        date_filter: str,
+        get_date: Callable[[dict], Optional[str]],
+        include_no_date: Callable[[dict], bool] = lambda _: False,
+    ) -> List[dict]:
+        """Filter *vals* by *date_filter*, extracting each item's date via *get_date*.
+
+        *get_date* should return an ISO-8601 string or ``None``.
+        *include_no_date* returns ``True`` for items that should be included when
+        they have no date (used by filter_publish_date's ``include_unknown`` flag).
+        Returns the original list unchanged when *date_filter* cannot be parsed.
+        """
+
+        def parse_item_date(v: dict) -> Optional[datetime]:
+            raw = get_date(v)
+            if not raw:
+                return None
+            try:
+                d = datetime.fromisoformat(raw)
+                return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
+            except ValueError:
+                return None
+
+        result: List[dict] = []
+
+        if ".." in date_filter:
+            parts = date_filter.split("..")
+            if len(parts) != 2:
+                return vals
+            try:
+                start = datetime.fromisoformat(parts[0].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                end = datetime.fromisoformat(parts[1].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if start <= d <= end:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        elif date_filter.startswith(">="):
+            try:
+                threshold = datetime.fromisoformat(date_filter[2:].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if d >= threshold:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        elif date_filter.startswith(">"):
+            try:
+                threshold = datetime.fromisoformat(date_filter[1:].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if d > threshold:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        elif date_filter.startswith("<="):
+            try:
+                threshold = datetime.fromisoformat(date_filter[2:].strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if d <= threshold:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        elif date_filter.startswith("<"):
+            try:
+                threshold = datetime.fromisoformat(date_filter[1:].strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if d < threshold:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        else:
+            try:
+                start = datetime.fromisoformat(date_filter.strip()).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+                end = datetime.fromisoformat(date_filter.strip()).replace(
+                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            except ValueError:
+                return vals
+            for v in vals:
+                d = parse_item_date(v)
+                if d is not None:
+                    if start <= d <= end:
+                        result.append(v)
+                elif include_no_date(v):
+                    result.append(v)
+
+        return result
+
+    @staticmethod
     def filter_last_assessment_date(value: dict[str, dict] | list[dict], date_filter: str) -> list[dict]:
         """
         Filter vulnerabilities based on their last assessment date.
 
-                Supports the following formats:
+        Supports the following formats:
         - '>2026-01-01': After this date (exclusive)
         - '>=2026-01-01': After or on this date (inclusive)
         - '<2026-01-01': Before this date (exclusive)
@@ -295,151 +415,22 @@ class TemplatesExtensions:
         - '2026-01-01..2026-01-31': Between two dates (inclusive)
         - '2026-01-01': Exact date match
 
-                Args:
+        Args:
             value: Dictionary or list of vulnerabilities
             date_filter: Date filter string in one of the supported formats
 
-                    Returns:
+        Returns:
             List of filtered vulnerabilities
         """
-        vals: List[dict]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
 
-        result: List[dict] = []
+        def get_date(v: dict) -> Optional[str]:
+            la = v.get("last_assessment")
+            if la and isinstance(la, dict):
+                return la.get("timestamp")
+            return None
 
-        # Parse the date filter
-        if ".." in date_filter:
-            # Range filter: '2026-01-01..2026-01-31'
-            parts = date_filter.split("..")
-            if len(parts) != 2:
-                return vals  # Invalid format, return all
-            try:
-                start_date = datetime.fromisoformat(parts[0].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                end_date = datetime.fromisoformat(parts[1].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if start_date <= assess_date <= end_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals  # Invalid date format, return all
-
-        elif date_filter.startswith(">="):
-            # Greater than or equal: '>=2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if assess_date >= filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals
-
-        elif date_filter.startswith(">"):
-            # Greater than: '>2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if assess_date > filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals
-
-        elif date_filter.startswith("<="):
-            # Less than or equal: '<=2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if assess_date <= filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals
-
-        elif date_filter.startswith("<"):
-            # Less than: '<2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if assess_date < filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals
-
-        else:
-            # Exact date: '2026-01-01'
-            try:
-                filter_date_start = datetime.fromisoformat(date_filter.strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                filter_date_end = datetime.fromisoformat(date_filter.strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "last_assessment" in v and v["last_assessment"] and "timestamp" in v["last_assessment"]:
-                        try:
-                            assess_date = datetime.fromisoformat(v["last_assessment"]["timestamp"])
-                            if assess_date.tzinfo is None:
-                                assess_date = assess_date.replace(tzinfo=timezone.utc)
-                            else:
-                                assess_date = assess_date.astimezone(timezone.utc)
-                            if filter_date_start <= assess_date <= filter_date_end:
-                                result.append(v)
-                        except Exception:
-                            pass
-            except Exception:
-                return vals
-
-        return result
+        return TemplatesExtensions._filter_by_date(vals, date_filter, get_date)
 
     @staticmethod
     def filter_publish_date(
@@ -447,7 +438,6 @@ class TemplatesExtensions:
         date_filter: str,
         include_unknown: bool = False
     ) -> list[dict]:
-        # Similar implementation to filter_last_assessment_date but for the "published" field
         """
         Filter vulnerabilities based on their publish date.
 
@@ -459,172 +449,19 @@ class TemplatesExtensions:
         - `2026-01-01..2026-01-31`: Between two dates (inclusive)
         - `2026-01-01`: Exact date match, but ignores time (hours, minutes, seconds)
 
-            Args:
-                `value`: Dictionary or list of vulnerabilities
-                `date_filter`: Date filter string in one of the supported formats
+        Args:
+            `value`: Dictionary or list of vulnerabilities
+            `date_filter`: Date filter string in one of the supported formats
 
-            Returns:
-                List of filtered vulnerabilities
+        Returns:
+            List of filtered vulnerabilities
         """
-        vals: List[dict]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
 
-        result: List[dict] = []
+        def get_date(v: dict) -> Optional[str]:
+            return v.get("published") or None
 
-        # Parse the date filter
-        if ".." in date_filter:
-            # Range filter: '2026-01-01..2026-01-31'
-            parts = date_filter.split("..")
-            if len(parts) != 2:
-                return vals  # Invalid format, return all
-            try:
-                start_date = datetime.fromisoformat(parts[0].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                end_date = datetime.fromisoformat(parts[1].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+        def include_no_date(v: dict) -> bool:
+            return include_unknown and not v.get("published")
 
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if start_date <= publish_date <= end_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals  # Invalid date format, return all
-
-        elif date_filter.startswith(">="):
-            # Greater than or equal: '>=2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if publish_date >= filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals
-
-        elif date_filter.startswith(">"):
-            # Greater than: '>2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if publish_date > filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals
-
-        elif date_filter.startswith("<="):
-            # Less than or equal: '<=2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[2:].strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if publish_date <= filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals
-
-        elif date_filter.startswith("<"):
-            # Less than: '<2026-01-01'
-            try:
-                filter_date = datetime.fromisoformat(date_filter[1:].strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if publish_date < filter_date:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals
-
-        else:
-            # Exact date: '2026-01-01'
-            try:
-                filter_date_start = datetime.fromisoformat(date_filter.strip()).replace(
-                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-                filter_date_end = datetime.fromisoformat(date_filter.strip()).replace(
-                    hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
-                for v in vals:
-                    if "published" in v and v["published"]:
-                        try:
-                            publish_date = datetime.fromisoformat(v["published"])
-                            if publish_date.tzinfo is None:
-                                publish_date = publish_date.replace(tzinfo=timezone.utc)
-                            else:
-                                publish_date = publish_date.astimezone(timezone.utc)
-                            if filter_date_start <= publish_date <= filter_date_end:
-                                result.append(v)
-                        except Exception:
-                            pass
-                    elif include_unknown and (
-                        "published" not in v or not v["published"]
-                    ):
-                        result.append(v)
-            except Exception:
-                return vals
-
-        return result
+        return TemplatesExtensions._filter_by_date(vals, date_filter, get_date, include_no_date)

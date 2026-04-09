@@ -6,7 +6,7 @@
 import pytest
 import json
 from src.bin.webapp import create_app
-from . import write_demo_files
+from . import write_demo_files, setup_demo_db
 
 
 @pytest.fixture()
@@ -25,19 +25,20 @@ def init_files(tmp_path):
 
 @pytest.fixture()
 def app(init_files):
-    app = create_app()
-    app.config.update({
-        "TESTING": True,
-        "SCAN_FILE": init_files["status"],
-        "PKG_FILE": init_files["packages"],
-        "VULNS_FILE": init_files["vulnerabilities"],
-        "ASSESSMENTS_FILE": init_files["assessments"],
-        "OPENVEX_FILE": init_files["openvex"],
-        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
-        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
-    })
-
-    yield app
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": init_files["status"],
+            "OPENVEX_FILE": init_files["openvex"],
+            "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
+        })
+        setup_demo_db(application)
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
 @pytest.fixture()
@@ -65,11 +66,6 @@ def test_patch_vulnerability_with_cvss(client, init_files):
     # Verify CVSS was added
     cvss_scores = data["severity"]["cvss"]
     assert any(cvss["base_score"] == 8.5 for cvss in cvss_scores)
-    
-    # Verify time_estimates file was updated
-    assert init_files["time_estimates"].exists()
-    time_est_content = json.loads(init_files["time_estimates"].read_text())
-    assert "tasks" in time_est_content
 
 
 # Test PATCH vulnerability with missing CVSS fields
@@ -132,10 +128,6 @@ def test_patch_vulnerability_with_effort_and_cvss(client, init_files):
     # Verify CVSS was added (note: base_score might differ due to merging)
     cvss_scores = data["severity"]["cvss"]
     assert len(cvss_scores) >= 1
-    
-    # Verify files were updated
-    assert init_files["vulnerabilities"].exists()
-    assert init_files["time_estimates"].exists()
 
 
 # Test PATCH vulnerability not found
@@ -150,6 +142,18 @@ def test_patch_vulnerability_not_found(client):
     })
     assert response.status_code == 404
     assert response.data == b"Not found"
+
+
+def test_patch_vulnerability_no_body(client):
+    """PATCH with no JSON body returns 400/415 instead of 500 (None payload guard)."""
+    # Wrong content-type → Flask returns 415; empty JSON body → our guard returns 400
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492",
+                            data=b"", content_type="text/plain")
+    assert response.status_code in (400, 415)
+
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492",
+                            data=b"null", content_type="application/json")
+    assert response.status_code == 400
 
 
 # Test GET vulnerability by id (existing tests may not cover all paths)
@@ -436,10 +440,6 @@ def test_patch_vulnerabilities_batch_with_effort_and_cvss(client, init_files):
     assert vuln["effort"]["optimistic"] == "PT3H"
     # Check that CVSS scores exist
     assert len(vuln["severity"]["cvss"]) >= 1
-    
-    # Verify files were updated
-    assert init_files["vulnerabilities"].exists()
-    assert init_files["time_estimates"].exists()
 
 
 # Test that files are only written when there are results
@@ -485,3 +485,187 @@ def test_get_vulnerabilities_dict_format(client):
     data = json.loads(response.data)
     assert isinstance(data, dict)
     assert "CVE-2020-35492" in data
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/<id> — effort missing keys / invalid value / ordering
+# ---------------------------------------------------------------------------
+
+def test_patch_vulnerability_effort_missing_key(client):
+    """PATCH effort with missing 'pessimistic' key returns 400 (line 63)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "PT1H",
+            "likely": "PT4H"
+            # missing pessimistic
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+def test_patch_vulnerability_effort_invalid_type(client):
+    """PATCH effort with non-string/int values raises (ValueError) → 400 (lines 67-68)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": None,
+            "likely": None,
+            "pessimistic": None,
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+def test_patch_vulnerability_effort_not_ordered(client):
+    """PATCH effort where optimistic > likely returns 400 (lines 78-79)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "P2D",   # 2 days
+            "likely": "PT1H",      # 1 hour  (optimistic > likely)
+            "pessimistic": "P3D",
+        }
+    })
+    assert response.status_code == 400
+    assert b"Invalid effort" in response.data
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/batch — effort and CVSS error paths
+# ---------------------------------------------------------------------------
+
+def test_patch_batch_effort_invalid_type(client):
+    """Batch PATCH: invalid effort type for a valid vulnerability (line 128-129)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {
+                "optimistic": None,
+                "likely": None,
+                "pessimistic": None,
+            }
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] == 1
+    assert "Invalid effort values" in data["errors"][0]["error"]
+
+
+def test_patch_batch_effort_ordering_error(client):
+    """Batch PATCH: optimistic > likely returns error entry (line 124)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {
+                "optimistic": "P2D",
+                "likely": "PT1H",
+                "pessimistic": "P3D",
+            }
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] == 1
+    assert "Invalid effort values" in data["errors"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — compare_variant_id paths (lines 88, 100, 118)
+# ---------------------------------------------------------------------------
+
+def test_get_vulnerabilities_compare_base_none(client):
+    """GET with variant_id+compare_variant_id where base has no scan → base_ids=set() (line 88)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+
+
+def test_get_vulnerabilities_compare_intersection_no_scan(client):
+    """GET with operation=intersection and compare has no scan → records=[] (line 100)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+def test_get_vulnerabilities_compare_difference_no_scan(client):
+    """GET (default difference) compare has no scan → records=[] (line 118)."""
+    import uuid
+    base_id = str(uuid.uuid4())
+    compare_id = str(uuid.uuid4())
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=difference"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — invalid variant_id/project_id (lines 140, 162)
+# ---------------------------------------------------------------------------
+
+def test_get_vulnerabilities_invalid_variant_id(client):
+    """GET /api/vulnerabilities?variant_id=bad-uuid returns 400 (line 140)."""
+    response = client.get("/api/vulnerabilities?variant_id=not-a-valid-uuid")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "invalid" in data["error"].lower() or "variant" in data["error"].lower()
+
+
+def test_get_vulnerabilities_invalid_project_id(client):
+    """GET /api/vulnerabilities?project_id=bad-uuid returns 400 (line 162)."""
+    response = client.get("/api/vulnerabilities?project_id=not-a-valid-uuid")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "invalid" in data["error"].lower() or "project" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/<id> — invalid variant_id in effort (lines 280-281)
+# ---------------------------------------------------------------------------
+
+def test_patch_vulnerability_effort_invalid_variant_id(client):
+    """PATCH vulnerability effort with invalid variant_id returns 400 (lines 280-281)."""
+    response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "effort": {
+            "optimistic": "PT1H",
+            "likely": "PT4H",
+            "pessimistic": "P1D",
+        },
+        "variant_id": "not-a-valid-uuid",
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "variant_id" in data["error"].lower() or "invalid" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/vulnerabilities/batch — invalid variant_id in effort (lines 354-355)
+# ---------------------------------------------------------------------------
+
+def test_patch_batch_vulnerability_effort_invalid_variant_id(client):
+    """Batch PATCH effort with invalid variant_id appends error entry (lines 354-355)."""
+    response = client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "effort": {
+                "optimistic": "PT1H",
+                "likely": "PT4H",
+                "pessimistic": "P1D",
+            },
+            "variant_id": "not-a-valid-uuid",
+        }]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] >= 1
+    assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
+               for e in data["errors"])

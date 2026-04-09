@@ -1,0 +1,836 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Coverage tests for the new DB models: Vulnerability, Finding,
+Assessment, TimeEstimate, Metrics and their controllers."""
+
+import datetime
+import pytest
+from src.bin.webapp import create_app
+from src.extensions import db as _db
+from src.models.project import Project
+from src.models.variant import Variant
+from src.models.package import Package
+from src.models.vulnerability import Vulnerability
+from src.models.finding import Finding
+from src.models.assessment import Assessment
+from src.models.time_estimate import TimeEstimate
+from src.models.metrics import Metrics
+from src.controllers.vulnerabilities import VulnerabilitiesController
+from src.controllers.findings import FindingController
+from src.controllers.time_estimates import TimeEstimateController
+from src.controllers.metrics import MetricsController
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def app():
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": "/dev/null",
+        })
+        with application.app_context():
+            _db.create_all()
+            yield application
+            _db.drop_all()
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+
+
+@pytest.fixture()
+def project(app):
+    return Project.create("TestProject")
+
+
+@pytest.fixture()
+def variant(app, project):
+    return Variant.create("TestVariant", project.id)
+
+
+@pytest.fixture()
+def package(app):
+    return Package.create("libfoo", "1.0.0")
+
+
+@pytest.fixture()
+def vuln(app):
+    return Vulnerability.create_record(
+        id="CVE-2024-1234",
+        description="A test vulnerability.",
+        status="under_investigation",
+    )
+
+
+@pytest.fixture()
+def finding(app, package, vuln):
+    return Finding.create(package.id, vuln.id)
+
+
+@pytest.fixture()
+def assessment(app, finding, variant):
+    return Assessment.create(
+        status="under_investigation",
+        finding_id=finding.id,
+        variant_id=variant.id,
+    )
+
+
+@pytest.fixture()
+def time_estimate(app, finding, variant):
+    return TimeEstimate.create(
+        finding_id=finding.id,
+        variant_id=variant.id,
+        optimistic=1,
+        likely=3,
+        pessimistic=8,
+    )
+
+
+@pytest.fixture()
+def metrics(app, vuln):
+    return Metrics.create(
+        vulnerability_id=vuln.id,
+        version="3.1",
+        score=7.5,
+        vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        author="NVD",
+    )
+
+
+# ===========================================================================
+# Vulnerability model
+# ===========================================================================
+
+class TestVulnerability:
+    def test_create_and_get(self, app):
+        v = Vulnerability.create_record("CVE-2024-9999", description="desc")
+        assert Vulnerability.get_by_id("CVE-2024-9999") == v
+
+    def test_id_uppercased(self, app):
+        v = Vulnerability.create_record("cve-2024-0001")
+        assert v.id == "CVE-2024-0001"
+
+    def test_get_all(self, vuln, app):
+        Vulnerability.create_record("CVE-2024-0002")
+        records = Vulnerability.get_all()
+        assert len(records) >= 2
+
+    def test_get_or_create_existing(self, vuln):
+        v2 = Vulnerability.get_or_create(vuln.id)
+        assert v2.id == vuln.id
+
+    def test_get_or_create_new(self, app):
+        v = Vulnerability.get_or_create("CVE-2024-8888")
+        assert v.id == "CVE-2024-8888"
+
+    def test_update(self, vuln):
+        vuln.update_record(description="updated", status="fixed")
+        assert vuln.description == "updated"
+        assert vuln.status == "fixed"
+
+    def test_update_publish_date(self, vuln):
+        d = datetime.date(2024, 1, 15)
+        vuln.update_record(publish_date=d)
+        assert vuln.publish_date == d
+
+    def test_update_epss_score(self, vuln):
+        vuln.update_record(epss_score=0.85)
+        assert float(vuln.epss_score) == pytest.approx(0.85)
+
+    def test_update_links(self, vuln):
+        links = ["https://example.com/cve"]
+        vuln.update_record(links=links)
+        assert vuln.links == links
+
+    def test_delete(self, app):
+        v = Vulnerability.create_record("CVE-2024-DEL")
+        v.delete_record()
+        assert Vulnerability.get_by_id("CVE-2024-DEL") is None
+
+    def test_repr(self, vuln):
+        assert "CVE-2024-1234" in repr(vuln)
+
+
+# ===========================================================================
+# Finding model
+# ===========================================================================
+
+class TestFindingModel:
+    def test_create_and_get(self, finding):
+        f = Finding.get_by_id(finding.id)
+        assert f is not None
+        assert f.id == finding.id
+
+    def test_vulnerability_id_uppercased(self, package, vuln):
+        f = Finding.create(package.id, "cve-2024-1234")
+        assert f.vulnerability_id == "CVE-2024-1234"
+
+    def test_get_by_package(self, finding, package):
+        results = Finding.get_by_package(package.id)
+        assert any(f.id == finding.id for f in results)
+
+    def test_get_by_vulnerability(self, finding, vuln):
+        results = Finding.get_by_vulnerability(vuln.id)
+        assert any(f.id == finding.id for f in results)
+
+    def test_get_by_package_and_vulnerability(self, finding, package, vuln):
+        f = Finding.get_by_package_and_vulnerability(package.id, vuln.id)
+        assert f is not None
+        assert f.id == finding.id
+
+    def test_get_or_create_existing(self, finding, package, vuln):
+        f2 = Finding.get_or_create(package.id, vuln.id)
+        assert f2.id == finding.id
+
+    def test_get_or_create_new(self, app, package, vuln):
+        pkg2 = Package.create("libbar", "2.0.0")
+        f = Finding.get_or_create(pkg2.id, vuln.id)
+        assert f is not None
+
+    def test_delete(self, app, package, vuln):
+        f = Finding.create(package.id, vuln.id)
+        fid = f.id
+        f.delete()
+        assert Finding.get_by_id(fid) is None
+
+    def test_repr(self, finding):
+        assert "Finding" in repr(finding)
+
+
+# ===========================================================================
+# Assessment model
+# ===========================================================================
+
+class TestAssessmentModel:
+    def test_create_and_get(self, assessment):
+        a = Assessment.get_by_id(assessment.id)
+        assert a is not None
+        assert a.status == "under_investigation"
+
+    def test_get_by_finding(self, assessment, finding):
+        results = Assessment.get_by_finding(finding.id)
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_variant(self, assessment, variant):
+        results = Assessment.get_by_variant(variant.id)
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_finding_and_variant(self, assessment, finding, variant):
+        results = Assessment.get_by_finding_and_variant(finding.id, variant.id)
+        assert any(a.id == assessment.id for a in results)
+
+    def test_update_status(self, assessment):
+        assessment.update(status="fixed")
+        assert assessment.status == "fixed"
+
+    def test_update_many_fields(self, assessment):
+        assessment.update(
+            source="grype",
+            simplified_status="fixed",
+            status_notes="resolved in 1.2",
+            justification="vulnerable_code_not_present",
+            impact_statement="no impact",
+            workaround="upgrade",
+            responses=["update"],
+        )
+        assert assessment.source == "grype"
+        assert assessment.simplified_status == "fixed"
+        assert assessment.responses == ["update"]
+
+    def test_timestamp_set(self, assessment):
+        assert assessment.timestamp is not None
+
+    def test_delete(self, app, finding, variant):
+        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        aid = a.id
+        a.delete()
+        assert Assessment.get_by_id(aid) is None
+
+    def test_repr(self, assessment):
+        assert "Assessment" in repr(assessment)
+
+
+# ===========================================================================
+# TimeEstimate model
+# ===========================================================================
+
+class TestTimeEstimateModel:
+    def test_create_and_get(self, time_estimate):
+        e = TimeEstimate.get_by_id(time_estimate.id)
+        assert e is not None
+        assert e.optimistic == 1
+        assert e.likely == 3
+        assert e.pessimistic == 8
+
+    def test_get_by_finding(self, time_estimate, finding):
+        results = TimeEstimate.get_by_finding(finding.id)
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_get_by_variant(self, time_estimate, variant):
+        results = TimeEstimate.get_by_variant(variant.id)
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_get_by_finding_and_variant(self, time_estimate, finding, variant):
+        e = TimeEstimate.get_by_finding_and_variant(finding.id, variant.id)
+        assert e is not None
+        assert e.id == time_estimate.id
+
+    def test_update(self, time_estimate):
+        time_estimate.update(optimistic=2, likely=5, pessimistic=10)
+        assert time_estimate.optimistic == 2
+        assert time_estimate.likely == 5
+        assert time_estimate.pessimistic == 10
+
+    def test_delete(self, app, finding, variant):
+        e = TimeEstimate.create(finding_id=finding.id, variant_id=variant.id, optimistic=1, likely=2, pessimistic=3)
+        eid = e.id
+        e.delete()
+        assert TimeEstimate.get_by_id(eid) is None
+
+    def test_repr(self, time_estimate):
+        assert "TimeEstimate" in repr(time_estimate)
+
+
+# ===========================================================================
+# Metrics model
+# ===========================================================================
+
+class TestMetricsModel:
+    def test_create_and_get(self, metrics):
+        m = Metrics.get_by_id(metrics.id)
+        assert m is not None
+        assert m.version == "3.1"
+        assert float(m.score) == pytest.approx(7.5)
+
+    def test_get_by_vulnerability(self, metrics, vuln):
+        results = Metrics.get_by_vulnerability(vuln.id)
+        assert any(m.id == metrics.id for m in results)
+
+    def test_vulnerability_id_uppercased(self, app, vuln):
+        m = Metrics.create(vulnerability_id=vuln.id.lower(), score=5.0)
+        assert m.vulnerability_id == vuln.id.upper()
+
+    def test_update(self, metrics):
+        metrics.update(score=9.8, author="MITRE")
+        assert float(metrics.score) == pytest.approx(9.8)
+        assert metrics.author == "MITRE"
+
+    def test_delete(self, app, vuln):
+        m = Metrics.create(vulnerability_id=vuln.id, version="2.0", score=6.0)
+        mid = m.id
+        m.delete()
+        assert Metrics.get_by_id(mid) is None
+
+    def test_repr(self, metrics):
+        assert "Metrics" in repr(metrics)
+
+
+# ===========================================================================
+# VulnerabilitiesController (DB helpers)
+# ===========================================================================
+
+class TestVulnerabilitiesControllerDB:
+    def test_serialize(self, vuln):
+        data = VulnerabilitiesController.serialize(vuln)
+        assert data["id"] == "CVE-2024-1234"
+        assert "description" in data
+        assert "epss_score" in data
+
+    def test_serialize_list(self, vuln):
+        lst = VulnerabilitiesController.serialize_list([vuln])
+        assert len(lst) == 1
+
+    def test_get(self, vuln):
+        assert VulnerabilitiesController.get_db(vuln.id).id == vuln.id
+
+    def test_get_all(self, vuln):
+        assert len(VulnerabilitiesController.get_all_db()) >= 1
+
+    def test_create(self, app):
+        v = VulnerabilitiesController.create_db("CVE-2025-0001", description="new")
+        assert v.id == "CVE-2025-0001"
+
+    def test_create_empty_raises(self, app):
+        with pytest.raises(ValueError):
+            VulnerabilitiesController.create_db("  ")
+
+    def test_create_with_date_string(self, app):
+        v = VulnerabilitiesController.create_db("CVE-2025-0002", publish_date="2025-01-01")
+        assert v.publish_date == datetime.date(2025, 1, 1)
+
+    def test_get_or_create(self, vuln):
+        v2 = VulnerabilitiesController.get_or_create_db(vuln.id)
+        assert v2.id == vuln.id
+
+    def test_get_or_create_empty_raises(self, app):
+        with pytest.raises(ValueError):
+            VulnerabilitiesController.get_or_create_db("")
+
+    def test_update_by_instance(self, vuln):
+        VulnerabilitiesController.update_db(vuln, status="fixed")
+        assert vuln.status == "fixed"
+
+    def test_update_by_id_string(self, vuln):
+        VulnerabilitiesController.update_db(vuln.id, description="updated desc")
+        assert vuln.description == "updated desc"
+
+    def test_update_not_found_raises(self, app):
+        with pytest.raises(ValueError):
+            VulnerabilitiesController.update_db("CVE-9999-XXXX")
+
+    def test_delete_by_instance(self, app):
+        v = VulnerabilitiesController.create_db("CVE-2025-DEL")
+        VulnerabilitiesController.delete_db(v)
+        assert VulnerabilitiesController.get_db("CVE-2025-DEL") is None
+
+    def test_delete_by_id_string(self, app):
+        v = VulnerabilitiesController.create_db("CVE-2025-DEL2")
+        VulnerabilitiesController.delete_db(v.id)
+        assert VulnerabilitiesController.get_db("CVE-2025-DEL2") is None
+
+    def test_delete_not_found_raises(self, app):
+        with pytest.raises(ValueError):
+            VulnerabilitiesController.delete_db("CVE-NOTEXIST")
+
+
+# ===========================================================================
+# FindingController
+# ===========================================================================
+
+class TestFindingController:
+    def test_serialize(self, finding):
+        data = FindingController.serialize(finding)
+        assert "id" in data
+        assert data["vulnerability_id"] == "CVE-2024-1234"
+
+    def test_serialize_list(self, finding):
+        lst = FindingController.serialize_list([finding])
+        assert len(lst) == 1
+
+    def test_get(self, finding):
+        assert FindingController.get(str(finding.id)).id == finding.id
+
+    def test_get_by_package(self, finding, package):
+        results = FindingController.get_by_package(package.id)
+        assert any(f.id == finding.id for f in results)
+
+    def test_get_by_vulnerability(self, finding, vuln):
+        results = FindingController.get_by_vulnerability(vuln.id)
+        assert any(f.id == finding.id for f in results)
+
+    def test_create(self, app, package, vuln):
+        pkg2 = Package.create("libtest", "3.0.0")
+        f = FindingController.create(pkg2.id, vuln.id)
+        assert f.vulnerability_id == vuln.id
+
+    def test_create_empty_vuln_id_raises(self, package):
+        with pytest.raises(ValueError):
+            FindingController.create(package.id, "  ")
+
+    def test_get_or_create(self, finding, package, vuln):
+        f2 = FindingController.get_or_create(package.id, vuln.id)
+        assert f2.id == finding.id
+
+    def test_delete_by_instance(self, app, package, vuln):
+        f = Finding.create(package.id, vuln.id)
+        fid = f.id
+        FindingController.delete(f)
+        assert FindingController.get(fid) is None
+
+    def test_delete_by_id_string(self, app, package, vuln):
+        pkg2 = Package.create("libdel", "1.0")
+        f = Finding.create(pkg2.id, vuln.id)
+        fid = f.id
+        FindingController.delete(str(fid))
+        assert FindingController.get(fid) is None
+
+    def test_delete_not_found_raises(self, app):
+        import uuid
+        with pytest.raises(ValueError):
+            FindingController.delete(str(uuid.uuid4()))
+
+
+# ===========================================================================
+# Assessment – CRUD helpers (formerly via AssessmentDBController)
+# ===========================================================================
+
+class TestAssessmentDBController:
+    def test_serialize(self, assessment):
+        # Field access on the model replaces the old controller serialize()
+        assert assessment.status == "under_investigation"
+        assert assessment.finding_id is not None
+        assert assessment.variant_id is not None
+
+    def test_serialize_list(self, assessment):
+        lst = [assessment]
+        assert len(lst) == 1
+
+    def test_get(self, assessment):
+        assert Assessment.get_by_id(str(assessment.id)).id == assessment.id
+
+    def test_get_by_finding(self, assessment, finding):
+        results = Assessment.get_by_finding(finding.id)
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_variant(self, assessment, variant):
+        results = Assessment.get_by_variant(variant.id)
+        assert any(a.id == assessment.id for a in results)
+
+    def test_create(self, app, finding, variant):
+        a = Assessment.create(
+            "affected",
+            finding_id=finding.id,
+            variant_id=variant.id,
+        )
+        assert a.status == "affected"
+
+    def test_update_by_instance(self, assessment):
+        assessment.update(status="fixed")
+        assert assessment.status == "fixed"
+
+    def test_delete_by_instance(self, app, finding, variant):
+        a = Assessment.create("affected", finding_id=finding.id, variant_id=variant.id)
+        aid = a.id
+        a.delete()
+        assert Assessment.get_by_id(aid) is None
+
+
+# ===========================================================================
+# TimeEstimateController
+# ===========================================================================
+
+class TestTimeEstimateController:
+    def test_serialize(self, time_estimate):
+        data = TimeEstimateController.serialize(time_estimate)
+        assert data["optimistic"] == 1
+        assert data["likely"] == 3
+        assert data["pessimistic"] == 8
+
+    def test_serialize_list(self, time_estimate):
+        lst = TimeEstimateController.serialize_list([time_estimate])
+        assert len(lst) == 1
+
+    def test_get(self, time_estimate):
+        assert TimeEstimateController.get(str(time_estimate.id)).id == time_estimate.id
+
+    def test_get_by_finding(self, time_estimate, finding):
+        results = TimeEstimateController.get_by_finding(finding.id)
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_get_by_variant(self, time_estimate, variant):
+        results = TimeEstimateController.get_by_variant(variant.id)
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_create(self, app, finding, variant):
+        e = TimeEstimateController.create(finding_id=finding.id, variant_id=variant.id,
+                                          optimistic=2, likely=4, pessimistic=6)
+        assert e.optimistic == 2
+
+    def test_create_invalid_order_raises(self, app, finding, variant):
+        with pytest.raises(ValueError):
+            TimeEstimateController.create(optimistic=10, likely=5, pessimistic=3)
+
+    def test_update(self, time_estimate):
+        TimeEstimateController.update(time_estimate, optimistic=2, likely=5, pessimistic=10)
+        assert time_estimate.optimistic == 2
+
+    def test_update_invalid_order_raises(self, time_estimate):
+        with pytest.raises(ValueError):
+            TimeEstimateController.update(time_estimate, optimistic=100)
+
+    def test_update_not_found_raises(self, app):
+        import uuid
+        with pytest.raises(ValueError):
+            TimeEstimateController.update(str(uuid.uuid4()))
+
+    def test_delete_by_instance(self, app, finding, variant):
+        e = TimeEstimate.create(finding_id=finding.id, variant_id=variant.id,
+                                optimistic=1, likely=2, pessimistic=3)
+        eid = e.id
+        TimeEstimateController.delete(e)
+        assert TimeEstimateController.get(eid) is None
+
+    def test_delete_not_found_raises(self, app):
+        import uuid
+        with pytest.raises(ValueError):
+            TimeEstimateController.delete(str(uuid.uuid4()))
+
+
+# ===========================================================================
+# MetricsController
+# ===========================================================================
+
+class TestMetricsController:
+    def test_serialize(self, metrics):
+        data = MetricsController.serialize(metrics)
+        assert data["vulnerability_id"] == "CVE-2024-1234"
+        assert data["version"] == "3.1"
+        assert data["score"] == pytest.approx(7.5)
+
+    def test_serialize_list(self, metrics):
+        lst = MetricsController.serialize_list([metrics])
+        assert len(lst) == 1
+
+    def test_get(self, metrics):
+        assert MetricsController.get(str(metrics.id)).id == metrics.id
+
+    def test_get_by_vulnerability(self, metrics, vuln):
+        results = MetricsController.get_by_vulnerability(vuln.id)
+        assert any(m.id == metrics.id for m in results)
+
+    def test_create(self, app, vuln):
+        m = MetricsController.create(vuln.id, version="2.0", score=5.0, author="NVD")
+        assert float(m.score) == pytest.approx(5.0)
+
+    def test_create_empty_vuln_id_raises(self, app):
+        with pytest.raises(ValueError):
+            MetricsController.create("  ")
+
+    def test_update_by_instance(self, metrics):
+        MetricsController.update(metrics, score=9.9, author="MITRE")
+        assert float(metrics.score) == pytest.approx(9.9)
+        assert metrics.author == "MITRE"
+
+    def test_update_not_found_raises(self, app):
+        import uuid
+        with pytest.raises(ValueError):
+            MetricsController.update(str(uuid.uuid4()), score=1.0)
+
+    def test_delete_by_instance(self, app, vuln):
+        m = Metrics.create(vulnerability_id=vuln.id, score=1.0)
+        mid = m.id
+        MetricsController.delete(m)
+        assert MetricsController.get(mid) is None
+
+    def test_delete_not_found_raises(self, app):
+        import uuid
+        with pytest.raises(ValueError):
+            MetricsController.delete(str(uuid.uuid4()))
+
+
+# ===========================================================================
+# Additional model coverage — string UUID paths and edge cases
+# ===========================================================================
+
+class TestAssessmentModelExtra:
+    """Cover Assessment model paths not exercised by the main TestAssessmentModel."""
+
+    def test_create_with_string_finding_and_variant_ids(self, app, finding, variant):
+        """Assessment.create() with string finding_id and variant_id (lines 522, 524)."""
+        a = Assessment.create(
+            status="affected",
+            finding_id=str(finding.id),
+            variant_id=str(variant.id),
+        )
+        assert a is not None
+        assert a.finding_id == finding.id
+
+    def test_from_dict_invalid_uuid_id(self):
+        """from_dict() with an unparseable id falls back gracefully (lines 362-363)."""
+        a = Assessment.from_dict({"id": "not-a-valid-uuid", "vuln_id": "CVE-X", "packages": []})
+        assert a is not None
+
+    def test_from_dict_invalid_timestamp(self):
+        """from_dict() with an unparseable timestamp falls back (lines 373-374)."""
+        a = Assessment.from_dict({
+            "vuln_id": "CVE-X",
+            "packages": [],
+            "timestamp": "not-a-timestamp",
+        })
+        assert a is not None
+        # timestamp keeps its default value from new_dto (datetime.now), not None
+        assert isinstance(a.timestamp, datetime.datetime)
+
+    def test_get_by_finding_with_string_id(self, app, assessment, finding):
+        """get_by_finding() accepts a string UUID (line 608)."""
+        results = Assessment.get_by_finding(str(finding.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_variant_with_string_id(self, app, assessment, variant):
+        """get_by_variant() accepts a string UUID (line 617)."""
+        results = Assessment.get_by_variant(str(variant.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_get_by_finding_and_variant_with_string_ids(self, app, assessment, finding, variant):
+        """get_by_finding_and_variant() accepts string UUIDs (lines 629, 631)."""
+        results = Assessment.get_by_finding_and_variant(str(finding.id), str(variant.id))
+        assert any(a.id == assessment.id for a in results)
+
+    def test_add_response_when_responses_none(self):
+        """add_response() when self.responses is None initialises the list (line 316)."""
+        a = Assessment.new_dto("CVE-RESP", [])
+        a.responses = None
+        added = a.add_response("can_not_fix")
+        assert added is True
+        assert a.responses == ["can_not_fix"]
+
+    def test_merge_string_timestamps_other_newer(self):
+        """merge() with string timestamps: other > self updates self.timestamp (lines 470-471)."""
+        a1 = Assessment.new_dto("CVE-M", [])
+        a2 = Assessment.new_dto("CVE-M", [])
+        # Merge requires identical IDs; use the same ID to allow merge to proceed
+        a2.id = a1.id
+        a1.timestamp = "2023-01-01T00:00:00"
+        a2.timestamp = "2024-01-01T00:00:00"
+        a1.merge(a2)
+        assert a1.timestamp == "2024-01-01T00:00:00"
+
+    def test_packages_setter(self):
+        """packages setter converts any iterable to a list (line 172)."""
+        a = Assessment.new_dto("CVE-SET", [])
+        a.packages = ("pkg1@1.0", "pkg2@2.0")
+        assert a._packages == ["pkg1@1.0", "pkg2@2.0"]
+
+    def test_vuln_id_db_fallback(self, app, assessment):
+        """vuln_id property falls back to finding.vulnerability_id when _vuln_id
+        is empty (lines 151-153)."""
+        # Re-fetch from DB — reconstructor sets _vuln_id = "" (falsy), so the
+        # property must fall back to finding.vulnerability_id.
+        from src.models.assessment import Assessment as DBAssessment
+        db_a = DBAssessment.get_by_id(assessment.id)
+        db_a._vuln_id = ""  # ensure the transient value is empty
+        assert db_a.vuln_id == "CVE-2024-1234"
+
+    def test_packages_db_fallback(self, app, assessment):
+        """packages property falls back to finding.package when _packages is empty
+        (lines 166-167)."""
+        from src.models.assessment import Assessment as DBAssessment
+        db_a = DBAssessment.get_by_id(assessment.id)
+        db_a._packages = []  # ensure the transient list is empty
+        pkgs = db_a.packages
+        assert "libfoo@1.0.0" in pkgs
+
+
+class TestFindingModelExtra:
+    """Cover Finding paths not in the main TestFindingModel."""
+
+    def test_create_with_commit_false_uses_flush(self, app, package, vuln):
+        """create(..., commit=False) calls flush instead of commit (line 89)."""
+        from src.extensions import db as _db
+        f = Finding.create(package.id, vuln.id, commit=False)
+        assert f.id is not None  # PK available after flush
+        _db.session.rollback()  # clean up without persisting
+
+
+class TestMetricsModelExtra:
+    """Cover Metrics model paths not in the main TestMetricsModel."""
+
+    def test_get_by_id_with_string_uuid(self, app, metrics):
+        """get_by_id() accepts a string UUID (line 62)."""
+        result = Metrics.get_by_id(str(metrics.id))
+        assert result is not None
+        assert result.id == metrics.id
+
+    def test_update_version_field(self, app, metrics):
+        """update() with the version kwarg covers line 81."""
+        metrics.update(version="2.0")
+        assert metrics.version == "2.0"
+
+    def test_from_cvss_duplicate_fallback(self, app, vuln, metrics):
+        """from_cvss() falls back to SELECT when INSERT raises (lines 131-132)."""
+        from src.models.cvss import CVSS
+        from sqlalchemy.exc import IntegrityError
+        from unittest.mock import patch as mock_patch
+        # Build a CVSS matching the existing metrics fixture
+        cvss = CVSS(
+            version=metrics.version,
+            vector_string=metrics.vector or "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author=metrics.author or "NVD",
+            base_score=float(metrics.score),
+            exploitability_score=0.0,
+            impact_score=0.0,
+        )
+        # Clear _seen so from_cvss attempts the INSERT path
+        Metrics._seen.discard((vuln.id, cvss.version, float(cvss.base_score)))
+        # Mock create() to raise IntegrityError, forcing the SELECT fallback (lines 131-132)
+        with mock_patch.object(Metrics, "create", side_effect=IntegrityError("stmt", {}, None)):
+            result = Metrics.from_cvss(cvss, vuln.id)
+        assert result is not None
+        assert result.id == metrics.id
+
+
+class TestTimeEstimateModelExtra:
+    """Cover TimeEstimate model paths not in the main TestTimeEstimateModel."""
+
+    def test_get_by_id_with_string_uuid(self, app, time_estimate):
+        """get_by_id() accepts a string UUID (line 64)."""
+        from src.models.time_estimate import TimeEstimate
+        result = TimeEstimate.get_by_id(str(time_estimate.id))
+        assert result is not None
+        assert result.id == time_estimate.id
+
+    def test_get_by_finding_with_string_uuid(self, app, time_estimate, finding):
+        """get_by_finding() accepts a string UUID (line 71)."""
+        from src.models.time_estimate import TimeEstimate
+        results = TimeEstimate.get_by_finding(str(finding.id))
+        assert any(e.id == time_estimate.id for e in results)
+
+    def test_get_by_variant_with_string_uuid(self, app, time_estimate, variant):
+        """get_by_variant() accepts a string UUID (line 80)."""
+        from src.models.time_estimate import TimeEstimate
+        results = TimeEstimate.get_by_variant(str(variant.id))
+        assert any(e.id == time_estimate.id for e in results)
+
+
+class TestPackageModelExtra:
+    """Cover Package model paths not elsewhere tested."""
+
+    def test_eq_with_non_package_returns_not_implemented(self, app):
+        """__eq__ returns NotImplemented for non-Package objects (line 129)."""
+        pkg = Package.create("testpkg", "1.0.0")
+        result = pkg.__eq__("notapackage")
+        assert result is NotImplemented
+
+    def test_repr_contains_string_id(self, app):
+        """__repr__ (line 142) returns a string with the package string_id."""
+        pkg = Package.create("reprpkg", "2.0.0")
+        assert "reprpkg@2.0.0" in repr(pkg)
+
+    def test_bulk_find_or_create_purl_merge(self, app):
+        """bulk_find_or_create() when a package already exists merges purl (lines 307-308)."""
+        # First creation
+        Package.find_or_create("bulkpkg", "1.0", [], ["pkg:generic/bulkpkg@1.0"], "")
+        # Second call with same name/version but a new purl — triggers the merge branch
+        result = Package.bulk_find_or_create([
+            {
+                "name": "bulkpkg",
+                "version": "1.0",
+                "cpe": [],
+                "purl": ["pkg:pypi/bulkpkg@1.0"],
+                "licences": "",
+            }
+        ])
+        pkg = result.get("bulkpkg@1.0")
+        assert pkg is not None
+        assert "pkg:pypi/bulkpkg@1.0" in (pkg.purl or [])
+
+
+class TestVulnerabilityModelExtra:
+    """Cover Vulnerability model paths not elsewhere tested."""
+
+    def test_update_record_yocto_description(self, app, vuln):
+        """update_record() with yocto_description kwarg (line 542)."""
+        from src.models.vulnerability import Vulnerability
+        v = Vulnerability.get_by_id(vuln.id)
+        v.update_record(yocto_description="Yocto notes")
+        assert v.yocto_description == "Yocto notes"
+
+    def test_persist_from_transient_bad_publish_date(self, app):
+        """persist_from_transient() with an unparseable published date falls back
+        gracefully (lines 610-611)."""
+        from src.models.vulnerability import Vulnerability
+        transient = Vulnerability("CVE-2099-BADDATE", ["scanner"], "ds", "ns")
+        transient.published = "not-a-date"
+        transient.add_text("Some description", "description")
+        record = Vulnerability.persist_from_transient(transient)
+        assert record is not None
+        assert record.publish_date is None

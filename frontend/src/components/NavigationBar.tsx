@@ -1,5 +1,6 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faBugSlash } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear } from '@fortawesome/free-solid-svg-icons';
+import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-cyan-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -11,9 +12,12 @@ type Props = {
   changeTab: (tab: string) => void;
   darkMode: boolean;
   setDarkMode: (mode: boolean) => void;
+  defaultProject?: { id: string; name: string } | null;
+  defaultVariant?: { id: string; name: string } | null;
+  onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string) => void;
 };
 
-function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props>) {
+function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, onApply }: Readonly<Props>) {
   return (
   <nav>
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -32,14 +36,14 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
         </button>
       </li>
 
-      {/* === Packages === */}
+      {/* === SBOM === */}
       <li className={[bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('packages')}
           className="flex items-center h-full px-4 py-2"
         >
           <FontAwesomeIcon icon={faBox} className="mr-1" />
-          Packages
+          SBOM
         </button>
       </li>
 
@@ -55,13 +59,35 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
       </li>
 
       {/* === Patch-Finder === */}
-      <li className={[bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
+      {/* <li className={[bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('patch-finder')}
           className="flex items-center h-full px-4 py-2"
         >
           <FontAwesomeIcon icon={faBugSlash} className="mr-1" />
           Patch-Finder
+        </button>
+      </li> */}
+
+      {/* === Scans === */}
+      <li className={[bgHoverColor, tab == 'scans' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('scans')}
+          className="flex items-center h-full px-4 py-2"
+        >
+          <FontAwesomeIcon icon={faClockRotateLeft} className="mr-1" />
+          Scans
+        </button>
+      </li>
+
+      {/* === Review === */}
+      <li className={[bgHoverColor, tab == 'review' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('review')}
+          className="flex items-center h-full px-4 py-2"
+        >
+          <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
+          Review
         </button>
       </li>
 
@@ -81,8 +107,33 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode }: Readonly<Props
         </button>
       </li>
 
+      {/* === Settings === */}
+      <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('settings')}
+          className="flex items-center h-full px-4 py-2"
+        >
+          <FontAwesomeIcon icon={faGear} className="mr-1" />
+          Settings
+        </button>
+      </li>
+
       {/* Spacer */}
       <li className="grow"></li>
+
+      {/* === Project / Variant Selector === */}
+      <li className="flex items-stretch">
+        <ProjectVariantSelector
+          defaultProject={defaultProject}
+          defaultVariant={defaultVariant}
+          onApply={onApply}
+        />
+      </li>
+
+      {/* === Divider === */}
+      <li className="flex items-center mx-3">
+        <div className="border-l h-8 dark:border-neutral-300"></div>
+      </li>
 
       {/* === Dark Mode Toggle === */}
       <li className="px-4 py-2">

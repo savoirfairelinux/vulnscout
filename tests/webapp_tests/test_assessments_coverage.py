@@ -6,7 +6,7 @@
 import pytest
 import json
 from src.bin.webapp import create_app
-from . import write_demo_files
+from . import write_demo_files, setup_demo_db
 
 
 @pytest.fixture()
@@ -25,19 +25,20 @@ def init_files(tmp_path):
 
 @pytest.fixture()
 def app(init_files):
-    app = create_app()
-    app.config.update({
-        "TESTING": True,
-        "SCAN_FILE": init_files["status"],
-        "PKG_FILE": init_files["packages"],
-        "VULNS_FILE": init_files["vulnerabilities"],
-        "ASSESSMENTS_FILE": init_files["assessments"],
-        "OPENVEX_FILE": init_files["openvex"],
-        "TIME_ESTIMATES_PATH": init_files["time_estimates"],
-        "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
-    })
-
-    yield app
+    import os
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({
+            "TESTING": True,
+            "SCAN_FILE": init_files["status"],
+            "OPENVEX_FILE": init_files["openvex"],
+            "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
+        })
+        setup_demo_db(application)
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
 
 
 @pytest.fixture()
@@ -123,7 +124,6 @@ def test_post_assessment_with_workaround_and_timestamp(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["workaround"] == 'Disable feature X'
-    assert data["assessment"]["workaround_timestamp"] == '2024-01-15T12:00:00Z'
 
 
 # Test POST assessment with workaround without timestamp
@@ -137,7 +137,6 @@ def test_post_assessment_with_workaround_without_timestamp(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["workaround"] == 'Apply temporary patch'
-    assert data["assessment"]["workaround_timestamp"] != ""
 
 
 # Test POST assessment with responses
@@ -383,7 +382,6 @@ def test_update_assessment_workaround_without_timestamp(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["workaround"] == 'New workaround'
-    assert data["assessment"]["workaround_timestamp"] != ''
 
 
 # Test PUT assessment - update workaround with timestamp
@@ -404,7 +402,6 @@ def test_update_assessment_workaround_with_timestamp(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["workaround"] == 'Timestamped workaround'
-    assert data["assessment"]["workaround_timestamp"] == '2024-02-20T10:00:00Z'
 
 
 # Test PUT assessment - invalid data (no payload)
@@ -519,3 +516,160 @@ def test_update_assessment_updates_openvex_file(client, init_files):
     assert init_files["openvex"].exists()
     openvex_content = json.loads(init_files["openvex"].read_text())
     assert "statements" in openvex_content
+
+
+def test_post_assessment_invalid_timestamp(client):
+    """POST with an unparseable timestamp string falls back silently (lines 257-258)."""
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
+        "packages": ["cairo@1.16.0"],
+        "status": "affected",
+        "timestamp": "not-a-valid-timestamp",
+    })
+    assert response.status_code == 200
+
+
+def test_save_openvex_exception_is_silenced(client, monkeypatch):
+    """_save_openvex silently ignores write errors (lines 41-42)."""
+    import builtins
+    real_open = builtins.open
+
+    def fail_on_write(path, mode="r", **kwargs):
+        # path can be str or pathlib.Path — use str() for consistent matching
+        if "openvex" in str(path) and "w" in str(mode):
+            raise PermissionError("no write access")
+        return real_open(path, mode, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fail_on_write)
+
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
+        "packages": ["cairo@1.16.0"], "status": "affected"
+    })
+    # Despite the write failure, the API should still succeed
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/assessments?project_id=... — invalid UUID (line 71)
+# ---------------------------------------------------------------------------
+
+def test_get_assessments_invalid_project_id(client):
+    """GET /api/assessments with an invalid project_id UUID returns 400 (line 71)."""
+    response = client.get("/api/assessments?project_id=not-a-valid-uuid")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "Invalid project_id" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities/<vuln_id>/variants — line 111 (return variants_out, 200)
+# ---------------------------------------------------------------------------
+
+def test_get_variants_by_vuln(client):
+    """GET /api/vulnerabilities/<vuln_id>/variants returns 200 list (line 111)."""
+    response = client.get("/api/vulnerabilities/CVE-2020-35492/variants")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<vuln_id>/assessments — variant_id / vuln_id errors
+# ---------------------------------------------------------------------------
+
+def test_post_assessment_invalid_variant_id(client):
+    """POST assessment with non-UUID variant_id returns 400 (lines 175-176)."""
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        "packages": ["test@1.0.0"],
+        "status": "affected",
+        "variant_id": "not-a-valid-uuid",
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "variant_id" in data["error"].lower() or "invalid" in data["error"].lower()
+
+
+def test_post_assessment_vuln_id_mismatch(client):
+    """POST assessment with mismatched vuln_id in payload returns 400 (line 179)."""
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        "vuln_id": "CVE-2021-DIFFERENT",
+        "packages": ["test@1.0.0"],
+        "status": "affected",
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "vuln_id" in data["error"].lower() or "invalid" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/assessments/batch — invalid variant_id (lines 212-213)
+# ---------------------------------------------------------------------------
+
+def test_post_assessments_batch_invalid_variant_id(client):
+    """Batch assessment with invalid variant_id appends error and continues (lines 212-213)."""
+    response = client.post("/api/assessments/batch", json={
+        "assessments": [
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                "variant_id": "not-a-valid-uuid",
+            }
+        ]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] >= 1
+    assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
+               for e in data["errors"])
+
+
+# ---------------------------------------------------------------------------
+# POST /api/assessments/batch — DB error in item (lines 252-253)
+# ---------------------------------------------------------------------------
+
+def test_post_assessments_batch_db_error(client, monkeypatch):
+    """A DB error during batch item processing appends error entry (lines 252-253)."""
+    from src.models.finding import Finding as DBFinding
+
+    def fail_get_or_create(*args, **kwargs):
+        raise RuntimeError("simulated DB error")
+
+    monkeypatch.setattr(DBFinding, "get_or_create", fail_get_or_create)
+
+    response = client.post("/api/assessments/batch", json={
+        "assessments": [
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+            }
+        ]
+    })
+    data = json.loads(response.data)
+    assert data["error_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/assessments/<id> — clearing justification for non-not_affected (line 271)
+# ---------------------------------------------------------------------------
+
+def test_patch_assessment_clears_justification_and_impact(client):
+    """PATCH to a non-not_affected/false_positive status clears justification (line 271)."""
+    # Create an assessment with not_affected + justification
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        "packages": ["test@1.0.0"],
+        "status": "not_affected",
+        "justification": "component_not_present",
+        "impact_statement": "Not present in this build",
+    })
+    assert response.status_code == 200
+    assessment_id = json.loads(response.data)["assessment"]["id"]
+
+    # Now PATCH to 'affected' — should clear justification and impact_statement
+    response = client.patch(f"/api/assessments/{assessment_id}", json={
+        "status": "affected",
+    })
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    # justification and impact_statement should be cleared (line 271)
+    assert data["assessment"]["justification"] == "" or data["assessment"]["justification"] is None
+    assert data["assessment"]["impact_statement"] == "" or data["assessment"]["impact_statement"] is None

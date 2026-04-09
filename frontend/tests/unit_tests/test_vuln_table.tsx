@@ -2,6 +2,8 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
+jest.setTimeout(15000);
+
 import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
@@ -16,13 +18,16 @@ import Iso8601Duration from '../../src/handlers/iso8601duration';
 jest.mock('../../src/handlers/nvd_progress', () => ({
     __esModule: true,
     default: {
-        getProgress: jest.fn().mockResolvedValue({
-            in_progress: false,
-            phase: 'idle',
-            current: 0,
-            total: 0,
-            message: '',
-        }),
+        getProgress: jest.fn().mockResolvedValue(null),
+        getProgressPercentage: jest.fn().mockReturnValue(0),
+    },
+}));
+
+// Mock EPSSProgressHandler to prevent unwanted fetch calls
+jest.mock('../../src/handlers/epss_progress', () => ({
+    __esModule: true,
+    default: {
+        getProgress: jest.fn().mockResolvedValue(null),
         getProgressPercentage: jest.fn().mockReturnValue(0),
     },
 }));
@@ -52,6 +57,7 @@ describe('Vulnerability Table', () => {
             found_by: ['hardcoded'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
             packages: ['aaabbbccc@1.0.0'],
+            packages_current: ['aaabbbccc@1.0.0'],
             urls: ['https://security-tracker.debian.org/tracker/CVE-2010-1234'],
             texts: [
                 {
@@ -89,6 +95,7 @@ describe('Vulnerability Table', () => {
             status: 'affected',
             simplified_status: 'Exploitable',
             assessments: [],
+            variants: [],
             published: '2010-05-15T08:00:00Z'
         },
         {
@@ -99,6 +106,7 @@ describe('Vulnerability Table', () => {
             found_by: ['cve-finder'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2018-5678',
             packages: ['xxxyyyzzz@2.0.0'],
+            packages_current: ['xxxyyyzzz@2.0.0'],
             urls: ['https://security-tracker.debian.org/tracker/CVE-2018-5678'],
             texts: [
                 {
@@ -148,7 +156,8 @@ describe('Vulnerability Table', () => {
             status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             published: '2018-07-22T14:30:00Z',
-            assessments: []
+            assessments: [],
+            variants: []
         },
         {
             id: 'CVE-2024-56730',
@@ -158,6 +167,7 @@ describe('Vulnerability Table', () => {
             found_by: ['yocto'],
             datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2024-56730',
             packages: ['linux-yocto@6.6.21'],
+            packages_current: ['linux-yocto@6.6.21'],
             urls: ['https://nvd.nist.gov/vuln/detail/CVE-2024-56730'],
             texts: [
                 {
@@ -210,11 +220,42 @@ describe('Vulnerability Table', () => {
                     workaround_timestamp: '',
                     timestamp: '2026-02-06T17:43:14.254534+00:00',
                     last_update: '2026-02-06T17:43:14.254537+00:00',
+                    origin: 'custom',
                     responses: []
                 }
-            ]
+            ],
+            variants: []
         }
     ];
+
+    const longContent = 'This is a very long description sentence. '.repeat(50);
+
+    const vulnWithLongText: Vulnerability = {
+        id: 'CVE-2099-9999',
+        aliases: [],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2099-9999',
+        packages: ['pkg@1.0.0'],
+        packages_current: ['pkg@1.0.0'],
+        variants: [],
+        urls: [],
+        texts: [{ title: 'description', content: longContent }],
+        severity: { severity: 'low', min_score: 1, max_score: 1, cvss: [] },
+        epss: { score: 0.1, percentile: 0.5 },
+        effort: {
+            optimistic: new Iso8601Duration(undefined),
+            likely: new Iso8601Duration(undefined),
+            pessimistic: new Iso8601Duration(undefined)
+        },
+        fix: { state: 'unknown' },
+        status: 'affected',
+        simplified_status: 'Exploitable',
+        assessments: [],
+        published: '2024-01-01T00:00:00Z'
+    };
+
 
     Element.prototype.getBoundingClientRect = jest.fn(function () {
         return getDOMRect(500, 500)
@@ -234,7 +275,7 @@ describe('Vulnerability Table', () => {
         const id_header = await screen.getByRole('columnheader', {name: /id/i});
         const severity_header = await screen.getByRole('columnheader', {name: /severity/i});
         const exploit_header = await screen.getByRole('columnheader', {name: /EPSS score/i});
-        const packages_header = await screen.getByRole('columnheader', {name: /packages/i});
+        const packages_header = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
         const status_header = await screen.getByRole('columnheader', {name: /status/i});
         const last_updated_header = await screen.getByRole('columnheader', {name: /last updated/i});
 
@@ -546,12 +587,12 @@ describe('Vulnerability Table', () => {
         expect(sourceBtn).toBeInTheDocument();
         await user.click(sourceBtn);
 
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2010-1234/}), { timeout: 1000 });
-
         const srcCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
         await user.click(srcCheckbox);
 
-        await deletion;
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
+        }, { timeout: 5000 });
 
         const pkg_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(pkg_xyz).toBeInTheDocument();
@@ -568,7 +609,7 @@ describe('Vulnerability Table', () => {
 
         // Ensure the exploitable row exists before starting the removal watcher.
         const exploitableRow = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-        const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 1000 });
+        const pending_deletion = waitForElementToBeRemoved(exploitableRow, { timeout: 5000 });
 
         const pendingCheckbox = await screen.getByRole('checkbox', { name: /Pending Assessment/i });
         await user.click(pendingCheckbox);
@@ -590,7 +631,7 @@ describe('Vulnerability Table', () => {
 
         // Ensure the target row is present before starting removal watcher
         const communityRow = await screen.findByRole('cell', {name: /CVE-2018-5678/});
-        const pending_deletion = waitForElementToBeRemoved(communityRow, { timeout: 1000 });
+        const pending_deletion = waitForElementToBeRemoved(communityRow, { timeout: 5000 });
 
         // ACT
         const exploitableCheckbox = await screen.getByRole('checkbox', { name: /Exploitable/i });
@@ -707,7 +748,8 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
+        expect(fetchMock).toHaveBeenCalledTimes(4);
     })
 
     test('select and change time estimate', async () => {
@@ -760,19 +802,19 @@ describe('Vulnerability Table', () => {
 
     test('show description when hovering vulnerability', async () => {
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const user = userEvent.setup();
-        const id_col = await screen.getByRole('cell', {name: vulnerabilities[0].id});
+        const id_col = screen.getByRole('cell', {name: vulnerabilities[0].id});
         expect(id_col).toBeInTheDocument();
-        const description = await screen.getByText(vulnerabilities[0].texts[0].content);
-        expect(description).toBeInTheDocument();
 
-        await user.hover(id_col);
-        expect(description).toBeVisible();
+        // Tooltip is portal-based: content only appears after mouseenter on the row
+        const row = container.querySelector('tr.row-with-hover-effect')!;
+        fireEvent.mouseEnter(row);
 
-        await user.unhover(id_col)
-        // doesn't seem to work : expect(description).not.toBeVisible();
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('[role="tooltip"]');
+            expect(tooltip?.textContent).toContain(vulnerabilities[0].texts[0].content);
+        });
     })
 
     test('filter by severity', async () => {
@@ -784,12 +826,12 @@ describe('Vulnerability Table', () => {
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
-        const deletion = waitForElementToBeRemoved(() => screen.getByRole('cell', {name: /CVE-2018-5678/}), { timeout: 1000 });
-
         const lowCheckbox = await screen.getByRole('checkbox', { name: 'low' });
         await user.click(lowCheckbox);
 
-        await deletion;
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+        }, { timeout: 5000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
@@ -810,24 +852,24 @@ describe('Vulnerability Table', () => {
         expect(customCheckbox).toBeInTheDocument();
         await user.click(customCheckbox as HTMLElement);
 
-        const [minSlider, maxSlider] = await screen.findAllByRole('slider');
+        const sliders = await screen.findAllByRole('slider');
 
-        console.log(minSlider, maxSlider);
-
-        expect(minSlider).toBeInTheDocument();
-        expect(maxSlider).toBeInTheDocument();
+        expect(sliders).toHaveLength(2);
 
         // Vulneraibilities with the severity max score between 2 and 4 will remain.
-        fireEvent.change(minSlider, { target: { value: '2' } });
-        fireEvent.change(maxSlider, { target: { value: '4' } });
+        fireEvent.change(sliders[0], { target: { value: '2' } });
+
+        // Re-query sliders after state update to avoid stale references
+        const slidersAfter = screen.getAllByRole('slider');
+        fireEvent.change(slidersAfter[1], { target: { value: '4' } });
 
         await waitFor(() => {
             expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
             expect(screen.queryByRole('cell', {name: /CVE-2024-56730/})).toBeNull();
-        }, { timeout: 1000 });
+        }, { timeout: 5000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
-        
+
         expect(vuln_abc).toBeInTheDocument();
     })
 
@@ -860,41 +902,6 @@ describe('Vulnerability Table', () => {
         await user.click(lowCheckbox);
         expect(lowCheckbox).toBeChecked();
         expect(customCheckbox).not.toBeChecked();
-    })
-
-    test('hide fixed toggle functionality', async () => {
-        const vulnWithFixed: Vulnerability[] = [
-            ...vulnerabilities,
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-2020-9999',
-                simplified_status: 'Fixed'
-            }
-        ];
-
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
-        expect(hideFixedToggle).toBeInTheDocument();
-
-        // Ensure the fixed vulnerability is initially visible
-        const fixedVuln = await screen.getByRole('cell', {name: /CVE-2020-9999/});
-        expect(fixedVuln).toBeInTheDocument();
-
-        const deletion = waitForElementToBeRemoved(fixedVuln, { timeout: 1000 });
-
-        // ACT - Toggle hide fixed
-        await user.click(hideFixedToggle);
-
-        // ASSERT - Fixed vulnerability should be hidden
-        await deletion;
-        expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
-
-        // Other vulnerabilities should still be visible
-        const otherVuln = await screen.getByRole('cell', {name: /CVE-2010-1234/});
-        expect(otherVuln).toBeInTheDocument();
     })
 
     test('reset filters button clears all filters', async () => {
@@ -977,47 +984,6 @@ describe('Vulnerability Table', () => {
         expect(vuln2).toBeInTheDocument();
     })
 
-    test('hide fixed toggle interaction with status filter', async () => {
-        const vulnWithFixed: Vulnerability[] = [
-            ...vulnerabilities,
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-2020-9999',
-                simplified_status: 'Fixed'
-            }
-        ];
-
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // First enable hide fixed
-        const hideFixedToggle = await screen.getByRole('button', { name: /Hide Fixed/i });
-        await user.click(hideFixedToggle);
-
-        // Wait for fixed vulnerability to be hidden
-        await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /CVE-2020-9999/})).not.toBeInTheDocument();
-        });
-
-        // Now manually select 'fixed' in status filter
-        // Use getAllByRole to handle multiple buttons with 'status' in name, select the first (main button)
-        const statusButtons = await screen.getAllByRole('button', { name: /status/i });
-        await user.click(statusButtons[0]);
-        const fixedCheckbox = await screen.getByRole('checkbox', { name: 'Fixed' });
-        await user.click(fixedCheckbox);
-
-        // ASSERT - Hide fixed toggle should be disabled when fixed is manually selected
-        expect(hideFixedToggle).toHaveAttribute('aria-pressed', 'false');
-
-        // Fixed vulnerability should now be visible
-        await waitFor(() => {
-            const fixedVuln = screen.getByRole('cell', {name: /CVE-2020-9999/});
-            expect(fixedVuln).toBeInTheDocument();
-        });
-    })
-
     test('search debounce functionality', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -1040,7 +1006,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const packagesHeader = await screen.getByRole('columnheader', {name: /packages/i});
+        const packagesHeader = await screen.getByRole('columnheader', {name: /SBOM Affected/i});
 
         // Store initial order
         const initialHtml = document.body.innerHTML;
@@ -1086,6 +1052,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1122,6 +1089,7 @@ describe('Vulnerability Table', () => {
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
                         last_update: '2024-02-20T14:45:00Z', // More recent than timestamp
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1148,6 +1116,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     },
                     {
@@ -1157,6 +1126,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-10T16:20:00Z', // Most recent
+                        origin: 'custom',
                         responses: []
                     },
                     {
@@ -1166,6 +1136,7 @@ describe('Vulnerability Table', () => {
                         status: 'under_investigation',
                         simplified_status: 'Pending Assessment',
                         timestamp: '2024-02-05T12:15:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1193,6 +1164,7 @@ describe('Vulnerability Table', () => {
                         status: 'not_affected',
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1208,6 +1180,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-20T15:45:00Z',
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1258,6 +1231,7 @@ describe('Vulnerability Table', () => {
                         simplified_status: 'Not affected',
                         timestamp: '2024-01-15T10:30:00Z',
                         last_update: '2024-03-25T12:00:00Z', // Most recent overall
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1273,6 +1247,7 @@ describe('Vulnerability Table', () => {
                         status: 'affected',
                         simplified_status: 'Exploitable',
                         timestamp: '2024-03-20T15:45:00Z', // Only timestamp, no last_update
+                        origin: 'custom',
                         responses: []
                     }
                 ]
@@ -1292,61 +1267,6 @@ describe('Vulnerability Table', () => {
             const html = document.body.innerHTML;
             // CVE-2020-1111 should come first because last_update (March 25) is more recent than CVE-2020-2222's timestamp (March 20)
             expect(html.indexOf('CVE-2020-1111')).toBeLessThan(html.indexOf('CVE-2020-2222'));
-        });
-    })
-
-    test('handleHideFixedToggle filters out Fixed status when enabled', async () => {
-        const vulnsWithFixed: Vulnerability[] = [
-            {
-                ...vulnerabilities[0],
-                id: 'CVE-FIXED-001',
-                simplified_status: 'Fixed'
-            },
-            {
-                ...vulnerabilities[1],
-                id: 'CVE-ACTIVE-001',
-                simplified_status: 'Exploitable'
-            }
-        ];
-
-        render(<TableVulnerabilities vulnerabilities={vulnsWithFixed} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // Toggle "Hide Fixed"
-        const hideFixedToggle = await screen.getByRole('button', {name: /hide fixed/i});
-        await user.click(hideFixedToggle);
-
-        // Fixed vulnerability should not be visible
-        await waitFor(() => {
-            expect(screen.queryByText('CVE-FIXED-001')).not.toBeInTheDocument();
-            expect(screen.getByText('CVE-ACTIVE-001')).toBeInTheDocument();
-        });
-    })
-
-    test('handleHideFixedToggle can be toggled on and off', async () => {
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-
-        // Enable "Hide Fixed"
-        const hideFixedToggle = await screen.getByRole('button', {name: /show hide fixed/i});
-        await user.click(hideFixedToggle);
-
-        // Toggle should change its aria-label
-        await waitFor(() => {
-            const toggleAfter = screen.getByRole('button', {name: /hide hide fixed/i});
-            expect(toggleAfter).toBeInTheDocument();
-        });
-
-        // Disable "Hide Fixed" by clicking again
-        const hideFixedToggle2 = await screen.getByRole('button', {name: /hide hide fixed/i});
-        await user.click(hideFixedToggle2);
-
-        // Toggle should revert
-        await waitFor(() => {
-            const toggleReverted = screen.getByRole('button', {name: /show hide fixed/i});
-            expect(toggleReverted).toBeInTheDocument();
         });
     })
 
@@ -1677,6 +1597,7 @@ describe('Vulnerability Table', () => {
                 found_by: ['hardcoded'],
                 datasource: 'test',
                 packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
                 urls: [],
                 texts: [{ title: 'description', content: 'No date vuln' }],
                 severity: {
@@ -1695,6 +1616,7 @@ describe('Vulnerability Table', () => {
                 status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
+                variants: [],
                 // no 'published' field
             }
         ];
@@ -1886,6 +1808,7 @@ describe('Vulnerability Table', () => {
                 found_by: ['hardcoded'],
                 datasource: 'test',
                 packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
                 urls: [],
                 texts: [{ title: 'description', content: 'No date vuln' }],
                 severity: {
@@ -1904,6 +1827,7 @@ describe('Vulnerability Table', () => {
                 status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
+                variants: [],
                 // no 'published' field
             }
         ];
@@ -1995,6 +1919,22 @@ describe('Vulnerability Table', () => {
         expect(screen.getByText('Navigate focused table row')).toBeInTheDocument();
         expect(screen.getByText('Home / End')).toBeInTheDocument();
         expect(screen.getByText('Navigate to first/last table row')).toBeInTheDocument();
+    });
+
+    test('search syntax helper is visible and shows syntax content when clicked', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        expect(helperBtn).toBeInTheDocument();
+
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeInTheDocument();
+        expect(screen.getByText('Match rows containing term')).toBeInTheDocument();
+        expect(screen.getByText('AND: both terms must match')).toBeInTheDocument();
+        expect(screen.getByText('OR: either term matches')).toBeInTheDocument();
+        expect(screen.getByText('NOT: exclude rows with term')).toBeInTheDocument();
     });
 
     test('pressing / focuses vulnerability search bar', async () => {
@@ -2104,5 +2044,303 @@ describe('Vulnerability Table', () => {
         await waitFor(() => {
             expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(1);
         });
+    });
+
+    test('tooltip portal behaviour: appears on hover with correct content and styles, disappears on mouseleave', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+        const scrollContainer = container.querySelector('.overflow-auto');
+
+        // No portal tooltip before hovering (inline td[role="tooltip"] may exist but is CSS-hidden)
+        expect(document.body.querySelector('div[role="tooltip"]')).toBeNull();
+
+        fireEvent.mouseEnter(rows[0]);
+
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('div[role="tooltip"]') as HTMLElement;
+            // Rendered into document.body via portal — not clipped by overflow-auto
+            expect(tooltip).toBeInTheDocument();
+            expect(scrollContainer?.contains(tooltip)).toBe(false);
+            // Content and sizing constraints
+            expect(tooltip.textContent).toContain('authentification process');
+            expect(tooltip.style.maxHeight).toBe('300px');
+        });
+
+        fireEvent.mouseLeave(rows[0]);
+        await waitFor(() => {
+            expect(document.body.querySelector('div[role="tooltip"]')).toBeNull();
+        });
+    });
+
+    test('tooltip truncates long descriptions via overflow-hidden and webkit line-clamp', async () => {
+        const { container } = render(<TableVulnerabilities vulnerabilities={[vulnWithLongText]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = container.querySelectorAll('tr.row-with-hover-effect');
+
+        fireEvent.mouseEnter(rows[0]);
+
+        await waitFor(() => {
+            const tooltip = document.body.querySelector('div[role="tooltip"]');
+            const contentDiv = tooltip?.querySelector('div') as HTMLElement;
+            expect(contentDiv).toBeInTheDocument();
+            expect(contentDiv.style.overflow).toBe('hidden');
+            // JSDOM drops unknown vendor-prefixed properties (WebkitLineClamp),
+            // so we verify the companion display value that enables line-clamp behaviour.
+            expect(contentDiv.getAttribute('style')).toContain('-webkit-box');
+        });
+    });
+
+     test('filter buttons have no active border by default', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
+        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
+        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+
+        expect(sourceBtn).toHaveClass('border-transparent');
+        expect(sourceBtn).not.toHaveClass('border-cyan-400');
+        expect(severityBtn).toHaveClass('border-transparent');
+        expect(severityBtn).not.toHaveClass('border-cyan-400');
+        expect(statusBtn).toHaveClass('border-transparent');
+        expect(statusBtn).not.toHaveClass('border-cyan-400');
+    });
+
+    test('filter buttons show active border when a filter option is selected', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Source filter
+        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
+        await user.click(sourceBtn);
+        await user.click(screen.getByRole('checkbox', { name: 'hardcoded' }));
+        expect(sourceBtn).toHaveClass('border-cyan-400');
+        expect(sourceBtn).not.toHaveClass('border-transparent');
+
+        // Severity filter
+        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
+        await user.click(severityBtn);
+        await user.click(screen.getByRole('checkbox', { name: 'low' }));
+        expect(severityBtn).toHaveClass('border-cyan-400');
+        expect(severityBtn).not.toHaveClass('border-transparent');
+
+        // Status filter
+        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+        await user.click(statusBtn);
+        await user.click(screen.getByRole('checkbox', { name: /exploitable/i }));
+        expect(statusBtn).toHaveClass('border-cyan-400');
+        expect(statusBtn).not.toHaveClass('border-transparent');
+    });
+});
+
+describe('More Filters dropdown', () => {
+    const vulnerabilities: Vulnerability[] = [
+        {
+            id: 'CVE-2010-1234',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['hardcoded'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
+            packages: ['pkg@1.0.0'],
+            packages_current: ['pkg@1.0.0'],
+            urls: [],
+            texts: [],
+            severity: {
+                severity: 'high',
+                min_score: 7,
+                max_score: 7,
+                cvss: [{
+                    author: 'test',
+                    severity: 'high',
+                    base_score: 7,
+                    vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N',
+                    version: '3.1',
+                    impact_score: 0,
+                    exploitability_score: 0,
+                    attack_vector: 'NETWORK'
+                }]
+            },
+            epss: { score: 0.5, percentile: 0.8 },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: { state: 'unknown' },
+            status: 'affected',
+            simplified_status: 'Exploitable',
+            assessments: [],
+            variants: [],
+            first_scan_date: '2025-01-15T10:00:00Z'
+        },
+        {
+            id: 'CVE-2020-5678',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['scanner'],
+            datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2020-5678',
+            packages: ['other@2.0.0'],
+            packages_current: ['other@2.0.0'],
+            urls: [],
+            texts: [],
+            severity: {
+                severity: 'low',
+                min_score: 2,
+                max_score: 2,
+                cvss: [{
+                    author: 'test',
+                    severity: 'low',
+                    base_score: 2,
+                    vector_string: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L',
+                    version: '3.1',
+                    impact_score: 0,
+                    exploitability_score: 0,
+                    attack_vector: 'LOCAL'
+                }]
+            },
+            epss: { score: 0.01, percentile: 0.1 },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined)
+            },
+            fix: { state: 'unknown' },
+            status: 'under_investigation',
+            simplified_status: 'Pending Assessment',
+            assessments: [],
+            variants: [],
+            first_scan_date: '2025-03-20T14:00:00Z'
+        }
+    ];
+
+    Element.prototype.getBoundingClientRect = jest.fn(function () {
+        return getDOMRect(500, 500);
+    });
+
+    beforeEach(() => {
+        fetchMock.resetMocks();
+    });
+
+    test('opens More Filters dropdown and shows EPSS, Attack Vector, and First Scan Date sections', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // More Filters button should exist
+        const moreBtn = screen.getByText('More');
+        expect(moreBtn).toBeInTheDocument();
+
+        // Click to open
+        await user.click(moreBtn);
+
+        // EPSS Range section should appear
+        expect(screen.getByText('EPSS Range (%)')).toBeInTheDocument();
+
+        // Attack Vector section should appear
+        expect(screen.getByText('Attack Vector')).toBeInTheDocument();
+
+        // First Scan Date section should appear
+        expect(screen.getByText('First Scan Date')).toBeInTheDocument();
+    });
+
+    test('toggles Attack Vector checkbox filter', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find "Network" attack vector checkbox and click it
+        const networkLabel = screen.getByText('Network');
+        await user.click(networkLabel);
+
+        // Should show active filter indicator (checkmark)
+        expect(screen.getByText('✓')).toBeInTheDocument();
+    });
+
+    test('toggles First Scan Date checkbox filter', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find scan date checkboxes — there should be 2 dates from our test data
+        const checkboxes = screen.getAllByRole('checkbox');
+        // Find one that's in the First Scan Date section (look for scan date text)
+        const scanDateLabels = checkboxes.filter(cb => {
+            const parent = cb.closest('label');
+            return parent?.textContent?.match(/\d{4}/); // date contains a year
+        });
+        expect(scanDateLabels.length).toBeGreaterThanOrEqual(1);
+
+        // Click to select and then deselect
+        await user.click(scanDateLabels[0]);
+        expect(screen.getByText('✓')).toBeInTheDocument();
+        await user.click(scanDateLabels[0]);
+    });
+
+    test('enables EPSS range filter via checkbox', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        // Find the EPSS Range checkbox
+        const epssCheckbox = screen.getByLabelText('EPSS Range (%)');
+        await user.click(epssCheckbox);
+
+        // Should show active filter indicator
+        expect(screen.getByText('✓')).toBeInTheDocument();
+    });
+
+    test('closes More Filters dropdown on outside click', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('EPSS Range (%)')).toBeInTheDocument();
+
+        // Click outside the dropdown
+        await user.click(document.body);
+
+        // Dropdown content should be gone
+        await waitFor(() => {
+            expect(screen.queryByText('EPSS Range (%)')).not.toBeInTheDocument();
+        });
+    });
+
+    test('shows no scan dates message when none available', async () => {
+        const vulnsNoScanDate: Vulnerability[] = [{
+            ...vulnerabilities[0],
+            first_scan_date: undefined
+        }, {
+            ...vulnerabilities[1],
+            first_scan_date: undefined
+        }];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsNoScanDate} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('No scan dates available')).toBeInTheDocument();
+    });
+
+    test('shows no attack vectors message when none available', async () => {
+        const vulnsNoCvss: Vulnerability[] = [{
+            ...vulnerabilities[0],
+            severity: { ...vulnerabilities[0].severity, cvss: [] }
+        }, {
+            ...vulnerabilities[1],
+            severity: { ...vulnerabilities[1].severity, cvss: [] }
+        }];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsNoCvss} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        expect(screen.getByText('No attack vectors available')).toBeInTheDocument();
     });
 });

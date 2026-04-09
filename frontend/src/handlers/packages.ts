@@ -9,6 +9,7 @@ type Package = {
     vulnerabilities: VulnCounts;
     maxSeverity: Severities;
     source: string[];
+    variants: string[];
 };
 
 export type { Package, VulnCounts, Severities };
@@ -28,6 +29,7 @@ const asPackage = (data: any): Package | [] => {
         vulnerabilities: {},
         maxSeverity: {},
         source: [],
+        variants: [],
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -35,6 +37,12 @@ const asPackage = (data: any): Package | [] => {
     }
     if (Array.isArray(data?.purl)) {
         for (const purl of data.purl) if (typeof purl === "string") pkg.purl.push(purl);
+    }
+    if (Array.isArray(data?.variants)) {
+        for (const v of data.variants) if (typeof v === "string") pkg.variants.push(v);
+    }
+    if (Array.isArray(data?.sources)) {
+        for (const s of data.sources) if (typeof s === "string") pkg.source.push(s);
     }
     return pkg
 };
@@ -44,8 +52,19 @@ class Packages {
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
-    static async list(): Promise<Package[]> {
-        const response = await fetch(import.meta.env.VITE_API_URL + "/api/packages?format=list", {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Package[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
+        url.searchParams.set('format', 'list');
+        if (variantId && compareVariantId) {
+            url.searchParams.set('variant_id', variantId);
+            url.searchParams.set('compare_variant_id', compareVariantId);
+            if (operation) url.searchParams.set('operation', operation);
+        } else if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), {
             mode: "cors",
         });
         const data = await response.json();
@@ -84,7 +103,8 @@ class Packages {
                 ...pkg,
                 vulnerabilities: counts,
                 maxSeverity: severities,
-                source: [...new Set(vulnerabilities.map((vuln) => vuln.found_by).flat())],
+                source: [...new Set([...pkg.source, ...vulnerabilities.map((vuln) => vuln.found_by).flat()])],
+                variants: [...new Set([...pkg.variants, ...vulnerabilities.flatMap((vuln) => vuln.variants || [])])],
             };
         });
     }

@@ -12,6 +12,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
+from ..helpers.env_vars import get_bool_env
 import glob
 import os
 import json
@@ -31,7 +32,7 @@ def read_inputs(controllers):
                 data = json.load(f)
                 openvex.load_from_dict(data)
         except Exception as e:
-            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+            if not get_bool_env('IGNORE_PARSING_ERRORS'):
                 print(f"Error parsing OpenVEX file: {file} {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e
@@ -50,6 +51,7 @@ def output_results(controllers):
 
 def main():
     pkg_ctrl = PackagesController()
+    pkg_ctrl._preload_cache()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)
     assess_ctrl = AssessmentsController(pkg_ctrl, vuln_ctrl)
     controllers = {

@@ -3,78 +3,481 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from flask import request
-import json
-from datetime import datetime, timezone
+from datetime import datetime
+from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
+from ..models.package import Package
+from ..models.finding import Finding
+from ..views.openvex import OpenVex
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
-from ..views.openvex import OpenVex
-from ..models.assessment import VulnAssessment
+from ..helpers.verbose import verbose
+from ..extensions import db
+from ..models.vulnerability import Vulnerability as DBVuln
 
-ASSESSMENTS_FILE = "/scan/tmp/assessments-merged.json"
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 
 def init_app(app):
 
-    if "ASSESSMENTS_FILE" not in app.config:
-        app.config["ASSESSMENTS_FILE"] = ASSESSMENTS_FILE
     if "OPENVEX_FILE" not in app.config:
         app.config["OPENVEX_FILE"] = OPENVEX_FILE
 
-    def get_assessments():
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            return AssessmentsController.from_dict(None, None, json.loads(f.read()))
+    def _get_all_db_assessments():
+        return DBAssessment.get_all()
 
-    def get_all_datas():
-        controllers = {}
-        with open(app.config["PKG_FILE"], "r") as f:
-            controllers["packages"] = PackagesController.from_dict(
-                json.loads(f.read())
-            )
-        with open(app.config["VULNS_FILE"], "r") as f:
-            controllers["vulnerabilities"] = VulnerabilitiesController.from_dict(
-                controllers["packages"],
-                json.loads(f.read())
-            )
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            controllers["assessments"] = AssessmentsController.from_dict(
-                controllers["packages"],
-                controllers["vulnerabilities"],
-                json.loads(f.read())
-            )
-        return controllers
+    def _save_openvex():
+        """Re-generate and save the OpenVEX file from current DB state."""
+        try:
+            import json
+
+            pkgCtrl = PackagesController()
+            pkgCtrl._preload_cache()
+            vulnCtrl = VulnerabilitiesController(pkgCtrl)
+            assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+
+            ctrls = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
+            vex = OpenVex(ctrls)
+            with open(app.config["OPENVEX_FILE"], "w") as f:
+                f.write(json.dumps(vex.to_dict(), indent=2))
+        except Exception as e:
+            verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
     def index_assess():
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+        if variant_id:
+            import uuid
+            try:
+                variant_uuid = uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+            assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
+        elif project_id:
+            import uuid
+            from ..models.variant import Variant as DBVariant
+            try:
+                project_uuid = uuid.UUID(project_id)
+            except ValueError:
+                return {"error": "Invalid project_id"}, 400
+            variants = DBVariant.get_by_project(project_uuid)
+            variant_ids = [v.id for v in variants]
+            if variant_ids:
+                assessments = []
+                for vid in variant_ids:
+                    assessments.extend(a.to_dict() for a in DBAssessment.get_by_variant(vid))
+            else:
+                assessments = []
+        else:
+            assessments = [a.to_dict() for a in _get_all_db_assessments()]
         if request.args.get('format', 'list') == "dict":
-            return assessCtrl.to_dict()
-        return list(assessCtrl.to_dict().values())
+            return {a["id"]: a for a in assessments}
+        return assessments
+
+    @app.route('/api/assessments/review')
+    def review_assessments():
+        """Return assessments not linked to any scan (handmade via the web UI)."""
+        import uuid as _uuid
+        from ..models.variant import Variant as DBVariant
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+        vid = None
+        if variant_id:
+            try:
+                vid = _uuid.UUID(variant_id)
+            except ValueError:
+                return {"error": "Invalid variant_id"}, 400
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
+        elif project_id:
+            try:
+                pid = _uuid.UUID(project_id)
+            except ValueError:
+                return {"error": "Invalid project_id"}, 400
+            variants = DBVariant.get_by_project(pid)
+            assessments = []
+            for v in variants:
+                assessments.extend(a.to_dict() for a in DBAssessment.get_handmade(v.id))
+        else:
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
+        return assessments
+
+    @app.route('/api/assessments/review/export')
+    def export_review_openvex():
+        """Export handmade (review) assessments as a .tar.gz containing one
+        OpenVEX JSON file per variant (``<variant_name>.json``).
+        Assessments without a variant are placed in ``unassigned.json``.
+        """
+        import io
+        import tarfile
+        import uuid as _uuid
+        import json
+        from datetime import datetime as _dt, timezone as _tz
+        from ..models.variant import Variant as DBVariant
+
+        handmade = DBAssessment.get_handmade()
+        if not handmade:
+            return {"error": "No review assessments to export"}, 404
+
+        author = request.args.get('author', 'Savoir-faire Linux')
+        now_iso = _dt.now(_tz.utc).isoformat()
+
+        # Build a variant-id → name lookup
+        variant_names: dict[str, str] = {}
+        for v in DBVariant.get_all():
+            variant_names[str(v.id)] = v.name
+
+        # Pre-fetch vulnerability objects for descriptions / aliases / urls
+        vuln_cache: dict[str, DBVuln | None] = {}
+
+        def _get_vuln(vuln_id: str):
+            if vuln_id not in vuln_cache:
+                vuln_cache[vuln_id] = DBVuln.get_by_id(vuln_id)
+            return vuln_cache[vuln_id]
+
+        # Group assessments by variant_id
+        from collections import defaultdict
+        by_variant: dict[str | None, list] = defaultdict(list)
+        for assess in handmade:
+            vid = str(assess.variant_id) if assess.variant_id else None
+            by_variant[vid].append(assess)
+
+        # Build the tar.gz archive in memory
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+            for vid, assessments in by_variant.items():
+                filename = (variant_names.get(vid, "unassigned") if vid else "unassigned") + ".json"
+                # Sanitise the filename
+                filename = filename.replace("/", "_").replace("\\", "_")
+
+                statements = []
+                for assess in assessments:
+                    stmt = assess.to_openvex_dict()
+                    if stmt is None:
+                        continue
+
+                    # Enrich vulnerability block with description, aliases, @id
+                    vuln_obj = _get_vuln(assess.vuln_id) if assess.vuln_id else None
+                    description = ""
+                    aliases: list[str] = []
+                    vuln_url = ""
+                    if vuln_obj:
+                        desc = vuln_obj.texts.get("description", "")
+                        yocto_desc = vuln_obj.texts.get("yocto description", "")
+                        description = desc or yocto_desc or ""
+                        aliases = list(vuln_obj.aliases or [])
+                        urls = list(vuln_obj.urls) if vuln_obj.urls else list(vuln_obj.links or [])
+                        vuln_url = urls[0] if urls else ""
+                        if not vuln_url and assess.vuln_id.startswith("CVE-"):
+                            vuln_url = f"https://nvd.nist.gov/vuln/detail/{assess.vuln_id}"
+                        elif not vuln_url and assess.vuln_id.startswith("GHSA-"):
+                            vuln_url = f"https://github.com/advisories/{assess.vuln_id}"
+
+                    stmt["vulnerability"] = {
+                        "name": assess.vuln_id,
+                        "description": description,
+                        "aliases": aliases,
+                        "@id": vuln_url,
+                    }
+
+                    # Enrich products with identifiers
+                    products = []
+                    for pkg_str in assess.packages:
+                        if "@" in pkg_str:
+                            name, version = pkg_str.rsplit("@", 1)
+                        else:
+                            name, version = pkg_str, ""
+                        products.append({
+                            "@id": pkg_str,
+                            "identifiers": {
+                                "cpe23": f"cpe:2.3:*:*:{name}:{version}:*:*:*:*:*:*:*",
+                                "purl": f"pkg:generic/{name}@{version}",
+                            }
+                        })
+                    stmt["products"] = products
+
+                    # Add extra fields to match the expected format
+                    stmt.setdefault("action_statement_timestamp", "")
+                    stmt["scanners"] = list({assess.source or "local_user_data", assess.origin or "local_user_data"})
+
+                    statements.append(stmt)
+
+                doc = {
+                    "@context": "https://openvex.dev/ns/v0.2.0",
+                    "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(str(_uuid.uuid4())),
+                    "author": author,
+                    "timestamp": now_iso,
+                    "version": 1,
+                    "statements": statements,
+                }
+
+                json_bytes = json.dumps(doc, indent=2).encode("utf-8")
+                info = tarfile.TarInfo(name=filename)
+                info.size = len(json_bytes)
+                tar.addfile(info, io.BytesIO(json_bytes))
+
+        buf.seek(0)
+        return buf.read(), 200, {
+            "Content-Type": "application/gzip",
+            "Content-Disposition": "attachment; filename=review_openvex.tar.gz",
+        }
+
+    @app.route('/api/assessments/review/import', methods=['POST'])
+    def import_review_openvex():
+        """Import OpenVEX review assessments from a ``.json`` or ``.tar.gz`` file.
+
+        * **Single .json file** – the filename (without extension) must match
+          an existing variant name in the database.
+        * **.tar.gz archive** – each ``.json`` entry inside must be named after
+          an existing variant.  Entries whose basename does not match a known
+          variant are reported as errors.
+
+        Every file is validated as a well-formed OpenVEX document (must contain
+        ``@context`` with ``openvex`` and a ``statements`` array).
+
+        Assessments are created with ``origin="custom"``.
+        """
+        import io
+        import json
+        import os
+        import tarfile
+        from ..models.variant import Variant as DBVariant
+
+        # ---- retrieve the uploaded file ----
+        if not (request.content_type and 'multipart/form-data' in request.content_type):
+            return {"error": "Expected multipart/form-data with a file upload"}, 400
+        uploaded = request.files.get('file')
+        if not uploaded or not uploaded.filename:
+            return {"error": "No file uploaded"}, 400
+
+        filename = uploaded.filename
+
+        # ---- build variant-name → variant lookup ----
+        all_variants = DBVariant.get_all()
+        # The export sanitises names (/ and \ replaced by _), so we store a
+        # sanitised-name → variant mapping for reliable round-trip matching.
+        variant_by_name: dict[str, "DBVariant"] = {}
+        for v in all_variants:
+            sanitised = v.name.replace("/", "_").replace("\\", "_")
+            variant_by_name[sanitised] = v
+            # Also keep the original name in case it differs
+            variant_by_name[v.name] = v
+
+        # ---- helpers ----
+        def _is_openvex(doc: dict) -> bool:
+            ctx = doc.get("@context", "")
+            return "openvex" in ctx and isinstance(doc.get("statements"), list)
+
+        def _import_statements(statements: list, variant_id) -> tuple[list, list, int]:
+            created: list[dict] = []
+            errors: list[dict] = []
+            skipped = 0
+            for stmt in statements:
+                if not isinstance(stmt, dict):
+                    continue
+                vuln_obj = stmt.get("vulnerability", {})
+                vuln_name = vuln_obj.get("name") if isinstance(vuln_obj, dict) else None
+                if not vuln_name:
+                    errors.append({"error": "Missing vulnerability name", "statement": stmt})
+                    continue
+                status = stmt.get("status")
+                if not status:
+                    errors.append({"vuln_id": vuln_name, "error": "Missing status"})
+                    continue
+
+                products = stmt.get("products", [])
+                pkg_ids = []
+                for prod in products:
+                    if isinstance(prod, dict) and "@id" in prod:
+                        pkg_ids.append(prod["@id"])
+                    elif isinstance(prod, str):
+                        pkg_ids.append(prod)
+                if not pkg_ids:
+                    errors.append({"vuln_id": vuln_name, "error": "No products/packages found"})
+                    continue
+
+                justification = stmt.get("justification", "")
+                impact_statement = stmt.get("impact_statement", "")
+                status_notes = stmt.get("status_notes", "")
+                workaround = stmt.get("action_statement", "")
+
+                for pkg_string_id in pkg_ids:
+                    try:
+                        name, version = (pkg_string_id.rsplit("@", 1)
+                                         if "@" in pkg_string_id else (pkg_string_id, ""))
+                        db_pkg = Package.find_or_create(name, version)
+                        DBVuln.get_or_create(vuln_name)
+                        finding = Finding.get_or_create(db_pkg.id, vuln_name)
+
+                        # Check for an existing identical assessment to avoid duplicates
+                        existing = db.session.execute(
+                            db.select(DBAssessment).where(
+                                DBAssessment.finding_id == finding.id,
+                                DBAssessment.variant_id == variant_id,
+                                DBAssessment.status == status,
+                                DBAssessment.justification == justification,
+                                DBAssessment.impact_statement == impact_statement,
+                                DBAssessment.status_notes == status_notes,
+                                DBAssessment.workaround == workaround,
+                            )
+                        ).scalar_one_or_none()
+                        if existing is not None:
+                            skipped += 1
+                            continue
+
+                        db_a = DBAssessment.create(
+                            status=status,
+                            simplified_status=STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
+                            finding_id=finding.id,
+                            variant_id=variant_id,
+                            origin="custom",
+                            status_notes=status_notes,
+                            justification=justification,
+                            impact_statement=impact_statement,
+                            workaround=workaround,
+                            responses=[],
+                            commit=True,
+                        )
+                        created.append(db_a.to_dict())
+                    except Exception as e:
+                        errors.append({"vuln_id": vuln_name, "package": pkg_string_id, "error": str(e)})
+            return created, errors, skipped
+
+        # ---- .tar.gz handling ----
+        if filename.endswith(".tar.gz") or filename.endswith(".tgz"):
+            try:
+                raw = io.BytesIO(uploaded.read())
+                tar = tarfile.open(fileobj=raw, mode='r:gz')
+            except Exception:
+                return {"error": "Unable to open tar.gz archive"}, 400
+
+            total_created: list[dict] = []
+            total_errors: list[dict] = []
+            total_skipped = 0
+            variant_files_found = 0
+
+            for member in tar.getmembers():
+                if not member.isfile() or not member.name.endswith(".json"):
+                    continue
+                base = os.path.basename(member.name)
+                variant_name = base[:-len(".json")]  # strip .json
+                variant = variant_by_name.get(variant_name)
+                if variant is None:
+                    total_errors.append({
+                        "file": member.name,
+                        "error": f"No variant found matching name '{variant_name}'"
+                    })
+                    continue
+
+                f = tar.extractfile(member)
+                if f is None:
+                    continue
+                try:
+                    doc = json.load(f)
+                except Exception:
+                    total_errors.append({"file": member.name, "error": "Invalid JSON"})
+                    continue
+
+                if not _is_openvex(doc):
+                    total_errors.append({"file": member.name, "error": "Not a valid OpenVEX document"})
+                    continue
+
+                variant_files_found += 1
+                c, e, s = _import_statements(doc["statements"], variant.id)
+                total_created.extend(c)
+                total_errors.extend(e)
+                total_skipped += s
+
+            tar.close()
+
+            if variant_files_found == 0 and not total_created:
+                return {
+                    "error": "No valid OpenVEX files matching known variants found in archive",
+                    "errors": total_errors,
+                }, 400
+
+            _save_openvex()
+            return {
+                "status": "success",
+                "imported": len(total_created),
+                "skipped": total_skipped,
+                "errors": total_errors,
+            }, 200
+
+        # ---- single .json handling ----
+        if filename.endswith(".json"):
+            base = os.path.basename(filename)
+            variant_name = base[:-len(".json")]
+            variant = variant_by_name.get(variant_name)
+            if variant is None:
+                return {
+                    "error": f"No variant found matching filename '{variant_name}'. "
+                             f"The JSON filename must correspond to an existing variant name."
+                }, 400
+
+            try:
+                data = json.load(uploaded)
+            except Exception:
+                return {"error": "Invalid JSON file"}, 400
+
+            if not _is_openvex(data):
+                return {
+                    "error": "Not a valid OpenVEX document "
+                             "(missing @context with 'openvex' "
+                             "or 'statements' array)"
+                }, 400
+
+            created, errors, skipped = _import_statements(data["statements"], variant.id)
+            _save_openvex()
+            return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
+
+        return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str):
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
-        item = assessCtrl.get_by_id(assessment_id)
+        item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
         return item.to_dict(), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
     def list_assess_by_vuln(vuln_id: str):
-        assessCtrl = get_assessments()
-        if assessCtrl is None:
-            return {"error": "Internal error"}, 500
-
+        # Get findings for this vulnerability then load their assessments
+        findings = Finding.get_by_vulnerability(vuln_id)
+        assessments = []
+        for f in findings:
+            for a in DBAssessment.get_by_finding(f.id):
+                assessments.append(a.to_dict())
         if request.args.get('format', 'list') == "dict":
-            return {k: v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id}, 200
-        return [v.to_dict() for k, v in assessCtrl.assessments.items() if v.vuln_id == vuln_id], 200
+            return {a["id"]: a for a in assessments}
+        return assessments, 200
+
+    @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
+    def list_variants_by_vuln(vuln_id: str):
+        """Return all distinct variants that have a finding for this vulnerability
+        (via the Observation → Scan → Variant chain)."""
+        from ..models.observation import Observation
+        from ..models.scan import Scan
+        from ..models.variant import Variant as DBVariant
+        findings = Finding.get_by_vulnerability(vuln_id)
+        seen_variant_ids: set = set()
+        variants_out = []
+        for finding in findings:
+            for obs in Observation.get_by_finding(finding.id):
+                scan = db.session.get(Scan, obs.scan_id)
+                if scan is None:
+                    continue
+                if scan.variant_id in seen_variant_ids:
+                    continue
+                seen_variant_ids.add(scan.variant_id)
+                variant = db.session.get(DBVariant, scan.variant_id)
+                if variant:
+                    variants_out.append({
+                        "id": str(variant.id),
+                        "name": variant.name,
+                        "project_id": str(variant.project_id),
+                    })
+        return variants_out, 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str):
@@ -86,17 +489,63 @@ def init_app(app):
             payload_data["vuln_id"] = vuln_id
         elif payload_data["vuln_id"] != vuln_id or not isinstance(payload_data["vuln_id"], str):
             return {"error": "Invalid vuln_id"}, 400
+
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
             return assessment, status
 
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-        ctrls["assessments"].add(assessment)
+        # Resolve variant_id once — same for all packages in this request
+        variant_id_raw = payload_data.get('variant_id') or None
+        variant_id = None
+        if variant_id_raw:
+            try:
+                import uuid as _uuid
+                variant_id = _uuid.UUID(variant_id_raw)
+            except (ValueError, AttributeError):
+                return {"error": "Invalid variant_id"}, 400
 
-        save_assessments_to_files(ctrls)
-        return {"status": "success", "assessment": assessment.to_dict()}, 200
+        # Persist to DB — one Assessment record per package
+        # Use a single timestamp so grouped rows share the exact same value.
+        # Prefer the timestamp from the payload (allows frontend to synchronise
+        # across multiple requests); fall back to server time.
+        from datetime import datetime as _dt, timezone as _tz
+        shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
+        created = []
+        for pkg_string_id in (assessment.packages or []):
+            try:
+                # find_or_create handles both lookup and creation in one query
+                name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                db_pkg = Package.find_or_create(name, version)
+                # Ensure vulnerability record exists before creating Finding (FK constraint)
+                DBVuln.get_or_create(vuln_id)
+                finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                # Always create a new record — never merge with an existing one.
+                # from_vuln_assessment does a find-or-update which would overwrite
+                # previous user assessments on the same (finding, variant).
+                db_a = DBAssessment.create(
+                    status=assessment.status,
+                    simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                    finding_id=finding.id,
+                    variant_id=variant_id,
+                    origin="custom",
+                    status_notes=assessment.status_notes,
+                    justification=assessment.justification,
+                    impact_statement=assessment.impact_statement,
+                    workaround=getattr(assessment, "workaround", None),
+                    responses=list(assessment.responses) if assessment.responses else [],
+                    timestamp=shared_timestamp,
+                    commit=True,
+                )
+                created.append(db_a.to_dict())
+            except Exception as e:
+                return {"error": f"DB error: {e}"}, 500
+
+        if not created:
+            return {"error": "No valid package found"}, 400
+
+        _save_openvex()
+        response_body = {"status": "success", "assessments": created, "assessment": created[0]}
+        return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
     def add_assessments_batch():
@@ -104,12 +553,11 @@ def init_app(app):
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
 
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-
         results = []
         errors = []
+        # Cache resolved packages across the batch to avoid repeated SELECTs
+        pkg_cache: dict = {}
+        finding_cache: dict = {}
 
         for item in payload_data["assessments"]:
             if not isinstance(item, dict) or "vuln_id" not in item:
@@ -121,22 +569,65 @@ def init_app(app):
                 errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
                 continue
 
-            ctrls["assessments"].add(assessment)
-            results.append(assessment.to_dict())
-
-        if results:
-            save_assessments_to_files(ctrls)
+            vuln_id = assessment.vuln_id
+            # Parse optional variant_id from the raw item
+            variant_id_raw = item.get('variant_id') or None
+            variant_id = None
+            if variant_id_raw:
+                try:
+                    import uuid as _uuid
+                    variant_id = _uuid.UUID(variant_id_raw)
+                except (ValueError, AttributeError):
+                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                    continue
+            pkg_list = assessment.packages or []
+            if not pkg_list:
+                errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
+                continue
+            for pkg_string_id in pkg_list:
+                try:
+                    # Resolve package from cache first, then DB
+                    db_pkg = pkg_cache.get(pkg_string_id)
+                    if db_pkg is None:
+                        name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                        db_pkg = Package.find_or_create(name, version)
+                        pkg_cache[pkg_string_id] = db_pkg
+                    # Ensure vulnerability record exists before creating Finding (FK constraint)
+                    DBVuln.get_or_create(vuln_id)
+                    # Resolve finding from cache first, then DB
+                    f_key = (db_pkg.id, vuln_id)
+                    finding = finding_cache.get(f_key)
+                    if finding is None:
+                        finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                        finding_cache[f_key] = finding
+                    # Always create a new record — never overwrite an existing assessment
+                    db_a = DBAssessment.create(
+                        status=assessment.status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        origin="custom",
+                        status_notes=assessment.status_notes,
+                        justification=assessment.justification,
+                        impact_statement=assessment.impact_statement,
+                        workaround=getattr(assessment, "workaround", None),
+                        responses=list(assessment.responses) if assessment.responses else [],
+                        commit=True,
+                    )
+                    results.append(db_a.to_dict())
+                except Exception as e:
+                    errors.append({"vuln_id": vuln_id, "error": str(e)})
 
         response = {
             "status": "success" if results else "error",
             "assessments": results,
             "count": len(results)
         }
-
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
-
+        if results:
+            _save_openvex()
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
@@ -145,88 +636,70 @@ def init_app(app):
         if not payload_data:
             return {"error": "Invalid request data"}, 400
 
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-
-        # Get the existing assessment
-        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
-        if existing_assessment is None:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
             return {"error": "Assessment not found"}, 404
 
-        # Update the assessment fields
+        # Reconstruct Assessment DTO for validation
+        mem_assess = DBAssessment.from_dict(existing.to_dict())
+
         if "status" in payload_data and isinstance(payload_data["status"], str):
-            if not existing_assessment.set_status(payload_data["status"]):
+            if not mem_assess.set_status(payload_data["status"]):
                 return {"error": "Invalid status"}, 400
-            if existing_assessment.status not in ["not_affected", "false_positive"]:
-                existing_assessment.justification = ""
-                existing_assessment.impact_statement = ""
+            if mem_assess.status not in ["not_affected", "false_positive"]:
+                mem_assess.justification = ""
+                mem_assess.impact_statement = ""
 
         if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
-            existing_assessment.set_status_notes(payload_data["status_notes"], False)
+            mem_assess.set_status_notes(payload_data["status_notes"], False)
 
         if "justification" in payload_data and isinstance(payload_data["justification"], str):
             if payload_data["justification"] == "":
-                existing_assessment.justification = ""
-            elif not existing_assessment.set_justification(payload_data["justification"]):
+                mem_assess.justification = ""
+            elif not mem_assess.set_justification(payload_data["justification"]):
                 return {"error": "Invalid justification"}, 400
-        elif existing_assessment.is_justification_required():
+        elif mem_assess.is_justification_required():
             return {"error": "Justification required"}, 400
 
         if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
             if payload_data["impact_statement"] == "":
-                existing_assessment.impact_statement = ""
+                mem_assess.impact_statement = ""
             else:
-                existing_assessment.set_not_affected_reason(payload_data["impact_statement"], False)
+                mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
 
         if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            if "workaround_timestamp" in payload_data and isinstance(payload_data["workaround_timestamp"], str):
-                existing_assessment.set_workaround(payload_data["workaround"], payload_data["workaround_timestamp"])
-            else:
-                existing_assessment.set_workaround(payload_data["workaround"])
+            mem_assess.set_workaround(payload_data["workaround"])
 
-        # Update last_update timestamp
-        existing_assessment.last_update = datetime.now(timezone.utc).isoformat()
-
-        save_assessments_to_files(ctrls)
-        return {"status": "success", "assessment": existing_assessment.to_dict()}, 200
+        existing.update(
+            status=mem_assess.status,
+            origin="custom",
+            status_notes=mem_assess.status_notes,
+            justification=mem_assess.justification,
+            impact_statement=mem_assess.impact_statement,
+            workaround=getattr(mem_assess, "workaround", None),
+            responses=list(mem_assess.responses),
+        )
+        _save_openvex()
+        return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
     def delete_assessment(assessment_id: str):
-        ctrls = get_all_datas()
-        if ctrls["assessments"] is None:
-            return {"error": "Internal error"}, 500
-
-        # Check if assessment exists
-        existing_assessment = ctrls["assessments"].get_by_id(assessment_id)
-        if existing_assessment is None:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
             return {"error": "Assessment not found"}, 404
-
-        # Remove the assessment
-        if ctrls["assessments"].remove(assessment_id):
-            save_assessments_to_files(ctrls)
-            return {"status": "success", "message": "Assessment deleted successfully"}, 200
-        else:
-            return {"error": "Failed to delete assessment"}, 500
-
-    def save_assessments_to_files(ctrls):
-        with open(app.config["ASSESSMENTS_FILE"], "w") as f:
-            f.write(json.dumps(ctrls["assessments"].to_dict()))
-
-        vex = OpenVex(ctrls)
-        with open(app.config["OPENVEX_FILE"], "w") as f:
-            f.write(json.dumps(vex.to_dict(), indent=2))
+        existing.delete()
+        return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 
 def payload_to_assessment(data):
     """
-    Take an object in input and try to convert it to an VulnAssessment instance.
-    Return either VulnAssessment and 200, or object and http responde code
+    Take an object in input and try to convert it to an Assessment DTO.
+    Return either (Assessment, 200) or (error_dict, http_code).
     """
     if "packages" not in data or not isinstance(data["packages"], list) or len(data["packages"]) < 1:
         return {"error": "Invalid request data"}, 400
 
-    assessment = VulnAssessment(data["vuln_id"], data["packages"])
+    assessment = DBAssessment.new_dto(data["vuln_id"], data["packages"])
 
     if "status" not in data or not isinstance(data["status"], str):
         return {"error": "Invalid request data"}, 400
@@ -240,7 +713,6 @@ def payload_to_assessment(data):
     if "justification" in data and isinstance(data["justification"], str):
         if not assessment.set_justification(data["justification"]):
             return {"error": "Invalid justification"}, 400
-
     elif assessment.is_justification_required():
         return {"error": "Justification required"}, 400
 
@@ -248,16 +720,13 @@ def payload_to_assessment(data):
         assessment.set_not_affected_reason(data["impact_statement"], False)
 
     if "workaround" in data and isinstance(data["workaround"], str):
-        if "workaround_timestamp" in data and isinstance(data["workaround_timestamp"], str):
-            assessment.set_workaround(data["workaround"], data["workaround_timestamp"])
-        else:
-            assessment.set_workaround(data["workaround"])
+        assessment.set_workaround(data["workaround"])
 
     if "timestamp" in data and isinstance(data["timestamp"], str):
-        assessment.timestamp = data["timestamp"]
-    if "last_updated" in data and isinstance(data["last_updated"], str):
-        assessment.last_update = data["last_updated"]
-
+        try:
+            assessment.timestamp = datetime.fromisoformat(data["timestamp"])
+        except (ValueError, TypeError):
+            pass
     if "responses" in data and isinstance(data["responses"], list):
         for response in data["responses"]:
             assessment.add_response(response)
