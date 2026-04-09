@@ -14,6 +14,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
+from ..helpers.env_vars import get_bool_env
 import glob
 import os
 import json
@@ -25,7 +26,7 @@ OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
 def read_inputs(controllers):
     """Read from folder."""
     use_fastspdx = False
-    if os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true':
+    if get_bool_env('IGNORE_PARSING_ERRORS'):
         use_fastspdx = True
         verbose("spdx_merge: Using FastSPDX parser")
 
@@ -47,7 +48,7 @@ def read_inputs(controllers):
                     spdx.load_from_file(file)
                     spdx.parse_and_merge()
         except Exception as e:
-            if os.getenv('IGNORE_PARSING_ERRORS', 'false') != 'true':
+            if not get_bool_env('IGNORE_PARSING_ERRORS'):
                 print(f"Error parsing SPDX file: {file} {e}")
                 print("Hint: set IGNORE_PARSING_ERRORS=true to ignore this error")
                 raise e

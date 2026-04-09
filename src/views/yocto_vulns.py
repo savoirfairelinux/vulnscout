@@ -3,12 +3,12 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-import os
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
 from ..models.cvss import CVSS
 from ..extensions import batch_session
+from ..helpers.env_vars import get_bool_env
 from datetime import datetime, timezone
 
 
@@ -41,7 +41,7 @@ class YoctoVulns:
     def load_from_dict(self, data: dict):
         """Load the yoctoVulns object from a dictionary."""
 
-        skip_patched = os.getenv('CVE_CHECK_EXCLUDE_PATCHED', 'false') == 'true'
+        skip_patched = get_bool_env('CVE_CHECK_EXCLUDE_PATCHED')
 
         with batch_session():
             for pkg in data.get("package", []):

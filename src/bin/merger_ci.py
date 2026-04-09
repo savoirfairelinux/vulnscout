@@ -31,6 +31,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.verbose import verbose
+from ..helpers.env_vars import get_bool_env
 from ..extensions import batch_session, db as _db
 import click
 import json
@@ -111,7 +112,7 @@ def read_inputs(controllers, scan_id=None):
     grype = GrypeVulns(controllers)
     templates = Templates(controllers)
 
-    use_fastspdx = os.getenv('IGNORE_PARSING_ERRORS', 'false') == 'true'
+    use_fastspdx = get_bool_env('IGNORE_PARSING_ERRORS', False)
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
@@ -271,7 +272,7 @@ def _run_main() -> dict:
     # the frontend stuck at Step 1.
     # In batch / CI mode (INTERACTIVE_MODE != "true") we run it here so that
     # EPSS scores are available for --match-condition evaluation.
-    interactive_mode = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
+    interactive_mode = get_bool_env("INTERACTIVE_MODE", False)
     if not interactive_mode:
         verbose("merger_ci: Starting post-treatment (EPSS enrichment)")
         post_treatment(controllers)
