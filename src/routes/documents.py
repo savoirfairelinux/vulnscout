@@ -11,6 +11,10 @@ from datetime import date
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from ..controllers.projects import ProjectController
+from ..controllers.variants import VariantController
+from ..controllers.scans import ScanController
+from ..controllers.sbom_documents import SBOMDocumentController
 from ..views.templates import Templates
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
@@ -49,11 +53,18 @@ def init_app(app):
             "packages": pkgCtrl,
             "vulnerabilities": vulnCtrl,
             "assessments": assessCtrl,
+            "projects": ProjectController,
+            "variants": VariantController,
+            "scans": ScanController,
+            "sbom_documents": SBOMDocumentController,
         }
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs():
-        templ = Templates({"packages": [], "vulnerabilities": [], "assessments": []})
+        templ = Templates({
+            "packages": [], "vulnerabilities": [], "assessments": [],
+            "projects": None, "variants": None, "scans": None, "sbom_documents": None,
+        })
         try:
             docs = templ.list_documents()
 
