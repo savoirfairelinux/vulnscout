@@ -163,14 +163,19 @@ def _variant_info(variant_ids: list) -> dict:
 # ---------------------------------------------------------------------------
 
 def _prev_scan_map(scans: list[Scan]) -> dict:
-    """Return {scan.id: previous_scan_or_None} grouped by variant, ordered by timestamp."""
-    by_variant: dict = {}
+    """Return {scan.id: previous_scan_or_None} grouped by (variant, scan_type), ordered by timestamp.
+
+    Tool scans (e.g. Grype) are only compared against previous tool scans,
+    and SBOM scans are only compared against previous SBOM scans.
+    """
+    by_key: dict = {}
     for s in scans:
-        by_variant.setdefault(s.variant_id, []).append(s)
+        key = (s.variant_id, s.scan_type or "sbom")
+        by_key.setdefault(key, []).append(s)
     mapping: dict = {}
-    for variant_scans in by_variant.values():
-        for i, s in enumerate(variant_scans):
-            mapping[s.id] = variant_scans[i - 1] if i > 0 else None
+    for group_scans in by_key.values():
+        for i, s in enumerate(group_scans):
+            mapping[s.id] = group_scans[i - 1] if i > 0 else None
     return mapping
 
 
@@ -199,6 +204,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         curr_p = packages_map.get(scan.id, set())
         curr_v = vulns_map.get(scan.id, set())
         prev = prev_map.get(scan.id)
+        is_tool_scan = (scan.scan_type or "sbom") == "tool"
 
         entry = {
             "scan": scan,
@@ -208,7 +214,9 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             "raw_added_f": set(), "raw_removed_f": set(),
         }
 
-        if prev is not None:
+        # Skip package-level diff for tool scans (e.g. Grype) since they only
+        # report the subset of packages that have vulnerabilities.
+        if prev is not None and not is_tool_scan:
             prev_p = packages_map.get(prev.id, set())
             raw_added_p = curr_p - prev_p
             raw_removed_p = prev_p - curr_p
@@ -256,6 +264,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         base["package_count"] = len(entry["curr_p"])
         base["vuln_count"] = len(curr_v)
 
+        is_tool_scan = (scan.scan_type or "sbom") == "tool"
+
         if prev is None:
             base["is_first"] = True
             base["findings_added"] = None
@@ -271,38 +281,47 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             prev_v = vulns_map.get(prev.id, set())
             base["is_first"] = False
 
-            upgraded_pairs = entry["upgraded_pairs"]
-            prev_pkgs = packages_map.get(prev.id, set())
-            base["packages_added"] = entry.get("truly_added_p", len(entry["curr_p"] - prev_pkgs))
-            base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
-            base["packages_upgraded"] = len(upgraded_pairs)
-
-            raw_added_f = curr_f - prev_f
-            raw_removed_f = prev_f - curr_f
-
-            if upgraded_pairs and entry["raw_added_f"]:
-                # Classify findings on upgraded packages
-                upgraded_old_ids = {str(old_pkg.id) for old_pkg, _ in upgraded_pairs}
-                upgraded_new_ids = {str(new_pkg.id) for _, new_pkg in upgraded_pairs}
-                # Vulns on removed side that belong to upgraded old packages
-                removed_vulns_on_upgraded = {
-                    fid_to_info[fid][1]
-                    for fid in raw_removed_f
-                    if fid in fid_to_info and str(fid_to_info[fid][0]) in upgraded_old_ids
-                }
-                upgraded_count = sum(
-                    1 for fid in raw_added_f
-                    if fid in fid_to_info
-                    and str(fid_to_info[fid][0]) in upgraded_new_ids
-                    and fid_to_info[fid][1] in removed_vulns_on_upgraded
-                )
-                base["findings_upgraded"] = upgraded_count
-                base["findings_added"] = len(raw_added_f) - upgraded_count
-                base["findings_removed"] = len(raw_removed_f) - upgraded_count
-            else:
+            if is_tool_scan:
+                # Tool scans: no package diffs, only findings/vulns
+                base["packages_added"] = 0
+                base["packages_removed"] = 0
+                base["packages_upgraded"] = 0
                 base["findings_upgraded"] = 0
-                base["findings_added"] = len(raw_added_f)
-                base["findings_removed"] = len(raw_removed_f)
+                base["findings_added"] = len(curr_f - prev_f)
+                base["findings_removed"] = len(prev_f - curr_f)
+            else:
+                upgraded_pairs = entry["upgraded_pairs"]
+                prev_pkgs = packages_map.get(prev.id, set())
+                base["packages_added"] = entry.get("truly_added_p", len(entry["curr_p"] - prev_pkgs))
+                base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
+                base["packages_upgraded"] = len(upgraded_pairs)
+
+                raw_added_f = curr_f - prev_f
+                raw_removed_f = prev_f - curr_f
+
+                if upgraded_pairs and entry["raw_added_f"]:
+                    # Classify findings on upgraded packages
+                    upgraded_old_ids = {str(old_pkg.id) for old_pkg, _ in upgraded_pairs}
+                    upgraded_new_ids = {str(new_pkg.id) for _, new_pkg in upgraded_pairs}
+                    # Vulns on removed side that belong to upgraded old packages
+                    removed_vulns_on_upgraded = {
+                        fid_to_info[fid][1]
+                        for fid in raw_removed_f
+                        if fid in fid_to_info and str(fid_to_info[fid][0]) in upgraded_old_ids
+                    }
+                    upgraded_count = sum(
+                        1 for fid in raw_added_f
+                        if fid in fid_to_info
+                        and str(fid_to_info[fid][0]) in upgraded_new_ids
+                        and fid_to_info[fid][1] in removed_vulns_on_upgraded
+                    )
+                    base["findings_upgraded"] = upgraded_count
+                    base["findings_added"] = len(raw_added_f) - upgraded_count
+                    base["findings_removed"] = len(raw_removed_f) - upgraded_count
+                else:
+                    base["findings_upgraded"] = 0
+                    base["findings_added"] = len(raw_added_f)
+                    base["findings_removed"] = len(raw_removed_f)
 
             base["vulns_added"] = len(curr_v - prev_v)
             base["vulns_removed"] = len(prev_v - curr_v)
@@ -406,6 +425,9 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
 
 def init_app(app):
 
+    # Track running Grype scans so we can report status / prevent duplicates
+    _grype_scans_in_progress: dict = {}  # variant_id -> {"status": str, "error": str|None}
+
     @app.route('/api/scans')
     def list_all_scans():
         scans = ScanController.get_all()
@@ -457,13 +479,17 @@ def init_app(app):
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
-        # Locate the previous scan for the same variant
+        # Locate the previous scan of the same type for the same variant
         all_variant_scans = ScanController.get_by_variant(scan.variant_id)
+        scan_type = scan.scan_type or "sbom"
         prev_scan_id = None
-        for i, s in enumerate(all_variant_scans):
+        same_type_scans = [s for s in all_variant_scans if (s.scan_type or "sbom") == scan_type]
+        for i, s in enumerate(same_type_scans):
             if s.id == scan.id and i > 0:
-                prev_scan_id = all_variant_scans[i - 1].id
+                prev_scan_id = same_type_scans[i - 1].id
                 break
+
+        is_tool_scan = scan_type == "tool"
 
         # --- Findings diff ---
         current_finding_ids = {obs.finding_id for obs in scan.observations}
@@ -488,34 +514,41 @@ def init_app(app):
             vulns_added = sorted(curr_vulns - prev_vulns)
             vulns_removed = sorted(prev_vulns - curr_vulns)
 
-        # --- Packages diff ---
-        scans_to_query = [scan.id] if prev_scan_id is None else [scan.id, prev_scan_id]
-        pkg_sets = _packages_by_scan_ids(scans_to_query)
-        curr_pkg_ids = pkg_sets.get(scan.id, set())
-        prev_pkg_ids = pkg_sets.get(prev_scan_id, set()) if prev_scan_id else set()
+        # --- Packages diff (skipped for tool scans) ---
+        if is_tool_scan:
+            curr_pkg_ids: set = set()
+            packages_added: list = []
+            packages_removed: list = []
+            packages_upgraded: list = []
+            upgraded_pairs: list = []
+        else:
+            scans_to_query = [scan.id] if prev_scan_id is None else [scan.id, prev_scan_id]
+            pkg_sets = _packages_by_scan_ids(scans_to_query)
+            curr_pkg_ids = pkg_sets.get(scan.id, set())
+            prev_pkg_ids = pkg_sets.get(prev_scan_id, set()) if prev_scan_id else set()
 
-        raw_added_pkg_ids = curr_pkg_ids - prev_pkg_ids
-        raw_removed_pkg_ids = prev_pkg_ids - curr_pkg_ids
+            raw_added_pkg_ids = curr_pkg_ids - prev_pkg_ids
+            raw_removed_pkg_ids = prev_pkg_ids - curr_pkg_ids
 
-        all_relevant_pkg_ids = raw_added_pkg_ids | raw_removed_pkg_ids
-        pkg_lookup = _package_rows(all_relevant_pkg_ids)
+            all_relevant_pkg_ids = raw_added_pkg_ids | raw_removed_pkg_ids
+            pkg_lookup = _package_rows(all_relevant_pkg_ids)
 
-        truly_added_ids, truly_removed_ids, upgraded_pairs = _classify_package_changes(
-            raw_added_pkg_ids, raw_removed_pkg_ids, pkg_lookup
-        )
+            truly_added_ids, truly_removed_ids, upgraded_pairs = _classify_package_changes(
+                raw_added_pkg_ids, raw_removed_pkg_ids, pkg_lookup
+            )
 
-        packages_added = [_pkg_to_dict(pkg_lookup[pid]) for pid in truly_added_ids if pid in pkg_lookup]
-        packages_removed = [_pkg_to_dict(pkg_lookup[pid]) for pid in truly_removed_ids if pid in pkg_lookup]
-        packages_upgraded = [
-            {
-                "package_name": (old_pkg.name or "unknown"),
-                "old_version": (old_pkg.version or ""),
-                "new_version": (new_pkg.version or ""),
-                "old_package_id": str(old_pkg.id),
-                "new_package_id": str(new_pkg.id),
-            }
-            for old_pkg, new_pkg in upgraded_pairs
-        ]
+            packages_added = [_pkg_to_dict(pkg_lookup[pid]) for pid in truly_added_ids if pid in pkg_lookup]
+            packages_removed = [_pkg_to_dict(pkg_lookup[pid]) for pid in truly_removed_ids if pid in pkg_lookup]
+            packages_upgraded = [
+                {
+                    "package_name": (old_pkg.name or "unknown"),
+                    "old_version": (old_pkg.version or ""),
+                    "new_version": (new_pkg.version or ""),
+                    "old_package_id": str(old_pkg.id),
+                    "new_package_id": str(new_pkg.id),
+                }
+                for old_pkg, new_pkg in upgraded_pairs
+            ]
 
         # --- Classify findings on upgraded packages ---
         if prev_scan_id is not None and upgraded_pairs:
@@ -533,6 +566,7 @@ def init_app(app):
 
         return jsonify({
             "scan_id": str(scan.id),
+            "scan_type": scan_type,
             "previous_scan_id": str(prev_scan_id) if prev_scan_id else None,
             "is_first": prev_scan_id is None,
             "finding_count": len(current_finding_ids),
@@ -547,3 +581,139 @@ def init_app(app):
             "vulns_added": vulns_added,
             "vulns_removed": vulns_removed,
         })
+
+    @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
+    def trigger_grype_scan(variant_id):
+        """Trigger a Grype vulnerability scan for the given variant.
+
+        Exports the variant's packages as CycloneDX, runs ``grype`` on the
+        export, and merges the results back into the DB as a tool scan.
+        """
+        import threading
+        import subprocess
+        import tempfile
+        import os
+        import shutil
+
+        try:
+            variant_uuid = uuid_module.UUID(variant_id)
+        except ValueError:
+            return jsonify({"error": "Invalid variant id"}), 400
+
+        variant = VariantController.get(variant_uuid)
+        if variant is None:
+            return jsonify({"error": "Variant not found"}), 404
+
+        vid_str = str(variant_uuid)
+        if vid_str in _grype_scans_in_progress and _grype_scans_in_progress[vid_str]["status"] == "running":
+            return jsonify({"error": "A Grype scan is already in progress for this variant"}), 409
+
+        # Check that grype is available
+        if shutil.which("grype") is None:
+            return jsonify({"error": "grype binary not found on this system"}), 503
+
+        project = db.session.get(Project, variant.project_id)
+        project_name = project.name if project else "unknown"
+        variant_name = variant.name
+
+        _grype_scans_in_progress[vid_str] = {"status": "running", "error": None}
+
+        def _run_grype_scan():
+            try:
+                base_dir = os.environ.get(
+                    "BASE_DIR",
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                )
+                grype_tmp = tempfile.mkdtemp(prefix="vulnscout_grype_")
+                try:
+                    # 1. Export current DB as CycloneDX
+                    subprocess.run(
+                        ["flask", "--app", "src.bin.webapp", "export",
+                         "--format", "cdx16", "--output-dir", grype_tmp],
+                        cwd=base_dir, check=True, capture_output=True, text=True,
+                        timeout=120,
+                    )
+
+                    exported_cdx = os.path.join(grype_tmp, "sbom_cyclonedx_v1_6.cdx.json")
+                    if not os.path.isfile(exported_cdx):
+                        _grype_scans_in_progress[vid_str] = {
+                            "status": "error",
+                            "error": "CycloneDX export produced no file",
+                        }
+                        return
+
+                    # 2. Run grype on the exported SBOM
+                    grype_out = os.path.join(grype_tmp, "grype_results.grype.json")
+                    with open(grype_out, "w") as gf:
+                        subprocess.run(
+                            ["grype", "--add-cpes-if-none",
+                             f"sbom:{exported_cdx}", "-o", "json"],
+                            cwd=base_dir, check=True, text=True,
+                            stdout=gf, stderr=subprocess.PIPE,
+                            timeout=600,
+                        )
+
+                    if not os.path.isfile(grype_out) or os.path.getsize(grype_out) == 0:
+                        _grype_scans_in_progress[vid_str] = {
+                            "status": "error",
+                            "error": "Grype produced no output",
+                        }
+                        return
+
+                    # 3. Merge Grype results as a tool scan
+                    subprocess.run(
+                        ["flask", "--app", "src.bin.webapp", "merge",
+                         "--project", project_name, "--variant", variant_name,
+                         "--grype", grype_out],
+                        cwd=base_dir, check=True, capture_output=True, text=True,
+                        timeout=120,
+                    )
+
+                    # 4. Process
+                    subprocess.run(
+                        ["flask", "--app", "src.bin.webapp", "process"],
+                        cwd=base_dir, check=True, capture_output=True, text=True,
+                        timeout=300,
+                    )
+
+                    _grype_scans_in_progress[vid_str] = {"status": "done", "error": None}
+                finally:
+                    shutil.rmtree(grype_tmp, ignore_errors=True)
+            except subprocess.TimeoutExpired:
+                _grype_scans_in_progress[vid_str] = {
+                    "status": "error",
+                    "error": "Grype scan timed out",
+                }
+            except subprocess.CalledProcessError as e:
+                _grype_scans_in_progress[vid_str] = {
+                    "status": "error",
+                    "error": f"Command failed: {e.stderr[:500] if e.stderr else str(e)}",
+                }
+            except Exception as e:
+                _grype_scans_in_progress[vid_str] = {
+                    "status": "error",
+                    "error": str(e)[:500],
+                }
+
+        thread = threading.Thread(
+            target=_run_grype_scan,
+            name=f"grype-scan-{vid_str}",
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({"status": "started", "variant_id": vid_str}), 202
+
+    @app.route('/api/variants/<variant_id>/grype-scan/status')
+    def grype_scan_status(variant_id):
+        """Check the status of a running Grype scan for the given variant."""
+        try:
+            variant_uuid = uuid_module.UUID(variant_id)
+        except ValueError:
+            return jsonify({"error": "Invalid variant id"}), 400
+
+        vid_str = str(variant_uuid)
+        info = _grype_scans_in_progress.get(vid_str)
+        if info is None:
+            return jsonify({"status": "idle"})
+        return jsonify(info)
