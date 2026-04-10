@@ -38,6 +38,7 @@ import click
 import json
 import os
 import typing
+import uuid
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 
@@ -376,6 +377,7 @@ def init_app(app) -> None:
     app.cli.add_command(import_custom_assessments_command)
     app.cli.add_command(list_projects_command)
     app.cli.add_command(list_scans_command)
+    app.cli.add_command(delete_scan_command)
 
 
 @click.command("export")
@@ -988,6 +990,14 @@ def list_scans_command(json_format: bool = False):
 
     scans = ScanController.get_all()
     _echo_object_list(json_format, scans, _format_scan_pretty, ScanModel.to_dict)
+
+
+@click.command("delete-scan")
+@click.argument("scan-id", type=click.UUID)
+@with_appcontext
+def delete_scan_command(scan_id: uuid.UUID):
+    ScanController.delete(scan_id)
+    click.echo(f"Successfully deleted scan {scan_id}")
 
 
 def main() -> dict:

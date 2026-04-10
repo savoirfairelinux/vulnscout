@@ -60,6 +60,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-custom-assessments` | Export custom (review) assessments as `.tar.gz` to `/scan/outputs/` |
 | `--import-custom-assessments <path>` | Import custom assessments from `.json` or `.tar.gz` |
 | `--match-condition <expr>` | Exit with code 2 if expression matches any vulnerability. Incompatible with `--serve` |
+| `--delete-scan <id>` | Delete a past scan by its ID |
 
 ### Data Retrieval Commands
 

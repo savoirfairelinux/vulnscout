@@ -83,6 +83,7 @@ Scan & output commands:
   --export-openvex                Export project as OpenVEX document
   --export-custom-assessments     Export custom (review) assessments as tar.gz
   --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
+  --delete-scan <id>                Delete a past scan by its ID
 
 Data retrieval commands:
   list-projects                   List all projects and their variants
@@ -332,6 +333,10 @@ parse_and_run() {
                 local import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
                 EXPORT_ARGS+=(--import-custom-assessments "$import_staged")
+                shift 2 ;;
+            --delete-scan)
+                ensure_running
+                exec_container --delete-scan "$2"
                 shift 2 ;;
             serve|--serve)
                 SERVE_REQUESTED=true; shift ;;

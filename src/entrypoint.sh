@@ -47,6 +47,7 @@ Scan & output commands:
   --export-custom-assessments  Export custom (review) assessments as tar.gz to /scan/outputs/
   --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
+  --delete-scan <id>        Delete a past scan by its ID
 
 Data retrieval commands:
   --list-projects           List all projects and their variants
@@ -426,6 +427,11 @@ cmd_do_get_data() {
     flask --app src.bin.webapp "${DATA_REQUESTED#--}" "${data_args[@]}"
 }
 
+cmd_delete_scan() {
+    scan_id="$1"
+    flask --app src.bin.webapp delete-scan "$scan_id"
+}
+
 cmd_daemon() {
     setup_user
     echo "VulnScout ready. Use '/scan/src/entrypoint.sh --help' for available commands."
@@ -553,6 +559,8 @@ while [[ $# -gt 0 ]]; do
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
+        --delete-scan)
+            cmd_delete_scan "$2"; shift 2 ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
