@@ -64,6 +64,26 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     fetchMock.resetMocks();
   });
 
+  test('list with compareVariantId and operation sets compare query params', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
+    const vulns = await Vulnerabilities.list('variant-1', undefined, 'variant-2', 'difference');
+    expect(vulns).toHaveLength(1);
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
+    expect(calledUrl.searchParams.get('compare_variant_id')).toBe('variant-2');
+    expect(calledUrl.searchParams.get('operation')).toBe('difference');
+  });
+
+  test('list with compareVariantId but no operation omits operation param', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
+    const vulns = await Vulnerabilities.list('variant-1', undefined, 'variant-2');
+    expect(vulns).toHaveLength(1);
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
+    expect(calledUrl.searchParams.get('compare_variant_id')).toBe('variant-2');
+    expect(calledUrl.searchParams.has('operation')).toBe(false);
+  });
+
   test('filters invalid cvss entries and keeps valid ones with attack vector', async () => {
     const cvssArray = [
       { version: '3.1', base_score: 5.5, vector_string: 'CVSS:3.1/AV:N/BS:5.5' },
@@ -254,12 +274,12 @@ describe('append_assessment', () => {
     } as any;
 
     const result = Vulnerabilities.append_assessment(vulns, assessment);
-    
+
     const cve1 = result.find((v: any) => v.id === 'CVE-2021-1');
     expect(cve1?.status).toBe('investigating');
     expect(cve1?.simplified_status).toBe('open');
     expect(cve1?.assessments).toHaveLength(1);
-    
+
     const cve2 = result.find((v: any) => v.id === 'CVE-2021-2');
     expect(cve2?.status).toBe('unknown');
     expect(cve2?.assessments).toHaveLength(0);
@@ -295,7 +315,7 @@ describe('append_cvss', () => {
     };
 
     const result = Vulnerabilities.append_cvss(vulns, 'CVE-2021-1', cvss);
-    
+
     expect(result[0].severity.cvss).toHaveLength(1);
     expect(result[0].severity.cvss[0]).toEqual(cvss);
   });
@@ -340,7 +360,7 @@ describe('append_cvss', () => {
     };
 
     const result = Vulnerabilities.append_cvss(vulns, 'CVE-2021-1', cvss);
-    
+
     expect(result[0].severity.cvss).toHaveLength(1);
     expect(result[1].severity.cvss).toHaveLength(0);
   });
@@ -349,7 +369,7 @@ describe('append_cvss', () => {
 describe('calculate_cvss_from_vector error handling', () => {
   test('handles non-invalid vector errors by logging them', () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    
+
     // Mock the CVSS calculator to throw a different error
     const originalCvss3P1 = require('ae-cvss-calculator').Cvss3P1;
     require('ae-cvss-calculator').Cvss3P1 = jest.fn().mockImplementation(() => ({
@@ -359,10 +379,10 @@ describe('calculate_cvss_from_vector error handling', () => {
     }));
 
     const result = Vulnerabilities.calculate_cvss_from_vector('CVSS:3.1/AV:N/BS:5.5');
-    
+
     expect(result).toBeNull();
     expect(consoleErrorSpy).toHaveBeenCalled();
-    
+
     // Restore mocks
     require('ae-cvss-calculator').Cvss3P1 = originalCvss3P1;
     consoleErrorSpy.mockRestore();
@@ -370,13 +390,13 @@ describe('calculate_cvss_from_vector error handling', () => {
 
   test('suppresses expected invalid vector errors', () => {
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    
+
     const result = Vulnerabilities.calculate_cvss_from_vector('INVALID_VECTOR');
-    
+
     expect(result).toBeNull();
     // Should NOT log the error since it's an expected 'invalid vector' error
     expect(consoleErrorSpy).not.toHaveBeenCalled();
-    
+
     consoleErrorSpy.mockRestore();
   });
 });

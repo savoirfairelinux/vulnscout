@@ -5,7 +5,7 @@
 
 import pytest
 from src.views.cyclonedx import CycloneDx
-from src.models.assessment import VulnAssessment
+from src.models.assessment import Assessment
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
@@ -206,7 +206,7 @@ def test_parse_vulnerabilities_json(cdx_parser):
 
 
 def test_parsing_assessment_already_present(cdx_parser):
-    assess = VulnAssessment("CVE-2020-35492", ["cairo@1.16.0"])
+    assess = Assessment.new_dto("CVE-2020-35492", ["cairo@1.16.0"])
     assess.set_status("affected")
     assess.set_status_notes("1st status notes")
     assess.set_status_notes("2nd status notes", True)
@@ -312,9 +312,8 @@ def test_vulnerability_without_id(cdx_parser):
         ]
     }"""))
     
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'upper'"):
-        cdx_parser.parse_and_merge()
-    
+    cdx_parser.parse_and_merge()
+
     # Assessment should not be created if vulnerability ID is None
     assert len(cdx_parser.assessmentsCtrl) == 0
     # Vulnerability without ID should be skipped entirely

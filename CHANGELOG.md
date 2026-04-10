@@ -10,6 +10,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.12.0] - 2026-04-09
+
+### Added
+- Migration to a database persistance.
+- Variant support: variant-specific assessments, variant columns in Vulnerabilities & Packages tables, project/variant picker.
+- Review tab: import/export custom user assessments as `.tar.gz`, grouped by variants and packages.
+- Scans tab: scan history with upgrade feature, diff UI, per-scan vulnerability metrics, and timezone support.
+- Settings tab: create/delete projects & variants, import multiple SBOMs per scan, custom loading messages.
+- New Vulnscout CLI entrypoint.
+- Podman container support; container runs as daemon.
+- Database migration tooling with notification UI.
+
+### Changed
+- Migrated from in-memory DTOs to SQLAlchemy models.
+- Replaced NVD/EPSS local SQLite cache with direct API clients.
+- New Sphinx documentation; removed `README_DEV`.
+- Reorganized `/example` and `/templates` folders.
+
+### Fixed
+- Data integrity and duplicate assessment issues.
+- Long "Loading Data" at serve time.
+- UI fixes: tooltips, table overflow, gauge overflow, hover effects, variant tags.
+- Match condition exit codes; `merger_ci` early exit on DB commit.
+- Deprecated SBOM parsing in Packages & Vulnerabilities tabs.
+
+### Removed
+- Patch-Finder feature (temporarily).
+
+---
+
 ## [0.11.1] - 2026-03-11
 
 ### Added

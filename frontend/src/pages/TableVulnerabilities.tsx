@@ -2,6 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
+import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
@@ -11,11 +12,12 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
+
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
+import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faCaretDown, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -25,6 +27,11 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
+    variantId?: string;
+    /** Origin variant when compare mode is active */
+    baseVariantId?: string;
+    /** 'difference' or 'intersection' when compare mode is active */
+    compareOperation?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -68,7 +75,7 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const fuseKeys = [
-    'id', 
+    'id',
     'packages',
     'texts.content'
 ]
@@ -87,10 +94,10 @@ type PublishedDateFilterProps = {
     nvdProgress: NVDProgress | null;
 };
 
-function PublishedDateFilter({ 
+function PublishedDateFilter({
     filterType, dateValue, daysValue, dateFrom, dateTo,
-    setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo, 
-    nvdProgress 
+    setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo,
+    nvdProgress
 }: Readonly<PublishedDateFilterProps>) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -262,7 +269,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
 
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
@@ -279,24 +286,33 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [publishedDateFrom, setPublishedDateFrom] = useState<string>('');
     const [publishedDateTo, setPublishedDateTo] = useState<string>('');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
+    const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
-    const [hideFixed, setHideFixed] = useState<boolean>(false);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date'
+        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
     const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
     const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useState<boolean>(false);
+    const [epssRange, setEpssRange] = useState<{ min: number; max: number }>({ min: 0, max: 100 });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useState<string[]>([]);
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showSearchHelper, setShowSearchHelper] = useState(false);
+    const [showMoreFilters, setShowMoreFilters] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
+    const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
+    const moreFiltersRef = useRef<HTMLDivElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -304,6 +320,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         { key: 'v', description: 'View vulnerability details' },
         { key: '↑ / ↓', description: 'Navigate focused table row' },
         { key: 'Home / End', description: 'Navigate to first/last table row' },
+    ];
+
+    const searchSyntaxHelp = [
+        { syntax: 'term', description: 'Match rows containing term' },
+        { syntax: 'term1 term2', description: 'AND: both terms must match' },
+        { syntax: 'term1 | term2', description: 'OR: either term matches' },
+        { syntax: '-term', description: 'NOT: exclude rows with term' },
     ];
 
 
@@ -332,6 +355,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return () => clearInterval(interval);
     }, []);
 
+    // Fetch EPSS progress on mount and periodically
+    useEffect(() => {
+        const fetchEpssProgress = async () => {
+            try {
+                const progress = await EPSSProgressHandler.getProgress();
+                setEpssProgress(progress);
+            } catch (error) {
+                console.error('Failed to fetch EPSS progress:', error);
+            }
+        };
+
+        fetchEpssProgress();
+        const interval = setInterval(fetchEpssProgress, 5000); // Poll every 5 seconds
+
+        return () => clearInterval(interval);
+    }, []);
+
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
         setBannerType(type);
@@ -352,6 +392,47 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
         setSeverityRange(value);
     }, 750, { maxWait: 5000 });
+
+    const updateCustomEpssFilter = debounce((value: { min: number; max: number }) => {
+        setEpssRange(value);
+    }, 750, { maxWait: 5000 });
+
+    const attack_vector_list = useMemo(() => {
+        const avSet = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            vuln.severity.cvss.forEach(cvss => {
+                if (cvss.attack_vector) avSet.add(cvss.attack_vector);
+            });
+        });
+        const order = ['NETWORK', 'ADJACENT', 'LOCAL', 'PHYSICAL'];
+        return Array.from(avSet).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    }, [vulnerabilities]);
+
+    // Build list of distinct first-scan timestamps, grouped by scan (same second = same scan)
+    const availableFirstScanDates = useMemo(() => {
+        const tsSet = new Set<number>();
+        vulnerabilities.forEach(vuln => {
+            if (vuln.first_scan_date) {
+                // Round to the nearest second to group identical scans
+                const ts = Math.round(new Date(vuln.first_scan_date).getTime() / 1000) * 1000;
+                tsSet.add(ts);
+            }
+        });
+        return Array.from(tsSet).sort((a, b) => a - b);
+    }, [vulnerabilities]);
+
+    const formatScanDate = useCallback((ts: number) => {
+        const d = new Date(ts);
+        return d.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+        }) + ' ' + d.toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short',
+        });
+    }, []);
 
     const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
         vuln.found_by.forEach(source => {
@@ -423,12 +504,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'id': 'ID',
         'severity.severity': 'Severity',
         'epss': 'EPSS Score',
-        'packages': 'Packages Affected',
+        'packages': 'SBOM Affected',
+        'variants': 'Variants',
         'severity': 'Attack Vector',
         'simplified_status': 'Status',
         'effort.likely': 'Estimated Effort',
         'assessments': 'Last Updated',
         'published': 'Published Date',
+        'first_scan_date': 'First Scan Date',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -514,23 +597,42 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('epss', {
             id: 'epss',
-            header: () => <div className="flex items-center justify-center">EPSS Score</div>,
+            header: () => {
+                const loading = epssProgress?.in_progress ?? false;
+                const pct = epssProgress && epssProgress.total > 0
+                    ? Math.round((epssProgress.current / epssProgress.total) * 100)
+                    : 0;
+                return (
+                    <div className="flex flex-col items-center justify-center gap-0.5">
+                        <span>EPSS Score</span>
+                        {loading && (
+                            <span className="flex items-center gap-1 text-xs text-amber-400 font-normal">
+                                <FontAwesomeIcon icon={faSync} className="text-[10px]" />
+                                {pct}%
+                            </span>
+                        )}
+                    </div>
+                );
+            },
             cell: info => {
                 const epss = info.getValue();
+                const fetching = epssProgress?.in_progress && (!epss.score || epss.score === 0);
                 return (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                    {epss.score !== undefined && epss.score !== 0 &&  <>
-                    {(epss.score * 100).toFixed(2)}%
-                    </>}
+                    {fetching ? (
+                        <span className="text-xs text-gray-500 italic">fetching…</span>
+                    ) : epss.score !== undefined && epss.score !== 0 ? (
+                        <>{(epss.score * 100).toFixed(2)}%</>
+                    ) : null}
                 </div>
                 );
             },
             sortingFn: (rowA, rowB) => (rowA.original.epss?.score || 0.0) - (rowB.original.epss?.score || 0.0),
             size: 50,
             }),
-            columnHelper.accessor('packages', {
+            columnHelper.accessor('packages_current', {
             id: 'packages',
-            header: () => <div className="flex items-center justify-center">Packages Affected</div>,
+            header: () => <div className="flex items-center justify-center">SBOM Affected</div>,
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
             enableSorting: false,
             size: 255
@@ -601,9 +703,29 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('published', {
             id: 'published',
-            header: () => <div className="flex items-center justify-center">Published Date</div>,
+            header: () => {
+                const loading = nvdProgress?.in_progress ?? false;
+                const pct = nvdProgress && nvdProgress.total > 0
+                    ? Math.round((nvdProgress.current / nvdProgress.total) * 100)
+                    : 0;
+                return (
+                    <div className="flex flex-col items-center justify-center gap-0.5">
+                        <span>Published Date</span>
+                        {loading && (
+                            <span className="flex items-center gap-1 text-xs text-amber-400 font-normal">
+                                <FontAwesomeIcon icon={faSync} className="text-[10px]" />
+                                {pct}%
+                            </span>
+                        )}
+                    </div>
+                );
+            },
             cell: info => {
                 const published = info.getValue();
+                const fetching = nvdProgress?.in_progress && !published;
+                if (fetching) {
+                    return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
+                }
                 if (!published) {
                     return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
                 }
@@ -626,6 +748,55 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 return dateA - dateB;
             },
             size: 90
+            }),
+            columnHelper.accessor('first_scan_date', {
+            id: 'first_scan_date',
+            header: () => <div className="flex items-center justify-center">First Scan Date</div>,
+            cell: info => {
+                const scanDate = info.getValue();
+                if (!scanDate) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Unknown</div>;
+                }
+                const date = new Date(scanDate);
+                const formattedDate = date.toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: '2-digit',
+                }) + ' ' + date.toLocaleTimeString(undefined, {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short',
+                });
+                return (
+                    <div className="flex items-center justify-center h-full text-center text-sm">
+                        {formattedDate}
+                    </div>
+                );
+            },
+            enableSorting: true,
+            sortingFn: (rowA, rowB) => {
+                const dateA = rowA.original.first_scan_date ? new Date(rowA.original.first_scan_date).getTime() : 0;
+                const dateB = rowB.original.first_scan_date ? new Date(rowB.original.first_scan_date).getTime() : 0;
+                return dateA - dateB;
+            },
+            size: 110
+            }),
+            columnHelper.accessor('variants', {
+            id: 'variants',
+            header: () => <div className="flex items-center justify-center">Variants</div>,
+            cell: info => (
+                <div className="flex items-center justify-center h-full">
+                    <div className="flex flex-wrap gap-1 justify-center">
+                        {info.getValue().map((name: string) => (
+                            <span key={name} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-900 text-green-300">
+                                {name}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            ),
+            enableSorting: false,
+            size: 120
             }),
             columnHelper.accessor('found_by', {
             id: 'found_by',
@@ -676,7 +847,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -692,13 +863,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
-            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages.includes(pkg))) return false;
-            
+            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
+
             // Published date filter
             if (publishedDateFilterType && el.published) {
                 const publishedDate = new Date(el.published);
                 const today = new Date();
-                
+
                 switch (publishedDateFilterType) {
                     case 'is':
                         if (publishedDateValue) {
@@ -752,18 +923,39 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 // If filter is active but vulnerability has no published date, filter it out
                 return false;
             }
-            
+
             if(showCustomSeverityFilter){
                 // Use the max score as this is how the final severity level is determined
                 const maxScore = el.severity.max_score;
-            
+
                 if (maxScore === null) return false;
                 if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
             }
-            
+
+            // EPSS range filter
+            if (showCustomEpssFilter) {
+                const epssScore = el.epss?.score;
+                if (epssScore === undefined || epssScore === null) return false;
+                const epssPct = epssScore * 100;
+                if (epssPct < epssRange.min || epssPct > epssRange.max) return false;
+            }
+
+            // Attack vector filter
+            if (selectedAttackVectors.length) {
+                const vulnAVs = new Set(el.severity.cvss.map(c => c.attack_vector).filter(Boolean));
+                if (!selectedAttackVectors.some(av => vulnAVs.has(av))) return false;
+            }
+
+            // First scan date filter (multi-select by scan timestamp)
+            if (selectedFirstScanDates.length > 0) {
+                if (!el.first_scan_date) return false;
+                const elTs = Math.round(new Date(el.first_scan_date).getTime() / 1000) * 1000;
+                if (!selectedFirstScanDates.includes(String(elTs))) return false;
+            }
+
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -788,34 +980,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setHideFixed(false);
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'Packages Affected', 'Status', 'Last Updated', 'Published Date']);
+        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Updated', 'Published Date']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+        setShowCustomEpssFilter(false);
+        setEpssRange({ min: 0, max: 100 });
+        setSelectedAttackVectors([]);
+        setSelectedFirstScanDates([]);
     }
-
-    const handleHideFixedToggle = (enabled: boolean) => {
-        setHideFixed(enabled);
-        if (enabled) {
-            const allStatuses = Array.from(new Set(vulnerabilities.map(v => v.simplified_status)));
-            const statusesExceptFixed = allStatuses.filter(status => status !== 'Fixed');
-            setSelectedStatuses(statusesExceptFixed);
-        } else {
-            setSelectedStatuses([]);
-        }
-    };
-
-    const handleStatusChange = (newStatuses: string[]) => {
-        setSelectedStatuses(newStatuses);
-        if (newStatuses.includes('Fixed') && hideFixed) {
-            setHideFixed(false);
-        }
-    };
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
             // Only trigger if not typing in an input/textarea
-            if (event.target instanceof HTMLInputElement || 
+            if (event.target instanceof HTMLInputElement ||
                 event.target instanceof HTMLTextAreaElement) {
                 return;
             }
@@ -864,16 +1041,39 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ) {
                 setShowShortcutHelper(false);
             }
+            if (
+                searchHelperDropdownRef.current &&
+                searchHelperButtonRef.current &&
+                !searchHelperDropdownRef.current.contains(event.target as Node) &&
+                !searchHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowSearchHelper(false);
+            }
         };
 
-        if (showShortcutHelper) {
+        if (showShortcutHelper || showSearchHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper]);
+    }, [showShortcutHelper, showSearchHelper]);
+
+    // Close "More Filters" on click outside
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (moreFiltersRef.current && !moreFiltersRef.current.contains(event.target as Node)) {
+                setShowMoreFilters(false);
+            }
+        };
+        if (showMoreFilters) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showMoreFilters]);
 
 
 
@@ -887,9 +1087,38 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             />
         )}
 
-        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+
+            <div className="relative">
+                <button
+                    ref={searchHelperButtonRef}
+                    aria-label="search syntax helper"
+                    title="View search syntax"
+                    type="button"
+                    className="text-white hover:text-blue-300 transition-colors"
+                    onClick={() => setShowSearchHelper(!showSearchHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleInfo} />
+                </button>
+                {showSearchHelper && (
+                    <div
+                        ref={searchHelperDropdownRef}
+                        className="absolute left-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[400px] text-sm"
+                    >
+                        <h3 className="font-bold text-white mb-3">Search Syntax</h3>
+                        <div className="space-y-2">
+                            {searchSyntaxHelp.map((item, index) => (
+                                <div key={index} className="flex justify-between gap-4">
+                                    <code className="text-cyan-300 min-w-[100px]">{item.syntax}</code>
+                                    <span className="text-gray-100">{item.description}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
 
             <FilterOption
                 label="Columns"
@@ -897,12 +1126,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'ID',
                     'Severity',
                     'EPSS Score',
-                    'Packages Affected',
+                    'SBOM Affected',
+                    'Variants',
                     'Attack Vector',
                     'Status',
                     'Estimated Effort',
                     'Last Updated',
                     'Published Date',
+                    'First Scan Date',
                     'Sources'
                 ]}
                 selected={visibleColumns}
@@ -942,7 +1173,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 label="Status"
                 options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
                 selected={selectedStatuses}
-                setSelected={handleStatusChange}
+                setSelected={setSelectedStatuses}
             />
 
             {/* Published Date Filter Dropdown */}
@@ -960,6 +1191,119 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 nvdProgress={nvdProgress}
             />
 
+            {/* More Filters dropdown — EPSS Range, Attack Vector, First Scan Date */}
+            <div ref={moreFiltersRef} className="ml-1 relative inline-block text-left">
+                <button
+                    onClick={() => setShowMoreFilters(!showMoreFilters)}
+                    className={`py-1 px-2 rounded flex items-center gap-1 ${
+                        showMoreFilters ? 'bg-sky-950' : 'bg-sky-900 hover:bg-sky-950'
+                    } text-white`}
+                    title="More filters"
+                >
+                    <FontAwesomeIcon icon={faFilter} />
+                    More
+                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0) && (
+                        <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>
+                    )}
+                    <FontAwesomeIcon icon={faCaretDown} />
+                </button>
+
+                {showMoreFilters && (
+                    <div className="absolute mt-1 w-80 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50 max-h-[70vh] overflow-y-auto">
+                        <div className="p-3 space-y-4">
+
+                            {/* EPSS Range Filter */}
+                            <div>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <input
+                                        type="checkbox"
+                                        id="epss-range-filter"
+                                        checked={showCustomEpssFilter}
+                                        onChange={() => setShowCustomEpssFilter(!showCustomEpssFilter)}
+                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                    />
+                                    <label htmlFor="epss-range-filter" className="text-sm font-semibold">EPSS Range (%)</label>
+                                </div>
+                                {showCustomEpssFilter && (
+                                    <div className="ml-2">
+                                        <RangeSlider
+                                            min={0}
+                                            max={100}
+                                            initialMin={epssRange.min}
+                                            initialMax={epssRange.max}
+                                            step={0.5}
+                                            onChange={updateCustomEpssFilter}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* Attack Vector Filter */}
+                            <div>
+                                <div className="text-sm font-semibold mb-2">Attack Vector</div>
+                                <div className="space-y-1 ml-2">
+                                    {attack_vector_list.map(av => (
+                                        <label key={av} className="flex items-center space-x-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedAttackVectors.includes(av)}
+                                                onChange={() => {
+                                                    if (selectedAttackVectors.includes(av)) {
+                                                        setSelectedAttackVectors(selectedAttackVectors.filter(v => v !== av));
+                                                    } else {
+                                                        setSelectedAttackVectors([...selectedAttackVectors, av]);
+                                                    }
+                                                }}
+                                                className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                            />
+                                            <span>{av.charAt(0) + av.slice(1).toLowerCase()}</span>
+                                        </label>
+                                    ))}
+                                    {attack_vector_list.length === 0 && (
+                                        <span className="text-xs text-gray-400 italic">No attack vectors available</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* First Scan Date Filter */}
+                            <div>
+                                <div className="text-sm font-semibold mb-2">First Scan Date</div>
+                                <div className="ml-2 space-y-1">
+                                    {availableFirstScanDates.length === 0 ? (
+                                        <span className="text-xs text-gray-400 italic">No scan dates available</span>
+                                    ) : (
+                                        availableFirstScanDates.map(ts => {
+                                            const key = String(ts);
+                                            return (
+                                                <label key={key} className="flex items-center space-x-2">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedFirstScanDates.includes(key)}
+                                                        onChange={() => {
+                                                            if (selectedFirstScanDates.includes(key)) {
+                                                                setSelectedFirstScanDates(selectedFirstScanDates.filter(d => d !== key));
+                                                            } else {
+                                                                setSelectedFirstScanDates([...selectedFirstScanDates, key]);
+                                                            }
+                                                        }}
+                                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                                    />
+                                                    <span className="text-sm">{formatScanDate(ts)}</span>
+                                                </label>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* Package indicator (no dropdown, just display) */}
             {selectedPackages.length > 0 && (
                 <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
@@ -974,12 +1318,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     </button>
                 </div>
             )}
-
-            <ToggleSwitch
-                enabled={hideFixed}
-                setEnabled={handleHideFixedToggle}
-                label="Hide Fixed"
-            />
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button
@@ -1026,6 +1364,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             patchVuln={patchVuln}
             triggerBanner={triggerBanner}
             hideBanner={closeBanner}
+            variantId={variantId}
+            baseVariantId={baseVariantId}
+            compareOperation={compareOperation}
         />
 
         <TableGeneric
@@ -1065,6 +1406,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             vulnerabilities={modalVulnSnapshot}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
+            variantId={variantId}
         ></VulnModal>}
     </>)
 }

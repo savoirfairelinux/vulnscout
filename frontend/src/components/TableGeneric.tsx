@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -13,6 +14,7 @@ type Props<DataType> = {
     search?: string;
     fuseKeys?: string[];
     hoverField?: string;
+    hoverIdField?: string;
     estimateRowHeight?: number;
     tableHeight?: string;
     selected?: RowSelectionState;
@@ -29,6 +31,7 @@ function TableGeneric<DataType> ({
     search,
     fuseKeys = ['id'],
     hoverField = undefined,
+    hoverIdField = undefined,
     estimateRowHeight = 66,
     tableHeight = 'calc(100dvh - 44px - 64px - 48px - 16px)',
     selected = undefined,
@@ -42,6 +45,8 @@ function TableGeneric<DataType> ({
     const [sorting, setSorting] = useState<SortingState>([])
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
+    const [tooltipInfo, setTooltipInfo] = useState<{ original: DataType; id: string; rect: DOMRect } | null>(null)
+    const hideTooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -57,22 +62,34 @@ function TableGeneric<DataType> ({
     const filteredData = useMemo(() => {
         if (search && search.length > 2) {
             const buildFuseQuery = (raw: string) => {
-                const terms = raw.trim().split(/\s+/);
                 // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
+                const buildTermClause = (term: string) => {
+                    const isNegated = term.startsWith('-');
+                    const bare = isNegated ? term.slice(1) : term;
+                    const value = isNegated ? `!${bare}` : `'${bare}`; // exact (non-fuzzy) match
+
+                    if (fuseKeys.length === 1) {
+                        return { [fuseKeys[0]]: value };
+                    }
+
+                    if (isNegated) {
+                        return { $and: fuseKeys.map(key => ({ [key]: value })) };
+                    }
+                    return { $or: fuseKeys.map(key => ({ [key]: value })) };
+                };
+
+                // Split by | to support OR syntax (e.g. "openssl | libssl")
+                const orGroups = raw.split('|').map(group => group.trim()).filter(Boolean);
+
+                if (orGroups.length === 1) {
+                    const terms = orGroups[0].split(/\s+/).filter(Boolean);
+                    return { $and: terms.map(buildTermClause) };
+                }
+
                 return {
-                    $and: terms.map(term => {
-                        const isNegated = term.startsWith('-');
-                        const raw = isNegated ? term.slice(1) : term;
-                        const value = isNegated ? `!${raw}` : `'${raw}`; // exact (non-fuzzy) match
-
-                        if (fuseKeys.length === 1) {
-                            return { [fuseKeys[0]]: value };
-                        }
-
-                        if (isNegated) {
-                            return { $and: fuseKeys.map(key => ({ [key]: value })) };
-                        }
-                        return { $or: fuseKeys.map(key => ({ [key]: value })) };
+                    $or: orGroups.map(group => {
+                        const terms = group.split(/\s+/).filter(Boolean);
+                        return { $and: terms.map(buildTermClause) };
                     })
                 };
             };
@@ -203,6 +220,20 @@ function TableGeneric<DataType> ({
         }
     }, [focusedRowIndex, useVirtualization])
 
+    useEffect(() => {
+        return () => { if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current) }
+    }, [])
+
+    function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
+        if (hoverField === undefined) return
+        if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current)
+        setTooltipInfo({ original: rowOriginal, id: rowId, rect: e.currentTarget.getBoundingClientRect() })
+    }
+
+    function hideTooltip() {
+        hideTooltipTimer.current = setTimeout(() => setTooltipInfo(null), 100)
+    }
+
     function ctrl_click (event: React.MouseEvent, row: Row<DataType>) {
         if (event.ctrlKey || event.metaKey) {
             row.getToggleSelectedHandler()(event)
@@ -277,6 +308,7 @@ function TableGeneric<DataType> ({
     }
 
     return (
+        <>
         <div className="flex flex-col" style={{ height: tableHeight === 'auto' ? 'auto' : tableHeight }}>
             <div className={`relative ${tableHeight === 'auto' ? '' : 'overflow-auto'}`} ref={tableContainerRef}>
                 <table className="rounded-md border-collapse border border-slate-500 w-full text-white grid">
@@ -342,6 +374,8 @@ function TableGeneric<DataType> ({
                                     onClick={(e) => ctrl_click(e, row)}
                                     onFocus={() => setFocusedRowIndex(virtualRow.index)}
                                     onKeyDown={(e) => handleKeyDown(e, virtualRow.index)}
+                                    onMouseEnter={(e) => showTooltip(e, row.original, row.id)}
+                                    onMouseLeave={hideTooltip}
                                     style={{
                                         transform: `translateY(${virtualRow.start}px)`, //this should always be a `style` as it changes on scroll
                                     }}
@@ -361,25 +395,6 @@ function TableGeneric<DataType> ({
                                                 )}
                                             </td>)
                                         })}
-                                    </tr>,
-                                    hoverField != undefined && <tr
-                                        className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
-                                        key={`${row.id}_hoverpanel`}
-                                        style={{
-                                            transform: virtualRow.start > 150 ?  //this should always be a `style` as it changes on scroll
-                                                `translateY(calc(${virtualRow.start}px - 100%))` :
-                                                `translateY(calc(${virtualRow.end}px))`
-                                        }}
-                                    >
-                                        <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
-                                            {(row.original as any)?.[hoverField]?.length > 0 ?(row.original as any)?.[hoverField]?.map((a: any, index: number) => {
-                                            return <>
-                                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, c => c.toUpperCase()))} of {row.id}</b><br/>
-                                                {a?.content ?? "N/A"}
-                                                {index < (row.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
-                                                </>
-                                        }) : "No description was provided"}
-                                        </td>
                                     </tr>
                                 ]
                             })
@@ -404,6 +419,8 @@ function TableGeneric<DataType> ({
                                 onClick={(e) => ctrl_click(e, row)}
                                 onFocus={() => setFocusedRowIndex(rowIndex)}
                                 onKeyDown={(e) => handleKeyDown(e, rowIndex)}
+                                onMouseEnter={(e) => showTooltip(e, row.original, row.id)}
+                                onMouseLeave={hideTooltip}
                                 >
                                     {row.getVisibleCells().map(cell => {
                                         return (
@@ -420,15 +437,6 @@ function TableGeneric<DataType> ({
                                             )}
                                         </td>)
                                     })}
-                                </tr>,
-                                hoverField != undefined && <tr
-                                    className="show-on-row-hover absolute z-30 overflow-visible w-full px-8 xl:px-32 2xl:px-64 text-center pointer-events-none"
-                                    key={`${row.id}_hoverpanel`}
-                                >
-                                    <td role="tooltip" className="block bg-gray-800/90 whitespace-pre-line p-2">
-                                        <b className='mb-2'>Description of {row.id}</b><br/>
-                                        {(row.original as any)?.[hoverField]?.map((a: any) => a?.content)?.join('\n---\n') ?? "No description was provided"}
-                                    </td>
                                 </tr>
                             ])
                         )}
@@ -533,6 +541,39 @@ function TableGeneric<DataType> ({
         }
 
         </div>
+
+        {hoverField && tooltipInfo && createPortal(
+            <div
+                role="tooltip"
+                className="fixed z-50 bg-gray-800 p-2 px-8 xl:px-32 2xl:px-64 text-center pointer-events-none text-white flex flex-col"
+                style={{
+                    ...(tooltipInfo.rect.top > window.innerHeight / 2
+                        ? { bottom: window.innerHeight - tooltipInfo.rect.top }
+                        : { top: tooltipInfo.rect.bottom }),
+                    left: tooltipInfo.rect.left + tooltipInfo.rect.width / 2,
+                    width: tooltipInfo.rect.width,
+                    transform: 'translateX(-50%)',
+                    maxWidth: '943px',
+                    maxHeight: '300px',
+                }}
+            >
+                <div style={{ overflow: 'hidden', whiteSpace: 'pre-line', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 12 }}>
+                    {(tooltipInfo.original as any)?.[hoverField]?.length > 0
+                        ? (tooltipInfo.original as any)?.[hoverField]?.map((a: any, index: number) => (
+                            <span key={index}>
+                                <b className='mb-2'>{(((a?.title as string) ?? 'Description').replace(/\b\w/g, (c: string) => c.toUpperCase()))} of {hoverIdField ? (tooltipInfo.original as any)?.[hoverIdField] ?? tooltipInfo.id : tooltipInfo.id}</b><br/>
+                                {a?.content ?? "N/A"}
+                                {index < (tooltipInfo.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
+                            </span>
+                        ))
+                        : "No description was provided"
+                    }
+                </div>
+                <p className="text-xs text-gray-400 mt-1 italic">Click the CVE to see more</p>
+            </div>,
+            document.body
+        )}
+        </>
     );
 }
 

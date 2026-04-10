@@ -5,7 +5,8 @@
 
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
-from ..models.assessment import VulnAssessment
+from ..models.assessment import Assessment
+from ..helpers.verbose import verbose
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
@@ -66,7 +67,7 @@ class OpenVex:
                         if "openvex" not in scanner:
                             vuln.add_found_by(scanner)
 
-                assess = VulnAssessment(vuln.id)
+                assess = Assessment.new_dto(vuln.id)
                 if "products" in statement:
                     for product in statement["products"]:
                         pkg = self.parse_package_section(product)
@@ -88,16 +89,24 @@ class OpenVex:
                 if "impact_statement" in statement:
                     assess.set_not_affected_reason(statement["impact_statement"])
                 if "action_statement" in statement:
-                    if "action_statement_timestamp" in statement:
-                        assess.set_workaround(statement["action_statement"], statement["action_statement_timestamp"])
-                    else:
-                        assess.set_workaround(statement["action_statement"])
+                    assess.set_workaround(statement["action_statement"])
                 if "timestamp" in statement:
                     assess.timestamp = statement["timestamp"]
-                if "last_updated" in statement:
-                    assess.last_update = statement["last_updated"]
 
                 self.assessmentsCtrl.add(assess)
+
+    def _all_assessments(self) -> list:
+        """Return all assessments from in-memory dict and DB, de-duped by id."""
+        seen: dict = {}
+        for assess_id, assess in self.assessmentsCtrl.assessments.items():
+            seen[assess_id] = assess
+        try:
+            for assess in Assessment.get_all():
+                if str(assess.id) not in seen:
+                    seen[str(assess.id)] = assess
+        except Exception as e:
+            verbose(f"[OpenVex._get_all_assessments] {e}")
+        return list(seen.values())
 
     def to_dict(self, strict_export=False, author=None) -> dict:
         output = {
@@ -108,7 +117,7 @@ class OpenVex:
             "version": 1,
             "statements": []
         }
-        for (assess_id, assess) in self.assessmentsCtrl.assessments.items():
+        for assess in self._all_assessments():
             stmt = assess.to_openvex_dict()
             # Check if the dict is empty, if so skip it.
             if stmt is None:

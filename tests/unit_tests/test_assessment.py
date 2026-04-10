@@ -5,7 +5,7 @@
 
 import pytest
 from src.models.package import Package
-from src.models.assessment import VulnAssessment
+from src.models.assessment import Assessment
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def pkg_XYZ():
 
 @pytest.fixture
 def assessment_initial(pkg_ABC):
-    assessment = VulnAssessment("CVE-456", [pkg_ABC])
+    assessment = Assessment.new_dto("CVE-456", [pkg_ABC])
     assessment.set_status("in_triage")
     assessment.set_status_notes("Initial assessment")
     assessment.add_package("inexistant_package@0.0.1")
@@ -35,7 +35,7 @@ def assessment_initial(pkg_ABC):
 
 @pytest.fixture
 def assessment_active(pkg_ABC):
-    assessment = VulnAssessment("CVE-456", [pkg_ABC])
+    assessment = Assessment.new_dto("CVE-456", [pkg_ABC])
     assessment.set_status("exploitable")
     assessment.set_status_notes("package ABC is vulnerable to CVE-456", True)
     assessment.set_status_notes("package ABC is vulnerable to CVE-123", True)
@@ -46,7 +46,7 @@ def assessment_active(pkg_ABC):
 
 @pytest.fixture
 def assessment_fixed(pkg_ABC):
-    assessment = VulnAssessment("CVE-456", [pkg_ABC])
+    assessment = Assessment.new_dto("CVE-456", [pkg_ABC])
     assessment.set_status("fixed")
     assessment.set_status_notes("package ABC in versions >= 1.4.0 is no longer vulnerable to CVE-456")
     assessment.add_response("update")
@@ -55,7 +55,7 @@ def assessment_fixed(pkg_ABC):
 
 @pytest.fixture
 def assessment_not_affected(pkg_XYZ):
-    assessment = VulnAssessment("CVE-789", [pkg_XYZ])
+    assessment = Assessment.new_dto("CVE-789", [pkg_XYZ])
     assessment.set_status("not_affected")
     assessment.set_status_notes("package XYZ is not affected by CVE-789")
     assessment.set_justification("code_not_present")
@@ -230,7 +230,7 @@ def test_export_import_assessment(assessment_not_affected):
     WHEN exporting to dict and importing back to a new assessment
     THEN data should remain the same
     """
-    new_assessment = VulnAssessment.from_dict(assessment_not_affected.to_dict())
+    new_assessment = Assessment.from_dict(assessment_not_affected.to_dict())
     assert new_assessment.to_dict().items() == assessment_not_affected.to_dict().items()
     assert new_assessment.id == assessment_not_affected.id
     assert new_assessment.vuln_id == assessment_not_affected.vuln_id
@@ -242,8 +242,6 @@ def test_export_import_assessment(assessment_not_affected):
     assert new_assessment.impact_statement == assessment_not_affected.impact_statement
     assert new_assessment.workaround == assessment_not_affected.workaround
     assert new_assessment.timestamp == assessment_not_affected.timestamp
-    assert new_assessment.last_update == assessment_not_affected.last_update
-    assert new_assessment.workaround_timestamp == assessment_not_affected.workaround_timestamp
 
 
 def test_specific_handling_false_positive():
@@ -252,7 +250,7 @@ def test_specific_handling_false_positive():
     WHEN converting to OpenVEX
     THEN convert to the equivalent 'not_affected' + 'component_not_present' status
     """
-    from_cdx = VulnAssessment("CVE-000", [])
+    from_cdx = Assessment.new_dto("CVE-000", [])
     from_cdx.set_status("false_positive")
     from_cdx.set_justification("code_not_present")
 
@@ -261,7 +259,7 @@ def test_specific_handling_false_positive():
         "justification": "component_not_present",
     }.items() <= from_cdx.to_openvex_dict().items()
 
-    from_openvex = VulnAssessment("CVE-000", [])
+    from_openvex = Assessment.new_dto("CVE-000", [])
     from_openvex.set_status("not_affected")
     from_openvex.set_justification("component_not_present")
 
@@ -321,7 +319,7 @@ def test_merge_same_assessment(assessment_initial, assessment_active, assessment
     assert assessment_initial.merge(assessment_initial) is True
     assert assessment_initial.status_notes == "Initial assessment"
 
-    fake_assessment = VulnAssessment(assessment_active.vuln_id, assessment_active.packages)
+    fake_assessment = Assessment.new_dto(assessment_active.vuln_id, assessment_active.packages)
     fake_assessment.id = assessment_active.id
     fake_assessment.set_status_notes("package ABC is vulnerable to CVE-123")
     assert fake_assessment.merge(assessment_active) is True
@@ -329,3 +327,25 @@ def test_merge_same_assessment(assessment_initial, assessment_active, assessment
 
     assert assessment_not_affected.merge(assessment_not_affected) is True
     assert assessment_not_affected.impact_statement == "package XYZ does not contain the vulnerable code"
+
+
+def test_status_to_simplified_mapping():
+    """
+    GIVEN the STATUS_TO_SIMPLIFIED mapping
+    WHEN checking each known status key
+    THEN the simplified label should match the expected value
+    """
+    from src.models.assessment import STATUS_TO_SIMPLIFIED
+
+    assert STATUS_TO_SIMPLIFIED["under_investigation"] == "Pending Assessment"
+    assert STATUS_TO_SIMPLIFIED["in_triage"] == "Pending Assessment"
+    assert STATUS_TO_SIMPLIFIED["false_positive"] == "Not affected"
+    assert STATUS_TO_SIMPLIFIED["not_affected"] == "Not affected"
+    assert STATUS_TO_SIMPLIFIED["exploitable"] == "Exploitable"
+    assert STATUS_TO_SIMPLIFIED["affected"] == "Exploitable"
+    assert STATUS_TO_SIMPLIFIED["resolved"] == "Fixed"
+    assert STATUS_TO_SIMPLIFIED["fixed"] == "Fixed"
+    assert STATUS_TO_SIMPLIFIED["resolved_with_pedigree"] == "Fixed"
+    # No unknown status should be present
+    for key in STATUS_TO_SIMPLIFIED:
+        assert STATUS_TO_SIMPLIFIED[key] in ("Pending Assessment", "Not affected", "Exploitable", "Fixed")

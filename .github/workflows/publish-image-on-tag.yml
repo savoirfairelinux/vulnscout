@@ -47,15 +47,12 @@ jobs:
 
       - name: Build and push multi-arch image
         run: |
+          TAGS="-t ${IMAGE_NAME}:${IMAGE_TAG}"
+          if [ "${{ inputs.publish_latest }}" = "true" ]; then
+            TAGS="${TAGS} -t ${IMAGE_NAME}:latest"
+          fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            -t ${IMAGE_NAME}:${IMAGE_TAG} \
-            --push .
-
-      - name: Tag and push latest (optional)
-        if: ${{ inputs.publish_latest }}
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            -t ${IMAGE_NAME}:latest \
+            --build-arg VULNSCOUT_VERSION=${IMAGE_TAG} \
+            ${TAGS} \
             --push .

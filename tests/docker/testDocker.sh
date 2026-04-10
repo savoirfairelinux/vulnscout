@@ -23,10 +23,25 @@ function main() {
 
     verify_image_exist "$dockerimage"
     local container_id
-    container_id=$(run_with_data "$dockerimage" "$flask_port" 'true')
+    container_id=$(start_daemon "$dockerimage" "$flask_port" 'true')
 
     # shellcheck disable=SC2064 # we intentionnaly expand container_id now, so even a later change in the variable won't affect the trap
     trap "{ echo 'Exiting script, shutting down container $container_id'; docker rm -vf $container_id > /dev/null; }" EXIT
+
+    # Copy input files into the container then run scan+serve via entrypoint commands
+    for f in ./spdx/*.spdx.json; do
+        docker cp "$f" "$container_id:/tmp/$(basename "$f")"
+    done
+    for f in ./cdx/*.json; do
+        docker cp "$f" "$container_id:/tmp/$(basename "$f")"
+    done
+    docker cp "./yocto.json" "$container_id:/tmp/yocto.json"
+
+    docker exec "$container_id" /scan/src/entrypoint.sh \
+        $(for f in ./spdx/*.spdx.json; do echo "--add-spdx /tmp/$(basename "$f")"; done) \
+        $(for f in ./cdx/*.json; do echo "--add-cdx /tmp/$(basename "$f")"; done) \
+        --add-cve-check /tmp/yocto.json \
+        --serve &
 
     chmod +x ./test_1_normal_operation.sh
     ./test_1_normal_operation.sh "localhost:$flask_port"
@@ -53,7 +68,7 @@ function verify_image_exist() {
 
 
 #######################################
-# Run docker container based on image with test data mounted
+# Run docker container based on image in daemon mode (no input files)
 # Arguments:
 #   docker image name (with tag)
 #   http port to bind
@@ -61,20 +76,17 @@ function verify_image_exist() {
 # Outputs:
 #   echo container_id in stdout
 #######################################
-function run_with_data() {
+function start_daemon() {
     local dockerimage=$1
     local flask_port=$2
     local ignore_errors=$3
 
     container_id="$(docker run --rm -d \
-        -v "./cdx:/scan/inputs/cdx:ro" \
-        -v "./spdx:/scan/inputs/spdx:ro" \
-        -v "./yocto.json:/scan/inputs/yocto_cve_check/yocto.json:ro" \
         -e "FLASK_RUN_PORT=$flask_port" \
         -e "FLASK_RUN_HOST=0.0.0.0" \
         -e "IGNORE_PARSING_ERRORS=$ignore_errors" \
         -p "$flask_port:$flask_port" \
-        "$dockerimage")"
+        "$dockerimage" daemon)"
 
     echo "$container_id"
 }

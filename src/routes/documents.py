@@ -40,23 +40,16 @@ def guess_mime_type(doc_name):
 def init_app(app):
 
     def get_all_datas():
-        controllers = {}
-        with open(app.config["PKG_FILE"], "r") as f:
-            controllers["packages"] = PackagesController.from_dict(
-                json.loads(f.read())
-            )
-        with open(app.config["VULNS_FILE"], "r") as f:
-            controllers["vulnerabilities"] = VulnerabilitiesController.from_dict(
-                controllers["packages"],
-                json.loads(f.read())
-            )
-        with open(app.config["ASSESSMENTS_FILE"], "r") as f:
-            controllers["assessments"] = AssessmentsController.from_dict(
-                controllers["packages"],
-                controllers["vulnerabilities"],
-                json.loads(f.read())
-            )
-        return controllers
+        # Controllers are now DB-backed; gets_by_* queries DB automatically.
+        pkgCtrl = PackagesController()
+        pkgCtrl._preload_cache()
+        vulnCtrl = VulnerabilitiesController(pkgCtrl)
+        assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
+        return {
+            "packages": pkgCtrl,
+            "vulnerabilities": vulnCtrl,
+            "assessments": assessCtrl,
+        }
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs():
@@ -99,7 +92,7 @@ def init_app(app):
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
             metadata = {
                 "author": request.args.get("author") or os.getenv('AUTHOR_NAME', 'Savoir-faire Linux'),
-                "client_name": request.args.get("client_name") or "",
+                "client_name": request.args.get("client_name") or os.getenv('CLIENT_NAME', ""),
                 "export_date": request.args.get("export_date") or date.today().isoformat(),
                 "ignore_before": request.args.get("ignore_before") or "1970-01-01T00:00",
                 "only_epss_greater": 0.0,
@@ -107,7 +100,7 @@ def init_app(app):
             }
             try:
                 metadata["only_epss_greater"] = float(request.args.get("only_epss_greater") or "0.0")
-            except Exception:
+            except ValueError:
                 pass
 
             if (
@@ -138,6 +131,9 @@ def init_app(app):
                 return resp
 
             return {"error": f"Cannot convert {base_mime} to {expected_mime}"}, 400
+        except FileNotFoundError as e:
+            print(e, flush=True)
+            return {"error": f"Required conversion tool not found: {e.filename}"}, 503
         except Exception as e:
             print(e, traceback.format_exc(), flush=True)
             return {"error": str(e)}, 500

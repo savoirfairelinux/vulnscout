@@ -3,6 +3,8 @@ import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
+jest.mock('../../src/components/VersionDisplay', () => () => null);
+
 import Loading from '../../src/pages/Loading';
 
 

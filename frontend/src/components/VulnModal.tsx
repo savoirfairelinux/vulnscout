@@ -17,11 +17,14 @@ import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, f
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
+import Variants from '../handlers/variant';
+import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
 type Props = {
     vuln: Vulnerability;
     isEditing?: boolean;
+    readOnly?: boolean;
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
@@ -29,6 +32,7 @@ type Props = {
     vulnerabilities?: Vulnerability[];
     currentIndex?: number;
     onNavigate?: (index: number) => void;
+    variantId?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -39,8 +43,16 @@ const dt_options: Intl.DateTimeFormatOptions = {
     minute: 'numeric',
     timeZoneName: 'shortOffset'
 };
+
+type AssessmentGroup = {
+    key: string;
+    assessments: Assessment[];
+    timestamp: string;
+    packages: string[];
+};
+
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate } = props;
+    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -50,8 +62,32 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const [pendingNavigation, setPendingNavigation] = useState<number | null>(null);
     const [editingAssessmentId, setEditingAssessmentId] = useState<string | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [assessmentToDelete, setAssessmentToDelete] = useState<Assessment | null>(null);
+    const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
+    const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
+    const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
+    const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
+
+    // Fetch variants that have a finding for this specific vulnerability
+    useEffect(() => {
+        setAvailableVariants([]);
+        Variants.listByVuln(vuln.id).then(setAvailableVariants).catch(() => {});
+    }, [vuln.id]);
+
+    // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
+    // complete even when a variant filter is active in the explorer.
+    useEffect(() => {
+        setAllVulnAssessments([]);
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors' })
+            .then(r => r.json())
+            .then((data: any[]) => {
+                if (Array.isArray(data)) {
+                    setAllVulnAssessments(data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a)));
+                }
+            })
+            .catch(() => {});
+    }, [vuln.id]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -152,131 +188,246 @@ const dt_options: Intl.DateTimeFormatOptions = {
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
 
-    const handleEditAssessment = (assessmentId: string) => {
+    const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
+        setEditingGroup(group);
     };
 
     const handleCancelEdit = () => {
         setEditingAssessmentId(null);
+        setEditingGroup(null);
     };
 
-    const handleDeleteAssessment = (assessment: Assessment) => {
-        setAssessmentToDelete(assessment);
+    const handleDeleteAssessment = (group: AssessmentGroup) => {
+        setGroupToDelete(group);
         setShowDeleteConfirm(true);
     };
 
     const handleConfirmDelete = async () => {
-        if (assessmentToDelete) {
-            try {
-                const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentToDelete.id)}`, {
-                    method: 'DELETE',
-                    mode: 'cors',
-                    headers: {
-                        'Content-Type': 'application/json'
+        if (groupToDelete) {
+            const idsToDelete = groupToDelete.assessments.map(a => a.id);
+            let anyError = false;
+
+            for (const id of idsToDelete) {
+                try {
+                    const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`, {
+                        method: 'DELETE',
+                        mode: 'cors',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.ok) {
+                        vuln.assessments = vuln.assessments.filter(a => a.id !== id);
+                        setAllVulnAssessments(prev => prev.filter(a => a.id !== id));
+                    } else {
+                        anyError = true;
+                        const errorData = await response.text();
+                        showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
                     }
-                });
-
-                if (response.ok) {
-                    // Remove assessment from vuln.assessments array
-                    const updatedAssessments = vuln.assessments.filter(
-                        assessment => assessment.id !== assessmentToDelete.id
-                    );
-                    vuln.assessments = updatedAssessments;
-
-                    if (updatedAssessments.length > 0) {
-                        const sortedAssessments = [...updatedAssessments].sort(
-                            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-                        );
-                        vuln.status = sortedAssessments[0].status;
-                        vuln.simplified_status = sortedAssessments[0].simplified_status;
-                    }
-
-                    // Update the vuln object in the parent component
-                    patchVuln(vuln.id, vuln);
-
-                    showMessage("Assessment deleted successfully!", "success");
-                } else {
-                    const errorData = await response.text();
-                    showMessage(`Failed to delete assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+                } catch (error) {
+                    anyError = true;
+                    showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
                 }
-            } catch (error) {
-                showMessage(`Failed to delete assessment: ${escape(String(error))}`, "error");
+            }
+
+            if (!anyError) {
+                if (vuln.assessments.length > 0) {
+                    const sortedAssessments = [...vuln.assessments].sort(
+                        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                    );
+                    vuln.status = sortedAssessments[0].status;
+                    vuln.simplified_status = sortedAssessments[0].simplified_status;
+                }
+
+                patchVuln(vuln.id, vuln);
+                showMessage("Assessment deleted successfully!", "success");
             }
         }
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const handleCancelDelete = () => {
         setShowDeleteConfirm(false);
-        setAssessmentToDelete(null);
+        setGroupToDelete(null);
     };
 
     const saveEditedAssessment = async (data: EditAssessmentData) => {
-        try {
-            const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(data.id)}`, {
-                method: 'PUT',
-                mode: 'cors',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
+        if (!editingGroup) return;
+        setSubmittingMessage('Editing assessment...');
+
+        // Share a single timestamp across all created rows in this edit action
+        const editSharedTimestamp = new Date().toISOString();
+
+        // Build target (package × variantId) combos from form selection
+        const targetVariantIds: Array<string | undefined> =
+            data.variant_ids && data.variant_ids.length > 0
+                ? data.variant_ids
+                : [undefined];
+        const targetPackages: string[] =
+            data.packages && data.packages.length > 0
+                ? data.packages
+                : editingGroup.packages;
+
+        // Index existing group assessments by (pkg, vid) key
+        const existingByKey = new Map<string, Assessment>();
+        for (const a of editingGroup.assessments) {
+            const pkg = a.packages[0] ?? '';
+            const vid = a.variant_id ?? '';
+            existingByKey.set(`${pkg}::${vid}`, a);
+        }
+
+        // Build the desired target key set
+        const targetKeys = new Set<string>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                targetKeys.add(`${pkg}::${vid ?? ''}`);
+            }
+        }
+
+        let anyError = false;
+
+        // Helper — normalise an Assessment from the API response
+        const normalise = (raw: unknown): Assessment | null => {
+            const a = asAssessment(raw);
+            if (Array.isArray(a) || typeof a !== 'object') return null;
+            const isRelevant = a.status === 'not_affected' || a.status === 'false_positive';
+            if (!isRelevant) {
+                a.justification = undefined;
+                a.impact_statement = undefined;
+            }
+            return a;
+        };
+
+        // 1. PUT-update persisting combos / DELETE removed combos
+        for (const [key, existing] of existingByKey) {
+            if (targetKeys.has(key)) {
+                try {
+                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
+                        method: 'PUT', mode: 'cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            status: data.status,
+                            justification: data.justification,
+                            impact_statement: data.impact_statement,
+                            status_notes: data.status_notes,
+                            workaround: data.workaround
+                        })
+                    });
+                    if (res.ok) {
+                        const rd = await res.json();
+                        if (rd?.status !== 'success') {
+                            anyError = true;
+                            showMessage('Error: invalid response from server', 'error');
+                        } else {
+                            const updated = normalise(rd.assessment);
+                            if (updated) {
+                                const idx = vuln.assessments.findIndex(a => a.id === existing.id);
+                                if (idx !== -1) vuln.assessments[idx] = updated;
+                                setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
+                            } else {
+                                anyError = true;
+                                showMessage('Error: invalid assessment data received', 'error');
+                            }
+                        }
+                    } else {
+                        anyError = true;
+                        showMessage(`Failed to update assessment: HTTP ${res.status}`, 'error');
+                    }
+                } catch (e) {
+                    anyError = true;
+                    showMessage(`Failed to update assessment: ${escape(String(e))}`, 'error');
+                }
+            } else {
+                // Deselected — delete this record
+                try {
+                    const res = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`, {
+                        method: 'DELETE', mode: 'cors'
+                    });
+                    if (res.ok) {
+                        vuln.assessments = vuln.assessments.filter(a => a.id !== existing.id);
+                        setAllVulnAssessments(prev => prev.filter(a => a.id !== existing.id));
+                    } else {
+                        anyError = true;
+                        showMessage(`Failed to delete assessment: HTTP ${res.status}`, 'error');
+                    }
+                } catch (e) {
+                    anyError = true;
+                    showMessage(`Failed to delete assessment: ${escape(String(e))}`, 'error');
+                }
+            }
+        }
+
+        // 2. POST-create newly-added combos — batch packages per variant so
+        //    all Assessment rows share the exact same timestamp.
+        const newPkgsByVariant = new Map<string | undefined, string[]>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                const key = `${pkg}::${vid ?? ''}`;
+                if (!existingByKey.has(key)) {
+                    const arr = newPkgsByVariant.get(vid) ?? [];
+                    arr.push(pkg);
+                    newPkgsByVariant.set(vid, arr);
+                }
+            }
+        }
+
+        for (const [vid, pkgs] of newPkgsByVariant) {
+            if (pkgs.length === 0) continue;
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: vuln.id,
+                    packages: pkgs,
                     status: data.status,
                     justification: data.justification,
                     impact_statement: data.impact_statement,
                     status_notes: data.status_notes,
-                    workaround: data.workaround
-                })
-            });
-
-            if (response.ok) {
-                const responseData = await response.json();
-                if (responseData?.status === 'success' && responseData?.assessment) {
-                    // Find and update the assessment in vuln.assessments array
-                    const assessmentIndex = vuln.assessments.findIndex(
-                        assessment => assessment.id === data.id
-                    );
-
-                    if (assessmentIndex !== -1) {
-                        // Update the assessment object with the response data
-                        let updatedAssessment = asAssessment(responseData.assessment);
-                        if (!Array.isArray(updatedAssessment) && typeof updatedAssessment === "object") {
-                            // Convert empty strings to undefined for non-relevant statuses
-                            const isRelevantStatus = updatedAssessment.status === "not_affected" || updatedAssessment.status === "false_positive";
-                            if (!isRelevantStatus) {
-                                updatedAssessment.justification = undefined;
-                                updatedAssessment.impact_statement = undefined;
-                            }
-
-                            // Replace the assessment in the array
-                            vuln.assessments[assessmentIndex] = updatedAssessment;
-
-                            // Update vulnerability status to match the edited assessment
-                            vuln.status = updatedAssessment.status;
-                            vuln.simplified_status = updatedAssessment.simplified_status;
-
-                            // Update the vuln object in the parent component
-                            patchVuln(vuln.id, vuln);
-
-                            showMessage("Assessment updated successfully!", "success");
-                        } else {
-                            showMessage("Error: Invalid assessment data received", "error");
+                    workaround: data.workaround,
+                    timestamp: editSharedTimestamp,
+                };
+                if (vid) body.variant_id = vid;
+                const res = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                    method: 'POST', mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const rd = await res.json();
+                if (rd?.status === 'success') {
+                    const rawList: unknown[] = Array.isArray(rd.assessments) ? rd.assessments : (rd.assessment ? [rd.assessment] : []);
+                    for (const raw of rawList) {
+                        const casted = normalise(raw);
+                        if (casted) {
+                            vuln.assessments.push(casted);
+                            setAllVulnAssessments(prev => [...prev, casted]);
                         }
-                    } else {
-                        showMessage("Error: Assessment not found in local data", "error");
                     }
                 } else {
-                    showMessage("Error: Invalid response from server", "error");
+                    anyError = true;
+                    showMessage(`Failed to create assessment: HTTP ${res.status}`, 'error');
                 }
-            } else {
-                const errorData = await response.text();
-                showMessage(`Failed to update assessment: HTTP code ${response.status} | ${escape(errorData)}`, "error");
+            } catch (e) {
+                anyError = true;
+                showMessage(`Failed to create assessment: ${escape(String(e))}`, 'error');
             }
-        } catch (error) {
-            showMessage(`Failed to update assessment: ${escape(String(error))}`, "error");
         }
 
+        if (!anyError) {
+            const latest = vuln.assessments.slice().sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            )[0];
+            if (latest) {
+                vuln.status = latest.status;
+                vuln.simplified_status = latest.simplified_status;
+            }
+            patchVuln(vuln.id, vuln);
+            showMessage('Assessment updated successfully!', 'success');
+        }
+
+        setSubmittingMessage(null);
         setEditingAssessmentId(null);
+        setEditingGroup(null);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
@@ -354,47 +505,85 @@ const dt_options: Intl.DateTimeFormatOptions = {
     const defaultStatus = getDefaultStatus();
 
     const addAssessment = async (content: PostAssessment) => {
-        content.vuln_id = vuln.id
-        content.packages = vuln.packages
+        content.vuln_id = vuln.id;
+        // packages come from StatusEditor selection; fall back to all vuln packages
+        if (!content.packages || content.packages.length === 0) {
+            content.packages = vuln.packages;
+        }
 
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-            method: 'POST',
-            mode: 'cors',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(content)
-        })
-        const data = await response.json()
-        if (data?.status === 'success') {
-            const casted = asAssessment(data?.assessment);
-            if (!Array.isArray(casted) && typeof casted === "object") {
-                // Track this as a newly added assessment
-                setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+        // Determine which variants to post to. If none selected, post once without a variant_id.
+        const variantIds: Array<string | undefined> =
+            content.variant_ids && content.variant_ids.length > 0
+                ? content.variant_ids
+                : [undefined];
 
-                // Remove the glow effect after animation completes
-                setTimeout(() => {
-                    setNewAssessmentIds(prev => {
-                        const newSet = new Set(prev);
-                        newSet.delete(casted.id);
-                        return newSet;
-                    });
-                }, 5500); // >2s that we used in css animation
+        const { variant_ids: _, ...baseContent } = content;
 
-                // Add the assessment immediately to the local vuln object for instant UI update
-                appendAssessment(casted);
-                vuln.assessments.push(casted);
-                vuln.status = casted.status;
-                vuln.simplified_status = casted.simplified_status;
+        // Share a single timestamp across all variant requests so grouped
+        // assessment rows get the exact same value in the database.
+        const sharedTimestamp = new Date().toISOString();
 
-                // Also patch the vulnerability for real-time refresh in other views
-                patchVuln(vuln.id, vuln);
-                showMessage("Successfully added assessment.", "success");
-                setClearAssessmentFields(true);
-                setTimeout(() => setClearAssessmentFields(false), 100);
+        let successCount = 0;
+        let lastCasted: Assessment | null = null;
+
+        setSubmittingMessage('Adding assessment...');
+        try {
+        for (const vid of variantIds) {
+            const body = vid ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp } : { ...baseContent, timestamp: sharedTimestamp };
+            const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+            if (data?.status === 'success') {
+                // Backend returns an array (one record per package); support legacy single too
+                const rawList: unknown[] = Array.isArray(data?.assessments)
+                    ? data.assessments
+                    : (data?.assessment ? [data.assessment] : []);
+                for (const raw of rawList) {
+                    const casted = asAssessment(raw);
+                    if (!Array.isArray(casted) && typeof casted === 'object') {
+                        successCount++;
+                        lastCasted = casted;
+
+                        // Highlight the very first created assessment
+                        if (successCount === 1) {
+                            setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                            setTimeout(() => {
+                                setNewAssessmentIds(prev => {
+                                    const newSet = new Set(prev);
+                                    newSet.delete(casted.id);
+                                    return newSet;
+                                });
+                            }, 5500);
+                        }
+
+                        appendAssessment(casted);
+                        vuln.assessments.push(casted);
+                        // Keep allVulnAssessments in sync so variant tags appear immediately
+                        setAllVulnAssessments(prev => [...prev, casted]);
+                        vuln.status = casted.status;
+                        vuln.simplified_status = casted.simplified_status;
+                    }
+                }
+            } else {
+                showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
             }
-        } else {
-            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, "error");
+        }
+
+        if (lastCasted) {
+            patchVuln(vuln.id, vuln);
+            const msg = successCount > 1
+                ? `Successfully added assessment to ${successCount} variants.`
+                : 'Successfully added assessment.';
+            showMessage(msg, 'success');
+            setClearAssessmentFields(true);
+            setTimeout(() => setClearAssessmentFields(false), 100);
+        }
+        } finally {
+            setSubmittingMessage(null);
         }
     };
 
@@ -439,17 +628,21 @@ const dt_options: Intl.DateTimeFormatOptions = {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
+        const body: Record<string, unknown> = {
+            effort: {
+                optimistic: content.optimistic.formatAsIso8601(),
+                likely: content.likely.formatAsIso8601(),
+                pessimistic: content.pessimistic.formatAsIso8601()
+            }
+        };
+        if (variantId) body.variant_id = variantId;
         const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({effort: {
-                optimistic: content.optimistic.formatAsIso8601(),
-                likely: content.likely.formatAsIso8601(),
-                pessimistic: content.pessimistic.formatAsIso8601()
-            }})
+            body: JSON.stringify(body)
         })
         if (response.status == 200) {
             const data = await response.json()
@@ -478,6 +671,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
             tabIndex={-1}
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
+            {submittingMessage && (
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm font-semibold">{submittingMessage}</span>
+                    </div>
+                </div>
+            )}
             <div className="relative p-16 h-full">
                 <div
                     ref={modalRef}
@@ -522,7 +723,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                 )}
                             </div>
 
-                            <button
+                            {!readOnly && <button
                                 onClick={() => setIsEditing(!isEditing)}
                                 type="button"
                                 className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
@@ -534,7 +735,7 @@ const dt_options: Intl.DateTimeFormatOptions = {
                             >
                                 <FontAwesomeIcon icon={faPenToSquare} className="mr-2" />
                                 {isEditing ? "Exit editing" : "Edit"}
-                            </button>
+                            </button>}
                             <button
                                 onClick={handleClose}
                                 type="button"
@@ -705,6 +906,8 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                             onFieldsChange={setHasAssessmentChanges}
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
+                                            variants={availableVariants}
+                                            availablePackages={vuln.packages}
                                         />
                                     </li>
                                 )}
@@ -727,6 +930,33 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                     </span>
                                                 ))}
                                             </div>
+                                            {(() => {
+                                                // Build the same content fingerprint used by groupAssessments,
+                                                // then find ALL matching records (across all variants) in the
+                                                // unfiltered allVulnAssessments so we can show every variant tag
+                                                // even when the explorer is filtered to a single variant.
+                                                const fp = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
+                                                const allVariantIds = [...new Set(
+                                                    allVulnAssessments
+                                                        .filter(a => {
+                                                            const afp = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
+                                                            return afp === fp && !!a.variant_id;
+                                                        })
+                                                        .map(a => a.variant_id as string)
+                                                )];
+                                                const variantTags = allVariantIds
+                                                    .map(vid => availableVariants.find(v => v.id === vid))
+                                                    .filter(Boolean) as Variant[];
+                                                return variantTags.length > 0 ? (
+                                                    <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                                        {variantTags.map(v => (
+                                                            <span key={v.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                                {v.name}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                ) : null;
+                                            })()}
                                             <div className="flex items-start justify-between">
                                                 <div className="flex-1">
                                                     <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
@@ -734,14 +964,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                         {isEditing && (
                                                             <div className="flex items-center ml-3 gap-2">
                                                                 <button
-                                                                    onClick={() => handleEditAssessment(firstAssess.id)}
+                                                                    onClick={() => handleEditAssessment(firstAssess.id, group)}
                                                                     className="text-blue-400 hover:text-blue-300 transition-colors"
                                                                     title="Edit assessment"
                                                                 >
                                                                     <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
                                                                 </button>
                                                                 <button
-                                                                    onClick={() => handleDeleteAssessment(firstAssess)}
+                                                                    onClick={() => handleDeleteAssessment(group)}
                                                                     className="text-red-400 hover:text-red-300 transition-colors"
                                                                     title="Delete assessment"
                                                                 >
@@ -767,6 +997,14 @@ const dt_options: Intl.DateTimeFormatOptions = {
                                                         onSaveAssessment={saveEditedAssessment}
                                                         onCancel={handleCancelEdit}
                                                         triggerBanner={showMessage}
+                                                        availableVariants={availableVariants}
+                                                        defaultSelectedVariantIds={[...new Set(
+                                                            group.assessments
+                                                                .map(a => a.variant_id)
+                                                                .filter((v): v is string => !!v)
+                                                        )]}
+                                                        availablePackages={vuln.packages}
+                                                        defaultSelectedPackages={group.packages}
                                                     />
                                                 </div>
                                             )}

@@ -3,12 +3,22 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+from sqlalchemy import orm
+from sqlalchemy.orm import Mapped, relationship, joinedload
+from ..extensions import db, Base
+from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
 from .package import Package
-from datetime import datetime, timezone
-from uuid import uuid4
-from typing import Optional
+from .finding import Finding
+from .variant import Variant
 
+
+# ---------------------------------------------------------------------------
+# VEX-related constants
+# ---------------------------------------------------------------------------
 
 VALID_STATUS_OPENVEX = ["under_investigation", "not_affected", "affected", "fixed"]
 VALID_STATUS_CDX_VEX = ["in_triage", "false_positive", "not_affected", "exploitable",
@@ -26,6 +36,18 @@ STATUS_OPENVEX_TO_CDX_VEX = {
     "not_affected": "not_affected",
     "affected": "exploitable",
     "fixed": "resolved"
+}
+
+STATUS_TO_SIMPLIFIED = {
+    "under_investigation": "Pending Assessment",
+    "in_triage": "Pending Assessment",
+    "false_positive": "Not affected",
+    "not_affected": "Not affected",
+    "exploitable": "Exploitable",
+    "affected": "Exploitable",
+    "resolved": "Fixed",
+    "fixed": "Fixed",
+    "resolved_with_pedigree": "Fixed",
 }
 
 VALID_JUSTIFICATION_OPENVEX = [
@@ -74,54 +96,156 @@ RESPONSES_CDX_VEX = [
 ]
 
 
-class VulnAssessment:
-    """
-    Represent the assessment of a vulnerability for a specific set of packages.
-    An assessment can be used to track the status of a vulnerability like pending, active, resolved, ...
-    A vulnerability can have multiple assessments because assessments are specific to a timestamp.
+# ---------------------------------------------------------------------------
+# Assessment model
+# ---------------------------------------------------------------------------
+
+class Assessment(Base):
+    """Stores a triage assessment for a :class:`Finding` scoped to a :class:`Variant`.
+
+    Also serves as a drop-in replacement for the former in-memory
+    ``VulnAssessment`` DTO so that parsers and controllers can use the same
+    API.  Call :meth:`new_dto` to create a lightweight, non-persisted instance
+    for the parsing pipeline.
     """
 
-    def __init__(self, vuln_id: str, packages: Optional[list[str]] = None):
-        """Create a new assesment for the given vulnerability (str) and packages (optional)."""
+    __tablename__ = "assessments"
+
+    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    source = db.Column(db.String, nullable=True)
+    origin = db.Column(db.String, nullable=True)
+    status = db.Column(db.String, nullable=True)
+    simplified_status = db.Column(db.String, nullable=True)
+    status_notes = db.Column(db.Text, nullable=True)
+    justification = db.Column(db.Text, nullable=True)
+    impact_statement = db.Column(db.Text, nullable=True)
+    workaround = db.Column(db.Text, nullable=True)
+    timestamp = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    responses = db.Column(db.JSON, nullable=True)
+    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
+    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+
+    finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
+    variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
+
+    # ------------------------------------------------------------------
+    # Transient attributes (initialised by _init_transient)
+    # ------------------------------------------------------------------
+
+    @orm.reconstructor
+    def _init_on_load(self):
+        """Called by SQLAlchemy when reconstituting from the DB."""
+        self._init_transient()
+
+    def _init_transient(self):
+        if not hasattr(self, "_vuln_id"):
+            self._vuln_id = ""
+        if not hasattr(self, "_packages"):
+            self._packages: list[str] = []
+
+    # ------------------------------------------------------------------
+    # vuln_id / packages — transient properties for parsing pipeline
+    # ------------------------------------------------------------------
+
+    @property
+    def vuln_id(self) -> str:
+        # _vuln_id is always initialised by _init_transient / new_dto; avoid
+        # the repeated hasattr overhead in hot ingestion loops.
+        val = self._vuln_id
+        if val:
+            return val
+        try:
+            if self.finding:
+                return self.finding.vulnerability_id or ""
+        except Exception as e:
+            verbose(f"[Assessment.vuln_id {self.id!r}] {e}")
+        return ""
+
+    @vuln_id.setter
+    def vuln_id(self, value: str):
+        self._vuln_id = value
+
+    @property
+    def packages(self) -> list[str]:
+        if hasattr(self, "_packages") and self._packages:
+            return self._packages
+        try:
+            if self.finding and self.finding.package:
+                return [self.finding.package.string_id]
+        except Exception as e:
+            verbose(f"[Assessment.packages {self.id!r}] {e}")
+        return []
+
+    @packages.setter
+    def packages(self, value):
+        self._packages = list(value or [])
+
+    def __repr__(self) -> str:
+        return (
+            f"<Assessment id={self.id} status={self.status!r}"
+            f" finding_id={self.finding_id} variant_id={self.variant_id}>"
+        )
+
+    # ==================================================================
+    # Factory: create an in-memory DTO (not yet persisted)
+    # ==================================================================
+
+    @classmethod
+    def new_dto(cls, vuln_id: str, packages: Optional[list[str]] = None) -> "Assessment":
+        """Create a lightweight, non-persisted Assessment for the parsing pipeline.
+
+        This replaces the former ``VulnAssessment(vuln_id, packages)`` constructor.
+        """
         if isinstance(vuln_id, Vulnerability):
             vuln_id = vuln_id.id
-        self.vuln_id = vuln_id
-        self.packages: list[str] = []
-        self.timestamp = datetime.now(timezone.utc).isoformat()
-        self.last_update = datetime.now(timezone.utc).isoformat()
-        self.id = str(uuid4())
+        obj = cls()
+        obj._vuln_id = vuln_id
+        obj._packages = []
+        obj.id = uuid.uuid4()
+        obj.status = "under_investigation"
+        obj.status_notes = ""
+        obj.justification = ""
+        obj.impact_statement = ""
+        obj.responses = []
+        obj.workaround = ""
+        obj.timestamp = datetime.now(timezone.utc)
+        for p in (packages or []):
+            obj.add_package(p)
+        return obj
 
-        self.status = "under_investigation"
-        self.status_notes = ""
-        self.justification = ""
-        self.impact_statement = ""
-        self.responses: list[str] = []
-        self.workaround = ""
-        self.workaround_timestamp = ""
-
-        for p in packages or []:
-            self.add_package(p)
+    # ==================================================================
+    # Validation / mutation helpers
+    # ==================================================================
 
     def add_package(self, package) -> bool:
+        """Add a package to the transient package list.
+
+        *package* can be a ``'name@version'`` string or a :class:`Package` instance.
         """
-        Add a package to the list of packages affected by this vulnerability.
-        Can be a string (package.id) or a Package object.
-        Return True if the package was added, False if it was already in the list or invalid.
-        """
+        if not hasattr(self, "_packages"):
+            self._packages = []
         if isinstance(package, str):
-            if package not in self.packages:
-                self.packages.append(package)
+            if package not in self._packages:
+                self._packages.append(package)
             return True
-        elif isinstance(package, Package):
-            if package.id not in self.packages:
-                self.packages.append(package.id)
-            return True
+        try:
+            if isinstance(package, Package):
+                sid = package.string_id
+                if sid not in self._packages:
+                    self._packages.append(sid)
+                return True
+        except AttributeError as e:
+            verbose(f"[Assessment.add_package {self.id!r}] {e}")
         return False
 
     def set_status(self, status: str) -> bool:
-        """
-        Define status of the vulnerability, using either openVEX or CDX status.
-        Return True if the status was set, False if it is invalid.
+        """Validate and set the assessment status (OpenVEX or CDX VEX).
+
+        Return ``True`` if the status was accepted, ``False`` otherwise.
         """
         if status in VALID_STATUS_OPENVEX or status in VALID_STATUS_CDX_VEX:
             self.status = status
@@ -129,7 +253,6 @@ class VulnAssessment:
         return False
 
     def get_status_openvex(self) -> Optional[str]:
-        """Return the status of the vulnerability in OpenVEX format."""
         if self.status in VALID_STATUS_OPENVEX:
             return self.status
         if self.status in STATUS_CDX_VEX_TO_OPENVEX:
@@ -137,7 +260,6 @@ class VulnAssessment:
         return None
 
     def get_status_cdx_vex(self) -> Optional[str]:
-        """Return the status of the vulnerability in CDX VEX format."""
         if self.status in VALID_STATUS_CDX_VEX:
             return self.status
         if self.status in STATUS_OPENVEX_TO_CDX_VEX:
@@ -145,43 +267,31 @@ class VulnAssessment:
         return None
 
     def is_compatible_status(self, status: str) -> bool:
-        """Check if the given status is already set or equivalent to the current status."""
         if status == self.status:
             return True
         if status in VALID_STATUS_OPENVEX and self.status in STATUS_CDX_VEX_TO_OPENVEX:
-            if STATUS_CDX_VEX_TO_OPENVEX[self.status] == status:
-                return True
-            return False
+            return STATUS_CDX_VEX_TO_OPENVEX[self.status] == status
         if status in VALID_STATUS_CDX_VEX and self.status in STATUS_OPENVEX_TO_CDX_VEX:
-            if STATUS_OPENVEX_TO_CDX_VEX[self.status] == status:
-                return True
-            return False
+            return STATUS_OPENVEX_TO_CDX_VEX[self.status] == status
         return False
 
     def set_status_notes(self, notes: str, append: bool = False):
-        """Set an arbitrary note about the status of the vulnerability. Replace by default or append if specified."""
-        if append and self.status_notes != "":
+        if append and self.status_notes:
             if notes not in self.status_notes:
-                self.status_notes += '\n' + notes
+                self.status_notes = self.status_notes + "\n" + notes
         else:
             self.status_notes = notes
 
     def is_justification_required(self) -> bool:
-        """Return True if the status requires a justification."""
         return self.status == "not_affected"
 
     def set_justification(self, justification: str) -> bool:
-        """
-        Define justification for the status of the vulnerability.
-        Return True if the justification was set, False if it is invalid.
-        """
         if justification in VALID_JUSTIFICATION_OPENVEX or justification in VALID_JUSTIFICATION_CDX_VEX:
             self.justification = justification
             return True
         return False
 
     def get_justification_openvex(self) -> Optional[str]:
-        """Return the justification of the vulnerability in OpenVEX format."""
         if self.justification in VALID_JUSTIFICATION_OPENVEX:
             return self.justification
         if self.justification in JUSTIFICATION_CDX_VEX_TO_OPENVEX:
@@ -189,7 +299,6 @@ class VulnAssessment:
         return None
 
     def get_justification_cdx_vex(self) -> Optional[str]:
-        """Return the justification of the vulnerability in CDX VEX format."""
         if self.justification in VALID_JUSTIFICATION_CDX_VEX:
             return self.justification
         if self.justification in JUSTIFICATION_OPENVEX_TO_CDX_VEX:
@@ -197,199 +306,466 @@ class VulnAssessment:
         return None
 
     def is_compatible_justification(self, justification: str) -> bool:
-        """Check if the given justification is already set or equivalent to the current justification."""
         if justification == self.justification:
             return True
         if justification in VALID_JUSTIFICATION_OPENVEX and self.justification in JUSTIFICATION_CDX_VEX_TO_OPENVEX:
-            if JUSTIFICATION_CDX_VEX_TO_OPENVEX[self.justification] == justification:
-                return True
-            return False
+            return JUSTIFICATION_CDX_VEX_TO_OPENVEX[self.justification] == justification
         if justification in VALID_JUSTIFICATION_CDX_VEX and self.justification in JUSTIFICATION_OPENVEX_TO_CDX_VEX:
-            if JUSTIFICATION_OPENVEX_TO_CDX_VEX[self.justification] == justification:
-                return True
-            return False
+            return JUSTIFICATION_OPENVEX_TO_CDX_VEX[self.justification] == justification
         return False
 
     def set_not_affected_reason(self, reason: str, append: bool = False):
-        """Set the reason why the vulnerability is not affected. Replace by default or append if specified."""
-        if append and self.impact_statement != "":
+        if append and self.impact_statement:
             if reason not in self.impact_statement:
-                self.impact_statement += '\n' + reason
+                self.impact_statement = self.impact_statement + "\n" + reason
         else:
             self.impact_statement = reason
 
     def add_response(self, response: str) -> bool:
-        """Add a response to the vulnerability assessment and return True if added, False if was already present."""
         if response in RESPONSES_CDX_VEX:
+            if self.responses is None:
+                self.responses = []
             if response not in self.responses:
                 self.responses.append(response)
             return True
         return False
 
     def remove_response(self, response: str) -> bool:
-        """Remove a response from the vulnerability assessment and return True if removed, False if not present."""
-        if response in self.responses:
+        if self.responses and response in self.responses:
             self.responses.remove(response)
             return True
         return False
 
     def set_workaround(self, workaround: str, timestamp: Optional[str] = None):
-        """
-        Set the workaround for the vulnerability and the timestamp of the last update.
-        If no timestamp is provided, the current time is used.
-        """
+        """Set the workaround text. The timestamp argument is accepted for compatibility but not stored."""
         self.workaround = workaround
-        self.workaround_timestamp = timestamp if timestamp is not None else datetime.now(timezone.utc).isoformat()
+
+    # ==================================================================
+    # Serialisation
+    # ==================================================================
 
     def to_dict(self) -> dict:
-        """Return a dict representation of this assessment."""
+        ts = self.timestamp
+        if ts is not None:
+            ts = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
         return {
-            "id": self.id,
+            "id": str(self.id),
+            "source": self.source or "",
+            "origin": self.origin or "sbom",
             "vuln_id": self.vuln_id,
-            "packages": self.packages,
-            "timestamp": self.timestamp,
-            "last_update": self.last_update,
-            "status": self.status,
-            "status_notes": self.status_notes,
-            "justification": self.justification,
-            "impact_statement": self.impact_statement,
-            "responses": self.responses,
-            "workaround": self.workaround,
-            "workaround_timestamp": self.workaround_timestamp
+            "packages": list(self.packages),
+            "variant_id": str(self.variant_id) if self.variant_id else None,
+            "timestamp": ts,
+            "last_update": ts or "",
+            "status": self.status or "",
+            "status_notes": self.status_notes or "",
+            "justification": self.justification or "",
+            "impact_statement": self.impact_statement or "",
+            "responses": list(self.responses or []),
+            "workaround": self.workaround or "",
         }
 
     @staticmethod
-    def from_dict(data: dict):
-        """Create a new assessment from a dict representation."""
-        assessment = VulnAssessment(data["vuln_id"], data["packages"])
-        assessment.id = data["id"]
-        assessment.timestamp = data["timestamp"]
-        assessment.last_update = data["last_update"]
-        assessment.status = data["status"]
-        assessment.status_notes = data["status_notes"] if "status_notes" in data else ""
-        assessment.justification = data["justification"] if "justification" in data else ""
-        assessment.impact_statement = data["impact_statement"] if "impact_statement" in data else ""
-        assessment.responses = data["responses"] if "responses" in data else []
-        assessment.workaround = data["workaround"] if "workaround" in data else ""
-        assessment.workaround_timestamp = data["workaround_timestamp"] if "workaround_timestamp" in data else ""
-        return assessment
+    def from_dict(data: dict) -> "Assessment":
+        """Create a DTO from a dict representation (replaces ``VulnAssessment.from_dict``)."""
+        obj = Assessment.new_dto(data.get("vuln_id", ""), data.get("packages", []))
+        if "id" in data:
+            try:
+                obj.id = uuid.UUID(data["id"]) if not isinstance(data["id"], uuid.UUID) else data["id"]
+            except (ValueError, AttributeError):
+                pass
+        obj.status = data.get("status", "under_investigation")
+        obj.status_notes = data.get("status_notes", "")
+        obj.justification = data.get("justification", "")
+        obj.impact_statement = data.get("impact_statement", "")
+        obj.responses = data.get("responses", [])
+        obj.workaround = data.get("workaround", "")
+        if "timestamp" in data and isinstance(data["timestamp"], str):
+            try:
+                obj.timestamp = datetime.fromisoformat(data["timestamp"])
+            except (ValueError, TypeError):
+                pass
+        return obj
 
     def to_openvex_dict(self) -> Optional[dict]:
-        """Return a dict representation of this assessment in OpenVEX format."""
-        # OpenVEX must have a valid status
+        """Return an OpenVEX statement dict, or ``None`` if the status is invalid."""
         openvex_status = self.get_status_openvex()
         if openvex_status is None:
             return None
-        openvex_justif: Optional[str] = ""
 
-        # If justification set, it must be valid
-        if self.justification != "":
+        openvex_justif: Optional[str] = ""
+        if self.justification:
             openvex_justif = self.get_justification_openvex()
 
-        # CDX VEX status "false_positive" is equivalent to OpenVEX justification "component_not_present"
         if self.status == "false_positive" and self.justification not in VALID_JUSTIFICATION_OPENVEX:
             openvex_justif = "component_not_present"
 
-        # OpenVEX status "not_affected" must have a justification or impact statement
         if (openvex_status == "not_affected"
            and openvex_justif not in VALID_JUSTIFICATION_OPENVEX
-           and self.impact_statement == ""):
+           and not self.impact_statement):
             return None
 
-        openvex_impact = self.impact_statement
-        # if no user defined impact statement, use CD VEX justification which is more precise
-        if self.justification in VALID_JUSTIFICATION_CDX_VEX and self.impact_statement == "":
+        openvex_impact = self.impact_statement or ""
+        if self.justification in VALID_JUSTIFICATION_CDX_VEX and not self.impact_statement:
             openvex_impact = self.justification
 
-        return {
-            "vulnerability": {
-                "name": self.vuln_id
-            },
-            "products": [{"@id": p} for p in self.packages],
-            "timestamp": self.timestamp,
-            "last_updated": self.last_update,
+        ts = self.timestamp
+        if ts is not None and hasattr(ts, "isoformat"):
+            ts = ts.isoformat()
 
+        return {
+            "vulnerability": {"name": self.vuln_id},
+            "products": [{"@id": p} for p in self.packages],
+            "timestamp": ts,
+            "last_updated": ts or "",
             "status": openvex_status,
-            "status_notes": self.status_notes,
+            "status_notes": self.status_notes or "",
             "justification": openvex_justif,
             "impact_statement": openvex_impact,
-            "action_statement": self.workaround,
-            "action_statement_timestamp": self.workaround_timestamp
+            "action_statement": self.workaround or "",
         }
 
     def to_cdx_vex_dict(self) -> Optional[dict]:
-        """Return a dict representation of this assessment in CDX VEX format."""
-        # CDX VEX must have a valid status
+        """Return a CycloneDX VEX analysis dict, or ``None`` if the status is invalid."""
         cdx_state = self.get_status_cdx_vex()
         if cdx_state is None:
             return None
 
         cdx_justif: Optional[str] = ""
-        # If justification set, it must be valid
-        if self.justification != "":
+        if self.justification:
             cdx_justif = self.get_justification_cdx_vex()
 
-        # OpenVEX status "not_affected" with justification "component_not_present"
-        # is equivalent to CDX VEX status "false_positive"
         if self.status == "not_affected" and self.justification == "component_not_present":
             cdx_state = "false_positive"
             cdx_justif = ""
 
-        cdx_response = self.responses
+        cdx_response = list(self.responses or [])
         if self.workaround in RESPONSES_CDX_VEX:
             cdx_response.append(self.workaround)
-        if len(cdx_response) < 1 and self.workaround != "":
+        if len(cdx_response) < 1 and self.workaround:
             cdx_response = ["workaround_available"]
 
-        detail = self.status_notes
-        if self.impact_statement != "" and detail != "":
+        detail = self.status_notes or ""
+        if self.impact_statement and detail:
             detail += "\n" + self.impact_statement
-        elif self.impact_statement != "":
+        elif self.impact_statement:
             detail = self.impact_statement
 
+        ts = self.timestamp
+        if ts is not None and hasattr(ts, "isoformat"):
+            ts = ts.isoformat()
+
         return {
-            "workaround": self.workaround,
+            "workaround": self.workaround or "",
             "analysis": {
                 "state": cdx_state,
                 "detail": detail,
                 "justification": cdx_justif,
                 "response": cdx_response,
-                "firstIssued": self.timestamp,
-                "lastUpdated": self.last_update
-            }
+                "firstIssued": ts,
+                "lastUpdated": ts or "",
+            },
         }
 
-    def merge(self, assessment) -> bool:
-        """Merge the given assessment into this one if they are compatible."""
-        if assessment.id != self.id:
+    def merge(self, other: "Assessment") -> bool:
+        """Merge *other* into this assessment (for deduplication during parsing)."""
+        if str(self.id) != str(other.id):
             return False
-        if assessment.vuln_id != self.vuln_id:
+        if self.vuln_id != other.vuln_id:
             return False
-        for p in assessment.packages:
+        for p in other.packages:
             self.add_package(p)
-        if assessment.timestamp > self.timestamp:
-            self.timestamp = assessment.timestamp
-        if assessment.last_update > self.last_update:
-            self.last_update = assessment.last_update
-        if not self.is_compatible_status(assessment.status):
-            self.set_status(assessment.status)
-        if assessment.status_notes != "":
-            for note in assessment.status_notes.split('\n'):
-                if note not in self.impact_statement:
+
+        other_ts = other.timestamp
+        self_ts = self.timestamp
+        # Normalise to comparable types
+        if isinstance(other_ts, str) and isinstance(self_ts, str):
+            if other_ts > self_ts:
+                self.timestamp = other_ts
+        elif isinstance(other_ts, datetime) and isinstance(self_ts, datetime):
+            if other_ts > self_ts:
+                self.timestamp = other_ts
+
+        if not self.is_compatible_status(other.status or ""):
+            self.set_status(other.status or "")
+        if other.status_notes:
+            for note in other.status_notes.split("\n"):
+                if note and (not self.impact_statement or note not in self.impact_statement):
                     self.set_status_notes(note, True)
-
-        if not self.is_compatible_justification(assessment.justification):
-            self.set_justification(assessment.justification)
-        if assessment.impact_statement != "":
-            for reason in assessment.impact_statement.split('\n'):
+        if not self.is_compatible_justification(other.justification or ""):
+            self.set_justification(other.justification or "")
+        if other.impact_statement:
+            for reason in other.impact_statement.split("\n"):
                 self.set_not_affected_reason(reason, True)
-
-        for r in assessment.responses:
+        for r in (other.responses or []):
             self.add_response(r)
-        if assessment.workaround != "":
-            if self.workaround == "":
-                self.set_workaround(assessment.workaround, assessment.workaround_timestamp)
-            elif self.workaround != assessment.workaround:
-                if assessment.workaround_timestamp > self.workaround_timestamp:
-                    self.set_workaround(assessment.workaround, assessment.workaround_timestamp)
+        if other.workaround:
+            self.set_workaround(other.workaround)
         return True
+
+    # ==================================================================
+    # CRUD helpers
+    # ==================================================================
+
+    @staticmethod
+    def create(
+        status: str,
+        assessment_id: Optional[uuid.UUID] = None,
+        finding_id: Optional[uuid.UUID | str] = None,
+        variant_id: Optional[uuid.UUID | str] = None,
+        source: Optional[str] = None,
+        origin: Optional[str] = None,
+        simplified_status: Optional[str] = None,
+        status_notes: Optional[str] = None,
+        justification: Optional[str] = None,
+        impact_statement: Optional[str] = None,
+        workaround: Optional[str] = None,
+        responses: Optional[list] = None,
+        timestamp: Optional[datetime] = None,
+        commit: bool = True,
+    ) -> "Assessment":
+        """Create a new assessment, persist it and return it.
+
+        Args:
+            assessment_id: Optional UUID to use for the new record. When
+                supplied (e.g. from an in-memory DTO), the DB row gets the
+                same UUID so that ``gets_by_vuln`` / ``gets_by_pkg`` can
+                deduplicate results from DB queries against in-memory ones.
+            commit: If True (default), commit immediately. Set False for bulk operations.
+        """
+        if isinstance(finding_id, str):
+            finding_id = uuid.UUID(finding_id)
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        assessment = Assessment(
+            status=status,
+            finding_id=finding_id,
+            variant_id=variant_id,
+            source=source,
+            origin=origin,
+            simplified_status=simplified_status,
+            status_notes=status_notes,
+            justification=justification,
+            impact_statement=impact_statement,
+            workaround=workaround,
+            responses=responses or [],
+        )
+        if timestamp is not None:
+            assessment.timestamp = timestamp
+        if assessment_id is not None:
+            assessment.id = assessment_id
+        assessment._init_transient()  # ensure transient attrs initialised on new objects
+        db.session.add(assessment)
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+        return assessment
+
+    @staticmethod
+    def get_all() -> list["Assessment"]:
+        """Return all assessments."""
+        return list(db.session.execute(
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .order_by(Assessment.timestamp)
+        ).scalars().unique().all())
+
+    @staticmethod
+    def from_vuln_assessment(assess, finding_id=None, variant_id=None) -> "Assessment":
+        """Create or update an ``Assessment`` DB record from an Assessment DTO.
+
+        Does not commit — callers are expected to be inside batch_session()
+        or to commit themselves after calling this.
+        """
+        existing = None
+        if finding_id is not None:
+            if variant_id is not None:
+                # assessment is linked to (finding, variant)
+                existing = db.session.execute(
+                    db.select(Assessment).where(
+                        Assessment.finding_id == finding_id,
+                        Assessment.variant_id == variant_id,
+                    )
+                ).scalar_one_or_none()
+            else:
+                existing = db.session.execute(
+                    db.select(Assessment).where(Assessment.finding_id == finding_id)
+                ).scalar_one_or_none()
+
+        if existing is not None:
+            existing.status = assess.status or existing.status
+            existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
+            existing.status_notes = assess.status_notes or existing.status_notes
+            existing.justification = assess.justification or existing.justification
+            existing.impact_statement = assess.impact_statement or existing.impact_statement
+            existing.workaround = getattr(assess, "workaround", None) or existing.workaround
+            existing.responses = list(assess.responses) if assess.responses else existing.responses
+            if not existing.origin or existing.origin != "sbom":
+                existing.origin = "sbom"
+            db.session.flush()
+            return existing
+
+        new_status = assess.status or "under_investigation"
+        record = Assessment.create(
+            assessment_id=getattr(assess, "id", None),
+            status=new_status,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
+            variant_id=variant_id,
+            finding_id=finding_id,
+            origin="sbom",
+            status_notes=assess.status_notes,
+            justification=assess.justification,
+            impact_statement=assess.impact_statement,
+            workaround=getattr(assess, "workaround", None),
+            responses=list(assess.responses) if assess.responses else [],
+            commit=False,
+        )
+        # Propagate transient fields so callers can call to_dict() immediately
+        # without waiting for DB lazy-loads.
+        record._vuln_id = assess.vuln_id or ""
+        record._packages = list(assess.packages or [])
+        return record
+
+    @staticmethod
+    def get_by_id(assessment_id: uuid.UUID | str) -> Optional["Assessment"]:
+        """Return the assessment matching *assessment_id*, or ``None``."""
+        if isinstance(assessment_id, str):
+            try:
+                assessment_id = uuid.UUID(assessment_id)
+            except ValueError:
+                return None
+        return db.session.get(Assessment, assessment_id)
+
+    @staticmethod
+    def get_by_finding(finding_id: uuid.UUID | str) -> list["Assessment"]:
+        """Return all assessments for the given finding."""
+        if isinstance(finding_id, str):
+            finding_id = uuid.UUID(finding_id)
+        return list(db.session.execute(
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .where(Assessment.finding_id == finding_id)
+        ).scalars().unique().all())
+
+    @staticmethod
+    def get_by_variant(variant_id: uuid.UUID | str) -> list["Assessment"]:
+        """Return all assessments for the given variant."""
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        return list(db.session.execute(
+            db.select(Assessment)
+            .options(
+                joinedload(Assessment.finding).joinedload(Finding.package)
+            )
+            .where(Assessment.variant_id == variant_id)
+        ).scalars().unique().all())
+
+    @staticmethod
+    def get_by_finding_and_variant(
+        finding_id: uuid.UUID | str,
+        variant_id: uuid.UUID | str,
+    ) -> list["Assessment"]:
+        """Return assessments matching both *finding_id* and *variant_id*."""
+        if isinstance(finding_id, str):
+            finding_id = uuid.UUID(finding_id)
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        return list(db.session.execute(
+            db.select(Assessment).where(
+                Assessment.finding_id == finding_id,
+                Assessment.variant_id == variant_id,
+            )
+        ).scalars().all())
+
+    @staticmethod
+    def get_by_vulnerability(vulnerability_id: str) -> list["Assessment"]:
+        """Return all assessments whose finding links to *vulnerability_id*."""
+        return list(db.session.execute(
+            db.select(Assessment)
+            .join(Finding, Assessment.finding_id == Finding.id)
+            .where(Finding.vulnerability_id == vulnerability_id.upper())
+            .order_by(Assessment.timestamp)
+        ).scalars().all())
+
+    @staticmethod
+    def get_by_package(package_id: "uuid.UUID | str") -> list["Assessment"]:
+        """Return all assessments whose finding links to *package_id*.
+
+        *package_id* may be a UUID, UUID string, or ``'name@version'`` string.
+        """
+        if isinstance(package_id, str):
+            pkg_str: str = package_id
+            try:
+                package_id = uuid.UUID(pkg_str)
+            except ValueError:
+                pkg = Package.get_by_string_id(pkg_str)
+                if pkg is None:
+                    return []
+                package_id = pkg.id
+        return list(db.session.execute(
+            db.select(Assessment)
+            .join(Finding, Assessment.finding_id == Finding.id)
+            .where(Finding.package_id == package_id)
+            .options(joinedload(Assessment.finding).joinedload(Finding.package))
+            .order_by(Assessment.timestamp)
+        ).scalars().all())
+
+    @staticmethod
+    def get_handmade(variant_id: Optional["uuid.UUID | str"] = None) -> list["Assessment"]:
+        """Return assessments created/edited via the web UI (``origin='custom'``)."""
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        query = (
+            db.select(Assessment)
+            .where(Assessment.origin == "custom")
+            .options(joinedload(Assessment.finding).joinedload(Finding.package))
+            .order_by(Assessment.timestamp.desc())
+        )
+        if variant_id is not None:
+            query = query.where(Assessment.variant_id == variant_id)
+        return list(db.session.execute(query).scalars().unique().all())
+
+    def update(
+        self,
+        status: Optional[str] = None,
+        source: Optional[str] = None,
+        origin: Optional[str] = None,
+        simplified_status: Optional[str] = None,
+        status_notes: Optional[str] = None,
+        justification: Optional[str] = None,
+        impact_statement: Optional[str] = None,
+        workaround: Optional[str] = None,
+        responses: Optional[list] = None,
+        **_kwargs,
+    ) -> "Assessment":
+        """Update fields in place, persist the change and return ``self``."""
+        if status is not None:
+            self.status = status
+        if source is not None:
+            self.source = source
+        if origin is not None:
+            self.origin = origin
+        if simplified_status is not None:
+            self.simplified_status = simplified_status
+        if status_notes is not None:
+            self.status_notes = status_notes
+        if justification is not None:
+            self.justification = justification
+        if impact_statement is not None:
+            self.impact_statement = impact_statement
+        if workaround is not None:
+            self.workaround = workaround
+        if responses is not None:
+            self.responses = responses
+        db.session.commit()
+        return self
+
+    def delete(self) -> None:
+        """Delete this assessment from the database."""
+        db.session.delete(self)
+        db.session.commit()
