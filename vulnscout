@@ -84,6 +84,11 @@ Scan & output commands:
   --export-custom-assessments     Export custom (review) assessments as tar.gz
   --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
 
+Data retrieval commands:
+  list-projects                   List all projects and their variants
+  list-scans                      List all past scans
+  --json                          Output objects in JSON format
+
 Configuration:
   config <key> <value>            Set a config value
   config-list                     Show current configuration
@@ -296,6 +301,8 @@ parse_and_run() {
     local SERVE_REQUESTED=false
     local REPORT_ARGS=()
     local EXPORT_ARGS=()
+    local DATA_REQUESTED=""
+    local DATA_ARGS=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --dev)
@@ -342,6 +349,18 @@ parse_and_run() {
                 fi
                 REPORT_ARGS+=(--report "$tpl")
                 shift 2 ;;
+            list-projects|list-scans)
+                ensure_running
+                command="$1"
+                if [[ "$DATA_REQUESTED" != "" ]]; then
+                    # Only 1 data request command is allowed at the same time
+                    echo "Cannot use $command and $DATA_REQUESTED together"
+                    exit 1
+                fi
+                DATA_REQUESTED="$command"
+                shift ;;
+            --json)
+                DATA_ARGS+=(--json); shift ;;
             start)
                 do_start
                 if [ "$DEV_MODE" = true ]; then
@@ -420,6 +439,8 @@ parse_and_run() {
         local -a scan_args=()
         [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
         exec_container --project "$PROJECT" --variant "$VARIANT" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
+    elif [[ "$DATA_REQUESTED" != "" ]]; then
+        exec_container "--$DATA_REQUESTED" "${DATA_ARGS[@]}"
     elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
         # No new inputs but a match-condition, report, or export was given: run against existing DB data
         ensure_running

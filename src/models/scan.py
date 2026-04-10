@@ -51,6 +51,21 @@ class Scan(Base):
     def __repr__(self) -> str:
         return f"<Scan id={self.id} timestamp={self.timestamp}>"
 
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "description": self.description,
+            "timestamp": self.timestamp.isoformat(),
+            "variant": {
+                "id": str(self.variant.id),
+                "name": self.variant.name,
+                "project": {
+                    "id": str(self.variant.project.id),
+                    "name": self.variant.project.name,
+                }
+            }
+        }
+
     # ------------------------------------------------------------------
     # CRUD helpers
     # ------------------------------------------------------------------

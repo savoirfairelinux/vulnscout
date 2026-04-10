@@ -33,6 +33,16 @@ class Project(Base):
     def __repr__(self) -> str:
         return f"<Project id={self.id} name={self.name!r}>"
 
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "variants": [{
+                "id": str(variant.id),
+                "name": variant.name
+            } for variant in self.variants],
+        }
+
     # ------------------------------------------------------------------
     # CRUD helpers
     # ------------------------------------------------------------------
