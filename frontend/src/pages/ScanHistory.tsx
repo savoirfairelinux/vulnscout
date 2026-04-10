@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry } from "../handlers/scans";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug } from "@fortawesome/free-solid-svg-icons";
 
 type Props = {
     variantId?: string;
@@ -306,11 +306,12 @@ function VulnDiffList({ vulns, label, colorClass }: {
 
 type Section = 'packages' | 'findings' | 'vulnerabilities';
 
-function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void }) {
+function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: string; onClose: () => void }) {
     const [diff, setDiff] = useState<ScanDiff | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [section, setSection] = useState<Section>('packages');
+    const isToolScan = scanType === 'tool';
+    const [section, setSection] = useState<Section>(isToolScan ? 'findings' : 'packages');
     const overlayRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -357,7 +358,7 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                     {/* Header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
                         <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
-                            Scan diff details
+                            {isToolScan ? 'Tool scan diff details' : 'Scan diff details'}
                         </h3>
                         <button
                             onClick={onClose}
@@ -374,6 +375,7 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                     {/* Tab bar */}
                     {diff && (
                         <div className="flex border-b dark:border-gray-600 px-4 flex-wrap">
+                            {!isToolScan && (
                             <button className={tabCls('packages')} onClick={() => setSection('packages')}>
                                 Packages
                                 {diff.is_first ? (
@@ -394,6 +396,7 @@ function DiffModal({ scanId, onClose }: { scanId: string; onClose: () => void })
                                     </>
                                 )}
                             </button>
+                            )}
                             <button className={tabCls('findings')} onClick={() => setSection('findings')}>
                                 Findings
                                 {diff.is_first ? (
@@ -543,8 +546,19 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [openDiffId, setOpenDiffId] = useState<string | null>(null);
+    const [openDiffType, setOpenDiffType] = useState<string>('sbom');
     const [editingDescId, setEditingDescId] = useState<string | null>(null);
     const [editingDescValue, setEditingDescValue] = useState<string>('');
+    const [grypeStatus, setGrypeStatus] = useState<string>('idle');
+    const [grypeError, setGrypeError] = useState<string | null>(null);
+
+    const refreshScans = useCallback(() => {
+        ScansHandler.list(variantId, projectId)
+            .then((data) => {
+                setScans([...data].reverse());
+            })
+            .catch(() => {});
+    }, [variantId, projectId]);
 
     async function saveDescription(scanId: string) {
         const ok = await ScansHandler.setDescription(scanId, editingDescValue);
@@ -552,6 +566,45 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
             setScans(prev => prev.map(s => s.id === scanId ? { ...s, description: editingDescValue } : s));
             setEditingDescId(null);
         }
+    }
+
+    // Derive the effective variant IDs to scan: explicit prop or unique IDs from loaded scans
+    const effectiveVariantIds: string[] = variantId
+        ? [variantId]
+        : [...new Set(scans.map(s => s.variant_id))];
+
+    async function handleTriggerGrypeScan() {
+        if (effectiveVariantIds.length === 0) return;
+        setGrypeError(null);
+
+        // Trigger a scan for every variant
+        for (const vid of effectiveVariantIds) {
+            const result = await ScansHandler.triggerGrypeScan(vid);
+            if (!result.ok) {
+                setGrypeError(result.error ?? 'Failed to start Grype scan');
+                return;
+            }
+        }
+
+        setGrypeStatus('running');
+        // Poll all variants until every one is done (or any errors)
+        const interval = setInterval(async () => {
+            const statuses = await Promise.all(
+                effectiveVariantIds.map(vid => ScansHandler.getGrypeScanStatus(vid))
+            );
+            const anyError = statuses.find(s => s.status === 'error');
+            const allDone = statuses.every(s => s.status === 'done' || s.status === 'idle');
+            if (anyError) {
+                clearInterval(interval);
+                setGrypeStatus('error');
+                setGrypeError(anyError.error ?? 'Grype scan failed');
+            } else if (allDone && statuses.some(s => s.status === 'done')) {
+                clearInterval(interval);
+                setGrypeStatus('done');
+                refreshScans();
+                setTimeout(() => setGrypeStatus('idle'), 3000);
+            }
+        }, 3000);
     }
 
     useEffect(() => {
@@ -566,26 +619,70 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                 setError("Failed to load scan history.");
                 setLoading(false);
             });
-    }, [variantId, projectId]);
+    }, [variantId, projectId, refreshScans]);
+
+    // Build the scan-trigger button (always visible when there are variant(s) to scan)
+    const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
+    const scanButton = canTriggerScan ? (
+        <div className="flex items-center gap-3">
+            {grypeError && (
+                <span className="text-sm text-red-400">{grypeError}</span>
+            )}
+            {grypeStatus === 'done' && (
+                <span className="text-sm text-green-400">Grype scan complete!</span>
+            )}
+            <button
+                onClick={handleTriggerGrypeScan}
+                disabled={grypeStatus === 'running' || loading}
+                className={[
+                    "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors",
+                    grypeStatus === 'running'
+                        ? "bg-purple-800/50 text-purple-300 cursor-wait"
+                        : "bg-purple-700 hover:bg-purple-600 text-white",
+                ].join(' ')}
+            >
+                <FontAwesomeIcon icon={faBug} />
+                {grypeStatus === 'running' ? 'Scanning…' : 'Perform Grype Scan'}
+            </button>
+        </div>
+    ) : null;
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-32 text-gray-400">
-                Loading scan history…
+            <div className="max-w-7xl mx-auto py-6">
+                <div className="flex items-center justify-between mb-6">
+                    <h1 className="text-2xl font-bold text-gray-800 dark:text-neutral-100">Scan History</h1>
+                    {scanButton}
+                </div>
+                <div className="flex items-center justify-center h-32 text-gray-400">
+                    Loading scan history…
+                </div>
             </div>
         );
     }
     if (error) {
         return (
-            <div className="flex items-center justify-center h-32 text-red-400">
-                {error}
+            <div className="max-w-7xl mx-auto py-6">
+                <div className="flex items-center justify-between mb-6">
+                    <h1 className="text-2xl font-bold text-gray-800 dark:text-neutral-100">Scan History</h1>
+                    {scanButton}
+                </div>
+                <div className="flex items-center justify-center h-32 text-red-400">
+                    {error}
+                </div>
             </div>
         );
     }
     if (scans.length === 0) {
         return (
-            <div className="flex items-center justify-center h-32 text-gray-400 dark:text-neutral-400">
-                No scans found.
+            <div className="max-w-7xl mx-auto py-6">
+                <div className="flex items-center justify-between mb-6">
+                    <h1 className="text-2xl font-bold text-gray-800 dark:text-neutral-100">Scan History</h1>
+                    {scanButton}
+                </div>
+                <div className="flex items-center justify-center h-32 text-gray-400 dark:text-neutral-400">
+                    No scans found.
+                </div>
             </div>
         );
     }
@@ -593,13 +690,16 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
     return (
         <>
             {openDiffId && (
-                <DiffModal scanId={openDiffId} onClose={() => setOpenDiffId(null)} />
+                <DiffModal scanId={openDiffId} scanType={openDiffType} onClose={() => setOpenDiffId(null)} />
             )}
 
             <div className="max-w-7xl mx-auto py-6">
-                <h1 className="text-2xl font-bold mb-6 text-gray-800 dark:text-neutral-100">
-                    Scan History
-                </h1>
+                <div className="flex items-center justify-between mb-6">
+                    <h1 className="text-2xl font-bold text-gray-800 dark:text-neutral-100">
+                        Scan History
+                    </h1>
+                    {scanButton}
+                </div>
 
                 <ol className="relative border-l-2 border-cyan-700 dark:border-cyan-600">
                     {scans.map((scan, index) => (
@@ -615,19 +715,29 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                             ].join(' ')} />
 
                             <div className="p-4 bg-white dark:bg-neutral-700 rounded-lg shadow-sm border border-gray-100 dark:border-neutral-600">
-                                {/* Row 1: timestamp */}
-                                <time className="block text-sm font-semibold text-gray-500 dark:text-neutral-400 mb-1">
-                                    {formatDate(scan.timestamp)}
-                                </time>
+                                {/* Row 1: timestamp + scan type badge */}
+                                <div className="flex items-center gap-2 mb-1">
+                                    <time className="text-sm font-semibold text-gray-500 dark:text-neutral-400">
+                                        {formatDate(scan.timestamp)}
+                                    </time>
+                                    {(scan.scan_type || 'sbom') === 'tool' && (
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                            <FontAwesomeIcon icon={faBug} className="mr-1" />
+                                            Tool Scan
+                                        </span>
+                                    )}
+                                </div>
 
                                 {/* Row 2: badges + details button */}
                                 <div className="flex items-center gap-2 flex-wrap mb-1">
                                         {scan.is_first ? (
                                             /* First scan: total counts */
                                             <>
+                                                {(scan.scan_type || 'sbom') !== 'tool' && (
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                                                     {(scan.package_count ?? 0).toLocaleString()} packages
                                                 </span>
+                                                )}
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                                                     {(scan.finding_count ?? 0).toLocaleString()} findings
                                                 </span>
@@ -638,6 +748,8 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                         ) : (
                                             /* Subsequent scans: diff badges */
                                             <>
+                                                {(scan.scan_type || 'sbom') !== 'tool' && (
+                                                <>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.packages_added ?? 0).toLocaleString()} packages
                                                 </span>
@@ -647,15 +759,19 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     ↑{(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
                                                 </span>
+                                                </>
+                                                )}
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.findings_added ?? 0).toLocaleString()} findings
                                                 </span>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     −{(scan.findings_removed ?? 0).toLocaleString()} findings
                                                 </span>
+                                                {(scan.scan_type || 'sbom') !== 'tool' && (
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     ↑{(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
                                                 </span>
+                                                )}
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
                                                     +{(scan.vulns_added ?? 0).toLocaleString()} vulnerabilities
                                                 </span>
@@ -667,7 +783,7 @@ function ScanHistory({ variantId, projectId }: Readonly<Props>) {
 
                                         {/* Details button */}
                                         <button
-                                            onClick={() => setOpenDiffId(scan.id)}
+                                            onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
                                             className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
                                         >
                                             Details

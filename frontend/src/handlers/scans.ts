@@ -1,6 +1,7 @@
 type Scan = {
     id: string;
     description: string | null;
+    scan_type: string;
     timestamp: string;
     variant_id: string;
     variant_name: string | null;
@@ -50,6 +51,7 @@ type FindingUpgradeEntry = {
 
 type ScanDiff = {
     scan_id: string;
+    scan_type: string;
     previous_scan_id: string | null;
     is_first: boolean;
     finding_count: number;
@@ -112,6 +114,25 @@ class ScansHandler {
             }
         );
         return response.ok;
+    }
+
+    static async triggerGrypeScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan`,
+            { method: 'POST', mode: 'cors' }
+        );
+        if (response.ok || response.status === 202) return { ok: true };
+        const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getGrypeScanStatus(variantId: string): Promise<{ status: string; error?: string | null }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan/status`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return { status: 'unknown' };
+        return await response.json();
     }
 }
 
