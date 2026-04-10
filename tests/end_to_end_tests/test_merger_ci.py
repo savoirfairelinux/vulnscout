@@ -15,6 +15,10 @@ import pytest
 import io
 import json
 import os
+
+from flask.testing import FlaskCliRunner
+from click.testing import Result as CliResult
+
 from src.bin.merger_ci import _run_main, _ts_key, post_treatment, main
 from . import write_demo_files
 
@@ -56,7 +60,7 @@ def app(init_files, monkeypatch):
         result = runner.invoke(args=[
             "merge",
             "--project", "TestProject",
-            "--variant", "default",
+            "--variant", "TestVariant",
             "--cdx", str(init_files["CDX_PATH"]),
             "--spdx", str(init_files["SPDX_PATH"]),
             "--grype", str(init_files["GRYPE_CDX_PATH"]),
@@ -67,6 +71,11 @@ def app(init_files, monkeypatch):
         assert result.exit_code == 0, result.output
         yield application
         _db.drop_all()
+
+
+@pytest.fixture()
+def cli_runner(app) -> FlaskCliRunner:
+    return app.test_cli_runner()
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +523,7 @@ def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
 
 def test_import_custom_assessments_json_invalid_json(app, tmp_path):
     """Import a .json with invalid JSON exits with error code 1."""
-    json_file = tmp_path / "default.json"
+    json_file = tmp_path / "TestVariant.json"
     json_file.write_text("{invalid json")
     with app.app_context():
         runner = app.test_cli_runner()
@@ -527,7 +536,7 @@ def test_import_custom_assessments_json_invalid_json(app, tmp_path):
 
 def test_import_custom_assessments_json_not_openvex(app, tmp_path):
     """Import a .json that is not OpenVEX exits with error code 1."""
-    json_file = tmp_path / "default.json"
+    json_file = tmp_path / "TestVariant.json"
     json_file.write_text(json.dumps({"hello": "world"}))
     with app.app_context():
         runner = app.test_cli_runner()
@@ -549,7 +558,7 @@ def test_import_custom_assessments_json_success(app, tmp_path):
             "status_notes": "imported via CLI",
         }],
     }
-    json_file = tmp_path / "default.json"
+    json_file = tmp_path / "TestVariant.json"
     json_file.write_text(json.dumps(doc))
     with app.app_context():
         runner = app.test_cli_runner()
@@ -647,8 +656,8 @@ def test_import_custom_assessments_targz_invalid_json_inside(
 
     buf = io.BytesIO()
     with _tf.open(fileobj=buf, mode='w:gz') as tar:
-        content = b"{not valid json"
-        info = _tf.TarInfo(name="default.json")
+        content = b"{"
+        info = _tf.TarInfo(name="TestVariant.json")
         info.size = len(content)
         tar.addfile(info, io.BytesIO(content))
 
@@ -672,7 +681,7 @@ def test_import_custom_assessments_targz_not_openvex_inside(
     buf = io.BytesIO()
     with _tf.open(fileobj=buf, mode='w:gz') as tar:
         content = json.dumps({"hello": "world"}).encode()
-        info = _tf.TarInfo(name="default.json")
+        info = _tf.TarInfo(name="TestVariant.json")
         info.size = len(content)
         tar.addfile(info, io.BytesIO(content))
 
@@ -685,3 +694,112 @@ def test_import_custom_assessments_targz_not_openvex_inside(
             "import-custom-assessments", str(archive),
         ])
     assert result.exit_code == 1
+
+
+def test_list_projects(cli_runner):
+    out: CliResult = cli_runner.invoke(args=[
+        "list-projects"
+    ])
+
+    assert out.exit_code == 0
+    assert "TestProject" in out.stdout
+    assert "TestVariant" in out.stdout
+
+
+def test_list_projects_json(cli_runner):
+    out: CliResult = cli_runner.invoke(args=[
+        "list-projects",
+        "--json"
+    ])
+
+    assert out.exit_code == 0
+
+    data = json.loads(out.stdout)
+    assert isinstance(data, list)
+    assert len(data) == 1
+
+    project = data[0]
+    assert isinstance(project, dict)
+    assert project["name"] == "TestProject"
+
+    variants = project["variants"]
+    assert isinstance(variants, list)
+    assert len(variants) == 1
+
+    variant = variants[0]
+    assert variant["name"] == "TestVariant"
+
+
+def test_list_scans(cli_runner):
+    out: CliResult = cli_runner.invoke(args=[
+        "list-scans"
+    ])
+
+    assert out.exit_code == 0
+    assert "TestProject" in out.stdout
+    assert "TestVariant" in out.stdout
+
+
+def test_list_scans_json(cli_runner):
+    out: CliResult = cli_runner.invoke(args=[
+        "list-scans",
+        "--json"
+    ])
+
+    from datetime import datetime
+
+    assert out.exit_code == 0
+
+    data = json.loads(out.stdout)
+    assert isinstance(data, list)
+    assert len(data) == 1
+
+    scan = data[0]
+    assert isinstance(scan, dict)
+    scan_timestamp = datetime.fromisoformat(scan["timestamp"])
+    assert scan_timestamp is not None
+    # cannot test that the timestamp is recent bc of timezone issues
+
+    variant = scan["variant"]
+    assert isinstance(variant, dict)
+    assert variant["name"] == "TestVariant"
+
+    project = variant["project"]
+    assert isinstance(project, dict)
+    assert project["name"] == "TestProject"
+
+
+def test_delete_scan(cli_runner):
+    out: CliResult = cli_runner.invoke(args=[
+        "list-scans",
+        "--json"
+    ])
+
+    scan_id = json.loads(out.stdout)[0]["id"]
+
+    out = cli_runner.invoke(args=[
+        "delete-scan",
+        scan_id
+    ])
+
+    assert out.exit_code == 0
+    assert "deleted scan" in out.stdout
+
+
+def test_delete_unknown_scan(cli_runner):
+    import uuid
+
+    out: CliResult = cli_runner.invoke(args=[
+        "delete-scan",
+        str(uuid.uuid4())
+    ])
+
+    assert out.exit_code != 0
+    assert "Scan not found" in str(out.exception)
+
+    out = cli_runner.invoke(args=[
+        "list-scans",
+        "--json"
+    ])
+
+    assert len(json.loads(out.stdout)) == 1, "The scan has been deleted"
