@@ -18,6 +18,10 @@ class Templates:
         self.packagesCtrl = controllers["packages"]
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
+        self.projectsCtrl = controllers.get("projects")
+        self.variantsCtrl = controllers.get("variants")
+        self.scansCtrl = controllers.get("scans")
+        self.sbomDocumentsCtrl = controllers.get("sbom_documents")
 
         template_dir = os.path.join(os.path.dirname(__file__), "templates")
         self.internal_loader = FileSystemLoader([
@@ -48,6 +52,24 @@ class Templates:
         kwargs["vulnerabilities"] = {}
         kwargs["unfiltered_assessments"] = self.assessmentsCtrl.to_dict()
         kwargs["assessments"] = {}
+
+        if self.projectsCtrl is not None:
+            kwargs["projects"] = self.projectsCtrl.serialize_list(self.projectsCtrl.get_all())
+        else:
+            kwargs["projects"] = []
+        if self.variantsCtrl is not None:
+            kwargs["variants"] = self.variantsCtrl.serialize_list(self.variantsCtrl.get_all())
+        else:
+            kwargs["variants"] = []
+        if self.scansCtrl is not None:
+            kwargs["scans"] = self.scansCtrl.serialize_list(self.scansCtrl.get_all())
+        else:
+            kwargs["scans"] = []
+        if self.sbomDocumentsCtrl is not None:
+            kwargs["sbom_documents"] = self.sbomDocumentsCtrl.serialize_list(self.sbomDocumentsCtrl.get_all())
+        else:
+            kwargs["sbom_documents"] = []
+
         filter_date = None
         if "ignore_before" in kwargs and kwargs["ignore_before"] != "1970-01-01T00:00":
             filter_date = datetime.fromisoformat(kwargs["ignore_before"]).astimezone(timezone.utc)
@@ -193,6 +215,9 @@ class TemplatesExtensions:
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
         jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
         jinjaEnv.filters["filter_by_publish_date"] = TemplatesExtensions.filter_publish_date
+        jinjaEnv.filters["filter_by_variant"] = TemplatesExtensions.filter_by_variant
+        jinjaEnv.filters["filter_by_project"] = TemplatesExtensions.filter_by_project
+        jinjaEnv.filters["sort_by_scan_date"] = TemplatesExtensions.sort_by_scan_date
 
     @staticmethod
     def get_env_var(key: str, default: str = "") -> str:
@@ -466,3 +491,16 @@ class TemplatesExtensions:
             return include_unknown and not v.get("published")
 
         return TemplatesExtensions._filter_by_date(vals, date_filter, get_date, include_no_date)
+
+    @staticmethod
+    def filter_by_variant(value: dict[str, dict] | list[dict], variant_id: str) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return [v for v in vals if v.get("variant_id") == variant_id]
+
+    @staticmethod
+    def filter_by_project(value: list[dict], project_id: str) -> list[dict]:
+        return [v for v in value if v.get("project_id") == project_id]
+
+    @staticmethod
+    def sort_by_scan_date(value: list[dict]) -> list[dict]:
+        return sorted(value, key=lambda x: x.get("timestamp") or "", reverse=True)

@@ -46,6 +46,10 @@ All templates can also be run on-demand from the web interface using the export 
 | `unfiltered_vulnerabilities` | dict | All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset. |
 | `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
 | `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
+| `projects` | list[dict] | All projects. Each item has the fields described in the Project Object section below. |
+| `variants` | list[dict] | All variants. Each item has the fields described in the Variant Object section below. |
+| `scans` | list[dict] | All scans. Each item has the fields described in the Scan Object section below. |
+| `sbom_documents` | list[dict] | All SBOM documents. Each item has the fields described in the SBOM Document Object section below. |
 
 ---
 
@@ -125,6 +129,48 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `workaround` | string | Workaround description. |
 | `workaround_timestamp` | string | Datetime of this workaround in ISO 8601 format. |
 | `variant_id` | string | UUID of the variant this assessment belongs to, or empty. |
+
+---
+
+### Project Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Project ID (UUID). |
+| `name` | string | Name of the project. |
+
+---
+
+### Variant Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Variant ID (UUID). |
+| `name` | string | Name of the variant (e.g. build configuration). |
+| `project_id` | string | UUID of the project this variant belongs to. |
+
+---
+
+### Scan Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Scan ID (UUID). |
+| `description` | string | Description of the scan (may be empty). |
+| `timestamp` | string | Scan datetime in ISO 8601 format. |
+| `variant_id` | string | UUID of the variant this scan belongs to. |
+
+---
+
+### SBOM Document Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | SBOM document ID (UUID). |
+| `path` | string | File path of the SBOM document. |
+| `source_name` | string | Name of the source that produced this document. |
+| `format` | string | Format of the document (e.g. `spdx`, `cdx`, `openvex`, `yocto_cve_check`). |
+| `scan_id` | string | UUID of the scan this document belongs to. |
 
 #### Possible values for `status`
 
@@ -220,6 +266,14 @@ Both `last_assessment_date` and `filter_by_publish_date` accept date expressions
 | `sort_by_epss` | Sort vulnerabilities by EPSS score, highest first. |
 | `sort_by_effort` | Sort vulnerabilities by effort (`effort.likely`), most effort first. |
 | `sort_by_last_modified` | Sort vulnerabilities by latest assessment date, most recent first. |
+| `sort_by_scan_date` | Sort scans by timestamp, most recent first. |
+
+### Relational Filtering
+
+| Filter | Description |
+|--------|-------------|
+| `filter_by_variant(variant_id)` | Keep only items whose `variant_id` matches. Works on assessments and scans. |
+| `filter_by_project(project_id)` | Keep only items whose `project_id` matches. Works on variants. |
 
 ---
 
@@ -261,5 +315,29 @@ Both `last_assessment_date` and `filter_by_publish_date` accept date expressions
 ```
 Product: {{ env("PRODUCT_NAME", "unknown") }}
 Version: {{ env("PRODUCT_VERSION", "unknown") }}
+```
+
+**List all projects and their variants:**
+```
+{% for project in projects %}
+Project: {{ project.name }}
+  {% for variant in variants | filter_by_project(project.id) %}
+  - Variant: {{ variant.name }}
+  {% endfor %}
+{% endfor %}
+```
+
+**List most recent scans for a variant:**
+```
+{% for scan in scans | filter_by_variant(variant_id) | sort_by_scan_date | limit(5) %}
+- {{ scan.timestamp | print_iso8601 }}: {{ scan.description }}
+{% endfor %}
+```
+
+**List SBOM documents:**
+```
+{% for doc in sbom_documents %}
+- {{ doc.source_name }} ({{ doc.format }}): {{ doc.path }}
+{% endfor %}
 ```
 
