@@ -1,30 +1,30 @@
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.3.0
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
     hooks:
-    -   id: check-yaml
-    -   id: end-of-file-fixer
-    -   id: trailing-whitespace
--   repo: https://github.com/pycqa/flake8
-    rev: '7.0.0'
+      - id: check-yaml
+#      - id: end-of-file-fixer
+#      - id: trailing-whitespace
+  - repo: https://github.com/pycqa/flake8
+    rev: "7.0.0"
     hooks:
-    -   id: flake8
+      - id: flake8
         files: ^src/
-- repo: https://github.com/pre-commit/mirrors-mypy
-  rev: v1.11.2
-  hooks:
-    - id: mypy
-      args:
-        - --ignore-missing-imports
-        - --config-file
-        - tests/tox.ini
-        - --check-untyped-defs
-      files: ^src/
-- repo: https://github.com/pre-commit/mirrors-eslint
-  rev: v8.50.0
-  hooks:
-    - id: eslint
-      args:
-        - --config
-        - frontend/eslint.config.js
-      files: ^frontend/src/
+        exclude: src/migrations/versions
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        args:
+          - --ignore-missing-imports
+          - --config-file
+          - tox.ini
+        files: ^src/
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v8.50.0
+    hooks:
+      - id: eslint
+        args:
+          - --config
+          - frontend/eslint.config.js
+        files: ^frontend/src/

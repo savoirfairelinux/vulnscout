@@ -208,8 +208,8 @@ make -C tests docker_build docker_test docker_clean
 
 | Task | Command |
 |------|---------|
-| Linter | `flake8` |
-| Type checking (from `tests/` folder) | `mypy --config-file tox.ini` |
+| Linter | `flake8 src` |
+| Type checking | `mypy --config-file tox.ini` |
 | Unit tests | `pytest` |
 | Coverage (terminal) | `pytest --cov=src` |
 | Coverage (HTML) | `pytest --cov-report html --cov=src` |
