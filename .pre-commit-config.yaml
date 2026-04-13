@@ -28,3 +28,8 @@ repos:
           - --config
           - frontend/eslint.config.js
         files: ^frontend/src/
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        exclude: ^tests

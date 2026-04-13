@@ -22,6 +22,7 @@ test_frontend:
 	fi
 
 test_ci:
+	shellcheck $(SRC_DIR)/../vulnscout $(SRC_DIR)/entrypoint.sh
 	cd $(CI_DIR) && \
 	bash ./vulnscout_CI_test.sh
 

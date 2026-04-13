@@ -224,6 +224,13 @@ make -C tests docker_build docker_test docker_clean
 | Linter | `npm run lint` (ESLint) |
 | Coverage report | `npm run coverage` |
 
+### Bash Scripts (`vulnscout` and `entrypoint.sh`)
+
+| Task | Command |
+|------|---------|
+| Linter | `shellcheck vulnscout src/entrypoint.sh` |
+
+
 > **Note:** Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit. With CQFD, use `cqfd -b test` to run the full suite.
 
 ### Pre-commit Hook
