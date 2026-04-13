@@ -11,6 +11,7 @@ import string
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
+from ..models.sbom_package import SBOMPackage
 
 
 class Templates:
@@ -115,6 +116,79 @@ class Templates:
                     kwargs['assessments'][assessment["id"]] = assessment
         else:
             kwargs["assessments"] = kwargs["unfiltered_assessments"]
+
+        scan_by_id = {s["id"]: s for s in kwargs["scans"]}
+        doc_by_id = {d["id"]: d for d in kwargs["sbom_documents"]}
+        variant_by_id = {v["id"]: v for v in kwargs["variants"]}
+
+        for doc in kwargs["sbom_documents"]:
+            scan = scan_by_id.get(doc["scan_id"])
+            doc["variant_id"] = scan["variant_id"] if scan else None
+
+        for doc in kwargs["sbom_documents"]:
+            doc["packages"] = {}
+            for sbom_pkg in SBOMPackage.get_by_document(doc["id"]):
+                pkg_id = sbom_pkg.package.string_id
+                if pkg_id in kwargs["packages"]:
+                    doc["packages"][pkg_id] = kwargs["packages"][pkg_id]
+
+        pkg_to_docs: dict = {}
+        pkg_to_variants: dict = {}
+        for doc in kwargs["sbom_documents"]:
+            for pkg_id in doc["packages"]:
+                pkg_to_docs.setdefault(pkg_id, []).append(doc["id"])
+                if doc["variant_id"]:
+                    pkg_to_variants.setdefault(pkg_id, set()).add(doc["variant_id"])
+
+        for pkg_id, pkg in kwargs["packages"].items():
+            pkg["sbom_documents"] = [doc_by_id[d] for d in pkg_to_docs.get(pkg_id, []) if d in doc_by_id]
+            pkg["variants"] = list(pkg_to_variants.get(pkg_id, set()))
+            pkg["vulnerabilities"] = {}
+
+        for vuln in kwargs["vulnerabilities"].values():
+            by_variant: dict = {}
+            for assessment in vuln.get("assessments", []):
+                vid = assessment.get("variant_id")
+                if vid:
+                    by_variant.setdefault(vid, []).append(assessment)
+            vuln["assessments_by_variant"] = by_variant
+            vuln["variant_ids"] = list(by_variant.keys())
+
+        vuln_by_pkg: dict = {}
+        for vuln_id, vuln in kwargs["vulnerabilities"].items():
+            for pkg_id in vuln.get("packages", []):
+                vuln_by_pkg.setdefault(pkg_id, {})[vuln_id] = vuln
+
+        for doc in kwargs["sbom_documents"]:
+            doc["vulnerabilities"] = {}
+            for pkg_id in doc["packages"]:
+                doc["vulnerabilities"].update(vuln_by_pkg.get(pkg_id, {}))
+
+        for pkg_id, pkg in kwargs["packages"].items():
+            pkg["vulnerabilities"] = vuln_by_pkg.get(pkg_id, {})
+
+        for scan in kwargs["scans"]:
+            scan["variant"] = variant_by_id.get(scan["variant_id"])
+            scan["sbom_documents"] = [d for d in kwargs["sbom_documents"] if d["scan_id"] == scan["id"]]
+            scan["packages"] = {}
+            for doc in scan["sbom_documents"]:
+                scan["packages"].update(doc["packages"])
+
+        for variant in kwargs["variants"]:
+            vid = variant["id"]
+            variant["scans"] = [s for s in kwargs["scans"] if s["variant_id"] == vid]
+            variant["sbom_documents"] = [d for d in kwargs["sbom_documents"] if d.get("variant_id") == vid]
+            variant["packages"] = {}
+            for doc in variant["sbom_documents"]:
+                variant["packages"].update(doc["packages"])
+            variant["assessments"] = [
+                a for a in kwargs["assessments"].values() if a.get("variant_id") == vid
+            ]
+            variant["vulnerabilities"] = {
+                vuln_id: v
+                for vuln_id, v in kwargs["vulnerabilities"].items()
+                if vid in v.get("variant_ids", [])
+            }
 
         return template.render(**kwargs)
 
@@ -495,7 +569,7 @@ class TemplatesExtensions:
     @staticmethod
     def filter_by_variant(value: dict[str, dict] | list[dict], variant_id: str) -> list[dict]:
         vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
-        return [v for v in vals if v.get("variant_id") == variant_id]
+        return [v for v in vals if v.get("variant_id") == variant_id or variant_id in v.get("variant_ids", [])]
 
     @staticmethod
     def filter_by_project(value: list[dict], project_id: str) -> list[dict]:
