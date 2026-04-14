@@ -182,10 +182,20 @@ class CycloneDx:
             for reference in vulnerability.references:
                 vuln.add_alias(reference.id)
             for rating in vulnerability.ratings:
-                if rating.method and rating.score and rating.method.startswith('CVSSv'):
+                method_value = rating.method.value if rating.method else ""
+                if rating.method and rating.score and method_value.startswith('CVSSv'):
+                    version = method_value.replace("CVSSv", "").replace("31", "3.1")
+                    # The library normalises the vector by stripping the
+                    # "CVSS:X.X/" prefix – reconstruct the full form.
+                    vector = rating.vector or ""
+                    if vector and not vector.startswith("CVSS:"):
+                        if version in ("3.0", "3", "3.1"):
+                            vector = f"CVSS:{version}/{vector}"
+                        elif version in ("4.0", "4"):
+                            vector = f"CVSS:{version}/{vector}"
                     cvss = CVSS(
-                        str(rating.method.replace("CVSSv", "").replace("31", "3.1")),
-                        rating.vector,
+                        version,
+                        vector,
                         rating.source.name if rating.source and rating.source.name else 'unknown',
                         float(rating.score),
                         0.0,
@@ -309,7 +319,10 @@ class CycloneDx:
             for alias in vuln.aliases:
                 vuln_obj.references.add(
                     cyclonedx.model.vulnerability.VulnerabilityReference(
-                        id=alias
+                        id=alias,
+                        source=cyclonedx.model.vulnerability.VulnerabilitySource(
+                            name=vuln.namespace,
+                        )
                     )
                 )
             have_custom_severity = vuln.severity_max_score is not None
