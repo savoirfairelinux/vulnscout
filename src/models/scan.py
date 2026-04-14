@@ -3,11 +3,19 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
+import typing
 import uuid
 from datetime import datetime, timezone
+
 from ..extensions import db, Base
 from .variant import Variant
+
+from sqlalchemy.orm import Mapped
+
+if typing.TYPE_CHECKING:
+    # avoid circular imports, https://stackoverflow.com/a/79601366
+    from .sbom_document import SBOMDocument
+    from .observation import Observation
 
 
 class Scan(Base):
@@ -15,21 +23,48 @@ class Scan(Base):
 
     __tablename__ = "scans"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    description = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(
+    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    description: Mapped[str | None] = db.Column(db.Text, nullable=True)
+    timestamp: Mapped[datetime] = db.Column(
         db.DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=False, index=True)
+    variant_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=False, index=True)
 
-    variant = db.relationship("Variant", back_populates="scans")
-    sbom_documents = db.relationship("SBOMDocument", back_populates="scan", cascade="all, delete-orphan")
-    observations = db.relationship("Observation", back_populates="scan", cascade="all, delete-orphan")
+    # Flask-SQLAlchemy has typing issues, see https://github.com/pallets-eco/flask-sqlalchemy/issues/1318
+    variant: Mapped[Variant] = db.relationship(  # type: ignore
+        "Variant",
+        back_populates="scans"
+    )
+    sbom_documents: Mapped[list["SBOMDocument"]] = db.relationship(  # type: ignore
+        "SBOMDocument",
+        back_populates="scan",
+        cascade="all, delete-orphan"
+    )
+    observations: Mapped[list["Observation"]] = db.relationship(  # type: ignore
+        "Observation",
+        back_populates="scan",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Scan id={self.id} timestamp={self.timestamp}>"
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "description": self.description,
+            "timestamp": self.timestamp.isoformat(),
+            "variant": {
+                "id": str(self.variant.id),
+                "name": self.variant.name,
+                "project": {
+                    "id": str(self.variant.project.id),
+                    "name": self.variant.project.name,
+                }
+            }
+        }
 
     # ------------------------------------------------------------------
     # CRUD helpers
@@ -44,7 +79,7 @@ class Scan(Base):
         return scan
 
     @staticmethod
-    def get_by_id(scan_id: uuid.UUID) -> Optional["Scan"]:
+    def get_by_id(scan_id: uuid.UUID) -> "Scan | None":
         """Return the scan matching *scan_id*, or ``None`` if not found."""
         return db.session.get(Scan, scan_id)
 
@@ -73,7 +108,7 @@ class Scan(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_latest() -> Optional["Scan"]:
+    def get_latest() -> "Scan | None":
         """Return the most recently created scan, or ``None`` if no scans exist."""
         result = db.session.execute(
             db.select(Scan).order_by(Scan.timestamp.desc()).limit(1)

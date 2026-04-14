@@ -4,9 +4,18 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
-from sqlalchemy.exc import IntegrityError
+import typing
+
 from ..extensions import db, Base
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Mapped
+
+if typing.TYPE_CHECKING:
+    from .project import Project
+    from .scan import Scan
+    from .assessment import Assessment
+    from .time_estimate import TimeEstimate
 
 
 class Variant(Base):
@@ -17,14 +26,25 @@ class Variant(Base):
         db.UniqueConstraint("name", "project_id", name="uq_variants_name_project"),
     )
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    name = db.Column(db.String, nullable=False)
-    project_id = db.Column(db.Uuid, db.ForeignKey("projects.id"), nullable=False)
+    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = db.Column(db.String, nullable=False)
+    project_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("projects.id"), nullable=False)
 
-    project = db.relationship("Project", back_populates="variants")
-    scans = db.relationship("Scan", back_populates="variant", cascade="all, delete-orphan")
-    assessments = db.relationship("Assessment", back_populates="variant", cascade="all, delete-orphan")
-    time_estimates = db.relationship("TimeEstimate", back_populates="variant", cascade="all, delete-orphan")
+    project: Mapped["Project"] = db.relationship(  # type: ignore
+        back_populates="variants"
+    )
+    scans: Mapped[list["Scan"]] = db.relationship(  # type: ignore
+        back_populates="variant",
+        cascade="all, delete-orphan"
+    )
+    assessments: Mapped[list["Assessment"]] = db.relationship(  # type: ignore
+        back_populates="variant",
+        cascade="all, delete-orphan"
+    )
+    time_estimates: Mapped[list["TimeEstimate"]] = db.relationship(  # type: ignore
+        back_populates="variant",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Variant id={self.id} name={self.name!r}>"
@@ -42,7 +62,7 @@ class Variant(Base):
         return variant
 
     @staticmethod
-    def get_by_id(variant_id: uuid.UUID) -> Optional["Variant"]:
+    def get_by_id(variant_id: uuid.UUID) -> "Variant | None":
         """Return the variant matching *variant_id*, or ``None`` if not found."""
         return db.session.get(Variant, variant_id)
 
