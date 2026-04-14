@@ -64,21 +64,22 @@ class Templates:
         kwargs["assessments"] = {}
 
         if self.projectsCtrl is not None:
-            kwargs["projects"] = self.projectsCtrl.serialize_list(self.projectsCtrl.get_all())
+            kwargs["projects"] = {p["id"]: p for p in self.projectsCtrl.serialize_list(self.projectsCtrl.get_all())}
         else:
-            kwargs["projects"] = []
+            kwargs["projects"] = {}
         if self.variantsCtrl is not None:
-            kwargs["variants"] = self.variantsCtrl.serialize_list(self.variantsCtrl.get_all())
+            kwargs["variants"] = {v["id"]: v for v in self.variantsCtrl.serialize_list(self.variantsCtrl.get_all())}
         else:
-            kwargs["variants"] = []
+            kwargs["variants"] = {}
         if self.scansCtrl is not None:
-            kwargs["scans"] = self.scansCtrl.serialize_list(self.scansCtrl.get_all())
+            kwargs["scans"] = {s["id"]: s for s in self.scansCtrl.serialize_list(self.scansCtrl.get_all())}
         else:
-            kwargs["scans"] = []
+            kwargs["scans"] = {}
         if self.sbomDocumentsCtrl is not None:
-            kwargs["sbom_documents"] = self.sbomDocumentsCtrl.serialize_list(self.sbomDocumentsCtrl.get_all())
+            all_docs = self.sbomDocumentsCtrl.serialize_list(self.sbomDocumentsCtrl.get_all())
+            kwargs["sbom_documents"] = {d["id"]: d for d in all_docs}
         else:
-            kwargs["sbom_documents"] = []
+            kwargs["sbom_documents"] = {}
 
         filter_date = None
         if "ignore_before" in kwargs and kwargs["ignore_before"] != "1970-01-01T00:00":
@@ -126,15 +127,15 @@ class Templates:
         else:
             kwargs["assessments"] = kwargs["unfiltered_assessments"]
 
-        scan_by_id = {s["id"]: s for s in kwargs["scans"]}
-        doc_by_id = {d["id"]: d for d in kwargs["sbom_documents"]}
-        variant_by_id = {v["id"]: v for v in kwargs["variants"]}
+        scan_by_id = kwargs["scans"]
+        doc_by_id = kwargs["sbom_documents"]
+        variant_by_id = kwargs["variants"]
 
-        for doc in kwargs["sbom_documents"]:
+        for doc in kwargs["sbom_documents"].values():
             scan = scan_by_id.get(doc["scan_id"])
             doc["variant_id"] = scan["variant_id"] if scan else None
 
-        for doc in kwargs["sbom_documents"]:
+        for doc in kwargs["sbom_documents"].values():
             doc["packages"] = {}
             for sbom_pkg in SBOMPackage.get_by_document(doc["id"]):
                 pkg_id = sbom_pkg.package.string_id
@@ -143,14 +144,14 @@ class Templates:
 
         pkg_to_docs: dict = {}
         pkg_to_variants: dict = {}
-        for doc in kwargs["sbom_documents"]:
+        for doc in kwargs["sbom_documents"].values():
             for pkg_id in doc["packages"]:
                 pkg_to_docs.setdefault(pkg_id, []).append(doc["id"])
                 if doc["variant_id"]:
                     pkg_to_variants.setdefault(pkg_id, set()).add(doc["variant_id"])
 
         for pkg_id, pkg in kwargs["packages"].items():
-            pkg["sbom_documents"] = [doc_by_id[d] for d in pkg_to_docs.get(pkg_id, []) if d in doc_by_id]
+            pkg["sbom_documents"] = {d: doc_by_id[d] for d in pkg_to_docs.get(pkg_id, []) if d in doc_by_id}
             pkg["variants"] = list(pkg_to_variants.get(pkg_id, set()))
             pkg["vulnerabilities"] = {}
 
@@ -168,7 +169,7 @@ class Templates:
             for pkg_id in vuln.get("packages", []):
                 vuln_by_pkg.setdefault(pkg_id, {})[vuln_id] = vuln
 
-        for doc in kwargs["sbom_documents"]:
+        for doc in kwargs["sbom_documents"].values():
             doc["vulnerabilities"] = {}
             for pkg_id in doc["packages"]:
                 doc["vulnerabilities"].update(vuln_by_pkg.get(pkg_id, {}))
@@ -176,19 +177,25 @@ class Templates:
         for pkg_id, pkg in kwargs["packages"].items():
             pkg["vulnerabilities"] = vuln_by_pkg.get(pkg_id, {})
 
-        for scan in kwargs["scans"]:
+        for scan in kwargs["scans"].values():
             scan["variant"] = variant_by_id.get(scan["variant_id"])
-            scan["sbom_documents"] = [d for d in kwargs["sbom_documents"] if d["scan_id"] == scan["id"]]
+            scan["sbom_documents"] = {
+                d_id: d for d_id, d in kwargs["sbom_documents"].items()
+                if d["scan_id"] == scan["id"]
+            }
             scan["packages"] = {}
-            for doc in scan["sbom_documents"]:
+            for doc in scan["sbom_documents"].values():
                 scan["packages"].update(doc["packages"])
 
-        for variant in kwargs["variants"]:
+        for variant in kwargs["variants"].values():
             vid = variant["id"]
-            variant["scans"] = [s for s in kwargs["scans"] if s["variant_id"] == vid]
-            variant["sbom_documents"] = [d for d in kwargs["sbom_documents"] if d.get("variant_id") == vid]
+            variant["scans"] = {s_id: s for s_id, s in kwargs["scans"].items() if s["variant_id"] == vid}
+            variant["sbom_documents"] = {
+                d_id: d for d_id, d in kwargs["sbom_documents"].items()
+                if d.get("variant_id") == vid
+            }
             variant["packages"] = {}
-            for doc in variant["sbom_documents"]:
+            for doc in variant["sbom_documents"].values():
                 variant["packages"].update(doc["packages"])
             variant["assessments"] = [
                 a for a in kwargs["assessments"].values() if a.get("variant_id") == vid

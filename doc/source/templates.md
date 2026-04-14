@@ -46,10 +46,10 @@ All templates can also be run on-demand from the web interface using the export 
 | `unfiltered_vulnerabilities` | dict | All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset. |
 | `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
 | `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
-| `projects` | list[dict] | All projects. Each item has the fields described in the Project Object section below. |
-| `variants` | list[dict] | All variants. Each item has the fields described in the Variant Object section below. |
-| `scans` | list[dict] | All scans. Each item has the fields described in the Scan Object section below. |
-| `sbom_documents` | list[dict] | All SBOM documents. Each item has the fields described in the SBOM Document Object section below. |
+| `projects` | dict | All projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
+| `variants` | dict | All variants, keyed by UUID. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
+| `scans` | dict | All scans, keyed by UUID. Use `scans \| as_list` to get a list. Each value has the fields described in the Scan Object section below. |
+| `sbom_documents` | dict | All SBOM documents, keyed by UUID. Use `sbom_documents \| as_list` to get a list. Each value has the fields described in the SBOM Document Object section below. |
 
 ---
 
@@ -110,7 +110,7 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `version` | string | Version of the package. |
 | `cpe` | list[string] | List of CPE identifiers. |
 | `purl` | list[string] | List of PURL identifiers. |
-| `sbom_documents` | list[SBOM Document] | SBOM documents that list this package. |
+| `sbom_documents` | dict[string, SBOM Document] | SBOM documents that list this package, keyed by UUID. |
 | `variants` | list[string] | UUIDs of variants in which this package appears (derived from its SBOM documents). |
 | `vulnerabilities` | dict[string, Vulnerability] | Vulnerabilities affecting this package, keyed by vulnerability ID. |
 
@@ -153,8 +153,8 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `id` | string | Variant ID (UUID). |
 | `name` | string | Name of the variant (e.g. build configuration). |
 | `project_id` | string | UUID of the project this variant belongs to. |
-| `scans` | list[Scan] | All scans belonging to this variant. |
-| `sbom_documents` | list[SBOM Document] | All SBOM documents belonging to this variant (across all its scans). |
+| `scans` | dict[string, Scan] | All scans belonging to this variant, keyed by UUID. |
+| `sbom_documents` | dict[string, SBOM Document] | All SBOM documents belonging to this variant (across all its scans), keyed by UUID. |
 | `packages` | dict[string, Package] | All packages found in this variant, keyed by `name@version`. |
 | `assessments` | list[Assessment] | All assessments scoped to this variant. |
 | `vulnerabilities` | dict[string, Vulnerability] | All vulnerabilities that have at least one assessment in this variant, keyed by vulnerability ID. |
@@ -170,7 +170,7 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `timestamp` | string | Scan datetime in ISO 8601 format. |
 | `variant_id` | string | UUID of the variant this scan belongs to. |
 | `variant` | Variant | The variant object this scan belongs to. |
-| `sbom_documents` | list[SBOM Document] | All SBOM documents produced by this scan. |
+| `sbom_documents` | dict[string, SBOM Document] | All SBOM documents produced by this scan, keyed by UUID. |
 | `packages` | dict[string, Package] | All packages found across this scan's SBOM documents, keyed by `name@version`. |
 
 ---
