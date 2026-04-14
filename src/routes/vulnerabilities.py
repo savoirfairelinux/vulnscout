@@ -287,7 +287,10 @@ def _apply_server_filters(vulns: list[dict], args) -> list[dict]:
         allowed = set(av.split(","))
         result = [
             v for v in result
-            if allowed & {c.get("attack_vector") for c in (v.get("severity") or {}).get("cvss", []) if c.get("attack_vector")}
+            if allowed & {
+                c.get("attack_vector") for c in (v.get("severity") or {}).get("cvss", [])
+                if c.get("attack_vector")
+            }
         ]
 
     pub_filter = args.get("published_date_filter")
@@ -328,6 +331,7 @@ def _apply_server_filters(vulns: list[dict], args) -> list[dict]:
     fsd = args.get("first_scan_date")
     if fsd:
         allowed_ts = set(fsd.split(","))
+
         def _fsd_ok(v):
             d = v.get("first_scan_date")
             if not d:
