@@ -19,7 +19,7 @@ class Variant(Base):
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     name = db.Column(db.String, nullable=False)
-    project_id = db.Column(db.Uuid, db.ForeignKey("projects.id"), nullable=False)
+    project_id = db.Column(db.Uuid, db.ForeignKey("projects.id"), nullable=False, index=True)
 
     project = db.relationship("Project", back_populates="variants")
     scans = db.relationship("Scan", back_populates="variant", cascade="all, delete-orphan")

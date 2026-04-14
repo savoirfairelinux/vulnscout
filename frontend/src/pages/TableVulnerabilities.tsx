@@ -1,10 +1,11 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
+import type { Facets } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import Vulnerabilities from "../handlers/vulnerabilities";
-import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
+import { createColumnHelper, SortingFn, RowSelectionState, Row, Table, SortingState } from '@tanstack/react-table'
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
 import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
@@ -269,7 +270,12 @@ const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue, baseVariantId, compareOperation }: Readonly<Props>) {
 
-    const [vulnerabilities, setVulnerabilities] = useState<Vulnerability[]>([]);
+    const [pageItems, setPageItems] = useState<Vulnerability[]>([]);
+    const [serverTotal, setServerTotal] = useState(0);
+    const [facets, setFacets] = useState<Facets>({ severities: [], statuses: [], sources: [], attack_vectors: [], first_scan_dates: [] });
+    const [page, setPage] = useState(0); // 0-indexed
+    const [pageSize, setPageSize] = useState(50);
+    const [serverSorting, setServerSorting] = useState<SortingState>([]);
     const [isLoadingVulns, setIsLoadingVulns] = useState(false);
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
@@ -338,36 +344,97 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
 
-    // Fetch vulnerabilities (including inline assessments) when scope changes
-    const fetchVulns = useCallback(() => {
+    // Fetch a page of vulnerabilities with server-side filtering/sorting
+    const abortRef = useRef<AbortController | null>(null);
+
+    const fetchPage = useCallback((requestedPage?: number) => {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
         setIsLoadingVulns(true);
-        // Compare mode: baseVariantId is the "from" variant, variantId is the "to" variant
         const compareVariantId = baseVariantId ? variantId : undefined;
         const effectiveVariantId = baseVariantId || variantId;
-        Vulnerabilities.list(effectiveVariantId, projectId, compareVariantId, compareOperation)
-            .then(data => setVulnerabilities(data))
-            .catch(err => console.error('Failed to load vulnerabilities', err))
-            .finally(() => setIsLoadingVulns(false));
-    }, [variantId, projectId, baseVariantId, compareOperation]);
 
+        const sortCol = serverSorting[0];
+        Vulnerabilities.listPaginated({
+            variantId: effectiveVariantId,
+            projectId,
+            compareVariantId,
+            operation: compareOperation,
+            page: (requestedPage ?? page) + 1, // API is 1-indexed
+            pageSize,
+            sortBy: sortCol?.id,
+            sortDir: sortCol ? (sortCol.desc ? 'desc' : 'asc') : undefined,
+            search: search || undefined,
+            severity: selectedSeverities.length ? selectedSeverities : undefined,
+            simplifiedStatus: selectedStatuses.length ? selectedStatuses : undefined,
+            foundBy: selectedSources.length ? selectedSources : undefined,
+            packages: selectedPackages.length ? selectedPackages : undefined,
+            epssMin: showCustomEpssFilter ? epssRange.min : undefined,
+            epssMax: showCustomEpssFilter ? epssRange.max : undefined,
+            severityMin: showCustomSeverityFilter ? severityRange.min : undefined,
+            severityMax: showCustomSeverityFilter ? severityRange.max : undefined,
+            attackVector: selectedAttackVectors.length ? selectedAttackVectors : undefined,
+            publishedDateFilter: publishedDateFilterType || undefined,
+            publishedDateValue: publishedDateValue || undefined,
+            publishedDateFrom: publishedDateFrom || undefined,
+            publishedDateTo: publishedDateTo || undefined,
+            publishedDaysValue: publishedDaysValue || undefined,
+            firstScanDate: selectedFirstScanDates.length ? selectedFirstScanDates : undefined,
+            signal: controller.signal,
+        })
+            .then(res => {
+                setPageItems(res.items);
+                setServerTotal(res.total);
+                setFacets(res.facets);
+            })
+            .catch(err => { if (err.name !== 'AbortError') console.error('Failed to load vulnerabilities', err); })
+            .finally(() => setIsLoadingVulns(false));
+    }, [variantId, projectId, baseVariantId, compareOperation, page, pageSize,
+        serverSorting, search, selectedSeverities, selectedStatuses, selectedSources,
+        selectedPackages, showCustomEpssFilter, epssRange, showCustomSeverityFilter,
+        severityRange, selectedAttackVectors, publishedDateFilterType,
+        publishedDateValue, publishedDateFrom, publishedDateTo, publishedDaysValue,
+        selectedFirstScanDates]);
+
+    // Re-fetch when any dependency changes
+    useEffect(() => { fetchPage(); }, [fetchPage]);
+
+    // Reset to page 0 when filters change (but not when page itself changes)
+    const filterDepsRef = useRef<string>('');
     useEffect(() => {
-        fetchVulns();
-    }, [fetchVulns]);
+        const key = JSON.stringify([
+            search, selectedSeverities, selectedStatuses, selectedSources,
+            selectedPackages, showCustomEpssFilter, epssRange,
+            showCustomSeverityFilter, severityRange, selectedAttackVectors,
+            publishedDateFilterType, publishedDateValue, publishedDateFrom,
+            publishedDateTo, publishedDaysValue, selectedFirstScanDates,
+        ]);
+        if (filterDepsRef.current && filterDepsRef.current !== key) {
+            setPage(0);
+        }
+        filterDepsRef.current = key;
+    }, [search, selectedSeverities, selectedStatuses, selectedSources,
+        selectedPackages, showCustomEpssFilter, epssRange,
+        showCustomSeverityFilter, severityRange, selectedAttackVectors,
+        publishedDateFilterType, publishedDateValue, publishedDateFrom,
+        publishedDateTo, publishedDaysValue, selectedFirstScanDates]);
 
     const appendAssessment = useCallback((added: Assessment) => {
-        setVulnerabilities(prev => Vulnerabilities.append_assessment(prev, added));
+        setPageItems(prev => Vulnerabilities.append_assessment(prev, added));
     }, []);
 
     const appendCVSS = useCallback((vulnId: string, vector: string): CVSS | null => {
         const cvss = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
         if (cvss !== null) {
-            setVulnerabilities(prev => Vulnerabilities.append_cvss(prev, vulnId, cvss));
+            setPageItems(prev => Vulnerabilities.append_cvss(prev, vulnId, cvss));
         }
         return cvss;
     }, []);
 
     const patchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
-        setVulnerabilities(prev => prev.map(v => v.id === vulnId ? replace_vuln : v));
+        setPageItems(prev => prev.map(v => v.id === vulnId ? replace_vuln : v));
     }, []);
 
     // Fetch NVD progress on mount and periodically
@@ -430,28 +497,14 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
     }, 750, { maxWait: 5000 });
 
     const attack_vector_list = useMemo(() => {
-        const avSet = new Set<string>();
-        vulnerabilities.forEach(vuln => {
-            vuln.severity.cvss.forEach(cvss => {
-                if (cvss.attack_vector) avSet.add(cvss.attack_vector);
-            });
-        });
         const order = ['NETWORK', 'ADJACENT', 'LOCAL', 'PHYSICAL'];
-        return Array.from(avSet).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    }, [vulnerabilities]);
+        return [...facets.attack_vectors].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    }, [facets.attack_vectors]);
 
-    // Build list of distinct first-scan timestamps, grouped by scan (same second = same scan)
+    // Build list of distinct first-scan timestamps from facets
     const availableFirstScanDates = useMemo(() => {
-        const tsSet = new Set<number>();
-        vulnerabilities.forEach(vuln => {
-            if (vuln.first_scan_date) {
-                // Round to the nearest second to group identical scans
-                const ts = Math.round(new Date(vuln.first_scan_date).getTime() / 1000) * 1000;
-                tsSet.add(ts);
-            }
-        });
-        return Array.from(tsSet).sort((a, b) => a - b);
-    }, [vulnerabilities]);
+        return facets.first_scan_dates;
+    }, [facets.first_scan_dates]);
 
     const formatScanDate = useCallback((ts: number) => {
         const d = new Date(ts);
@@ -466,13 +519,7 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
         });
     }, []);
 
-    const sources_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
-        vuln.found_by.forEach(source => {
-            if (!acc.includes(source) && source != '')
-                acc.push(source)
-        });
-        return acc;
-    }, []), [vulnerabilities])
+    const sources_list = useMemo(() => facets.sources, [facets.sources])
 
     const sources_display_list = useMemo(
         () =>
@@ -890,105 +937,6 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
         });
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
-    const dataToDisplay = useMemo(() => {
-        return vulnerabilities.filter((el) => {
-            if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
-            if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
-            if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
-            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
-
-            // Published date filter
-            if (publishedDateFilterType && el.published) {
-                const publishedDate = new Date(el.published);
-                const today = new Date();
-
-                switch (publishedDateFilterType) {
-                    case 'is':
-                        if (publishedDateValue) {
-                            const targetDate = new Date(publishedDateValue);
-                            // Compare dates in UTC to avoid timezone issues
-                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
-                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
-                            if (publishedUTC !== targetUTC) return false;
-                        }
-                        break;
-                    case '>=':
-                        if (publishedDateValue) {
-                            const targetDate = new Date(publishedDateValue);
-                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
-                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
-                            if (publishedUTC < targetUTC) return false;
-                        }
-                        break;
-                    case '<=':
-                        if (publishedDateValue) {
-                            const targetDate = new Date(publishedDateValue);
-                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
-                            const targetUTC = Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate());
-                            if (publishedUTC > targetUTC) return false;
-                        }
-                        break;
-                    case 'between':
-                        if (publishedDateFrom && publishedDateTo) {
-                            const fromDate = new Date(publishedDateFrom);
-                            const toDate = new Date(publishedDateTo);
-                            const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
-                            const fromUTC = Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate());
-                            const toUTC = Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate());
-                            if (publishedUTC < fromUTC || publishedUTC > toUTC) return false;
-                        }
-                        break;
-                    case 'days_ago':
-                        if (publishedDaysValue) {
-                            const daysAgo = parseInt(publishedDaysValue);
-                            if (!isNaN(daysAgo)) {
-                                const cutoffDate = new Date(today);
-                                cutoffDate.setDate(cutoffDate.getDate() - daysAgo);
-                                const publishedUTC = Date.UTC(publishedDate.getUTCFullYear(), publishedDate.getUTCMonth(), publishedDate.getUTCDate());
-                                const cutoffUTC = Date.UTC(cutoffDate.getUTCFullYear(), cutoffDate.getUTCMonth(), cutoffDate.getUTCDate());
-                                if (publishedUTC < cutoffUTC) return false;
-                            }
-                        }
-                        break;
-                }
-            } else if (publishedDateFilterType && !el.published) {
-                // If filter is active but vulnerability has no published date, filter it out
-                return false;
-            }
-
-            if(showCustomSeverityFilter){
-                // Use the max score as this is how the final severity level is determined
-                const maxScore = el.severity.max_score;
-
-                if (maxScore === null) return false;
-                if (maxScore < severityRange.min || maxScore > severityRange.max) return false;
-            }
-
-            // EPSS range filter
-            if (showCustomEpssFilter) {
-                const epssScore = el.epss?.score;
-                if (epssScore === undefined || epssScore === null) return false;
-                const epssPct = epssScore * 100;
-                if (epssPct < epssRange.min || epssPct > epssRange.max) return false;
-            }
-
-            // Attack vector filter
-            if (selectedAttackVectors.length) {
-                const vulnAVs = new Set(el.severity.cvss.map(c => c.attack_vector).filter(Boolean));
-                if (!selectedAttackVectors.some(av => vulnAVs.has(av))) return false;
-            }
-
-            // First scan date filter (multi-select by scan timestamp)
-            if (selectedFirstScanDates.length > 0) {
-                if (!el.first_scan_date) return false;
-                const elTs = Math.round(new Date(el.first_scan_date).getTime() / 1000) * 1000;
-                if (!selectedFirstScanDates.includes(String(elTs))) return false;
-            }
-
-            return true;
-        });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
-
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
@@ -1185,7 +1133,7 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
 
             <FilterOption
                 label="Severity"
-                options={Array.from(new Set(vulnerabilities.map(v => v.severity.severity))).sort((a, b) =>
+                options={[...facets.severities].sort((a, b) =>
                     SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(b.toLowerCase()) - SEVERITY_ORDER.map(s => s.toLowerCase()).indexOf(a.toLowerCase())
                 )}
                 selected={selectedSeverities}
@@ -1207,7 +1155,7 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
 
             <FilterOption
                 label="Status"
-                options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
+                options={facets.statuses}
                 selected={selectedStatuses}
                 setSelected={setSelectedStatuses}
             />
@@ -1393,7 +1341,7 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
         </div>
 
         <MultiEditBar
-            vulnerabilities={vulnerabilities}
+            vulnerabilities={pageItems}
             selectedVulns={selectedVulns}
             resetVulns={() => setSelectedRows({})}
             appendAssessment={appendAssessment}
@@ -1408,7 +1356,6 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
         <TableGeneric
             fuseKeys={fuseKeys}
             hoverField="texts"
-            search={search}
             columns={columns}
             tableHeight={
                 selectedVulns.length >= 1 ?
@@ -1419,12 +1366,20 @@ function TableVulnerabilities ({ variantId, projectId, filterLabel, filterValue,
                     'calc(100vh - 44px - 64px - 48px - 16px - 8px - 64px)' :
                     'calc(100vh - 44px - 64px - 48px - 16px - 8px)')
             }
-            data={dataToDisplay}
+            data={pageItems}
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}
             onFilteredDataChange={setSearchFilteredData}
             onFocusedRowChange={setFocusedRowIndex}
+            serverPagination={{
+                page,
+                pageSize,
+                total: serverTotal,
+                onPageChange: setPage,
+                onPageSizeChange: (size: number) => { setPageSize(size); setPage(0); },
+            }}
+            onSortingChange={setServerSorting}
         />
 
         {modalVuln != undefined && <VulnModal

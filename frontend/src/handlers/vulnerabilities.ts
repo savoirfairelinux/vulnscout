@@ -56,6 +56,24 @@ type Vulnerability = {
 
 export type { Vulnerability, CVSS };
 
+type Facets = {
+    severities: string[];
+    statuses: string[];
+    sources: string[];
+    attack_vectors: string[];
+    first_scan_dates: number[];
+};
+
+type PaginatedResponse = {
+    items: Vulnerability[];
+    total: number;
+    page: number;
+    page_size: number;
+    facets: Facets;
+};
+
+export type { Facets, PaginatedResponse };
+
 const SEVERITY_ORDER = ['NONE', 'UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 const asCVSS = (data: any): CVSS | [] => {
@@ -166,6 +184,76 @@ class Vulnerabilities {
         });
         const data = await response.json();
         return data.flatMap(asVulnerability);
+    }
+
+    static async listPaginated(params: {
+        variantId?: string;
+        projectId?: string;
+        compareVariantId?: string;
+        operation?: string;
+        page: number;
+        pageSize: number;
+        sortBy?: string;
+        sortDir?: string;
+        search?: string;
+        severity?: string[];
+        simplifiedStatus?: string[];
+        foundBy?: string[];
+        packages?: string[];
+        epssMin?: number;
+        epssMax?: number;
+        severityMin?: number;
+        severityMax?: number;
+        attackVector?: string[];
+        publishedDateFilter?: string;
+        publishedDateValue?: string;
+        publishedDateFrom?: string;
+        publishedDateTo?: string;
+        publishedDaysValue?: string;
+        firstScanDate?: string[];
+        signal?: AbortSignal;
+    }): Promise<PaginatedResponse> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
+        url.searchParams.set('page', String(params.page));
+        url.searchParams.set('page_size', String(params.pageSize));
+        if (params.variantId && params.compareVariantId) {
+            url.searchParams.set('variant_id', params.variantId);
+            url.searchParams.set('compare_variant_id', params.compareVariantId);
+            if (params.operation) url.searchParams.set('operation', params.operation);
+        } else if (params.variantId) {
+            url.searchParams.set('variant_id', params.variantId);
+        } else if (params.projectId) {
+            url.searchParams.set('project_id', params.projectId);
+        }
+        if (params.sortBy) url.searchParams.set('sort_by', params.sortBy);
+        if (params.sortDir) url.searchParams.set('sort_dir', params.sortDir);
+        if (params.search) url.searchParams.set('search', params.search);
+        if (params.severity?.length) url.searchParams.set('severity', params.severity.join(','));
+        if (params.simplifiedStatus?.length) url.searchParams.set('simplified_status', params.simplifiedStatus.join(','));
+        if (params.foundBy?.length) url.searchParams.set('found_by', params.foundBy.join(','));
+        if (params.packages?.length) url.searchParams.set('package', params.packages.join(','));
+        if (params.epssMin !== undefined) url.searchParams.set('epss_min', String(params.epssMin));
+        if (params.epssMax !== undefined) url.searchParams.set('epss_max', String(params.epssMax));
+        if (params.severityMin !== undefined) url.searchParams.set('severity_min', String(params.severityMin));
+        if (params.severityMax !== undefined) url.searchParams.set('severity_max', String(params.severityMax));
+        if (params.attackVector?.length) url.searchParams.set('attack_vector', params.attackVector.join(','));
+        if (params.publishedDateFilter) {
+            url.searchParams.set('published_date_filter', params.publishedDateFilter);
+            if (params.publishedDateValue) url.searchParams.set('published_date_value', params.publishedDateValue);
+            if (params.publishedDateFrom) url.searchParams.set('published_date_from', params.publishedDateFrom);
+            if (params.publishedDateTo) url.searchParams.set('published_date_to', params.publishedDateTo);
+            if (params.publishedDaysValue) url.searchParams.set('published_days_value', params.publishedDaysValue);
+        }
+        if (params.firstScanDate?.length) url.searchParams.set('first_scan_date', params.firstScanDate.join(','));
+        const response = await fetch(url.toString(), { mode: "cors", signal: params.signal });
+        const data = await response.json();
+        return {
+            items: (data.items || []).flatMap(asVulnerability),
+            total: data.total ?? 0,
+            page: data.page ?? 1,
+            page_size: data.page_size ?? params.pageSize,
+            facets: data.facets ?? { severities: [], statuses: [], sources: [], attack_vectors: [], first_scan_dates: [] },
+        };
     }
 
     static enrich_with_assessments(vulns: Vulnerability[], assessments: Assessment[]): Vulnerability[] {

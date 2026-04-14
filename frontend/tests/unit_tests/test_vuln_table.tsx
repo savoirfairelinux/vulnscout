@@ -33,18 +33,161 @@ jest.mock('../../src/handlers/epss_progress', () => ({
 }));
 
 // Mock Vulnerabilities handler so the component doesn't make real fetch calls
-jest.mock('../../src/handlers/vulnerabilities', () => ({
-    __esModule: true,
-    default: {
-        list: jest.fn(),
-        enrich_with_assessments: jest.requireActual('../../src/handlers/vulnerabilities').default.enrich_with_assessments,
-        append_assessment: jest.requireActual('../../src/handlers/vulnerabilities').default.append_assessment,
-        append_cvss: jest.requireActual('../../src/handlers/vulnerabilities').default.append_cvss,
-        calculate_cvss_from_vector: jest.requireActual('../../src/handlers/vulnerabilities').default.calculate_cvss_from_vector,
-    },
-    asVulnerability: jest.requireActual('../../src/handlers/vulnerabilities').asVulnerability,
-    SEVERITY_ORDER: jest.requireActual('../../src/handlers/vulnerabilities').SEVERITY_ORDER,
-}));
+jest.mock('../../src/handlers/vulnerabilities', () => {
+    const _list = jest.fn();
+    const _listPaginated = jest.fn().mockImplementation(async (params: any) => {
+        const allItems: any[] = await _list();
+
+        // Compute facets from unfiltered data
+        const facets = {
+            severities: [...new Set(allItems.map((v: any) => v.severity?.severity).filter(Boolean))],
+            statuses: [...new Set(allItems.map((v: any) => v.simplified_status).filter(Boolean))],
+            sources: [...new Set(allItems.flatMap((v: any) => v.found_by || []).filter(Boolean))],
+            attack_vectors: [...new Set(allItems.flatMap((v: any) => (v.severity?.cvss || []).map((c: any) => c.attack_vector).filter(Boolean)))],
+            first_scan_dates: [...new Set(allItems.map((v: any) => v.first_scan_date ? Math.round(new Date(v.first_scan_date).getTime() / 1000) * 1000 : null).filter(Boolean))],
+        };
+
+        // Apply filters to replicate server behaviour
+        let items = [...allItems];
+
+        if (params?.search && params.search.length > 2) {
+            const orGroups = params.search.toLowerCase().split('|').map((g: string) => g.trim()).filter(Boolean);
+            items = items.filter((v: any) => {
+                const searchable = [
+                    v.id || '',
+                    ...(v.packages || []),
+                    ...(v.texts || []).map((t: any) => t.content || ''),
+                ].join(' ').toLowerCase();
+                return orGroups.some((group: string) => {
+                    const terms = group.split(/\s+/);
+                    return terms.every((term: string) => {
+                        if (term.startsWith('-') && term.length > 1) return !searchable.includes(term.slice(1));
+                        return searchable.includes(term);
+                    });
+                });
+            });
+        }
+        if (params?.severity?.length) {
+            const allowed = new Set(params.severity);
+            items = items.filter((v: any) => allowed.has(v.severity?.severity));
+        }
+        if (params?.simplifiedStatus?.length) {
+            const allowed = new Set(params.simplifiedStatus);
+            items = items.filter((v: any) => allowed.has(v.simplified_status));
+        }
+        if (params?.foundBy?.length) {
+            const allowed = new Set(params.foundBy);
+            items = items.filter((v: any) => (v.found_by || []).some((s: string) => allowed.has(s)));
+        }
+        if (params?.packages?.length) {
+            const allowed = new Set(params.packages);
+            items = items.filter((v: any) => (v.packages_current || []).some((p: string) => allowed.has(p)));
+        }
+        if (params?.severityMin !== undefined || params?.severityMax !== undefined) {
+            items = items.filter((v: any) => {
+                const score = v.severity?.max_score;
+                if (score === null || score === undefined) return false;
+                if (params.severityMin !== undefined && score < params.severityMin) return false;
+                if (params.severityMax !== undefined && score > params.severityMax) return false;
+                return true;
+            });
+        }
+        if (params?.epssMin !== undefined || params?.epssMax !== undefined) {
+            items = items.filter((v: any) => {
+                const score = v.epss?.score;
+                if (score === undefined || score === null) return false;
+                const pct = score * 100;
+                if (params.epssMin !== undefined && pct < params.epssMin) return false;
+                if (params.epssMax !== undefined && pct > params.epssMax) return false;
+                return true;
+            });
+        }
+        if (params?.attackVector?.length) {
+            const allowed = new Set(params.attackVector);
+            items = items.filter((v: any) => (v.severity?.cvss || []).some((c: any) => allowed.has(c.attack_vector)));
+        }
+        if (params?.publishedDateFilter) {
+            items = items.filter((v: any) => {
+                if (!v.published) return false;
+                const pubDate = new Date(v.published);
+                const pf = params.publishedDateFilter;
+                if (pf === 'is' && params.publishedDateValue) {
+                    const target = new Date(params.publishedDateValue);
+                    return pubDate.getUTCFullYear() === target.getUTCFullYear() &&
+                        pubDate.getUTCMonth() === target.getUTCMonth() &&
+                        pubDate.getUTCDate() === target.getUTCDate();
+                }
+                if (pf === '>=' && params.publishedDateValue) return pubDate >= new Date(params.publishedDateValue);
+                if (pf === '<=' && params.publishedDateValue) return pubDate <= new Date(params.publishedDateValue + 'T23:59:59Z');
+                if (pf === 'between' && params.publishedDateFrom && params.publishedDateTo)
+                    return pubDate >= new Date(params.publishedDateFrom) && pubDate <= new Date(params.publishedDateTo + 'T23:59:59Z');
+                if (pf === 'days_ago' && params.publishedDaysValue) {
+                    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - parseInt(params.publishedDaysValue));
+                    return pubDate >= cutoff;
+                }
+                return true;
+            });
+        }
+        if (params?.firstScanDate?.length) {
+            const allowed = new Set(params.firstScanDate.map(String));
+            items = items.filter((v: any) => {
+                if (!v.first_scan_date) return false;
+                const ts = String(Math.round(new Date(v.first_scan_date).getTime() / 1000) * 1000);
+                return allowed.has(ts);
+            });
+        }
+
+        // Sort
+        if (params?.sortBy) {
+            const dir = params.sortDir === 'asc' ? 1 : -1;
+            items.sort((a: any, b: any) => {
+                let va: any, vb: any;
+                if (params.sortBy === 'assessments') {
+                    const latest = (v: any) => {
+                        if (!v.assessments?.length) return null;
+                        return Math.max(...v.assessments.map((ass: any) => new Date(ass.last_update || ass.timestamp).getTime()));
+                    };
+                    va = latest(a); vb = latest(b);
+                    if (va === null && vb === null) return 0;
+                    if (va === null) return dir;
+                    if (vb === null) return -dir;
+                } else if (params.sortBy === 'id') {
+                    va = a.id; vb = b.id;
+                } else if (params.sortBy === 'severity.severity') {
+                    const order: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, none: 1 };
+                    va = order[a.severity?.severity?.toLowerCase()] || 0;
+                    vb = order[b.severity?.severity?.toLowerCase()] || 0;
+                } else {
+                    return 0;
+                }
+                if (va < vb) return -dir;
+                if (va > vb) return dir;
+                return 0;
+            });
+        }
+
+        return {
+            items,
+            total: items.length,
+            page: params?.page ?? 1,
+            page_size: params?.pageSize ?? 50,
+            facets,
+        };
+    });
+    return {
+        __esModule: true,
+        default: {
+            list: _list,
+            listPaginated: _listPaginated,
+            enrich_with_assessments: jest.requireActual('../../src/handlers/vulnerabilities').default.enrich_with_assessments,
+            append_assessment: jest.requireActual('../../src/handlers/vulnerabilities').default.append_assessment,
+            append_cvss: jest.requireActual('../../src/handlers/vulnerabilities').default.append_cvss,
+            calculate_cvss_from_vector: jest.requireActual('../../src/handlers/vulnerabilities').default.calculate_cvss_from_vector,
+        },
+        asVulnerability: jest.requireActual('../../src/handlers/vulnerabilities').asVulnerability,
+        SEVERITY_ORDER: jest.requireActual('../../src/handlers/vulnerabilities').SEVERITY_ORDER,
+    };
+});
 
 
 const getDOMRect = (width: number, height: number) => ({
@@ -1055,7 +1198,7 @@ describe('Vulnerability Table', () => {
             }
         ];
 
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithoutAssessments);
+        Vulnerabilities.list.mockResolvedValue(vulnWithoutAssessments);
         render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Vulnerability has empty assessments array, should show "No assessment"
@@ -1086,7 +1229,7 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithAssessments);
+        Vulnerabilities.list.mockResolvedValue(vulnWithAssessments);
         render(<TableVulnerabilities />);
 
         // ACT & ASSERT
@@ -1118,7 +1261,7 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithUpdatedAssessments);
+        Vulnerabilities.list.mockResolvedValue(vulnWithUpdatedAssessments);
         render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Should show the more recent last_update date
@@ -1165,7 +1308,7 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithMultipleAssessments);
+        Vulnerabilities.list.mockResolvedValue(vulnWithMultipleAssessments);
         render(<TableVulnerabilities />);
 
         // ACT & ASSERT - Should show the most recent assessment date (March 10)
@@ -1214,7 +1357,7 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithDifferentDates);
+        Vulnerabilities.list.mockResolvedValue(vulnWithDifferentDates);
         render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
@@ -1277,7 +1420,7 @@ describe('Vulnerability Table', () => {
         ];
 
         // ARRANGE
-        Vulnerabilities.list.mockResolvedValueOnce(vulnWithMixedDates);
+        Vulnerabilities.list.mockResolvedValue(vulnWithMixedDates);
         render(<TableVulnerabilities />);
 
         const user = userEvent.setup();
@@ -1653,7 +1796,7 @@ describe('Vulnerability Table', () => {
             }
         ];
 
-        Vulnerabilities.list.mockResolvedValueOnce(vulnsWithMissing);
+        Vulnerabilities.list.mockResolvedValue(vulnsWithMissing);
         render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
@@ -2367,7 +2510,7 @@ describe('More Filters dropdown', () => {
             first_scan_date: undefined
         }];
 
-        VulnerabilitiesMoreFilters.list.mockResolvedValueOnce(vulnsNoScanDate);
+        VulnerabilitiesMoreFilters.list.mockResolvedValue(vulnsNoScanDate);
         render(<TableVulnerabilities />);
         const user = userEvent.setup();
 
@@ -2384,7 +2527,7 @@ describe('More Filters dropdown', () => {
             severity: { ...vulnerabilities[1].severity, cvss: [] }
         }];
 
-        VulnerabilitiesMoreFilters.list.mockResolvedValueOnce(vulnsNoCvss);
+        VulnerabilitiesMoreFilters.list.mockResolvedValue(vulnsNoCvss);
         render(<TableVulnerabilities />);
         const user = userEvent.setup();
 

@@ -12,6 +12,9 @@ class Observation(Base):
     """Represents an observation linking a finding to a scan."""
 
     __tablename__ = "observations"
+    __table_args__ = (
+        db.Index("ix_observations_scan_finding", "scan_id", "finding_id"),
+    )
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False, index=True)

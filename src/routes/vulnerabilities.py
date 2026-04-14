@@ -123,6 +123,7 @@ def _populate_found_by(
             base_query
             .join(Scan, Scan.id == SBOMDocument.scan_id)
             .where(Scan.variant_id == variant_uuid)
+            .where(Finding.vulnerability_id.in_(vuln_ids))
         )
     elif project_uuid is not None:
         base_query = (
@@ -130,6 +131,7 @@ def _populate_found_by(
             .join(Scan, Scan.id == SBOMDocument.scan_id)
             .join(Variant, Variant.id == Scan.variant_id)
             .where(Variant.project_id == project_uuid)
+            .where(Finding.vulnerability_id.in_(vuln_ids))
         )
     else:
         base_query = base_query.where(Finding.vulnerability_id.in_(vuln_ids))  # no need for full query on all variants
@@ -156,6 +158,239 @@ def _populate_found_by(
     for record in records:
         for scanner in found_by_map.get(record.id, set()):
             record.add_found_by(scanner)
+
+
+# ---- Server-side pagination, sorting & filtering helpers ----
+
+_SEVERITY_SORT_ORDER = ['none', 'unknown', 'low', 'medium', 'high', 'critical']
+_STATUS_SORT_ORDER = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed']
+_AV_SORT_ORDER = [None, 'PHYSICAL', 'LOCAL', 'ADJACENT', 'NETWORK']
+
+
+def _compute_facets(vulns: list[dict]) -> dict:
+    """Compute filter-option metadata from the *full* (unfiltered) enriched list."""
+    severities: set[str] = set()
+    statuses: set[str] = set()
+    sources: set[str] = set()
+    attack_vectors: set[str] = set()
+    first_scan_ts: set[int] = set()
+    for v in vulns:
+        sev = (v.get("severity") or {}).get("severity")
+        if sev:
+            severities.add(sev)
+        st = v.get("simplified_status")
+        if st:
+            statuses.add(st)
+        for s in (v.get("found_by") or []):
+            if s:
+                sources.add(s)
+        for cvss in (v.get("severity") or {}).get("cvss", []):
+            av = cvss.get("attack_vector")
+            if av:
+                attack_vectors.add(av)
+        fsd = v.get("first_scan_date")
+        if fsd:
+            try:
+                import datetime as _dt
+                ts = int(round(_dt.datetime.fromisoformat(fsd).timestamp())) * 1000
+                first_scan_ts.add(ts)
+            except (ValueError, TypeError):
+                pass
+    return {
+        "severities": sorted(severities),
+        "statuses": sorted(statuses),
+        "sources": sorted(sources),
+        "attack_vectors": sorted(attack_vectors),
+        "first_scan_dates": sorted(first_scan_ts),
+    }
+
+
+def _matches_search(vuln: dict, search: str) -> bool:
+    """Match a vuln dict against a search string using the same AND/OR/NOT
+    semantics as the frontend Fuse.js extended search."""
+    searchable = " ".join([
+        vuln.get("id", ""),
+        " ".join(vuln.get("packages", [])),
+        " ".join(str(v) for v in (vuln.get("texts") or {}).values()),
+    ]).lower()
+    or_groups = [g.strip() for g in search.split("|") if g.strip()]
+    for group in or_groups:
+        terms = group.split()
+        if all(
+            (t[1:].lower() not in searchable) if (t.startswith("-") and len(t) > 1)
+            else (t.lower() in searchable)
+            for t in terms
+        ):
+            return True
+    return False
+
+
+def _apply_server_filters(vulns: list[dict], args) -> list[dict]:
+    """Apply query-param filters to the enriched vuln list."""
+    result = vulns
+
+    search = (args.get("search") or "").strip()
+    if search and len(search) > 2:
+        result = [v for v in result if _matches_search(v, search)]
+
+    severity = args.get("severity")
+    if severity:
+        allowed = set(severity.split(","))
+        result = [v for v in result if (v.get("severity") or {}).get("severity") in allowed]
+
+    status = args.get("simplified_status")
+    if status:
+        allowed = set(status.split(","))
+        result = [v for v in result if v.get("simplified_status") in allowed]
+
+    source = args.get("found_by")
+    if source:
+        allowed = set(source.split(","))
+        result = [v for v in result if allowed & set(v.get("found_by") or [])]
+
+    package = args.get("package")
+    if package:
+        allowed = set(package.split(","))
+        result = [v for v in result if allowed & set(v.get("packages_current") or [])]
+
+    epss_min = args.get("epss_min", type=float)
+    epss_max = args.get("epss_max", type=float)
+    if epss_min is not None or epss_max is not None:
+        def _epss_ok(v):
+            score = (v.get("epss") or {}).get("score")
+            if score is None:
+                return False
+            pct = score * 100
+            if epss_min is not None and pct < epss_min:
+                return False
+            if epss_max is not None and pct > epss_max:
+                return False
+            return True
+        result = [v for v in result if _epss_ok(v)]
+
+    sev_min = args.get("severity_min", type=float)
+    sev_max = args.get("severity_max", type=float)
+    if sev_min is not None or sev_max is not None:
+        def _sev_score_ok(v):
+            score = (v.get("severity") or {}).get("max_score")
+            if score is None:
+                return False
+            if sev_min is not None and score < sev_min:
+                return False
+            if sev_max is not None and score > sev_max:
+                return False
+            return True
+        result = [v for v in result if _sev_score_ok(v)]
+
+    av = args.get("attack_vector")
+    if av:
+        allowed = set(av.split(","))
+        result = [
+            v for v in result
+            if allowed & {c.get("attack_vector") for c in (v.get("severity") or {}).get("cvss", []) if c.get("attack_vector")}
+        ]
+
+    pub_filter = args.get("published_date_filter")
+    if pub_filter:
+        import datetime as _dt
+        pub_value = args.get("published_date_value", "")
+        pub_from = args.get("published_date_from", "")
+        pub_to = args.get("published_date_to", "")
+        pub_days = args.get("published_days_value", "")
+        filtered: list[dict] = []
+        for v in result:
+            pub = v.get("published")
+            if not pub:
+                continue
+            try:
+                pub_date = _dt.date.fromisoformat(pub)
+            except (ValueError, TypeError):
+                continue
+            keep = True
+            if pub_filter == "is" and pub_value:
+                keep = pub_date == _dt.date.fromisoformat(pub_value)
+            elif pub_filter == ">=" and pub_value:
+                keep = pub_date >= _dt.date.fromisoformat(pub_value)
+            elif pub_filter == "<=" and pub_value:
+                keep = pub_date <= _dt.date.fromisoformat(pub_value)
+            elif pub_filter == "between" and pub_from and pub_to:
+                keep = _dt.date.fromisoformat(pub_from) <= pub_date <= _dt.date.fromisoformat(pub_to)
+            elif pub_filter == "days_ago" and pub_days:
+                try:
+                    cutoff = _dt.date.today() - _dt.timedelta(days=int(pub_days))
+                    keep = pub_date >= cutoff
+                except ValueError:
+                    pass
+            if keep:
+                filtered.append(v)
+        result = filtered
+
+    fsd = args.get("first_scan_date")
+    if fsd:
+        allowed_ts = set(fsd.split(","))
+        def _fsd_ok(v):
+            d = v.get("first_scan_date")
+            if not d:
+                return False
+            try:
+                import datetime as _dt
+                ts = str(int(round(_dt.datetime.fromisoformat(d).timestamp())) * 1000)
+                return ts in allowed_ts
+            except (ValueError, TypeError):
+                return False
+        result = [v for v in result if _fsd_ok(v)]
+
+    return result
+
+
+def _apply_server_sort(vulns: list[dict], sort_by: str, sort_dir: str) -> list[dict]:
+    """Sort the enriched vuln list by a column identifier."""
+    reverse = sort_dir.lower() == "desc"
+
+    def _key(v):  # noqa: C901
+        if sort_by == "id":
+            return v.get("id", "")
+        if sort_by == "severity.severity":
+            sev = (v.get("severity") or {}).get("severity", "").lower()
+            try:
+                return _SEVERITY_SORT_ORDER.index(sev)
+            except ValueError:
+                return -1
+        if sort_by == "severity.max_score":
+            return (v.get("severity") or {}).get("max_score") or 0
+        if sort_by == "epss":
+            return (v.get("epss") or {}).get("score") or 0
+        if sort_by == "simplified_status":
+            st = v.get("simplified_status", "")
+            try:
+                return _STATUS_SORT_ORDER.index(st)
+            except ValueError:
+                return -1
+        if sort_by == "effort.likely":
+            eff = (v.get("effort") or {}).get("likely")
+            if eff:
+                try:
+                    return Iso8601Duration(eff).total_seconds
+                except Exception:
+                    return 0
+            return 0
+        if sort_by == "assessments":
+            aa = v.get("assessments") or []
+            if not aa:
+                return ""
+            return max((a.get("last_update") or a.get("timestamp") or "") for a in aa)
+        if sort_by == "published":
+            return v.get("published") or ""
+        if sort_by == "first_scan_date":
+            return v.get("first_scan_date") or ""
+        if sort_by == "attack_vector":
+            avs = [c.get("attack_vector") for c in (v.get("severity") or {}).get("cvss", []) if c.get("attack_vector")]
+            if not avs:
+                return -1
+            return max((_AV_SORT_ORDER.index(a) if a in _AV_SORT_ORDER else -1) for a in avs)
+        return v.get("id", "")
+
+    return sorted(vulns, key=_key, reverse=reverse)
 
 
 def init_app(app):
@@ -268,78 +503,78 @@ def init_app(app):
                 records = []
             else:
 
-                # Subquery for vulnerability IDs visible in these scans,
-                # used to avoid huge literal IN-lists in secondary queries.
-                vuln_ids_subq = (
+                # Materialize vulnerability IDs once – avoids SQLite
+                # re-evaluating the subquery in every subsequent statement.
+                vuln_id_list = list(db.session.execute(
                     db.select(Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
                     .where(Observation.scan_id.in_(latest_ids))
                     .distinct()
-                    .scalar_subquery()
-                )
+                ).scalars().all())
 
                 records = list(db.session.execute(
                     db.select(Vulnerability)
-                    .where(Vulnerability.id.in_(vuln_ids_subq))
+                    .where(Vulnerability.id.in_(vuln_id_list))
                     .order_by(Vulnerability.id)
-                ).scalars().all())
+                ).scalars().all()) if vuln_id_list else []
 
-                # Bulk-load metrics per vulnerability
-                metric_rows = db.session.execute(
-                    db.select(Metrics)
-                    .where(Metrics.vulnerability_id.in_(vuln_ids_subq))
-                ).scalars().all()
-                metrics_by_vuln: dict[str, list] = {}
-                for m in metric_rows:
-                    metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
+                if records:
+                    # Bulk-load metrics per vulnerability
+                    metric_rows = db.session.execute(
+                        db.select(Metrics)
+                        .where(Metrics.vulnerability_id.in_(vuln_id_list))
+                    ).scalars().all()
+                    metrics_by_vuln: dict[str, list] = {}
+                    for m in metric_rows:
+                        metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
 
-                # Bulk-load packages per vulnerability
-                pkg_rows = db.session.execute(
-                    db.select(Finding.vulnerability_id, Package.name, Package.version)
-                    .join(Package, Finding.package_id == Package.id)
-                    .where(Finding.vulnerability_id.in_(vuln_ids_subq))
-                    .distinct()
-                ).all()
-                pkgs_by_vuln: dict[str, list[str]] = {}
-                for vid, pname, pver in pkg_rows:
-                    pkgs_by_vuln.setdefault(vid, []).append(f"{pname}@{pver}")
+                    # Bulk-load packages per vulnerability
+                    pkg_rows = db.session.execute(
+                        db.select(Finding.vulnerability_id, Package.name, Package.version)
+                        .join(Package, Finding.package_id == Package.id)
+                        .where(Finding.vulnerability_id.in_(vuln_id_list))
+                        .distinct()
+                    ).all()
+                    pkgs_by_vuln: dict[str, list[str]] = {}
+                    for vid, pname, pver in pkg_rows:
+                        pkgs_by_vuln.setdefault(vid, []).append(f"{pname}@{pver}")
 
-                # Bulk-load effort (time estimates) per vulnerability
-                te_rows = db.session.execute(
-                    db.select(
-                        Finding.vulnerability_id,
-                        TimeEstimate.optimistic,
-                        TimeEstimate.likely,
-                        TimeEstimate.pessimistic,
-                    )
-                    .join(Finding, TimeEstimate.finding_id == Finding.id)
-                    .where(Finding.vulnerability_id.in_(vuln_ids_subq))
-                ).all()
-                effort_by_vuln: dict[str, tuple] = {}
-                for vid, opti, like, pess in te_rows:
-                    if vid not in effort_by_vuln:
-                        effort_by_vuln[vid] = (opti, like, pess)
+                    # Bulk-load effort (time estimates) per vulnerability
+                    te_rows = db.session.execute(
+                        db.select(
+                            Finding.vulnerability_id,
+                            TimeEstimate.optimistic,
+                            TimeEstimate.likely,
+                            TimeEstimate.pessimistic,
+                        )
+                        .join(Finding, TimeEstimate.finding_id == Finding.id)
+                        .where(Finding.vulnerability_id.in_(vuln_id_list))
+                    ).all()
+                    effort_by_vuln: dict[str, tuple] = {}
+                    for vid, opti, like, pess in te_rows:
+                        if vid not in effort_by_vuln:
+                            effort_by_vuln[vid] = (opti, like, pess)
 
-                # Pre-populate transient fields so to_dict() won't lazy-load findings
-                from sqlalchemy.orm import attributes as orm_attrs
-                for r in records:
-                    r.packages = pkgs_by_vuln.get(r.id, [])
-                    te = effort_by_vuln.get(r.id)
-                    if te:
-                        opti, like, pess = te
+                    # Pre-populate transient fields so to_dict() won't lazy-load findings
+                    from sqlalchemy.orm import attributes as orm_attrs
+                    for r in records:
+                        r.packages = pkgs_by_vuln.get(r.id, [])
+                        te = effort_by_vuln.get(r.id)
+                        if te:
+                            opti, like, pess = te
 
-                        def _h(v):
-                            if v is None:
-                                return None
-                            return Iso8601Duration(f"PT{v}H")
-                        r.effort = {
-                            "optimistic": _h(opti),
-                            "likely": _h(like),
-                            "pessimistic": _h(pess),
-                        }
-                    # Mark findings and metrics as loaded to prevent lazy-load
-                    orm_attrs.set_committed_value(r, 'findings', [])
-                    orm_attrs.set_committed_value(r, 'metrics', metrics_by_vuln.get(r.id, []))
+                            def _h(v):
+                                if v is None:
+                                    return None
+                                return Iso8601Duration(f"PT{v}H")
+                            r.effort = {
+                                "optimistic": _h(opti),
+                                "likely": _h(like),
+                                "pessimistic": _h(pess),
+                            }
+                        # Mark findings and metrics as loaded to prevent lazy-load
+                        orm_attrs.set_committed_value(r, 'findings', [])
+                        orm_attrs.set_committed_value(r, 'metrics', metrics_by_vuln.get(r.id, []))
 
         else:
             records = Vulnerability.get_all()
@@ -371,46 +606,43 @@ def init_app(app):
 
             # Enrich each vuln dict with sorted variant names, restricted to latest scans
             # and scoped to the current project/variant to avoid cross-project leaks.
-            latest_ts_base = (
-                db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-            )
-            if _scope_variant is not None:
-                _v = db.session.get(Variant, _scope_variant)
-                if _v and _v.project_id:
-                    latest_ts_base = (
-                        latest_ts_base
-                        .join(Variant, Scan.variant_id == Variant.id)
-                        .where(Variant.project_id == _v.project_id)
-                    )
-                else:
-                    latest_ts_base = latest_ts_base.where(
-                        Scan.variant_id == _scope_variant
-                    )
-            elif _scope_project is not None:
-                latest_ts_base = (
-                    latest_ts_base
+            if current_scan_ids:
+                # Reuse the already-computed latest scan IDs instead of
+                # rebuilding the max-timestamp subquery from scratch.
+                rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Variant.name)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
                     .join(Variant, Scan.variant_id == Variant.id)
-                    .where(Variant.project_id == _scope_project)
+                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .where(Observation.scan_id.in_(current_scan_ids))
+                    .distinct()
+                ).all()
+            else:
+                # No scope — compute latest scans for all variants
+                latest_ts_sub = (
+                    db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
+                    .group_by(Scan.variant_id)
+                    .subquery()
                 )
-            latest_ts_sub = latest_ts_base.group_by(Scan.variant_id).subquery()
-            latest_scan_sub = (
-                db.select(Scan.id)
-                .join(
-                    latest_ts_sub,
-                    (Scan.variant_id == latest_ts_sub.c.variant_id)
-                    & (Scan.timestamp == latest_ts_sub.c.max_ts),
+                latest_scan_sub = (
+                    db.select(Scan.id)
+                    .join(
+                        latest_ts_sub,
+                        (Scan.variant_id == latest_ts_sub.c.variant_id)
+                        & (Scan.timestamp == latest_ts_sub.c.max_ts),
+                    )
+                    .subquery()
                 )
-                .subquery()
-            )
-            rows = db.session.execute(
-                db.select(Finding.vulnerability_id, Variant.name)
-                .join(Observation, Finding.id == Observation.finding_id)
-                .join(Scan, Observation.scan_id == Scan.id)
-                .join(Variant, Scan.variant_id == Variant.id)
-                .where(Finding.vulnerability_id.in_(vuln_ids))
-                .where(Observation.scan_id.in_(db.select(latest_scan_sub.c.id)))
-                .distinct()
-            ).all()
+                rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Variant.name)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .join(Variant, Scan.variant_id == Variant.id)
+                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .where(Observation.scan_id.in_(db.select(latest_scan_sub.c.id)))
+                    .distinct()
+                ).all()
             variant_names_by_vuln: dict = {}
             for vuln_id, variant_name in rows:
                 variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
@@ -491,6 +723,31 @@ def init_app(app):
 
         if request.args.get('format', 'list') == "dict":
             return {v["id"]: v for v in vulns}
+
+        # ---- Server-side pagination (opt-in via ?page=) ----
+        page = request.args.get('page', type=int)
+        if page is not None:
+            page_size = min(max(request.args.get('page_size', 50, type=int), 1), 500)
+            page = max(page, 1)
+
+            facets = _compute_facets(vulns)
+            filtered = _apply_server_filters(vulns, request.args)
+
+            sort_by = request.args.get('sort_by', 'id')
+            sort_dir = request.args.get('sort_dir', 'asc')
+            filtered = _apply_server_sort(filtered, sort_by, sort_dir)
+
+            total = len(filtered)
+            start = (page - 1) * page_size
+            items = filtered[start:start + page_size]
+            return {
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "facets": facets,
+            }
+
         return vulns
 
     @app.route('/api/vulnerabilities/<id>', methods=['GET', 'PATCH'])

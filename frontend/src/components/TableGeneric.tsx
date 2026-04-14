@@ -7,6 +7,14 @@ import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
 
 /* tslint:disable:no-explicit-any */
+type ServerPagination = {
+    page: number;       // 0-indexed
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (size: number) => void;
+};
+
 type Props<DataType> = {
 
     columns: any[];
@@ -22,6 +30,8 @@ type Props<DataType> = {
     hasPagination?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
+    serverPagination?: ServerPagination;
+    onSortingChange?: (sorting: SortingState) => void;
 };
 /* tslint:enable:no-explicit-any */
 
@@ -38,8 +48,11 @@ function TableGeneric<DataType> ({
     updateSelected = () => {},
     hasPagination = true,
     onFilteredDataChange,
-    onFocusedRowChange
+    onFocusedRowChange,
+    serverPagination,
+    onSortingChange,
 }: Readonly<Props<DataType>>) {
+    const isServerMode = !!serverPagination;
     const [pageIndex, setPageIndex] = useState(0)
     const [itemsPerPage, setItemsPerPage] = useState(50)
     const [sorting, setSorting] = useState<SortingState>([])
@@ -60,6 +73,7 @@ function TableGeneric<DataType> ({
     }, [fuseKeys, data]);
 
     const filteredData = useMemo(() => {
+        if (isServerMode) return data;
         if (search && search.length > 2) {
             const buildFuseQuery = (raw: string) => {
                 // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
@@ -109,6 +123,7 @@ function TableGeneric<DataType> ({
     }, [filteredData, onFilteredDataChange]);
 
     const sortedData = useMemo(() => {
+        if (isServerMode) return filteredData;
         if (sorting.length === 0) return filteredData;
         const sorted = [...filteredData];
         const { id, desc } = sorting[0];
@@ -138,12 +153,25 @@ function TableGeneric<DataType> ({
     }, [filteredData, sorting, columns]);
 
     const paginatedData = useMemo(() => {
+        if (isServerMode) return sortedData;
         const start = pageIndex * itemsPerPage
         return sortedData.slice(start, start + itemsPerPage)
-    }, [sortedData, pageIndex, itemsPerPage])
+    }, [isServerMode, sortedData, pageIndex, itemsPerPage])
+
+    // Notify parent when sorting changes in server mode
+    useEffect(() => {
+        if (isServerMode && onSortingChange) {
+            onSortingChange(sorting);
+        }
+    }, [sorting, isServerMode, onSortingChange]);
+
+    const effectivePageIndex = isServerMode ? serverPagination!.page : pageIndex;
+    const effectiveItemsPerPage = isServerMode ? serverPagination!.pageSize : itemsPerPage;
+    const effectiveTotal = isServerMode ? serverPagination!.total : filteredData.length;
+    const pageCount = Math.ceil(effectiveTotal / effectiveItemsPerPage);
 
     const paginationSizes = useMemo(() => {
-        const total = filteredData.length;
+        const total = effectiveTotal;
 
         const roundToNearest100 = (n: number) => Math.round(n / 100) * 100;
 
@@ -158,9 +186,7 @@ function TableGeneric<DataType> ({
             .sort((a, b) => a - b);
 
         return uniqueSorted;
-    }, [filteredData.length]);
-
-    const pageCount = Math.ceil(filteredData.length / itemsPerPage)
+    }, [effectiveTotal]);
 
     const table = useReactTable({
         columns,
@@ -471,21 +497,26 @@ function TableGeneric<DataType> ({
             <div className="rounded-b-md flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
             <div className="flex items-center gap-2">
                 <span>
-                {pageIndex * itemsPerPage + 1}-
-                {Math.min((pageIndex + 1) * itemsPerPage, filteredData.length)} / {filteredData.length}
+                {effectivePageIndex * effectiveItemsPerPage + 1}-
+                {Math.min((effectivePageIndex + 1) * effectiveItemsPerPage, effectiveTotal)} / {effectiveTotal}
                 </span>
                 <span>- Results per page:</span>
                 <select
-                value={itemsPerPage}
+                value={effectiveItemsPerPage}
                 onChange={(e) => {
-                    setPageIndex(0)
-                    setItemsPerPage(Number(e.target.value))
+                    const newSize = Number(e.target.value);
+                    if (isServerMode) {
+                        serverPagination!.onPageSizeChange(newSize);
+                    } else {
+                        setPageIndex(0);
+                        setItemsPerPage(newSize);
+                    }
                 }}
                 className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
                 >
                 {paginationSizes.map(size => (
                     <option key={size} value={size}>
-                    {size === filteredData.length ? `${size} (All)` : size}
+                    {size === effectiveTotal ? `${size} (All)` : size}
                     </option>
                 ))}
                 </select>
@@ -494,19 +525,19 @@ function TableGeneric<DataType> ({
             <div className="flex flex-wrap justify-end items-center gap-2">
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-                disabled={pageIndex === 0}
-                onClick={() => setPageIndex(0)}
+                disabled={effectivePageIndex === 0}
+                onClick={() => isServerMode ? serverPagination!.onPageChange(0) : setPageIndex(0)}
                 >
                 First
                 </button>
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-                disabled={pageIndex === 0}
-                onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))}
+                disabled={effectivePageIndex === 0}
+                onClick={() => isServerMode ? serverPagination!.onPageChange(Math.max(effectivePageIndex - 1, 0)) : setPageIndex(prev => Math.max(prev - 1, 0))}
                 >
                 Previous
                 </button>
-                {getPageNumbers(pageIndex, pageCount).map((p, i) =>
+                {getPageNumbers(effectivePageIndex, pageCount).map((p, i) =>
                 typeof p === 'string' ? (
                     <span key={i} className="px-2">...</span>
                 ) : (
@@ -514,9 +545,9 @@ function TableGeneric<DataType> ({
                     key={i}
                     className={[
                         'px-2 py-1 rounded',
-                        p === pageIndex ? 'bg-blue-600' : 'bg-slate-600'
+                        p === effectivePageIndex ? 'bg-blue-600' : 'bg-slate-600'
                     ].join(' ')}
-                    onClick={() => setPageIndex(p)}
+                    onClick={() => isServerMode ? serverPagination!.onPageChange(p) : setPageIndex(p)}
                     >
                     {p + 1}
                     </button>
@@ -524,15 +555,15 @@ function TableGeneric<DataType> ({
                 )}
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-                disabled={pageIndex + 1 >= pageCount}
-                onClick={() => setPageIndex(prev => prev + 1)}
+                disabled={effectivePageIndex + 1 >= pageCount}
+                onClick={() => isServerMode ? serverPagination!.onPageChange(effectivePageIndex + 1) : setPageIndex(prev => prev + 1)}
                 >
                 Next
                 </button>
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
-                disabled={pageIndex + 1 >= pageCount}
-                onClick={() => setPageIndex(pageCount - 1)}
+                disabled={effectivePageIndex + 1 >= pageCount}
+                onClick={() => isServerMode ? serverPagination!.onPageChange(pageCount - 1) : setPageIndex(pageCount - 1)}
                 >
                 Last
                 </button>
