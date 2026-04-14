@@ -467,7 +467,15 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     assessCtrl = AssessmentsController(pkgCtrl, vulnCtrl)
     vulnCtrl = VulnerabilitiesController.from_dict(pkgCtrl, vulnCtrl.to_dict())
 
-    controllers = {"packages": pkgCtrl, "vulnerabilities": vulnCtrl, "assessments": assessCtrl}
+    controllers = {
+        "packages": pkgCtrl,
+        "vulnerabilities": vulnCtrl,
+        "assessments": assessCtrl,
+        "projects": ProjectController(),
+        "variants": VariantController(),
+        "scans": ScanController(),
+        "sbom_documents": SBOMDocumentController(),
+    }
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now
