@@ -12,17 +12,26 @@ from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_package import SBOMPackage
+from ..controllers import (
+    PackagesController,
+    VulnerabilitiesController,
+    AssessmentsController,
+    ProjectController,
+    VariantController,
+    ScanController,
+    SBOMDocumentController,
+)
 
 
 class Templates:
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
-        self.projectsCtrl = controllers.get("projects")
-        self.variantsCtrl = controllers.get("variants")
-        self.scansCtrl = controllers.get("scans")
-        self.sbomDocumentsCtrl = controllers.get("sbom_documents")
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+        self.projectsCtrl: ProjectController = controllers.get("projects")
+        self.variantsCtrl: VariantController = controllers.get("variants")
+        self.scansCtrl: ScanController = controllers.get("scans")
+        self.sbomDocumentsCtrl: SBOMDocumentController = controllers.get("sbom_documents")
 
         template_dir = os.path.join(os.path.dirname(__file__), "templates")
         self.internal_loader = FileSystemLoader([
