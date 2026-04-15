@@ -203,11 +203,12 @@ def init_app(app):
                             name, version = pkg_str.rsplit("@", 1)
                         else:
                             name, version = pkg_str, ""
+                        purl = f"pkg:generic/{name}@{version}"
                         products.append({
-                            "@id": pkg_str,
+                            "@id": purl,
                             "identifiers": {
                                 "cpe23": f"cpe:2.3:*:*:{name}:{version}:*:*:*:*:*:*:*",
-                                "purl": f"pkg:generic/{name}@{version}",
+                                "purl": purl,
                             }
                         })
                     stmt["products"] = products
