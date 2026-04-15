@@ -105,6 +105,44 @@ describe('MultiEditBar', () => {
         expect(container.firstChild).not.toBeNull();
     });
 
+    test('uses singular loading copy for a single selected vulnerability', async () => {
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-2']
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(getByText('Editing selected CVE...')).toBeInTheDocument();
+            expect(getByText('Selected vulnerabilities: 1')).toBeInTheDocument();
+        });
+    });
+
+    test('uses plural loading copy for multiple selected vulnerabilities', async () => {
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1', 'vuln-2']
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(getByText('Editing selected CVEs...')).toBeInTheDocument();
+            expect(getByText('Selected vulnerabilities: 2')).toBeInTheDocument();
+        });
+    });
+
     test('handles same status across vulnerabilities', () => {
         const sameStatusVulns = [
             { ...mockVulnerabilities[0], id: 'vuln-1', status: 'affected' },
