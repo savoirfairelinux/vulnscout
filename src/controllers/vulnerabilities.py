@@ -400,7 +400,6 @@ class VulnerabilitiesController:
                     print(f"=== EPSS: committed {processed}/{total}", flush=True)
                 except Exception as e:
                     verbose(f"[fetch_epss_scores commit at {processed}] {e}")
-
                     db.session.rollback()
 
         # Final commit for any remaining deferred EPSS updates.
