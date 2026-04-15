@@ -109,6 +109,24 @@ describe('PopupExportOptions component', () => {
        expect(mockOnClose).toHaveBeenCalled();
    });
 
+   test('calls onClose when backdrop is clicked', async () => {
+       const mockOnClose = jest.fn();
+       render(<PopupExportOptions docName="report.txt" extension="adoc" onClose={mockOnClose} />);
+
+       await userEvent.click(screen.getByTestId('popup-export-backdrop'));
+
+       expect(mockOnClose).toHaveBeenCalledTimes(1);
+   });
+
+   test('calls onClose when escape is pressed', () => {
+       const mockOnClose = jest.fn();
+       render(<PopupExportOptions docName="report.txt" extension="adoc" onClose={mockOnClose} />);
+
+       fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+
+       expect(mockOnClose).toHaveBeenCalledTimes(1);
+   });
+
    test('renders without onClose prop (uses default)', async () => {
        render(<PopupExportOptions docName="report.txt" extension="adoc" />);
        expect(screen.getByText(/Exporting/i)).toBeInTheDocument();

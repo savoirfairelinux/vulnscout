@@ -30,6 +30,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [affectedVariantNames, setAffectedVariantNames] = useState<string[]>([])
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
+    const closePanel = () => {
+        if (!isLoading) setPanelOpened(0)
+    }
 
     useEffect(() => {
         if (selectedVulns.length === 0) {
@@ -37,6 +40,21 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             setIsLoading(false);
         }
     }, [selectedVulns.length]);
+
+    useEffect(() => {
+        if (panelOpened === 0 || isLoading) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setPanelOpened(0);
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [panelOpened, isLoading]);
 
     // Recompute affected variants whenever the status panel opens or the selection changes
     useEffect(() => {
@@ -258,7 +276,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
     return (<>
         {selectedVulns.length >= 1 && <>
-            {panelOpened > 0 && <div className="absolute top-0 left-0 right-0 bottom-0 z-30 bg-black/40"></div>}
+            {panelOpened > 0 && (
+                <div
+                    data-testid="multi-edit-backdrop"
+                    className="fixed inset-0 z-30 bg-black/40"
+                    onMouseDown={closePanel}
+                ></div>
+            )}
 
             {isLoading && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -284,7 +308,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             <div className={[
                 'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
                 panelOpened == 1 ? 'block' : 'hidden'
-            ].join(' ')}>
+            ].join(' ')} data-testid="multi-edit-status-panel">
                 <StatusEditor
                     onAddAssessment={(data) => addAssessment(data)}
                     progressBar={undefined}
@@ -317,7 +341,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             <div className={[
                 'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
                 panelOpened == 2 ? 'block' : 'hidden'
-            ].join(' ')}>
+            ].join(' ')} data-testid="multi-edit-time-panel">
                 <TimeEstimateEditor
                     onSaveTimeEstimation={(data) => saveTimeEstimation(data)}
                     progressBar={undefined}
