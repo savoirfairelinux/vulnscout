@@ -233,6 +233,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
+        const mockResetVulns = jest.fn();
         fetchMock.mockResponseOnce(JSON.stringify([])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -253,7 +254,8 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-1'],
             triggerBanner: mockTriggerBanner,
             appendAssessment: mockAppendAssessment,
-            patchVuln: mockPatchVuln
+            patchVuln: mockPatchVuln,
+            resetVulns: mockResetVulns
         };
 
         const { getByText } = render(<MultiEditBar {...props} />);
@@ -273,11 +275,13 @@ describe('MultiEditBar', () => {
         });
         expect(mockAppendAssessment).toHaveBeenCalled();
         expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 
     test('saveTimeEstimation success path: updates vulns and triggers success banner', async () => {
         const mockTriggerBanner = jest.fn();
         const mockPatchVuln = jest.fn();
+        const mockResetVulns = jest.fn();
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             vulnerabilities: [{
@@ -295,7 +299,8 @@ describe('MultiEditBar', () => {
             ...mockProps,
             selectedVulns: ['vuln-1'],
             triggerBanner: mockTriggerBanner,
-            patchVuln: mockPatchVuln
+            patchVuln: mockPatchVuln,
+            resetVulns: mockResetVulns
         };
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
@@ -315,6 +320,7 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 
     test('addAssessment error path: triggers error banner with error details', async () => {

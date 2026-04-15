@@ -31,10 +31,12 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
 
-    if (selectedVulns.length == 0) {
-        if (panelOpened) setPanelOpened(0)
-        if (isLoading) setIsLoading(false)
-    }
+    useEffect(() => {
+        if (selectedVulns.length === 0) {
+            setPanelOpened(0);
+            setIsLoading(false);
+        }
+    }, [selectedVulns.length]);
 
     // Recompute affected variants whenever the status panel opens or the selection changes
     useEffect(() => {
@@ -180,6 +182,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
                 triggerBanner(`Successfully added assessments to ${data.count} vulnerabilities${errorMsg}`, 'success');
+                resetVulns();
             } else {
                 const errorMsg = data?.errors?.length
                     ? `Errors: ${data.errors.map((e: {error?: string}) => e.error).join(', ')}`
@@ -238,6 +241,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
 
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
                 triggerBanner(`Successfully updated time estimates for ${data.count} vulnerabilities${errorMsg}`, 'success');
+                resetVulns();
             } else {
                 const errorMsg = data?.errors?.length
                     ? `Errors: ${data.errors.map((e: {error?: string}) => e.error).join(', ')}`
