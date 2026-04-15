@@ -40,7 +40,8 @@ describe('Packages Table', () => {
                 "fixed": {label: 'medium', index: 3}
             },
             source: ['hardcoded'],
-            variants: []
+            variants: [],
+            sbom_documents: []
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -51,7 +52,8 @@ describe('Packages Table', () => {
             vulnerabilities: {"active": 4},
             maxSeverity: {"active": {label: 'high', index: 4}},
             source: ['cve-finder'],
-            variants: []
+            variants: [],
+            sbom_documents: []
         },
         {
             id: 'dddeeefff@1.5.0',
@@ -65,7 +67,8 @@ describe('Packages Table', () => {
                 "fixed": {label: 'low', index: 2}
             },
             source: ['cve-finder', 'hardcoded'],
-            variants: []
+            variants: [],
+            sbom_documents: []
         }
     ];
 
@@ -248,7 +251,7 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
 
         // Open the "Source" filter dropdown
-        const source_btn = await screen.getByRole('button', { name: /source/i });
+        const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);
 
         // ACT: select "cve-finder"
@@ -286,7 +289,7 @@ describe('Packages Table', () => {
         const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
         await user.click(severity_toggle);
 
-        const source_btn = await screen.getByRole('button', { name: /source/i });
+        const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
         await user.click(cveFinderCheckbox);
@@ -345,7 +348,8 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: []
             }
         ];
 
@@ -379,7 +383,8 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: []
             }
         ];
 
@@ -529,7 +534,8 @@ describe('Packages Table', () => {
                 vulnerabilities: {"active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: ['variant-A', 'variant-B']
+                variants: ['variant-A', 'variant-B'],
+                sbom_documents: []
             }
         ];
 
@@ -550,7 +556,8 @@ describe('Packages Table', () => {
                 vulnerabilities: {"Pending Assessment": 5, "active": 1},
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: []
             },
             {
                 id: 'pkg-b@1.0.0',
@@ -561,7 +568,8 @@ describe('Packages Table', () => {
                 vulnerabilities: {"Pending Assessment": 1, "active": 2},
                 maxSeverity: {"active": {label: 'medium', index: 3}},
                 source: ['test'],
-                variants: []
+                variants: [],
+                sbom_documents: []
             }
         ];
 
