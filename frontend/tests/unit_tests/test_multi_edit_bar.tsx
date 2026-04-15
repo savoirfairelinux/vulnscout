@@ -186,6 +186,24 @@ describe('MultiEditBar', () => {
         expect(statusEditor).toBeTruthy();
     });
 
+    test('clicking the backdrop closes the batch status panel', async () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1']
+        };
+
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
+        await act(async () => { getByText('Change status').click(); });
+
+        expect(getByTestId('multi-edit-status-panel')).toHaveClass('block');
+
+        fireEvent.mouseDown(getByTestId('multi-edit-backdrop'));
+
+        await waitFor(() => {
+            expect(getByTestId('multi-edit-status-panel')).toHaveClass('hidden');
+        });
+    });
+
     test('renders time estimate editor when change time button clicked', () => {
         const props = {
             ...mockProps,
@@ -199,6 +217,25 @@ describe('MultiEditBar', () => {
         // TimeEstimateEditor should be visible (check by finding an input with its placeholder)
         const timeEditor = getByPlaceholderText('shortest estimate [eg: 5h]');
         expect(timeEditor).toBeTruthy();
+    });
+
+    test('pressing escape closes the batch time panel', async () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1']
+        };
+
+        const { getByText, getByPlaceholderText, getByTestId } = render(<MultiEditBar {...props} />);
+        await act(async () => { getByText('Change estimated time').click(); });
+
+        expect(getByPlaceholderText('shortest estimate [eg: 5h]')).toBeInTheDocument();
+        expect(getByTestId('multi-edit-time-panel')).toHaveClass('block');
+
+        fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+
+        await waitFor(() => {
+            expect(getByTestId('multi-edit-time-panel')).toHaveClass('hidden');
+        });
     });
 
     test('calls resetVulns when reset selection button clicked', () => {

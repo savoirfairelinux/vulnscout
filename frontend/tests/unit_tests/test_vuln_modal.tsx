@@ -407,6 +407,29 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).toHaveBeenCalledTimes(1);
     });
 
+    test('clicking the backdrop closes modal without unsaved changes', async () => {
+        const closeCb = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTestId('vuln-modal-backdrop'));
+
+        expect(closeCb).toHaveBeenCalledTimes(1);
+    });
+
+    test('clicking the backdrop shows confirmation when unsaved changes exist', async () => {
+        const closeCb = jest.fn();
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
+        await user.type(optimistic, '5h');
+        await user.click(screen.getByTestId('vuln-modal-backdrop'));
+
+        expect(await screen.findByText(/are you sure you want to close without saving/i)).toBeInTheDocument();
+        expect(closeCb).not.toHaveBeenCalled();
+    });
+
     test('ESC key shows confirmation modal with unsaved changes', async () => {
         const closeCb = jest.fn();
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
