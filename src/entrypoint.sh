@@ -48,6 +48,12 @@ Scan & output commands:
   --export-custom-assessments  Export custom (review) assessments as tar.gz to /scan/outputs/
   --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
+  --delete-scan <id>        Delete a past scan by its ID
+
+Data retrieval commands:
+  --list-projects           List all projects and their variants
+  --list-scans              List all past scans
+  --json                    Output objects in JSON format
 
 Configuration commands:
   --config <key> <value>    Set a persistent config value
@@ -401,9 +407,31 @@ cmd_config_clear() {
     fi
 }
 
-cmd_list_projects() {
-    cd /scan/src
-    flask --app bin.webapp list-projects
+# Process the arguments of a --list-xxx or --get-xxx command but do NOT do the
+# operation right away so it waits until all arguments are processed before
+# actually getting the data (in cmd_do_get_data).
+# This way, all arguments are parsed first, especially the ones that the get
+# data operations depend on (e.g. --json).
+cmd_get_data() {
+    flag="$1"
+    if [[ "$DATA_REQUESTED" != "" ]]; then
+        # Only 1 --list-xxx or --get-xxx command is allowed at the same time
+        echo "Cannot use $flag and $DATA_REQUESTED together"
+        exit 1
+    fi
+    DATA_REQUESTED="$flag"
+}
+
+cmd_do_get_data() {
+    data_args=()
+    if [[ "$JSON_OUTPUT" == true ]]; then data_args+=("--json"); fi
+
+    flask --app src.bin.webapp "${DATA_REQUESTED#--}" "${data_args[@]}"
+}
+
+cmd_delete_scan() {
+    scan_id="$1"
+    flask --app src.bin.webapp delete-scan "$scan_id"
 }
 
 cmd_daemon() {
@@ -441,6 +469,8 @@ GRYPE_SCAN_REQUESTED=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
+JSON_OUTPUT=false
+DATA_REQUESTED=""
 
 # ---------------------------------------------------------------------------
 # Legacy setup detection: if an openvex.json output exists but no database,
@@ -511,6 +541,8 @@ while [[ $# -gt 0 ]]; do
             PROJECT_NAME="$2"; shift 2 ;;
         --variant)
             VARIANT_NAME="$2"; shift 2 ;;
+        --json)
+            JSON_OUTPUT=true; shift ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
@@ -530,6 +562,8 @@ while [[ $# -gt 0 ]]; do
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
+        --delete-scan)
+            cmd_delete_scan "$2"; shift 2 ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
@@ -551,8 +585,8 @@ while [[ $# -gt 0 ]]; do
             EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
         --import-custom-assessments)
             IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
-        --list-projects)
-            cmd_list_projects; exit 0 ;;
+        --list-projects|--list-scans)
+            cmd_get_data "$1"; shift ;;
         --config)
             cmd_config_set "$2" "$3"; shift 3 ;;
         --config-list)
@@ -593,6 +627,11 @@ if [[ "${EXPORT_CUSTOM_ASSESSMENTS:-false}" == "true" ]]; then
 fi
 if [[ -n "${IMPORT_CUSTOM_ASSESSMENTS_FILE:-}" ]]; then
     cmd_import_custom_assessments "$IMPORT_CUSTOM_ASSESSMENTS_FILE"
+fi
+
+# Step 5: Get data
+if [[ "$DATA_REQUESTED" != "" ]]; then
+    cmd_do_get_data
 fi
 
 exit $match_exit

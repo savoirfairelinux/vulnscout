@@ -4,9 +4,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
-from sqlalchemy.exc import IntegrityError
+import typing
+
 from ..extensions import db, Base
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Mapped
+
+if typing.TYPE_CHECKING:
+    from .variant import Variant
 
 
 class Project(Base):
@@ -15,13 +21,27 @@ class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (db.UniqueConstraint("name", name="uq_projects_name"),)
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    name = db.Column(db.String, nullable=False)
+    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = db.Column(db.String, nullable=False)
 
-    variants = db.relationship("Variant", back_populates="project", cascade="all, delete-orphan")
+    variants: Mapped[list["Variant"]] = db.relationship(  # type: ignore
+        "Variant",
+        back_populates="project",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Project id={self.id} name={self.name!r}>"
+
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "variants": [{
+                "id": str(variant.id),
+                "name": variant.name
+            } for variant in self.variants],
+        }
 
     # ------------------------------------------------------------------
     # CRUD helpers
@@ -36,7 +56,7 @@ class Project(Base):
         return project
 
     @staticmethod
-    def get_by_id(project_id: uuid.UUID) -> Optional["Project"]:
+    def get_by_id(project_id: uuid.UUID) -> "Project | None":
         """Return the project matching *project_id*, or ``None`` if not found."""
         return db.session.get(Project, project_id)
 
