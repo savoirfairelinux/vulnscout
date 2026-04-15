@@ -92,6 +92,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
+    const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
@@ -177,9 +178,18 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
+    const sbom_docs_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
+        for (const doc of pkg.sbom_documents) {
+            if (doc !== '' && !acc.includes(doc))
+                acc.push(doc);
+        }
+        return acc.sort();
+    }, []), [packages])
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
+        setSelectedSbomDocs([]);
         setShowSeverity(false);
     }
 
@@ -258,6 +268,25 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()?.join(', ')}</div>,
                 enableSorting: false
             }),
+            columnHelper.accessor('sbom_documents', {
+                header: () => <div className="flex items-center justify-center">SBOM Source File</div>,
+                cell: info => {
+                    const docs = info.getValue();
+                    if (!docs || docs.length === 0)
+                        return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
+                    return (
+                        <div className="flex flex-wrap gap-1 items-center justify-center h-full">
+                            {docs.map(doc => (
+                                <span key={doc} className="bg-gray-600 text-gray-200 text-xs px-1.5 py-0.5 rounded font-mono">
+                                    {doc}
+                                </span>
+                            ))}
+                        </div>
+                    );
+                },
+                enableSorting: false,
+                size: 220,
+            }),
             columnHelper.accessor(row => row, {
                 header: 'Actions',
                 cell: info => (
@@ -282,10 +311,12 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
                 return false;
             }
-
+            if (selectedSbomDocs.length && !selectedSbomDocs.some(doc => el.sbom_documents.includes(doc))) {
+                return false;
+            }
             return true;
         });
-    }, [packages, selectedSources]);
+    }, [packages, selectedSources, selectedSbomDocs]);
 
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -326,6 +357,13 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 options={sources_list}
                 selected={selectedSources}
                 setSelected={setSelectedSources}
+            />
+
+            <FilterOption
+                label="SBOM Source File"
+                options={sbom_docs_list}
+                selected={selectedSbomDocs}
+                setSelected={setSelectedSbomDocs}
             />
 
             <div className="ml-4">

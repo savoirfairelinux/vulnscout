@@ -341,6 +341,7 @@ describe('Render patch found', () => {
             maxSeverity: {},
             source: [],
             variants: [],
+            sbom_documents: [],
         }
     ]
 
