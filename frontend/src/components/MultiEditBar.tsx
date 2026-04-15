@@ -29,6 +29,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [isLoading, setIsLoading] = useState<boolean>(false)
     const [affectedVariantNames, setAffectedVariantNames] = useState<string[]>([])
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
+    const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
 
     if (selectedVulns.length == 0) {
         if (panelOpened) setPanelOpened(0)
@@ -259,7 +260,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
                     <div className="flex flex-col items-center gap-3 text-white">
                         <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">Editing multiple CVEs...</span>
+                        <span className="text-sm font-semibold">{loadingLabel}</span>
                     </div>
                 </div>
             )}
