@@ -17,6 +17,7 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
     . "$CONFIG_FILE"
 fi
 
@@ -128,7 +129,8 @@ cmd_add_file() {
             echo "Warning: no .spdx.json files found inside archive $src"
         fi
     else
-        local dest="$INPUTS_DIR/$type/$(basename "$src")"
+        local dest
+        dest="$INPUTS_DIR/$type/$(basename "$src")"
         cp "$src" "$dest"
         echo "Added $type input: $dest"
     fi
@@ -461,7 +463,6 @@ function set_status() {
     echo "Step ($step/2): $message"
 }
 
-INPUTS_ADDED=false
 MATCH_CONDITION=""
 SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
@@ -493,8 +494,10 @@ _run_legacy_check=false
 
 _LEGACY_OPENVEX="${OUTPUTS_DIR:-/scan/outputs}/openvex.json"
 _DB_FILE="/cache/vulnscout/vulnscout.db"
-if [[ "$_run_legacy_check" == "true" ]] && \
-   ( [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] || ( [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]] ) ); then
+if [[ "$_run_legacy_check" == "true" ]] && {
+    [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] ||
+    [[ -f "$_LEGACY_OPENVEX" && ! -f "$_DB_FILE" ]]
+}; then
     if [[ "${INTERACTIVE_MODE:-false}" == "true" ]]; then
         # Write a notification that the web UI will display as a popup
         mkdir -p /scan
@@ -546,15 +549,15 @@ while [[ $# -gt 0 ]]; do
             fi
             MATCH_CONDITION="$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-spdx)
-            cmd_add_file spdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file spdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cve-check)
-            cmd_add_file yocto_cve_check "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file yocto_cve_check "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-openvex)
-            cmd_add_file openvex "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file openvex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
-            cmd_add_file cdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file cdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
-            cmd_add_file grype "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
