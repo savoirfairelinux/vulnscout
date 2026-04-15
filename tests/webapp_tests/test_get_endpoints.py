@@ -69,6 +69,8 @@ def test_get_packages_list(client):
     assert data[0]["name"] == "cairo"
     assert data[0]["version"] == "1.16.0"
     assert len(data[0]["cpe"]) == 4
+    assert "sbom_documents" in data[0]
+    assert "grype.json" in data[0]["sbom_documents"]
 
 
 def test_get_packages_dict(client):
@@ -80,6 +82,8 @@ def test_get_packages_dict(client):
     assert data["cairo@1.16.0"]["name"] == "cairo"
     assert data["cairo@1.16.0"]["version"] == "1.16.0"
     assert len(data["cairo@1.16.0"]["cpe"]) == 4
+    assert "sbom_documents" in data["cairo@1.16.0"]
+    assert "grype.json" in data["cairo@1.16.0"]["sbom_documents"]
 
 
 def test_get_vulnerabilities_list(client):
