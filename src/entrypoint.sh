@@ -371,6 +371,15 @@ cmd_export_custom_assessments() {
 cmd_import_custom_assessments() {
     local file="$1"
     cd "$BASE_DIR"
+    local raw_basename dest_name dest_file
+    raw_basename="$(basename "$file")"
+    dest_name="${raw_basename#vulnscout_stage_}"
+    if [[ "$dest_name" != "$raw_basename" ]]; then
+        dest_file="$(dirname "$file")/$dest_name"
+        mv "$file" "$dest_file"
+        file="$dest_file"
+    fi
+
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp import-custom-assessments "$file"
     setup_user
