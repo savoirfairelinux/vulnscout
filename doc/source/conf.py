@@ -24,3 +24,8 @@ exclude_patterns = []
 
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
+
+# Set intersphinx mapping with meta-vulnscout documentation.
+intersphinx_mapping = {
+    "meta-vulnscout": ("https://meta-vulnscout.readthedocs.io/en/latest/", None),
+}
