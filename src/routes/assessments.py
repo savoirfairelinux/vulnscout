@@ -622,10 +622,12 @@ def init_app(app):
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})
 
+        distinct_vulns = len({r.get("vuln_id") for r in results if r.get("vuln_id")})
         response = {
             "status": "success" if results else "error",
             "assessments": results,
-            "count": len(results)
+            "count": len(results),
+            "vuln_count": distinct_vulns
         }
         if errors:
             response["errors"] = errors
