@@ -668,6 +668,7 @@ type AssessmentGroup = {
 
     return (
         <div
+            key={vuln.id}
             data-testid="vuln-modal-backdrop"
             tabIndex={-1}
             onMouseDown={(event) => {
