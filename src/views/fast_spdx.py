@@ -49,6 +49,12 @@ class FastSPDX ():
             cpe_type = "h"
         package.add_cpe(f"cpe:2.3:{cpe_type}:*:{name}:{version or '*'}:*:*:*:*:*:*:*")
 
+        for external_ref in _get_field(pkg, ["externalRefs"]) or []:
+            if _get_field(external_ref, ["referenceType"]) == "purl":
+                purl = _get_field(external_ref, ["referenceLocator"])
+                assert isinstance(purl, str)
+                package.add_purl(purl)
+
         package.generate_generic_cpe()
         package.generate_generic_purl()
 
