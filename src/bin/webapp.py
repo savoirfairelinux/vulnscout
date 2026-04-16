@@ -9,7 +9,7 @@
 
 from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
-from ..extensions import db, migrate
+from ..extensions import db, migrate, setup_write_serialization
 from ..routes import init_app
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli, post_treatment
@@ -32,6 +32,11 @@ def _launch_enrichment(app):
     """
     def _enrich_epss():
         with app.app_context():
+            # Disable autoflush: without this, every SELECT triggers a flush
+            # which acquires the write-lock and holds it across the slow HTTP
+            # calls until the next explicit commit().  With autoflush=False
+            # the lock is only held during commit() itself (milliseconds).
+            db.session.autoflush = False
             try:
                 from ..controllers.packages import PackagesController
                 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -43,6 +48,7 @@ def _launch_enrichment(app):
 
     def _enrich_nvd():
         with app.app_context():
+            db.session.autoflush = False
             try:
                 from ..controllers.packages import PackagesController
                 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -96,6 +102,10 @@ def create_app():
                 db.session.commit()
             except Exception:
                 pass
+            # Serialise write transactions across threads so that
+            # concurrent enrichment / request commits never trigger
+            # "database is locked".
+            setup_write_serialization(db.session)
 
     # Ensure every new SQLite connection inherits the busy timeout so that
     # concurrent writes from background threads don't immediately fail.

@@ -6,7 +6,6 @@ from .packages import init_app as init_pkg_app
 from .vulnerabilities import init_app as init_vuln_app
 from .assessments import init_app as init_assess_app
 from .documents import init_app as init_doc_app
-# from .patch_finder import init_app as init_patch_finder_app  # disabled — feature on standby
 from .nvd_progress import init_app as init_nvd_progress_app
 from .epss_progress import init_app as init_epss_progress_app
 from .project import init_app as init_project_app
@@ -23,7 +22,6 @@ def init_app(app):
     init_vuln_app(app)
     init_assess_app(app)
     init_doc_app(app)
-    # init_patch_finder_app(app)  # disabled — feature on standby
     init_nvd_progress_app(app)
     init_epss_progress_app(app)
     init_project_app(app)
