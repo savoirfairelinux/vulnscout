@@ -69,6 +69,11 @@ class SPDX:
                 license_str = str(license_declared)
                 pkg.licences = license_str
             pkg.add_cpe(f"cpe:2.3:{cpe_type}:*:{package.name or '*'}:{package.version or '*'}:*:*:*:*:*:*:*")
+
+            for external_ref in package.external_references:
+                if external_ref.reference_type == "purl":
+                    pkg.add_purl(external_ref.locator)
+
             pkg.generate_generic_cpe()
             pkg.generate_generic_purl()
 
