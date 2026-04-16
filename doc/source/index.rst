@@ -13,3 +13,4 @@ VulnScout Documentation
    ci_conditions
    api
    dev_guide
+   yocto-integration
