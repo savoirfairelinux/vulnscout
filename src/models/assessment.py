@@ -762,6 +762,7 @@ class Assessment(Base):
             self.workaround = workaround
         if responses is not None:
             self.responses = responses
+        self.timestamp = datetime.now(timezone.utc)
         db.session.commit()
         return self
 
