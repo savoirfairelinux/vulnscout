@@ -18,6 +18,8 @@ RUN mkdir -p /cache/vulnscout && chmod -R 777 /cache
 RUN pip install --no-cache-dir -r /tmp/dev.txt \
     && rm -rf /tmp/dev.txt
 
+COPY --from=koalaman/shellcheck:v0.11.0 /bin/shellcheck /bin/shellcheck
+
 # Install Docker CLI only (no daemon)
 RUN apt-get update && \
     apt-get install -y ca-certificates curl gnupg lsb-release && \
