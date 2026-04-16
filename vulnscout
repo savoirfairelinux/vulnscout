@@ -37,14 +37,6 @@ MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false
 
-declare -A INPUT_PATHS=(
-    [add-spdx]="spdx"
-    [add-cve-check]="yocto_cve_check"
-    [add-openvex]="openvex"
-    [add-cdx]="cdx"
-    [add-grype]="grype"
-)
-
 show_help() {
     cat <<EOF
 VulnScout - Vulnerability Scanner
@@ -131,16 +123,11 @@ add_input() {
     local cmd="$1"
     local file
     file="$(readlink -f "$2")"
-    local staged="/tmp/vulnscout_stage_$(basename "$file")"
+    local staged
+    staged="/tmp/vulnscout_stage_$(basename "$file")"
 
     call_container_engine cp "$file" "$CONTAINER_NAME:$staged"
     PENDING_ARGS+=("--${cmd}" "$staged")
-}
-
-do_match_condition() {
-    local -a scan_args=()
-    [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
-    exec_container --project "$PROJECT" --variant "$VARIANT" "${scan_args[@]}"
 }
 
 config_set() {
@@ -227,9 +214,9 @@ EOF
     done < "$VULNSCOUT_CONFIG_FILE"
     [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
     local -a vol_args=(
-        -v "$VULNSCOUT_CACHE_DIR":/cache/vulnscout:Z
-        -v "$VULNSCOUT_OUTPUTS_DIR":/scan/outputs:Z
-        -v "$VULNSCOUT_CONFIG_FILE":/etc/vulnscout/config.env:ro,Z
+        -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
+        -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
+        -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:ro,Z"
     )
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src)
@@ -281,12 +268,14 @@ start_frontend_dev() {
     echo "$npm_pid" > "$SCRIPT_DIR/.vulnscout-npm.pid"
     echo "Frontend dev server started (PID $npm_pid)"
 
+    # shellcheck disable=SC2329
+    # (does not handle function used in trap)
     _cleanup_frontend() {
         if [ -f "$SCRIPT_DIR/.vulnscout-npm.pid" ]; then
             local pid
             pid=$(cat "$SCRIPT_DIR/.vulnscout-npm.pid")
             echo "Stopping frontend dev server (PID $pid)..."
-            kill -- -$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ') 2>/dev/null || kill "$pid" 2>/dev/null || true
+            kill -- "-$(ps -o pgid= "$pid" 2>/dev/null | tr -d ' ')" 2>/dev/null || kill "$pid" 2>/dev/null || true
             wait "$pid" 2>/dev/null || true
             rm -f "$SCRIPT_DIR/.vulnscout-npm.pid"
         fi
@@ -330,7 +319,8 @@ parse_and_run() {
                 ensure_running
                 local import_file
                 import_file="$(readlink -f "$2")"
-                local import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
+                local import_staged
+                import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
                 EXPORT_ARGS+=(--import-custom-assessments "$import_staged")
                 shift 2 ;;
