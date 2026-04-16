@@ -4,6 +4,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
+from ..controllers.packages import PackagesController
+from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers.assessments import AssessmentsController
 
 
 class FastSPDX ():
@@ -13,51 +16,53 @@ class FastSPDX ():
     """
 
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
-        self.sbom = None
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
-    def get_field(self, obj: dict, field: list[str]):
-        """Get field from dict or return None."""
-        for f in field:
-            if f in obj:
-                return obj[f]
-        return None
-
-    def check_spdx_version(self):
+    def _check_spdx_version(self, sbom: dict):
         """Check if the SPDX version is supported."""
-        self.version = self.get_field(self.sbom, ["spdxVersion", "SPDXVersion", "spdxversion"])
-        if self.version != "SPDX-2.3" and self.version != "SPDX-2.2":
+        self.version = _get_field(sbom, ["spdxVersion", "SPDXVersion", "spdxversion"])
+        if self.version not in ("SPDX-2.3", "SPDX-2.2"):
             raise ValueError("Unsupported SPDX version")
 
-    def merge_packages(self):
+    def _merge_packages(self, sbom: dict):
         """Merge packages from SPDX SBOM."""
-        if not self.get_field(self.sbom, ["packages", "Packages"]):
-            return
+        for pkg in _get_field(sbom, ["packages", "Packages"]) or []:
+            parsed_package = self._parse_package(pkg)
+            if parsed_package:
+                self.packagesCtrl.add(parsed_package)
 
-        for pkg in self.get_field(self.sbom, ["packages", "Packages"]):
-            name = self.get_field(pkg, ["name", "Name", "packageName", "PackageName"])
-            if name is None:
-                continue
-            version = self.get_field(pkg, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
-            primary_package_purpose = self.get_field(pkg, ["primaryPackagePurpose", "PrimaryPackagePurpose"])
-            licences = self.get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
+    def _parse_package(self, pkg: dict) -> Package | None:
+        name = _get_field(pkg, ["name", "Name", "packageName", "PackageName"])
+        if name is None:
+            return None
+        version = _get_field(pkg, ["version", "Version", "packageVersion", "PackageVersion", "versionInfo"])
+        primary_package_purpose = _get_field(pkg, ["primaryPackagePurpose", "PrimaryPackagePurpose"])
+        licences = _get_field(pkg, ["licenseDeclared", "LicenseDeclared"])
 
-            package = Package(name, version or "", [], [], licences or "")
-            cpe_type = "a"
-            if primary_package_purpose == "OPERATING-SYSTEM" or primary_package_purpose == "OPERATING_SYSTEM":
-                cpe_type = "o"
-            if primary_package_purpose == "DEVICE":
-                cpe_type = "h"
-            package.add_cpe(f"cpe:2.3:{cpe_type}:*:{name}:{version or '*'}:*:*:*:*:*:*:*")
-            package.generate_generic_cpe()
-            package.generate_generic_purl()
+        package = Package(name, version or "", [], [], licences or "")
+        cpe_type = "a"
+        if primary_package_purpose == "OPERATING-SYSTEM" or primary_package_purpose == "OPERATING_SYSTEM":
+            cpe_type = "o"
+        if primary_package_purpose == "DEVICE":
+            cpe_type = "h"
+        package.add_cpe(f"cpe:2.3:{cpe_type}:*:{name}:{version or '*'}:*:*:*:*:*:*:*")
 
-            self.packagesCtrl.add(package)
+        package.generate_generic_cpe()
+        package.generate_generic_purl()
+
+        return package
 
     def parse_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""
-        self.sbom = spdx
-        self.check_spdx_version()
-        self.merge_packages()
+        self._check_spdx_version(spdx)
+        self._merge_packages(spdx)
+
+
+def _get_field(obj: dict, field: list[str]):
+    """Get field from dict or return None."""
+    for f in field:
+        if f in obj:
+            return obj[f]
+    return None
