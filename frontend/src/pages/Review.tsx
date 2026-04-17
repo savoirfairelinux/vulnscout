@@ -133,31 +133,17 @@ function Review({ variantId, projectId }: Readonly<Props>) {
             .then(data => {
                 setAssessments(groupAssessments(data));
                 setLoading(false);
-                // Fetch vulnerability descriptions for hover tooltips
-                const vulnIds = [...new Set(data.map(a => a.vuln_id))];
-                if (vulnIds.length > 0) {
-                    Promise.all(
-                        vulnIds.map(vid =>
-                            fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vid)}`, { mode: 'cors' })
-                                .then(r => r.ok ? r.json() : null)
-                                .then(d => {
-                                    if (!d) return null;
-                                    const v = asVulnerability(d);
-                                    if (Array.isArray(v)) return null;
-                                    return v;
-                                })
-                                .catch(() => null)
-                        )
-                    ).then(results => {
-                        const descMap: Record<string, { title: string; content: string }[]> = {};
-                        for (const v of results) {
-                            if (v) {
-                                descMap[v.id] = v.texts.length > 0 ? v.texts : [{ title: "description", content: "No description available" }];
-                            }
-                        }
-                        setVulnDescriptions(descMap);
-                    });
+                // Build tooltip descriptions from vuln_texts included in the response
+                const descMap: Record<string, { title: string; content: string }[]> = {};
+                for (const a of data) {
+                    if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
+                        const entries = Object.entries(a.vuln_texts);
+                        descMap[a.vuln_id] = entries.length > 0
+                            ? entries.map(([title, content]) => ({ title, content }))
+                            : [{ title: "description", content: "No description available" }];
+                    }
                 }
+                setVulnDescriptions(descMap);
             })
             .catch(err => {
                 console.error(err);
