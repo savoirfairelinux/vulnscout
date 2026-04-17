@@ -79,36 +79,7 @@ It is also possible to add sources files on a specific project and variant with 
 
 == :book: Documentation
 
-Full documentation is available in the `doc/` directory as a Sphinx project.
-
-=== Building the documentation
-
-Install the required Python packages:
-
-[source,bash]
-----
-pip install sphinx myst-parser sphinx-rtd-theme
-----
-
-Then build the HTML documentation:
-
-[source,bash]
-----
-make -C doc html
-----
-
-The generated pages are in `doc/build/html/`. Open `doc/build/html/index.html` in your browser.
-
-==== Building with CQFD
-
-If you use CQFD, you can build the documentation inside the CQFD container:
-
-[source,bash]
-----
-cqfd -b documentation
-----
-
-The generated documentation will be available in `doc/build/html/` on the host.
+Full documentation is available at https://vulnscout.readthedocs.io/
 
 ===  Container Lifecycle
 

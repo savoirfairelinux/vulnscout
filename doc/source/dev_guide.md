@@ -248,6 +248,38 @@ This helps enforce code quality and consistency across all contributions.
 
 ---
 
+## Building the Documentation
+
+Full documentation is available in the `doc/` directory as a Sphinx project.
+
+### Local Build
+
+Install the required Python packages:
+
+```bash
+pip install sphinx myst-parser sphinx-rtd-theme
+```
+
+Then build the HTML documentation:
+
+```bash
+make -C doc html
+```
+
+The generated pages are in `doc/build/html/`. Open `doc/build/html/index.html` in your browser.
+
+### Building with CQFD
+
+If you use CQFD, you can build the documentation inside the CQFD container:
+
+```bash
+cqfd -b documentation
+```
+
+The generated documentation will be available in `doc/build/html/` on the host.
+
+---
+
 ## Release Process
 
 VulnScout follows a semantic versioning strategy with development versions between releases.
