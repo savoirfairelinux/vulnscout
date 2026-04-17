@@ -77,7 +77,12 @@ def init_app(app):
 
     @app.route('/api/assessments/review')
     def review_assessments():
-        """Return assessments not linked to any scan (handmade via the web UI)."""
+        """Return assessments not linked to any scan (handmade via the web UI).
+
+        Each assessment dict is enriched with a ``vuln_texts`` key mapping to the
+        vulnerability's ``texts`` dict so the front-end can display tooltips
+        without extra requests.
+        """
         import uuid as _uuid
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
@@ -100,6 +105,17 @@ def init_app(app):
                 assessments.extend(a.to_dict() for a in DBAssessment.get_handmade(v.id))
         else:
             assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
+
+        # Enrich with vulnerability texts for front-end tooltips (single DB pass)
+        vuln_ids = {a["vuln_id"] for a in assessments if a.get("vuln_id")}
+        vuln_texts: dict[str, dict] = {}
+        for vid_str in vuln_ids:
+            vuln = DBVuln.get_by_id(vid_str)
+            if vuln is not None:
+                vuln_texts[vid_str] = dict(vuln.texts or {})
+        for a in assessments:
+            a["vuln_texts"] = vuln_texts.get(a.get("vuln_id", ""), {})
+
         return assessments
 
     @app.route('/api/assessments/review/export')
@@ -622,10 +638,12 @@ def init_app(app):
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})
 
+        distinct_vulns = len({r.get("vuln_id") for r in results if r.get("vuln_id")})
         response = {
             "status": "success" if results else "error",
             "assessments": results,
-            "count": len(results)
+            "count": len(results),
+            "vuln_count": distinct_vulns
         }
         if errors:
             response["errors"] = errors
