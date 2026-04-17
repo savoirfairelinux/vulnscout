@@ -40,7 +40,13 @@ function ConfirmationModal({
 
     return (
         <div
+            data-testid="confirmation-modal-backdrop"
             tabIndex={-1}
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                    onCancel();
+                }
+            }}
             className="fixed top-0 right-0 left-0 z-[100] flex justify-center items-center w-full h-full max-h-full bg-black/50"
         >
             <div className="relative p-4 w-full max-w-md max-h-full">

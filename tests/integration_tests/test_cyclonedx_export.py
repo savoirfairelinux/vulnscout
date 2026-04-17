@@ -145,10 +145,9 @@ def test_export_vulnerabilities_json(cdx_exporter):
             "references": [
                 {
                     "id": "CVE-2018-99999",
-                    # "source": {
-                    #     "name": "NVD",
-                    #     "url": "https://nvd.nist.gov/vuln/detail/CVE-2018-99999"
-                    # }
+                    "source": {
+                        "name": "NVD",
+                    }
                 }
             ],
             "advisories": [
@@ -161,10 +160,9 @@ def test_export_vulnerabilities_json(cdx_exporter):
                     "method": "CVSSv31",
                     "source": {
                         "name": "NVD",
-                        # "url": "https://nvd.nist.gov/vuln/detail/CVE-2020-35492"
                     },
                     "score": 7.8,
-                    "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                    "vector": "AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
                     "severity": "high"
                 },
                 {

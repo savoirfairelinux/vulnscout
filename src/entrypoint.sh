@@ -17,6 +17,7 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
     . "$CONFIG_FILE"
 fi
 
@@ -39,14 +40,20 @@ Input commands:
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
-  --report <template>       Generate a report from a template in /scan/templates/
-  --report <path>           Stage a local report template file and generate a report from it 
+  --report <template>       Generate a report from a template in /cache/vulnscout/templates/
+  --report <path>           Stage a local report template file and generate a report from it
   --export-spdx             Export project as SPDX 3.0 SBOM to /scan/outputs/
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
   --export-custom-assessments  Export custom (review) assessments as tar.gz to /scan/outputs/
   --import-custom-assessments <path>  Import custom assessments from .json or .tar.gz
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
+  --delete-scan <id>        Delete a past scan by its ID
+
+Data retrieval commands:
+  --list-projects           List all projects and their variants
+  --list-scans              List all past scans
+  --json                    Output objects in JSON format
 
 Configuration commands:
   --config <key> <value>    Set a persistent config value
@@ -122,7 +129,8 @@ cmd_add_file() {
             echo "Warning: no .spdx.json files found inside archive $src"
         fi
     else
-        local dest="$INPUTS_DIR/$type/$(basename "$src")"
+        local dest
+        dest="$INPUTS_DIR/$type/$(basename "$src")"
         cp "$src" "$dest"
         echo "Added $type input: $dest"
     fi
@@ -133,9 +141,9 @@ cmd_add_report_template() {
     local dest_name
     dest_name="$(basename "$src")"
     dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
-    mkdir -p "/scan/templates"
-    cp "$src" "/scan/templates/$dest_name"
-    echo "Added report template: /scan/templates/$dest_name" >&2
+    mkdir -p "/cache/vulnscout/templates"
+    cp "$src" "/cache/vulnscout/templates/$dest_name"
+    echo "Added report template: /cache/vulnscout/templates/$dest_name" >&2
 }
 
 cmd_stage_report_template() {
@@ -158,7 +166,7 @@ cmd_stage_report_template() {
         return 0
     fi
 
-    local in_scan_templates="/scan/templates/$dest_name"
+    local in_scan_templates="/cache/vulnscout/templates/$dest_name"
     local in_views_templates="$BASE_DIR/src/views/templates/$dest_name"
 
     local src_md5
@@ -168,9 +176,9 @@ cmd_stage_report_template() {
         local dst_md5
         dst_md5=$(md5sum "$in_scan_templates" | awk '{print $1}')
         if [[ "$src_md5" == "$dst_md5" ]]; then
-            echo "Template '$dest_name' already up-to-date in /scan/templates/, skipping copy." >&2
+            echo "Template '$dest_name' already up-to-date in /cache/vulnscout/templates/, skipping copy." >&2
         else
-            echo "Template '$dest_name' differs from /scan/templates/ copy, updating..." >&2
+            echo "Template '$dest_name' differs from /cache/vulnscout/templates/ copy, updating..." >&2
             cmd_add_report_template "$template"
         fi
     elif [[ -f "$in_views_templates" ]]; then
@@ -179,7 +187,7 @@ cmd_stage_report_template() {
         if [[ "$src_md5" == "$dst_md5" ]]; then
             echo "Template '$dest_name' matches built-in template, skipping copy." >&2
         else
-            echo "Template '$dest_name' differs from built-in template, copying to /scan/templates/..." >&2
+            echo "Template '$dest_name' differs from built-in template, copying to /cache/vulnscout/templates/..." >&2
             cmd_add_report_template "$template"
         fi
     else
@@ -236,18 +244,43 @@ cmd_scan() {
     INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
     if [[ -d "$INPUTS_DIR/spdx" ]]; then
         for f in "$INPUTS_DIR/spdx"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f"); done
+        # Warn about files that don't match the SPDX naming convention
+        for f in "$INPUTS_DIR/spdx"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *.spdx.json) ;;  # valid SPDX 3 JSON
+                *.spdx)      ;;  # valid SPDX 2 tag-value
+                *) echo "Warning: '$f' was added with --add-spdx but does not match the expected SPDX naming convention (*.spdx.json or *.spdx). File will be ignored. See https://spdx.github.io/spdx-spec/v2.3/conformance/#44-standard-data-format-requirements" >&2 ;;
+            esac
+        done
     fi
     if [[ -d "$INPUTS_DIR/cdx" ]]; then
         for f in "$INPUTS_DIR/cdx"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--cdx "$f"); done
     fi
     if [[ -d "$INPUTS_DIR/openvex" ]]; then
         for f in "$INPUTS_DIR/openvex"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--openvex "$f"); done
+        # Warn about files that don't match the OpenVEX naming convention
+        for f in "$INPUTS_DIR/openvex"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *openvex*.json) ;;
+                *) echo "Warning: '$f' was added with --add-openvex but does not contain 'openvex' in its filename. File will be ignored." >&2 ;;
+            esac
+        done
     fi
     if [[ -d "$INPUTS_DIR/yocto_cve_check" ]]; then
         for f in "$INPUTS_DIR/yocto_cve_check"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f"); done
     fi
     if [[ -d "$INPUTS_DIR/grype" ]]; then
         for f in "$INPUTS_DIR/grype"/*.grype.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f"); done
+        # Warn about files that don't match the Grype naming convention
+        for f in "$INPUTS_DIR/grype"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *.grype.json) ;;
+                *) echo "Warning: '$f' was added with --add-grype but does not match the expected naming convention (*.grype.json). File will be ignored." >&2 ;;
+            esac
+        done
     fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade)
 
@@ -317,15 +350,15 @@ cmd_scan() {
     fi
 
     if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
+        local _port="${FLASK_RUN_PORT:-7275}"
+        local _host="${FLASK_RUN_HOST:-localhost}"
+        # 0.0.0.0 means "all interfaces" — show localhost in the URL instead
+        [[ "$_host" == "0.0.0.0" ]] && _host="localhost"
+        local _url="http://${_host}:${_port}"
         set_status "2" "<!-- __END_OF_SCAN_SCRIPT__ -->"
         echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "---------- Initialization Done - Loading is over and WebUI is ready ----------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
-        echo "------------------------------------------------------------------------------"
+        echo "Initialization Done - Loading is over and WebUI is ready !!!"
+        echo "Open  $_url in your browser to access VulnScout"
         echo "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
@@ -365,6 +398,15 @@ cmd_export_custom_assessments() {
 cmd_import_custom_assessments() {
     local file="$1"
     cd "$BASE_DIR"
+    local raw_basename dest_name dest_file
+    raw_basename="$(basename "$file")"
+    dest_name="${raw_basename#vulnscout_stage_}"
+    if [[ "$dest_name" != "$raw_basename" ]]; then
+        dest_file="$(dirname "$file")/$dest_name"
+        mv "$file" "$dest_file"
+        file="$dest_file"
+    fi
+
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp import-custom-assessments "$file"
     setup_user
@@ -399,9 +441,31 @@ cmd_config_clear() {
     fi
 }
 
-cmd_list_projects() {
-    cd /scan/src
-    flask --app bin.webapp list-projects
+# Process the arguments of a --list-xxx or --get-xxx command but do NOT do the
+# operation right away so it waits until all arguments are processed before
+# actually getting the data (in cmd_do_get_data).
+# This way, all arguments are parsed first, especially the ones that the get
+# data operations depend on (e.g. --json).
+cmd_get_data() {
+    flag="$1"
+    if [[ "$DATA_REQUESTED" != "" ]]; then
+        # Only 1 --list-xxx or --get-xxx command is allowed at the same time
+        echo "Cannot use $flag and $DATA_REQUESTED together"
+        exit 1
+    fi
+    DATA_REQUESTED="$flag"
+}
+
+cmd_do_get_data() {
+    data_args=()
+    if [[ "$JSON_OUTPUT" == true ]]; then data_args+=("--json"); fi
+
+    flask --app src.bin.webapp "${DATA_REQUESTED#--}" "${data_args[@]}"
+}
+
+cmd_delete_scan() {
+    scan_id="$1"
+    flask --app src.bin.webapp delete-scan "$scan_id"
 }
 
 cmd_daemon() {
@@ -433,13 +497,14 @@ function set_status() {
     echo "Step ($step/2): $message"
 }
 
-INPUTS_ADDED=false
 MATCH_CONDITION=""
 SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
+JSON_OUTPUT=false
+DATA_REQUESTED=""
 
 # ---------------------------------------------------------------------------
 # Legacy setup detection: if an openvex.json output exists but no database,
@@ -463,8 +528,10 @@ _run_legacy_check=false
 
 _LEGACY_OPENVEX="${OUTPUTS_DIR:-/scan/outputs}/openvex.json"
 _DB_FILE="/cache/vulnscout/vulnscout.db"
-if [[ "$_run_legacy_check" == "true" ]] && \
-   ( [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] || ( [[ -f "$_LEGACY_OPENVEX" ]] && [[ ! -f "$_DB_FILE" ]] ) ); then
+if [[ "$_run_legacy_check" == "true" ]] && {
+    [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] ||
+    [[ -f "$_LEGACY_OPENVEX" && ! -f "$_DB_FILE" ]]
+}; then
     if [[ "${INTERACTIVE_MODE:-false}" == "true" ]]; then
         # Write a notification that the web UI will display as a popup
         mkdir -p /scan
@@ -508,25 +575,29 @@ while [[ $# -gt 0 ]]; do
             PROJECT_NAME="$2"; shift 2 ;;
         --variant)
             VARIANT_NAME="$2"; shift 2 ;;
+        --json)
+            JSON_OUTPUT=true; shift ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
             fi
             MATCH_CONDITION="$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-spdx)
-            cmd_add_file spdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file spdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cve-check)
-            cmd_add_file yocto_cve_check "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file yocto_cve_check "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-openvex)
-            cmd_add_file openvex "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file openvex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
-            cmd_add_file cdx "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file cdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
-            cmd_add_file grype "$2"; INPUTS_ADDED=true; SCAN_REQUIRED=true; shift 2 ;;
+            cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
+        --delete-scan)
+            cmd_delete_scan "$2"; shift 2 ;;
         --serve)
             if [[ -n "$MATCH_CONDITION" ]]; then
                 echo "Error: --serve and --match-condition are incompatible."; exit 1
@@ -548,8 +619,8 @@ while [[ $# -gt 0 ]]; do
             EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
         --import-custom-assessments)
             IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
-        --list-projects)
-            cmd_list_projects; exit 0 ;;
+        --list-projects|--list-scans)
+            cmd_get_data "$1"; shift ;;
         --config)
             cmd_config_set "$2" "$3"; shift 3 ;;
         --config-list)
@@ -561,7 +632,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Step 1: Scan the new inputs/match condition if any 
+# Step 1: Scan the new inputs/match condition if any
 match_exit=0
 if [[ "$SCAN_REQUIRED" == "true" ]]; then
     cmd_scan || match_exit=$?
@@ -590,6 +661,11 @@ if [[ "${EXPORT_CUSTOM_ASSESSMENTS:-false}" == "true" ]]; then
 fi
 if [[ -n "${IMPORT_CUSTOM_ASSESSMENTS_FILE:-}" ]]; then
     cmd_import_custom_assessments "$IMPORT_CUSTOM_ASSESSMENTS_FILE"
+fi
+
+# Step 5: Get data
+if [[ "$DATA_REQUESTED" != "" ]]; then
+    cmd_do_get_data
 fi
 
 exit $match_exit

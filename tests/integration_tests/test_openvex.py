@@ -252,7 +252,7 @@ def test_encode_with_data(openvex_parser, pkg_ABC, vuln_123, assesment_123):
     }.items() <= statement["vulnerability"].items()
     assert len(statement["products"]) == 1
     assert {
-        "@id": "abc@1.2.3",
+        "@id": "pkg:generic/abc@1.2.3",
         "identifiers": {
             "cpe23": "cpe:2.3:a:abc:abc:1.2.3:*:*:*:*:*:*:*",
             "purl": "pkg:generic/abc@1.2.3"

@@ -98,6 +98,15 @@ describe('ConfirmationModal', () => {
         expect(defaultProps.onCancel).toHaveBeenCalledTimes(1);
     });
 
+    test('should call onCancel when backdrop is clicked', async () => {
+        const user = userEvent.setup();
+        render(<ConfirmationModal {...defaultProps} />);
+
+        await user.click(screen.getByTestId('confirmation-modal-backdrop'));
+
+        expect(defaultProps.onCancel).toHaveBeenCalledTimes(1);
+    });
+
     test('should call onCancel when Escape key is pressed', () => {
         // ARRANGE
         render(<ConfirmationModal {...defaultProps} />);

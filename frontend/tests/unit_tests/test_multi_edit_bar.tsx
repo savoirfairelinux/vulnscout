@@ -105,6 +105,44 @@ describe('MultiEditBar', () => {
         expect(container.firstChild).not.toBeNull();
     });
 
+    test('uses singular loading copy for a single selected vulnerability', async () => {
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-2']
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(getByText('Editing selected CVE...')).toBeInTheDocument();
+            expect(getByText('Selected vulnerabilities: 1')).toBeInTheDocument();
+        });
+    });
+
+    test('uses plural loading copy for multiple selected vulnerabilities', async () => {
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1', 'vuln-2']
+        };
+
+        const { getByText } = render(<MultiEditBar {...props} />);
+
+        await act(async () => { getByText('Change status').click(); });
+        await act(async () => { getByText('Add assessment').click(); });
+
+        await waitFor(() => {
+            expect(getByText('Editing selected CVEs...')).toBeInTheDocument();
+            expect(getByText('Selected vulnerabilities: 2')).toBeInTheDocument();
+        });
+    });
+
     test('handles same status across vulnerabilities', () => {
         const sameStatusVulns = [
             { ...mockVulnerabilities[0], id: 'vuln-1', status: 'affected' },
@@ -148,6 +186,24 @@ describe('MultiEditBar', () => {
         expect(statusEditor).toBeTruthy();
     });
 
+    test('clicking the backdrop closes the batch status panel', async () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1']
+        };
+
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
+        await act(async () => { getByText('Change status').click(); });
+
+        expect(getByTestId('multi-edit-status-panel')).toHaveClass('block');
+
+        fireEvent.mouseDown(getByTestId('multi-edit-backdrop'));
+
+        await waitFor(() => {
+            expect(getByTestId('multi-edit-status-panel')).toHaveClass('hidden');
+        });
+    });
+
     test('renders time estimate editor when change time button clicked', () => {
         const props = {
             ...mockProps,
@@ -161,6 +217,25 @@ describe('MultiEditBar', () => {
         // TimeEstimateEditor should be visible (check by finding an input with its placeholder)
         const timeEditor = getByPlaceholderText('shortest estimate [eg: 5h]');
         expect(timeEditor).toBeTruthy();
+    });
+
+    test('pressing escape closes the batch time panel', async () => {
+        const props = {
+            ...mockProps,
+            selectedVulns: ['vuln-1']
+        };
+
+        const { getByText, getByPlaceholderText, getByTestId } = render(<MultiEditBar {...props} />);
+        await act(async () => { getByText('Change estimated time').click(); });
+
+        expect(getByPlaceholderText('shortest estimate [eg: 5h]')).toBeInTheDocument();
+        expect(getByTestId('multi-edit-time-panel')).toHaveClass('block');
+
+        fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+
+        await waitFor(() => {
+            expect(getByTestId('multi-edit-time-panel')).toHaveClass('hidden');
+        });
     });
 
     test('calls resetVulns when reset selection button clicked', () => {
@@ -195,6 +270,7 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
+        const mockResetVulns = jest.fn();
         fetchMock.mockResponseOnce(JSON.stringify([])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -215,7 +291,8 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-1'],
             triggerBanner: mockTriggerBanner,
             appendAssessment: mockAppendAssessment,
-            patchVuln: mockPatchVuln
+            patchVuln: mockPatchVuln,
+            resetVulns: mockResetVulns
         };
 
         const { getByText } = render(<MultiEditBar {...props} />);
@@ -235,11 +312,13 @@ describe('MultiEditBar', () => {
         });
         expect(mockAppendAssessment).toHaveBeenCalled();
         expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 
     test('saveTimeEstimation success path: updates vulns and triggers success banner', async () => {
         const mockTriggerBanner = jest.fn();
         const mockPatchVuln = jest.fn();
+        const mockResetVulns = jest.fn();
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             vulnerabilities: [{
@@ -257,7 +336,8 @@ describe('MultiEditBar', () => {
             ...mockProps,
             selectedVulns: ['vuln-1'],
             triggerBanner: mockTriggerBanner,
-            patchVuln: mockPatchVuln
+            patchVuln: mockPatchVuln,
+            resetVulns: mockResetVulns
         };
 
         const { getByText, getByPlaceholderText } = render(<MultiEditBar {...props} />);
@@ -277,6 +357,7 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 
     test('addAssessment error path: triggers error banner with error details', async () => {

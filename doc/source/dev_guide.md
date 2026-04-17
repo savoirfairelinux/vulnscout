@@ -208,8 +208,8 @@ make -C tests docker_build docker_test docker_clean
 
 | Task | Command |
 |------|---------|
-| Linter | `flake8` |
-| Type checking (from `tests/` folder) | `mypy --config-file tox.ini` |
+| Linter | `flake8 src` |
+| Type checking | `mypy --config-file tox.ini` |
 | Unit tests | `pytest` |
 | Coverage (terminal) | `pytest --cov=src` |
 | Coverage (HTML) | `pytest --cov-report html --cov=src` |
@@ -223,6 +223,13 @@ make -C tests docker_build docker_test docker_clean
 | Unit tests | `npm run test` (uses Jest + Testing Library) |
 | Linter | `npm run lint` (ESLint) |
 | Coverage report | `npm run coverage` |
+
+### Bash Scripts (`vulnscout` and `entrypoint.sh`)
+
+| Task | Command |
+|------|---------|
+| Linter | `shellcheck vulnscout src/entrypoint.sh` |
+
 
 > **Note:** Running `make -C tests test` will execute all linters and tests. If `pre-commit` is installed, `flake8` will also run on every commit. With CQFD, use `cqfd -b test` to run the full suite.
 
@@ -238,6 +245,38 @@ pre-commit install
 ```
 
 This helps enforce code quality and consistency across all contributions.
+
+---
+
+## Building the Documentation
+
+Full documentation is available in the `doc/` directory as a Sphinx project.
+
+### Local Build
+
+Install the required Python packages:
+
+```bash
+pip install sphinx myst-parser sphinx-rtd-theme
+```
+
+Then build the HTML documentation:
+
+```bash
+make -C doc html
+```
+
+The generated pages are in `doc/build/html/`. Open `doc/build/html/index.html` in your browser.
+
+### Building with CQFD
+
+If you use CQFD, you can build the documentation inside the CQFD container:
+
+```bash
+cqfd -b documentation
+```
+
+The generated documentation will be available in `doc/build/html/` on the host.
 
 ---
 

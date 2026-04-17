@@ -60,6 +60,15 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-custom-assessments` | Export custom (review) assessments as `.tar.gz` to `/scan/outputs/` |
 | `--import-custom-assessments <path>` | Import custom assessments from `.json` or `.tar.gz` |
 | `--match-condition <expr>` | Exit with code 2 if expression matches any vulnerability. Incompatible with `--serve` |
+| `--delete-scan <id>` | Delete a past scan by its ID |
+
+### Data Retrieval Commands
+
+| Flag | Description |
+|------|-------------|
+| `--list-projects` | List all projects and their variants |
+| `--list-scans` | List all past scans |
+| `--json` | Output objects in JSON format |
 
 ### Configuration Commands
 
@@ -75,7 +84,6 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 |------|-------------|
 | `--help`, `-h` | Show help message |
 | `--version` | Print the VulnScout version |
-| `--list-projects` | List all projects in the database |
 | `daemon` | Enter daemon mode (default when no arguments are given) |
 
 ---
@@ -118,7 +126,7 @@ The following paths inside the container are relevant:
 | `/scan/src/` | Python/Flask backend source code |
 | `/scan/inputs/` | Staging area for input files (cleaned after each scan) |
 | `/scan/outputs/` | Default output directory for reports and exports |
-| `/scan/templates/` | Custom report templates (user-installed) |
+| `/cache/vulnscout/templates/` | Custom report templates (user-installed, persisted via cache volume) |
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |

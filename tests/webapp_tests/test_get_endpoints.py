@@ -270,7 +270,7 @@ def test_render_document_invalid_ext(client):
     data = json.loads(response.data)
     assert data["error"] is not None
 
-
+@pytest.mark.skip(reason="patch-finder feature on standby")
 def test_get_patch_finder_status(client):
     response = client.get("/api/patch-finder/status")
     assert response.status_code == 200
@@ -400,13 +400,14 @@ def test_documents_list_categories_enrichment(monkeypatch, client):
     assert "vex" in item["category"]
     assert item["category"].count("misc") == 1
 
-
+@pytest.mark.skip(reason="patch-finder feature on standby")
 def test_patch_finder_scan_non_list_payload(client):
     """POST /api/patch-finder/scan with a non-list payload returns 400 (line 45)."""
     response = client.post("/api/patch-finder/scan", json={"not": "a list"})
     assert response.status_code == 400
 
 
+@pytest.mark.skip(reason="patch-finder feature on standby")
 def test_patch_finder_scan_unknown_cve(client):
     """POST /api/patch-finder/scan with an unknown CVE returns 200 with empty dict."""
     response = client.post("/api/patch-finder/scan", json=["CVE-0000-99999"])

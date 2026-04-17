@@ -139,9 +139,6 @@ class OpenVex:
 
             pkg_list = []
             for pkg_id in assess.packages:
-                product = {
-                    "@id": pkg_id
-                }
                 pkg = self.packagesCtrl.get(pkg_id)
 
                 if pkg is not None:
@@ -149,9 +146,16 @@ class OpenVex:
                         pkg.generate_generic_cpe()
                     if len(pkg.purl) < 1:
                         pkg.generate_generic_purl()
-                    product["identifiers"] = {
-                        "cpe23": pkg.cpe[0],
-                        "purl": pkg.purl[0]
+                    product = {
+                        "@id": pkg.purl[0],
+                        "identifiers": {
+                            "cpe23": pkg.cpe[0],
+                            "purl": pkg.purl[0]
+                        }
+                    }
+                else:
+                    product = {
+                        "@id": pkg_id
                     }
 
                 pkg_list.append(product)

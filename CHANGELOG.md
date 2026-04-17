@@ -10,6 +10,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.12.1] - 2026-04-17
+
+### Added
+- Read the Docs configuration.
+
+### Changed
+- Code quality: added shellcheck, fixed flake8 configuration, fixed pre-commits.
+- Upgrade cyclonedx-python-lib to 11.7.0.
+- Redirect users to the official documentation in the README.
+
+### Fixed
+- Persist custom report templates.
+- Remove API GET request per CVE on Review.
+- Multiedit correct vulnerability count.
+- Frontend data clear when navigating.
+- DB lock after few assessments due to NVD taking control of the DB.
+- UI bug fixes.
+- Strip staging prefix from filename.
+- Error 500 when setting a custom assessment.
+- Update initialization message to get URL.
+- Raise a warning when providing an invalid SPDX file
+- PURL as OpenVEX product @id, not name@version
+
+---
+
 ## [0.12.0] - 2026-04-09
 
 ### Added

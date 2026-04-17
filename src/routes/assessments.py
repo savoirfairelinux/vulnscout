@@ -12,7 +12,7 @@ from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
-from ..extensions import db
+from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
@@ -77,7 +77,12 @@ def init_app(app):
 
     @app.route('/api/assessments/review')
     def review_assessments():
-        """Return assessments not linked to any scan (handmade via the web UI)."""
+        """Return assessments not linked to any scan (handmade via the web UI).
+
+        Each assessment dict is enriched with a ``vuln_texts`` key mapping to the
+        vulnerability's ``texts`` dict so the front-end can display tooltips
+        without extra requests.
+        """
         import uuid as _uuid
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
@@ -100,6 +105,17 @@ def init_app(app):
                 assessments.extend(a.to_dict() for a in DBAssessment.get_handmade(v.id))
         else:
             assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
+
+        # Enrich with vulnerability texts for front-end tooltips (single DB pass)
+        vuln_ids = {a["vuln_id"] for a in assessments if a.get("vuln_id")}
+        vuln_texts: dict[str, dict] = {}
+        for vid_str in vuln_ids:
+            vuln = DBVuln.get_by_id(vid_str)
+            if vuln is not None:
+                vuln_texts[vid_str] = dict(vuln.texts or {})
+        for a in assessments:
+            a["vuln_texts"] = vuln_texts.get(a.get("vuln_id", ""), {})
+
         return assessments
 
     @app.route('/api/assessments/review/export')
@@ -187,11 +203,12 @@ def init_app(app):
                             name, version = pkg_str.rsplit("@", 1)
                         else:
                             name, version = pkg_str, ""
+                        purl = f"pkg:generic/{name}@{version}"
                         products.append({
-                            "@id": pkg_str,
+                            "@id": purl,
                             "identifiers": {
                                 "cpe23": f"cpe:2.3:*:*:{name}:{version}:*:*:*:*:*:*:*",
-                                "purl": f"pkg:generic/{name}@{version}",
+                                "purl": purl,
                             }
                         })
                     stmt["products"] = products
@@ -511,34 +528,35 @@ def init_app(app):
         from datetime import datetime as _dt, timezone as _tz
         shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
         created = []
-        for pkg_string_id in (assessment.packages or []):
-            try:
-                # find_or_create handles both lookup and creation in one query
-                name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
-                db_pkg = Package.find_or_create(name, version)
-                # Ensure vulnerability record exists before creating Finding (FK constraint)
-                DBVuln.get_or_create(vuln_id)
-                finding = Finding.get_or_create(db_pkg.id, vuln_id)
-                # Always create a new record — never merge with an existing one.
-                # from_vuln_assessment does a find-or-update which would overwrite
-                # previous user assessments on the same (finding, variant).
-                db_a = DBAssessment.create(
-                    status=assessment.status,
-                    simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                    finding_id=finding.id,
-                    variant_id=variant_id,
-                    origin="custom",
-                    status_notes=assessment.status_notes,
-                    justification=assessment.justification,
-                    impact_statement=assessment.impact_statement,
-                    workaround=getattr(assessment, "workaround", None),
-                    responses=list(assessment.responses) if assessment.responses else [],
-                    timestamp=shared_timestamp,
-                    commit=True,
-                )
-                created.append(db_a.to_dict())
-            except Exception as e:
-                return {"error": f"DB error: {e}"}, 500
+        try:
+            with batch_session():
+                for pkg_string_id in (assessment.packages or []):
+                    # find_or_create handles both lookup and creation in one query
+                    name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
+                    db_pkg = Package.find_or_create(name, version)
+                    # Ensure vulnerability record exists before creating Finding (FK constraint)
+                    DBVuln.get_or_create(vuln_id)
+                    finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                    # Always create a new record — never merge with an existing one.
+                    # from_vuln_assessment does a find-or-update which would overwrite
+                    # previous user assessments on the same (finding, variant).
+                    db_a = DBAssessment.create(
+                        status=assessment.status,
+                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        origin="custom",
+                        status_notes=assessment.status_notes,
+                        justification=assessment.justification,
+                        impact_statement=assessment.impact_statement,
+                        workaround=getattr(assessment, "workaround", None),
+                        responses=list(assessment.responses) if assessment.responses else [],
+                        timestamp=shared_timestamp,
+                        commit=True,
+                    )
+                    created.append(db_a.to_dict())
+        except Exception as e:
+            return {"error": f"DB error: {e}"}, 500
 
         if not created:
             return {"error": "No valid package found"}, 400
@@ -559,69 +577,74 @@ def init_app(app):
         pkg_cache: dict = {}
         finding_cache: dict = {}
 
-        for item in payload_data["assessments"]:
-            if not isinstance(item, dict) or "vuln_id" not in item:
-                errors.append({"error": "Invalid assessment data", "item": item})
-                continue
-
-            assessment, status = payload_to_assessment(item)
-            if status != 200:
-                errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
-                continue
-
-            vuln_id = assessment.vuln_id
-            # Parse optional variant_id from the raw item
-            variant_id_raw = item.get('variant_id') or None
-            variant_id = None
-            if variant_id_raw:
-                try:
-                    import uuid as _uuid
-                    variant_id = _uuid.UUID(variant_id_raw)
-                except (ValueError, AttributeError):
-                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+        with batch_session():
+            for item in payload_data["assessments"]:
+                if not isinstance(item, dict) or "vuln_id" not in item:
+                    errors.append({"error": "Invalid assessment data", "item": item})
                     continue
-            pkg_list = assessment.packages or []
-            if not pkg_list:
-                errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
-                continue
-            for pkg_string_id in pkg_list:
-                try:
-                    # Resolve package from cache first, then DB
-                    db_pkg = pkg_cache.get(pkg_string_id)
-                    if db_pkg is None:
-                        name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
-                        db_pkg = Package.find_or_create(name, version)
-                        pkg_cache[pkg_string_id] = db_pkg
-                    # Ensure vulnerability record exists before creating Finding (FK constraint)
-                    DBVuln.get_or_create(vuln_id)
-                    # Resolve finding from cache first, then DB
-                    f_key = (db_pkg.id, vuln_id)
-                    finding = finding_cache.get(f_key)
-                    if finding is None:
-                        finding = Finding.get_or_create(db_pkg.id, vuln_id)
-                        finding_cache[f_key] = finding
-                    # Always create a new record — never overwrite an existing assessment
-                    db_a = DBAssessment.create(
-                        status=assessment.status,
-                        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
-                        finding_id=finding.id,
-                        variant_id=variant_id,
-                        origin="custom",
-                        status_notes=assessment.status_notes,
-                        justification=assessment.justification,
-                        impact_statement=assessment.impact_statement,
-                        workaround=getattr(assessment, "workaround", None),
-                        responses=list(assessment.responses) if assessment.responses else [],
-                        commit=True,
-                    )
-                    results.append(db_a.to_dict())
-                except Exception as e:
-                    errors.append({"vuln_id": vuln_id, "error": str(e)})
 
+                assessment, status = payload_to_assessment(item)
+                if status != 200:
+                    errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
+                    continue
+
+                vuln_id = assessment.vuln_id
+                # Parse optional variant_id from the raw item
+                variant_id_raw = item.get('variant_id') or None
+                variant_id = None
+                if variant_id_raw:
+                    try:
+                        import uuid as _uuid
+                        variant_id = _uuid.UUID(variant_id_raw)
+                    except (ValueError, AttributeError):
+                        errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                        continue
+                pkg_list = assessment.packages or []
+                if not pkg_list:
+                    errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
+                    continue
+                for pkg_string_id in pkg_list:
+                    try:
+                        # Resolve package from cache first, then DB
+                        db_pkg = pkg_cache.get(pkg_string_id)
+                        if db_pkg is None:
+                            name, version = (pkg_string_id.rsplit("@", 1)
+                                             if "@" in pkg_string_id
+                                             else (pkg_string_id, ""))
+                            db_pkg = Package.find_or_create(name, version)
+                            pkg_cache[pkg_string_id] = db_pkg
+                        # Ensure vulnerability record exists before creating Finding (FK constraint)
+                        DBVuln.get_or_create(vuln_id)
+                        # Resolve finding from cache first, then DB
+                        f_key = (db_pkg.id, vuln_id)
+                        finding = finding_cache.get(f_key)
+                        if finding is None:
+                            finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                            finding_cache[f_key] = finding
+                        # Always create a new record — never overwrite an existing assessment
+                        db_a = DBAssessment.create(
+                            status=assessment.status,
+                            simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+                            finding_id=finding.id,
+                            variant_id=variant_id,
+                            origin="custom",
+                            status_notes=assessment.status_notes,
+                            justification=assessment.justification,
+                            impact_statement=assessment.impact_statement,
+                            workaround=getattr(assessment, "workaround", None),
+                            responses=list(assessment.responses) if assessment.responses else [],
+                            commit=True,
+                        )
+                        results.append(db_a.to_dict())
+                    except Exception as e:
+                        errors.append({"vuln_id": vuln_id, "error": str(e)})
+
+        distinct_vulns = len({r.get("vuln_id") for r in results if r.get("vuln_id")})
         response = {
             "status": "success" if results else "error",
             "assessments": results,
-            "count": len(results)
+            "count": len(results),
+            "vuln_count": distinct_vulns
         }
         if errors:
             response["errors"] = errors

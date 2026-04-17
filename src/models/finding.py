@@ -135,7 +135,7 @@ class Finding(Base):
         if existing is None:
             try:
                 with db.session.begin_nested():
-                    existing = Finding.create(package_id, vulnerability_id)
+                    existing = Finding.create(package_id, vulnerability_id, commit=False)
             except Exception as e:
                 verbose(f"[Finding.get_or_create race {vulnerability_id!r}] {e}")
                 existing = Finding.get_by_package_and_vulnerability(package_id, vulnerability_id)

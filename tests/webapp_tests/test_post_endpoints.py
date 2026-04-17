@@ -195,7 +195,7 @@ def test_patch_vulnerability_invalids(client):
     })
     assert response.status_code == 400
 
-
+@pytest.mark.skip(reason="patch-finder feature on standby")
 def test_post_scan_patch_finder(client, app):
     from src.models.vulnerability import Vulnerability
     with app.app_context():

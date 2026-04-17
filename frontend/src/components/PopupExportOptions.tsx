@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Options = {
     docName: string;
@@ -19,9 +19,28 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
 
     const onlyMoreRecent = onlyMoreRecentDate != '' ? `${onlyMoreRecentDate}T${onlyMoreRecentTime || '00:00'}` : undefined;
 
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [onClose]);
+
     return (
         <div
+            data-testid="popup-export-backdrop"
             tabIndex={-1}
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                    onClose();
+                }
+            }}
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
             <div className="relative p-4 md:p-32 xl:px-64 h-full">

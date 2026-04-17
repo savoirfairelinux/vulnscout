@@ -65,9 +65,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         .then((patchData) => {
             setPatchInfo(patchData);
         })
-        .catch((err) => {
-            console.error(err);
-            triggerBanner("Failed to load patch data", "error");
+        .catch((_err) => {
+            // patch-finder feature may be disabled — fail silently
         });
     }, []);
 
@@ -88,9 +87,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 setPatchDbReady(false);
             }
         })
-        .catch((err) => {
-            console.error(err);
-            triggerBanner("Failed to load patch data", "error");
+        .catch((_err) => {
+            // patch-finder feature may be disabled — fail silently
         })
     }, [loadPatchData]);
 
