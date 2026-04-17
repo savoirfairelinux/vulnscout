@@ -174,6 +174,7 @@ def test_post_assessments_batch_all_valid(client):
     data = json.loads(response.data)
     assert data["status"] == "success"
     assert data["count"] == 2
+    assert data["vuln_count"] == 2
     assert len(data["assessments"]) == 2
 
 
@@ -201,6 +202,7 @@ def test_post_assessments_batch_mixed_validity(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["count"] == 1
+    assert data["vuln_count"] == 1
     assert data["error_count"] == 2
     assert len(data["errors"]) == 2
 

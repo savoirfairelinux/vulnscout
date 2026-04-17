@@ -198,8 +198,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     }
                 }
 
+                const vulnCount = data.vuln_count ?? data.count;
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
-                triggerBanner(`Successfully added assessments to ${data.count} vulnerabilities${errorMsg}`, 'success');
+                triggerBanner(`Successfully added assessments to ${vulnCount} vulnerabilities${errorMsg}`, 'success');
                 resetVulns();
             } else {
                 const errorMsg = data?.errors?.length
