@@ -40,7 +40,7 @@ Input commands:
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
-  --report <template>       Generate a report from a template in /scan/templates/
+  --report <template>       Generate a report from a template in /cache/vulnscout/templates/
   --report <path>           Stage a local report template file and generate a report from it
   --export-spdx             Export project as SPDX 3.0 SBOM to /scan/outputs/
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
@@ -141,9 +141,9 @@ cmd_add_report_template() {
     local dest_name
     dest_name="$(basename "$src")"
     dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
-    mkdir -p "/scan/templates"
-    cp "$src" "/scan/templates/$dest_name"
-    echo "Added report template: /scan/templates/$dest_name" >&2
+    mkdir -p "/cache/vulnscout/templates"
+    cp "$src" "/cache/vulnscout/templates/$dest_name"
+    echo "Added report template: /cache/vulnscout/templates/$dest_name" >&2
 }
 
 cmd_stage_report_template() {
@@ -166,7 +166,7 @@ cmd_stage_report_template() {
         return 0
     fi
 
-    local in_scan_templates="/scan/templates/$dest_name"
+    local in_scan_templates="/cache/vulnscout/templates/$dest_name"
     local in_views_templates="$BASE_DIR/src/views/templates/$dest_name"
 
     local src_md5
@@ -176,9 +176,9 @@ cmd_stage_report_template() {
         local dst_md5
         dst_md5=$(md5sum "$in_scan_templates" | awk '{print $1}')
         if [[ "$src_md5" == "$dst_md5" ]]; then
-            echo "Template '$dest_name' already up-to-date in /scan/templates/, skipping copy." >&2
+            echo "Template '$dest_name' already up-to-date in /cache/vulnscout/templates/, skipping copy." >&2
         else
-            echo "Template '$dest_name' differs from /scan/templates/ copy, updating..." >&2
+            echo "Template '$dest_name' differs from /cache/vulnscout/templates/ copy, updating..." >&2
             cmd_add_report_template "$template"
         fi
     elif [[ -f "$in_views_templates" ]]; then
@@ -187,7 +187,7 @@ cmd_stage_report_template() {
         if [[ "$src_md5" == "$dst_md5" ]]; then
             echo "Template '$dest_name' matches built-in template, skipping copy." >&2
         else
-            echo "Template '$dest_name' differs from built-in template, copying to /scan/templates/..." >&2
+            echo "Template '$dest_name' differs from built-in template, copying to /cache/vulnscout/templates/..." >&2
             cmd_add_report_template "$template"
         fi
     else
