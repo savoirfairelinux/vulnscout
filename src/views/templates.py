@@ -25,6 +25,7 @@ class Templates:
             "views/templates"
         ])
         self.external_loader = FileSystemLoader([
+            "/cache/vulnscout/templates",
             ".vulnscout/templates",
             "templates",
             "/scan/templates"
