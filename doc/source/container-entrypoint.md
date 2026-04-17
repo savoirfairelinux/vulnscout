@@ -126,7 +126,7 @@ The following paths inside the container are relevant:
 | `/scan/src/` | Python/Flask backend source code |
 | `/scan/inputs/` | Staging area for input files (cleaned after each scan) |
 | `/scan/outputs/` | Default output directory for reports and exports |
-| `/scan/templates/` | Custom report templates (user-installed) |
+| `/cache/vulnscout/templates/` | Custom report templates (user-installed, persisted via cache volume) |
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |
