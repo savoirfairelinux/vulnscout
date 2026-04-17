@@ -244,18 +244,43 @@ cmd_scan() {
     INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
     if [[ -d "$INPUTS_DIR/spdx" ]]; then
         for f in "$INPUTS_DIR/spdx"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f"); done
+        # Warn about files that don't match the SPDX naming convention
+        for f in "$INPUTS_DIR/spdx"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *.spdx.json) ;;  # valid SPDX 3 JSON
+                *.spdx)      ;;  # valid SPDX 2 tag-value
+                *) echo "Warning: '$f' was added with --add-spdx but does not match the expected SPDX naming convention (*.spdx.json or *.spdx). File will be ignored. See https://spdx.github.io/spdx-spec/v2.3/conformance/#44-standard-data-format-requirements" >&2 ;;
+            esac
+        done
     fi
     if [[ -d "$INPUTS_DIR/cdx" ]]; then
         for f in "$INPUTS_DIR/cdx"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--cdx "$f"); done
     fi
     if [[ -d "$INPUTS_DIR/openvex" ]]; then
         for f in "$INPUTS_DIR/openvex"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--openvex "$f"); done
+        # Warn about files that don't match the OpenVEX naming convention
+        for f in "$INPUTS_DIR/openvex"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *openvex*.json) ;;
+                *) echo "Warning: '$f' was added with --add-openvex but does not contain 'openvex' in its filename. File will be ignored." >&2 ;;
+            esac
+        done
     fi
     if [[ -d "$INPUTS_DIR/yocto_cve_check" ]]; then
         for f in "$INPUTS_DIR/yocto_cve_check"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f"); done
     fi
     if [[ -d "$INPUTS_DIR/grype" ]]; then
         for f in "$INPUTS_DIR/grype"/*.grype.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f"); done
+        # Warn about files that don't match the Grype naming convention
+        for f in "$INPUTS_DIR/grype"/*; do
+            [[ -f "$f" ]] || continue
+            case "$f" in
+                *.grype.json) ;;
+                *) echo "Warning: '$f' was added with --add-grype but does not match the expected naming convention (*.grype.json). File will be ignored." >&2 ;;
+            esac
+        done
     fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade)
 
