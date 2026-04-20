@@ -101,6 +101,62 @@ class NVD_DB(BaseAPIClient):
             "If the issue persists after adding the API key, it may have been invalidated."
         )
 
+    def api_get_cves_by_cpe(
+        self,
+        cpe_name: str,
+        results_per_page: int = 100,
+        use_virtual_match: bool = False,
+    ) -> list[dict]:
+        """Query the NVD API for CVEs matching a CPE name.
+
+        When *use_virtual_match* is ``True`` the ``virtualMatchString``
+        parameter is sent instead of ``cpeName``.  This is required when
+        the CPE contains wildcard fields (e.g. vendor ``*``) because the
+        NVD ``cpeName`` parameter expects an entry from its CPE
+        dictionary, whereas ``virtualMatchString`` performs pattern
+        matching against CVE match criteria.
+
+        Returns a (possibly empty) list of CVE items from the NVD response.
+        Handles pagination transparently.
+        """
+        all_vulns: list[dict] = []
+        start_index = 0
+        first_request = True
+        while True:
+            retry = 0
+            status = 0
+            data: dict = {}
+            while retry <= 3:
+                # Rate-limit: skip sleep for the very first request of this CPE,
+                # sleep between retries / pagination pages.
+                if not first_request or retry > 0:
+                    time.sleep(max(6, 10 * retry))
+                first_request = False
+                param_key = (
+                    "virtualMatchString" if use_virtual_match
+                    else "cpeName"
+                )
+                status, data = self._call_nvd_api({
+                    param_key: cpe_name,
+                    "startIndex": start_index,
+                    "resultsPerPage": results_per_page,
+                })
+                if status == 200:
+                    break
+                elif status in self._NON_RETRYABLE_STATUSES:
+                    return all_vulns
+                else:
+                    retry += 1
+            if status != 200:
+                break
+            vulns = data.get("vulnerabilities", [])
+            all_vulns.extend(vulns)
+            total = data.get("totalResults", 0)
+            start_index += results_per_page
+            if start_index >= total:
+                break
+        return all_vulns
+
     def api_weaknesses_to_list_str(self, weaknesses: list) -> list[str]:
         """
         Convert a list of weaknesses obtained from API to a list of strings.
@@ -113,6 +169,106 @@ class NVD_DB(BaseAPIClient):
         Filter a list of references to get only the ones related to git patches.
         """
         return [x["url"] for x in references if "tags" in x and "Patch" in x["tags"]]
+
+    @staticmethod
+    def extract_cve_details(cve: dict) -> dict:
+        """Extract description, severity, links, weaknesses from an NVD CVE dict.
+
+        *cve* is the ``vulnerabilities[n]["cve"]`` object returned by the
+        NVD API v2.0.  Returns a dict with keys usable by
+        ``Vulnerability.update_record`` / ``create_record``.
+        """
+        # Description — prefer English
+        description = None
+        for desc in cve.get("descriptions", []):
+            if desc.get("lang", "").startswith("en"):
+                description = desc.get("value")
+                break
+        if description is None:
+            descs = cve.get("descriptions", [])
+            if descs:
+                description = descs[0].get("value")
+
+        # Severity label + base score — try CVSS v3.1, v3.0, v4.0, v2.0
+        severity = None
+        base_score = None
+        attack_vector = None
+        cvss_version = None
+        cvss_vector = None
+        cvss_exploitability = None
+        cvss_impact = None
+        metrics = cve.get("metrics", {})
+        _metric_version_map = {
+            "cvssMetricV31": "3.1",
+            "cvssMetricV30": "3.0",
+            "cvssMetricV40": "4.0",
+            "cvssMetricV2": "2.0",
+        }
+        for metric_key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV40", "cvssMetricV2"):
+            metric_list = metrics.get(metric_key, [])
+            if metric_list:
+                primary = next(
+                    (m for m in metric_list if m.get("type") == "Primary"),
+                    metric_list[0],
+                )
+                cvss_data = primary.get("cvssData", {})
+                severity = (
+                    primary.get("baseSeverity")
+                    or cvss_data.get("baseSeverity")
+                    or ""
+                ).lower() or None
+                base_score = cvss_data.get("baseScore")
+                attack_vector = cvss_data.get("attackVector")
+                cvss_version = _metric_version_map.get(metric_key)
+                cvss_vector = cvss_data.get("vectorString")
+                cvss_exploitability = primary.get("exploitabilityScore")
+                cvss_impact = primary.get("impactScore")
+                break
+
+        # References / links
+        links = [
+            ref.get("url")
+            for ref in cve.get("references", [])
+            if ref.get("url")
+        ]
+        # Always include the NVD detail page
+        cve_id = cve.get("id", "")
+        nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
+        if nvd_url not in links:
+            links.insert(0, nvd_url)
+
+        # Published date
+        published = cve.get("published")
+        publish_date = None
+        if published:
+            try:
+                import datetime
+                publish_date = datetime.date.fromisoformat(str(published)[:10])
+            except ValueError:
+                pass
+
+        # Weaknesses
+        weaknesses = []
+        for w in cve.get("weaknesses", []):
+            for d in w.get("description", []):
+                val = d.get("value", "")
+                if val and val not in weaknesses:
+                    weaknesses.append(val)
+
+        return {
+            "description": description,
+            "status": severity,
+            "base_score": base_score,
+            "attack_vector": attack_vector,
+            "cvss_version": cvss_version,
+            "cvss_vector": cvss_vector,
+            "cvss_exploitability": cvss_exploitability,
+            "cvss_impact": cvss_impact,
+            "links": links,
+            "publish_date": publish_date,
+            "weaknesses": weaknesses or None,
+            "nvd_last_modified": cve.get("lastModified"),
+        }
 
     def fetch_cve_data(self, cve_id: str) -> Optional[dict]:
         """
