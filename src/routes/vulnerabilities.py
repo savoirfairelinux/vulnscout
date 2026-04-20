@@ -26,32 +26,49 @@ TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 
 def _latest_scan_id_for_variant(variant_uuid):
-    """Return the ID of the most recent Scan for the given variant, or None."""
-    return db.session.execute(
-        db.select(Scan.id)
+    """Return the active Scan IDs for the given variant.
+
+    The current view is the union of the latest SBOM scan and the latest tool
+    scan (if any).  Returns a list of 0–2 scan IDs.
+    """
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.scan_type)
         .where(Scan.variant_id == variant_uuid)
         .order_by(Scan.timestamp.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+    ).all()
+    ids: list = []
+    seen_types: set = set()
+    for scan_id, scan_type in rows:
+        st = scan_type or "sbom"
+        if st not in seen_types:
+            seen_types.add(st)
+            ids.append(scan_id)
+        if len(seen_types) >= 2:          # sbom + tool
+            break
+    return ids
 
 
 def _latest_scan_ids_for_project(project_uuid):
-    """Return a list of Scan IDs – the latest scan for each variant in the project."""
-    latest_ts_sub = (
-        db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
+    """Return the active Scan IDs for each variant in the project.
+
+    For every variant the latest SBOM scan and the latest tool scan (if any)
+    are included so the view = latest SBOM ∪ latest tool scan.
+    """
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
         .where(Variant.project_id == project_uuid)
-        .group_by(Scan.variant_id)
-        .subquery()
-    )
-    return list(db.session.execute(
-        db.select(Scan.id)
-        .join(
-            latest_ts_sub,
-            (Scan.variant_id == latest_ts_sub.c.variant_id)
-            & (Scan.timestamp == latest_ts_sub.c.max_ts),
-        )
-    ).scalars().all())
+        .order_by(Scan.variant_id, Scan.timestamp.desc())
+    ).all()
+    ids: list = []
+    seen: dict = {}  # variant_id -> set of scan_types already picked
+    for scan_id, vid, scan_type, _ts in rows:
+        st = scan_type or "sbom"
+        variant_seen = seen.setdefault(vid, set())
+        if st not in variant_seen:
+            variant_seen.add(st)
+            ids.append(scan_id)
+    return ids
 
 
 def _parse_effort_hours(value) -> int:
@@ -174,9 +191,9 @@ def init_app(app):
                 compare_uuid = uuid.UUID(compare_variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id or compare_variant_id"}, 400
-            base_latest_id = _latest_scan_id_for_variant(base_uuid)
-            compare_latest_id = _latest_scan_id_for_variant(compare_uuid)
-            current_scan_ids = [compare_latest_id] if compare_latest_id else []
+            base_latest_ids = _latest_scan_id_for_variant(base_uuid)
+            compare_latest_ids = _latest_scan_id_for_variant(compare_uuid)
+            current_scan_ids = compare_latest_ids
             _scope_variant = compare_uuid
             _scope_project = None
             opts = (
@@ -184,26 +201,26 @@ def init_app(app):
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
                 selectinload(Vulnerability.metrics),
             )
-            if base_latest_id is None:
+            if not base_latest_ids:
                 base_ids = set()
             else:
                 base_ids = set(db.session.execute(
                     db.select(Vulnerability.id)
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id == base_latest_id)
+                    .where(Observation.scan_id.in_(base_latest_ids))
                     .distinct()
                 ).scalars().all())
             operation = request.args.get('operation', 'difference')
             if operation == 'intersection':
-                if compare_latest_id is None:
+                if not compare_latest_ids:
                     records = []
                 else:
                     compare_ids = set(db.session.execute(
                         db.select(Vulnerability.id)
                         .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                         .join(Observation, Finding.id == Observation.finding_id)
-                        .where(Observation.scan_id == compare_latest_id)
+                        .where(Observation.scan_id.in_(compare_latest_ids))
                         .distinct()
                     ).scalars().all())
                     intersection_ids = list(base_ids & compare_ids)
@@ -214,7 +231,7 @@ def init_app(app):
                         .order_by(Vulnerability.id)
                     ).scalars().all()) if intersection_ids else []
             else:  # difference (default): vulns in compare but NOT in base
-                if compare_latest_id is None:
+                if not compare_latest_ids:
                     records = []
                 else:
                     query = (
@@ -222,7 +239,7 @@ def init_app(app):
                         .options(*opts)
                         .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                         .join(Observation, Finding.id == Observation.finding_id)
-                        .where(Observation.scan_id == compare_latest_id)
+                        .where(Observation.scan_id.in_(compare_latest_ids))
                         .distinct()
                         .order_by(Vulnerability.id)
                     )
@@ -236,9 +253,9 @@ def init_app(app):
                 return {"error": "Invalid variant_id"}, 400
             _scope_variant = variant_uuid
             _scope_project = None
-            latest_id = _latest_scan_id_for_variant(variant_uuid)
-            current_scan_ids = [latest_id] if latest_id else []
-            if latest_id is None:
+            latest_ids = _latest_scan_id_for_variant(variant_uuid)
+            current_scan_ids = latest_ids
+            if not latest_ids:
                 records = []
             else:
                 records = list(db.session.execute(
@@ -250,7 +267,7 @@ def init_app(app):
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id == latest_id)
+                    .where(Observation.scan_id.in_(latest_ids))
                     .distinct()
                     .order_by(Vulnerability.id)
                 ).scalars().all())

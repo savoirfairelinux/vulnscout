@@ -4,7 +4,6 @@
 
 import uuid
 
-from sqlalchemy import func
 from ..models.package import Package
 from ..models.scan import Scan
 from ..models.variant import Variant
@@ -14,32 +13,45 @@ from ..extensions import db
 
 
 def _latest_scan_id_for_variant(variant_uuid):
-    """Return the ID of the most recent Scan for the given variant, or None."""
-    return db.session.execute(
-        db.select(Scan.id)
+    """Return the active Scan IDs for the given variant.
+
+    The current view is the union of the latest SBOM scan and the latest tool
+    scan (if any).  Returns a list of 0–2 scan IDs.
+    """
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.scan_type)
         .where(Scan.variant_id == variant_uuid)
         .order_by(Scan.timestamp.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+    ).all()
+    ids: list = []
+    seen_types: set = set()
+    for scan_id, scan_type in rows:
+        st = scan_type or "sbom"
+        if st not in seen_types:
+            seen_types.add(st)
+            ids.append(scan_id)
+        if len(seen_types) >= 2:
+            break
+    return ids
 
 
 def _latest_scan_ids_for_project(project_uuid):
-    """Return a list of Scan IDs – the latest scan for each variant in the project."""
-    latest_ts_sub = (
-        db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
+    """Return the active Scan IDs for each variant in the project."""
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
         .where(Variant.project_id == project_uuid)
-        .group_by(Scan.variant_id)
-        .subquery()
-    )
-    return list(db.session.execute(
-        db.select(Scan.id)
-        .join(
-            latest_ts_sub,
-            (Scan.variant_id == latest_ts_sub.c.variant_id)
-            & (Scan.timestamp == latest_ts_sub.c.max_ts),
-        )
-    ).scalars().all())
+        .order_by(Scan.variant_id, Scan.timestamp.desc())
+    ).all()
+    ids: list = []
+    seen: dict = {}
+    for scan_id, vid, scan_type, _ts in rows:
+        st = scan_type or "sbom"
+        variant_seen = seen.setdefault(vid, set())
+        if st not in variant_seen:
+            variant_seen.add(st)
+            ids.append(scan_id)
+    return ids
 
 
 def init_app(app):
@@ -99,15 +111,15 @@ def init_app(app):
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
-            latest_id = _latest_scan_id_for_variant(variant_uuid)
-            if latest_id is None:
+            latest_ids = _latest_scan_id_for_variant(variant_uuid)
+            if not latest_ids:
                 pkgs = []
             else:
                 pkg_ids_sub = (
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id == latest_id)
+                    .where(SBOMDocument.scan_id.in_(latest_ids))
                     .distinct()
                 )
                 pkgs = list(db.session.execute(
