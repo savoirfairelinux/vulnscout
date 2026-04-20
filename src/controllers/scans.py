@@ -7,6 +7,7 @@ import uuid
 from typing import Optional
 
 from ..models.scan import Scan
+from ..helpers.datetime_utils import ensure_utc_iso
 
 
 class ScanController:
@@ -27,7 +28,7 @@ class ScanController:
         return {
             "id": str(scan.id),
             "description": scan.description,
-            "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
+            "timestamp": ensure_utc_iso(scan.timestamp),
             "variant_id": str(scan.variant_id),
         }
 

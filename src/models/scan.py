@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from ..extensions import db, Base
+from ..helpers.datetime_utils import ensure_utc_iso
 from .variant import Variant
 
 from sqlalchemy.orm import Mapped
@@ -55,7 +56,7 @@ class Scan(Base):
         return {
             "id": str(self.id),
             "description": self.description,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": ensure_utc_iso(self.timestamp),
             "variant": {
                 "id": str(self.variant.id),
                 "name": self.variant.name,
