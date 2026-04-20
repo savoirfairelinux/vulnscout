@@ -12,6 +12,7 @@ from ..models.finding import Finding
 from ..models.observation import Observation
 from ..models.package import Package
 from ..models.scan import Scan
+from ..helpers.datetime_utils import ensure_utc_iso
 from ..models.variant import Variant
 from ..models.metrics import Metrics
 from ..models.cvss import CVSS
@@ -426,7 +427,7 @@ def init_app(app):
             ).all()
             first_scan_by_vuln: dict = {}
             for vuln_id, min_ts in first_scan_rows:
-                first_scan_by_vuln[str(vuln_id)] = min_ts.isoformat() if min_ts else None
+                first_scan_by_vuln[str(vuln_id)] = ensure_utc_iso(min_ts)
             for v in vulns:
                 v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
 
