@@ -398,7 +398,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.accessor("vuln_id", {
             id: 'id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
-            size: 160,
+            size: 130,
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
@@ -411,7 +411,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("packages", {
             header: () => <div className="flex items-center justify-center">SBOM Affected</div>,
-            size: 220,
+            size: 170,
             cell: info => {
                 const pkgs = info.getValue();
                 if (!pkgs || pkgs.length === 0) return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">—</span></div>;
@@ -428,7 +428,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("variant_id", {
             header: () => <div className="flex items-center justify-center">Variants</div>,
-            size: 180,
+            size: 120,
             cell: info => {
                 const row = info.row.original as ReviewRow;
                 const vids = row._variantIds ?? (row.variant_id ? [row.variant_id] : []);
@@ -449,7 +449,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("simplified_status", {
             header: () => <div className="flex items-center justify-center">Status</div>,
-            size: 150,
+            size: 110,
             cell: info => (
                 <div className="flex items-center justify-center h-full">
                     <code>{info.getValue()}</code>
@@ -458,7 +458,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("justification", {
             header: () => <div className="flex items-center justify-center">Justification</div>,
-            size: 180,
+            size: 140,
             cell: info => {
                 const val = info.getValue();
                 return (
@@ -472,7 +472,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("impact_statement", {
             header: () => <div className="flex items-center justify-center">Impact</div>,
-            size: 250,
+            size: 180,
             cell: info => {
                 const val = info.getValue();
                 return (
@@ -486,7 +486,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("status_notes", {
             header: () => <div className="flex items-center justify-center">Notes</div>,
-            size: 250,
+            size: 180,
             cell: info => {
                 const val = info.getValue();
                 return (
@@ -500,7 +500,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("workaround", {
             header: () => <div className="flex items-center justify-center">Workaround</div>,
-            size: 250,
+            size: 180,
             cell: info => {
                 const val = info.getValue();
                 return (
@@ -514,7 +514,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
         columnHelper.accessor("timestamp", {
             header: () => <div className="flex items-center justify-center">Assessment Date</div>,
-            size: 160,
+            size: 130,
             cell: info => (
                 <div className="flex items-center justify-center h-full">
                     <span className="text-sm text-gray-300">{formatDate(info.getValue())}</span>
@@ -524,7 +524,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
-            size: 90,
+            size: 70,
             cell: info => (
                 <div className="flex items-center justify-center gap-3 h-full">
                     <button
