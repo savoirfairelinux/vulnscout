@@ -283,14 +283,14 @@ Both `last_assessment_date` and `filter_by_publish_date` accept date expressions
 | `sort_by_epss` | Sort vulnerabilities by EPSS score, highest first. |
 | `sort_by_effort` | Sort vulnerabilities by effort (`effort.likely`), most effort first. |
 | `sort_by_last_modified` | Sort vulnerabilities by latest assessment date, most recent first. |
-| `sort_by_scan_date` | Sort scans by timestamp, most recent first. |
+| `sort_by_scan_date` | Sort scans by timestamp, most recent first. Accepts a dict (keyed by ID) or a list. |
 
 ### Relational Filtering
 
 | Filter | Description |
 |--------|-------------|
-| `filter_by_variant(variant_id)` | Keep only items that belong to the given variant. Works on assessments, scans, and vulnerabilities (matches against `variant_ids`). |
-| `filter_by_project(project_id)` | Keep only items whose `project_id` matches. Works on variants. |
+| `filter_by_variant(variant_id)` | Keep only items that belong to the given variant. Works on assessments, scans, and vulnerabilities (matches against `variant_ids`). Accepts a dict or a list. |
+| `filter_by_project(project_id)` | Keep only items whose `project_id` matches. Works on variants. Accepts a dict or a list. |
 
 ---
 
@@ -336,7 +336,7 @@ Version: {{ env("PRODUCT_VERSION", "unknown") }}
 
 **List all projects and their variants:**
 ```
-{% for project in projects %}
+{% for project in projects | as_list %}
 Project: {{ project.name }}
   {% for variant in variants | filter_by_project(project.id) %}
   - Variant: {{ variant.name }}
@@ -353,7 +353,7 @@ Project: {{ project.name }}
 
 **List SBOM documents:**
 ```
-{% for doc in sbom_documents %}
+{% for doc in sbom_documents | as_list %}
 - {{ doc.source_name }} ({{ doc.format }}): {{ doc.path }}
 {% endfor %}
 ```
@@ -377,7 +377,7 @@ Project
 
 **Loop over vulnerabilities per variant:**
 ```
-{% for variant in variants %}
+{% for variant in variants | as_list %}
 {{ variant.name }}
   {% for vuln in variant.vulnerabilities.values() | sort_by_epss %}
   - {{ vuln.id }} (EPSS: {{ vuln.epss.score }})
@@ -387,7 +387,7 @@ Project
 
 **Loop over packages per SBOM document:**
 ```
-{% for doc in sbom_documents %}
+{% for doc in sbom_documents | as_list %}
 {{ doc.source_name }} — {{ doc.path }}
   {% for pkg_id, pkg in doc.packages.items() %}
   - {{ pkg.name }} {{ pkg.version }}
@@ -395,11 +395,11 @@ Project
 {% endfor %}
 ```
 
-**Full traversal
+**Full traversal:**
 ```
-{% for project in projects %}
+{% for project in projects | as_list %}
   {% for variant in variants | filter_by_project(project.id) %}
-    {% for doc in variant.sbom_documents %}
+    {% for doc in variant.sbom_documents.values() %}
       {% for vuln in doc.vulnerabilities.values() | status_active | sort_by_epss %}
         {{ vuln.id }} in {{ doc.path }}
       {% endfor %}
@@ -426,7 +426,7 @@ Project
 
 **Most recent scan for a variant (using embedded `.scans`):**
 ```
-{% for variant in variants %}
+{% for variant in variants | as_list %}
   {% set latest = variant.scans | sort_by_scan_date | first %}
   {{ variant.name }}: last scanned {{ latest.timestamp | print_iso8601 }}
 {% endfor %}

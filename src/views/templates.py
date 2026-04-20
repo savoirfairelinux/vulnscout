@@ -588,9 +588,11 @@ class TemplatesExtensions:
         return [v for v in vals if v.get("variant_id") == variant_id or variant_id in v.get("variant_ids", [])]
 
     @staticmethod
-    def filter_by_project(value: list[dict], project_id: str) -> list[dict]:
-        return [v for v in value if v.get("project_id") == project_id]
+    def filter_by_project(value: dict[str, dict] | list[dict], project_id: str) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return [v for v in vals if v.get("project_id") == project_id]
 
     @staticmethod
-    def sort_by_scan_date(value: list[dict]) -> list[dict]:
-        return sorted(value, key=lambda x: x.get("timestamp") or "", reverse=True)
+    def sort_by_scan_date(value: dict[str, dict] | list[dict]) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return sorted(vals, key=lambda x: x.get("timestamp") or "", reverse=True)
