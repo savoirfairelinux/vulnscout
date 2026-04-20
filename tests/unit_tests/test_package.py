@@ -45,7 +45,7 @@ def test_create_package(generic_pkg):
     THEN check the Package id, cpe and purl is correct
     """
     assert generic_pkg.string_id == "mypackage@1.0.0"
-    assert generic_pkg.cpe[0] == "cpe:2.3:*:*:mypackage:1.0.0:*:*:*:*:*:*:*"
+    assert generic_pkg.cpe[0] == "cpe:2.3:a:*:mypackage:1.0.0:*:*:*:*:*:*:*"
     assert generic_pkg.purl[0] == "pkg:generic/mypackage@1.0.0"
 
 

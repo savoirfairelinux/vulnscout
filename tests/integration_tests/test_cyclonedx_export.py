@@ -98,7 +98,7 @@ def test_export_components_json(cdx_exporter):
             "bom-ref": "pkg:generic/cairo@1.16.0",
             "name": "cairo",
             "version": "1.16.0",
-            "cpe": "cpe:2.3:*:*:cairo:1.16.0:*:*:*:*:*:*:*",
+            "cpe": "cpe:2.3:a:*:cairo:1.16.0:*:*:*:*:*:*:*",
             "purl": "pkg:generic/cairo@1.16.0"
         }.items() <= output["components"][1].items()
 
