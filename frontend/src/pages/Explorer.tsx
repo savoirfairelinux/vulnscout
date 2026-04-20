@@ -152,6 +152,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         );
     }, [loadData]);
 
+    const handleScanComplete = useCallback(() => {
+        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+    }, [loadData, currentVariantId, currentProjectId]);
 
 
     function appendAssessment(added: Assessment) {
@@ -304,7 +307,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     compareOperation={currentOperation}
                 />}
                 {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports />}
                 {tab === 'settings' && <Settings onDataChanged={(message) => {
