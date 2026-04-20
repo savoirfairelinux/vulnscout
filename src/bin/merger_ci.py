@@ -220,8 +220,11 @@ def create_project_context(
     # or openvex, it's an "sbom" scan.  Grype-only → "tool" scan.
     has_sbom_inputs = bool(spdx_inputs or cdx_inputs or openvex_inputs or yocto_cve_inputs)
     scan_type = "sbom" if has_sbom_inputs else "tool"
+    scan_description = "empty description"
+    scan_source = "grype" if (not has_sbom_inputs and grype_inputs) else None
 
-    scan = ScanController.create("empty description", variant_obj.id, scan_type=scan_type)
+    scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
+                                 scan_source=scan_source)
     click.echo(f"project='{project}' variant='{variant_name}' scan={scan.id} type={scan_type}")
 
     format_groups: list[tuple[tuple, str]] = [

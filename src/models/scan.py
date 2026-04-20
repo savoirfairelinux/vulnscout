@@ -27,6 +27,7 @@ class Scan(Base):
     id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     description: Mapped[str | None] = db.Column(db.Text, nullable=True)
     scan_type: Mapped[str | None] = db.Column(db.String, nullable=True, default="sbom")  # 'sbom' or 'tool'
+    scan_source: Mapped[str | None] = db.Column(db.String, nullable=True)  # 'grype', 'nvd', 'osv', or None
     timestamp: Mapped[datetime] = db.Column(
         db.DateTime(timezone=True),
         nullable=False,
@@ -73,9 +74,11 @@ class Scan(Base):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create(description: str, variant_id: uuid.UUID, scan_type: str = "sbom") -> "Scan":
+    def create(description: str, variant_id: uuid.UUID, scan_type: str = "sbom",
+               scan_source: str | None = None) -> "Scan":
         """Create a new scan with the given *description* under *variant_id*, persist it and return it."""
-        scan = Scan(description=description, variant_id=variant_id, scan_type=scan_type)
+        scan = Scan(description=description, variant_id=variant_id,
+                    scan_type=scan_type, scan_source=scan_source)
         db.session.add(scan)
         db.session.commit()
         return scan
