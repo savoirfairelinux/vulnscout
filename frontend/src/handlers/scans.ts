@@ -2,6 +2,7 @@ type Scan = {
     id: string;
     description: string | null;
     scan_type: string;
+    scan_source: string | null;
     timestamp: string;
     variant_id: string;
     variant_name: string | null;
@@ -18,6 +19,15 @@ type Scan = {
     packages_upgraded: number | null;
     vulns_added: number | null;
     vulns_removed: number | null;
+    newly_detected_findings: number | null;
+    newly_detected_vulns: number | null;
+    branch_finding_count: number | null;
+    branch_vuln_count: number | null;
+    branch_package_count: number | null;
+    global_finding_count: number | null;
+    global_vuln_count: number | null;
+    global_package_count: number | null;
+    formats: string[];
 };
 
 type FindingDiffEntry = {
@@ -65,9 +75,45 @@ type ScanDiff = {
     packages_upgraded: PackageUpgradeEntry[];
     vulns_added: string[];
     vulns_removed: string[];
+    newly_detected_findings: number | null;
+    newly_detected_vulns: number | null;
+    newly_detected_findings_list: FindingDiffEntry[] | null;
+    newly_detected_vulns_list: string[] | null;
 };
 
-export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, ScanDiff };
+type GlobalResultFinding = {
+    finding_id: string;
+    package_name: string;
+    package_version: string;
+    package_id: string;
+    vulnerability_id: string;
+    sources: string[];
+};
+
+type GlobalResultPackage = {
+    package_id: string;
+    package_name: string;
+    package_version: string;
+    sources: string[];
+};
+
+type GlobalResultVuln = {
+    vulnerability_id: string;
+    sources: string[];
+};
+
+type GlobalResult = {
+    scan_id: string;
+    scan_type: string;
+    packages: GlobalResultPackage[];
+    findings: GlobalResultFinding[];
+    vulnerabilities: GlobalResultVuln[];
+    package_count: number;
+    finding_count: number;
+    vuln_count: number;
+};
+
+export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln };
 
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
@@ -126,13 +172,75 @@ class ScansHandler {
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 
-    static async getGrypeScanStatus(variantId: string): Promise<{ status: string; error?: string | null }> {
+    static async getGlobalResult(scanId: string): Promise<GlobalResult | null> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/scans/${encodeURIComponent(scanId)}/global-result`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (typeof data?.scan_id !== 'string') return null;
+        return data as GlobalResult;
+    }
+
+    static async getGrypeScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan/status`,
             { mode: 'cors' }
         );
         if (!response.ok) return { status: 'unknown' };
         return await response.json();
+    }
+
+    static async triggerNvdScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan`,
+            { method: 'POST', mode: 'cors' }
+        );
+        if (response.ok || response.status === 202) return { ok: true };
+        const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getNvdScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan/status`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return { status: 'unknown' };
+        return await response.json();
+    }
+
+    static async triggerOsvScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan`,
+            { method: 'POST', mode: 'cors' }
+        );
+        if (response.ok || response.status === 202) return { ok: true };
+        const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getOsvScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan/status`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return { status: 'unknown' };
+        return await response.json();
+    }
+
+    static async deleteScan(scanId: string): Promise<{ ok: boolean; error?: string; orphaned_findings_removed?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/scans/${encodeURIComponent(scanId)}`,
+            { method: 'DELETE', mode: 'cors' }
+        );
+        if (response.ok) {
+            const data = await response.json().catch(() => ({}));
+            return { ok: true, orphaned_findings_removed: data?.orphaned_findings_removed };
+        }
+        const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 }
 
