@@ -202,6 +202,36 @@ def _latest_sbom_scan_per_variant(scans: list[Scan]) -> dict:
     return latest
 
 
+def _sbom_scans_by_variant(scans: list[Scan]) -> dict:
+    """Return {variant_id: [sbom_scan, …]} ordered by timestamp ascending.
+
+    Used to look up which SBOM scan was active at any point in time.
+    """
+    by_variant: dict = {}
+    for s in scans:
+        if (s.scan_type or "sbom") != "sbom":
+            continue
+        by_variant.setdefault(s.variant_id, []).append(s)
+    # scans are already chronological but be safe
+    for v in by_variant.values():
+        v.sort(key=lambda s: s.timestamp)
+    return by_variant
+
+
+def _sbom_active_at(sbom_list: list, timestamp) -> "Scan | None":
+    """Return the most recent SBOM scan whose timestamp <= *timestamp*.
+
+    *sbom_list* must be sorted ascending by timestamp.
+    """
+    result = None
+    for s in sbom_list:
+        if s.timestamp <= timestamp:
+            result = s
+        else:
+            break
+    return result
+
+
 def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     if not scans:
         return []
@@ -213,17 +243,13 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     prev_map = _prev_scan_map(scans)
     variant_map = _variant_info(list({s.variant_id for s in scans}))
 
-    # For tool scans: find the latest SBOM scan per variant so we can compute
-    # "newly detected" counts (findings/vulns found by the tool but absent
-    # from the SBOM baseline).
-    latest_sbom = _latest_sbom_scan_per_variant(scans)
+    # For tool scans: determine the SBOM baseline that was active at the
+    # time of each tool scan.  This ensures that historical tool scan
+    # entries show the "newly detected" counts as they were at scan time,
+    # not re-calculated against a later SBOM import.
+    sbom_lists = _sbom_scans_by_variant(scans)
     # We may need findings/vulns for SBOM scans that aren't already in our maps
     # (they already are because all scans in the list are fetched).
-    sbom_findings: dict = {}  # variant_id -> set(finding_id)
-    sbom_vulns: dict = {}     # variant_id -> set(vulnerability_id)
-    for vid, sbom_scan in latest_sbom.items():
-        sbom_findings[vid] = findings_map.get(sbom_scan.id, set())
-        sbom_vulns[vid] = vulns_map.get(sbom_scan.id, set())
 
     # First pass: compute package diffs and collect all finding IDs that need
     # package-level info for upgrade classification.
@@ -283,8 +309,12 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # Track latest tool-scan findings/vulns per (variant, source) as we
     # iterate in chronological order so we can compute the "global" result
     # (SBOM ∪ all latest sources) at each point in time.
+    # Also track the SBOM baseline that was active at each tool scan's
+    # timestamp so historical counts stay stable.
     running_src_findings: dict = {}  # (variant_id, source) -> set
     running_src_vulns: dict = {}     # (variant_id, source) -> set
+    # Cache: sbom_scan.id -> (findings_set, vulns_set)
+    _sbom_cache: dict = {}
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -304,12 +334,23 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
         if is_tool_scan:
             # ---- Tool scan: diff against the GLOBAL state ----
-            # Compare the global result (SBOM ∪ all tool sources) before and
-            # after this scan so that added/removed counts reflect the real
-            # impact on the combined result, not the delta vs. the previous
-            # scan of the same tool type.
-            baseline_f = sbom_findings.get(scan.variant_id, set())
-            baseline_v = sbom_vulns.get(scan.variant_id, set())
+            # Use the SBOM baseline that was active at THIS scan's timestamp
+            # so that a later SBOM import doesn't retroactively change the
+            # "newly detected" counts of earlier tool scans.
+            sbom_at_time = _sbom_active_at(
+                sbom_lists.get(scan.variant_id, []),
+                scan.timestamp,
+            )
+            if sbom_at_time and sbom_at_time.id not in _sbom_cache:
+                _sbom_cache[sbom_at_time.id] = (
+                    findings_map.get(sbom_at_time.id, set()),
+                    vulns_map.get(sbom_at_time.id, set()),
+                )
+            if sbom_at_time:
+                baseline_f, baseline_v = _sbom_cache[sbom_at_time.id]
+            else:
+                baseline_f, baseline_v = set(), set()
+
             src_key = (scan.variant_id, scan.scan_source)
 
             # Global state BEFORE this scan
@@ -347,21 +388,18 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["vulns_removed"] = len(global_before_v - global_v)
 
             # "Newly detected" = findings/vulns added to the global result.
-            # By definition these are NOT in the SBOM baseline since SBOM is
-            # part of both global_before and global_after.
             base["newly_detected_findings"] = base["findings_added"]
             base["newly_detected_vulns"] = base["vulns_added"]
 
-            # Branch result = SBOM baseline ∪ this tool scan only
-            sbom_scan_obj = latest_sbom.get(scan.variant_id)
+            # Branch result = SBOM baseline (at scan time) ∪ this tool scan
             sbom_pkg = packages_map.get(
-                sbom_scan_obj.id, set()
-            ) if sbom_scan_obj else set()
+                sbom_at_time.id, set()
+            ) if sbom_at_time else set()
             base["branch_finding_count"] = len(baseline_f | curr_f)
             base["branch_vuln_count"] = len(baseline_v | curr_v)
             base["branch_package_count"] = len(sbom_pkg)
 
-            # Global result = SBOM baseline ∪ all latest tool-scan sources
+            # Global result = SBOM baseline (at scan time) ∪ all tool sources
             base["global_finding_count"] = len(global_f)
             base["global_vuln_count"] = len(global_v)
             base["global_package_count"] = len(sbom_pkg)
