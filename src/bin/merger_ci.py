@@ -1079,14 +1079,13 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     ).scalars().all()
 
     # 2. Collect CPE names from packages
-    _valid_cpe_parts = {"a", "o", "h"}
+    # Accept any CPE with a non-wildcard product (parts[4]).
+    # Wildcard part/vendor/version are handled via virtualMatchString.
     cpe_to_pkgs: dict = {}
     for pkg in packages:
         for cpe in (pkg.cpe or []):
             parts = cpe.split(":")
-            if (len(parts) >= 6
-                    and parts[2] in _valid_cpe_parts
-                    and parts[4] != "*"):
+            if len(parts) >= 6 and parts[4] != "*":
                 cpe_to_pkgs.setdefault(cpe, []).append(pkg)
 
     if not cpe_to_pkgs:
@@ -1117,7 +1116,9 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
             cpe_parts = cpe_name.split(":")
             has_wildcards = (
                 len(cpe_parts) >= 6
-                and (cpe_parts[3] == "*" or cpe_parts[5] == "*")
+                and (cpe_parts[2] == "*"
+                     or cpe_parts[3] == "*"
+                     or cpe_parts[5] == "*")
             )
             nvd_vulns = nvd.api_get_cves_by_cpe(
                 cpe_name,
