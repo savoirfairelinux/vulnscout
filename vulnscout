@@ -57,6 +57,9 @@ Container lifecycle:
   --update                        Pull latest image and restart if a new version is available
   --version                       Show current version
   --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
+  --pyspy [opts]                  Benchmark API routes (requires VULNSCOUT_ENABLE_PYSPY=true)
+                                  Options: --live, --filter <regex>, --duration <s>,
+                                           --iterations <N>, --routes-only, --list-only
 
 Note: The container runs as a daemon. All commands auto-start it if needed and
 leave it running afterward (including --serve). Use 'stop' to remove it.
@@ -231,10 +234,19 @@ EOF
         echo "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
     fi
 
+    # py-spy live attach needs CAP_SYS_PTRACE and an unconfined seccomp profile
+    # to read /proc/<pid>/mem of the Flask worker. Only granted when explicitly
+    # opted in so the default container surface is unchanged.
+    local -a cap_args=()
+    if [ "${VULNSCOUT_ENABLE_PYSPY:-false}" = "true" ]; then
+        cap_args=(--cap-add=SYS_PTRACE --security-opt seccomp=unconfined)
+    fi
+
     call_container_engine run -d --name "$CONTAINER_NAME" \
         -p 7275:7275 \
         "${env_args[@]}" \
         "${vol_args[@]}" \
+        "${cap_args[@]}" \
         "$DOCKER_IMAGE" daemon
     # Wait for the container process to be ready to accept exec calls
     local retries=15
@@ -286,6 +298,112 @@ start_frontend_dev() {
         fi
     }
     trap _cleanup_frontend SIGINT SIGTERM EXIT
+}
+
+cmd_pyspy() {
+    # Default: harness mode (in-process bench wrapped by py-spy).
+    # --live          : attach py-spy to the running flask server PID
+    # --routes-only   : run the bench harness without py-spy wrapper
+    # --list-only     : just list discovered URLs (no benchmarking)
+    # --filter <re>   : forwarded to bench / live driver
+    # --duration <s>  : live-mode capture window (default 30)
+    # --iterations N  : harness iterations per route (default 200)
+    local mode="harness"
+    local filter_re=""
+    local duration=""
+    local iterations=""
+    local list_only=false
+    local routes_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --live)         mode="live"; shift ;;
+            --routes-only)  routes_only=true; shift ;;
+            --list-only)    list_only=true; shift ;;
+            --filter)       filter_re="$2"; shift 2 ;;
+            --duration)     duration="$2"; shift 2 ;;
+            --iterations|-n) iterations="$2"; shift 2 ;;
+            -h|--help)
+                cat <<EOF
+Usage: vulnscout --pyspy [--live] [--filter <regex>] [--duration <s>]
+                         [--iterations <N>] [--routes-only] [--list-only]
+
+Modes:
+  (default)        harness — Flask test_client bench wrapped by py-spy record
+  --live           attach py-spy to the running flask worker (needs --serve up)
+  --routes-only    run the bench harness only (no py-spy)
+  --list-only      print discovered routes and exit (no benchmark, no profile)
+
+Outputs land in: \$VULNSCOUT_OUTPUTS_DIR/profiles/  (host: $VULNSCOUT_OUTPUTS_DIR/profiles/)
+
+Note: requires VULNSCOUT_ENABLE_PYSPY=true to be set when the container starts
+(the wrapper auto-restarts the container with the SYS_PTRACE capability).
+EOF
+                return 0 ;;
+            *) echo "Unknown --pyspy option: $1" >&2; return 1 ;;
+        esac
+    done
+
+    # Ensure container is running with the ptrace capability (needed for --live;
+    # harmless overhead for harness mode, simpler to gate uniformly).
+    export VULNSCOUT_ENABLE_PYSPY=true
+    local needs_restart=false
+    if call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        local caps
+        caps="$(call_container_engine inspect "$CONTAINER_NAME" \
+            --format '{{range .HostConfig.CapAdd}}{{.}} {{end}}' 2>/dev/null || true)"
+        if ! echo "$caps" | grep -q "SYS_PTRACE"; then
+            echo "[pyspy] container missing CAP_SYS_PTRACE — restarting with capability..."
+            needs_restart=true
+        fi
+    else
+        needs_restart=true
+    fi
+    if [ "$needs_restart" = true ]; then
+        do_start
+    fi
+
+    mkdir -p "$VULNSCOUT_OUTPUTS_DIR/profiles"
+
+    local -a bench_args=()
+    [[ -n "$filter_re" ]]   && bench_args+=(--filter "$filter_re")
+    [[ -n "$iterations" ]]  && bench_args+=(--iterations "$iterations")
+    [[ "$list_only" = true ]] && bench_args+=(--list-only)
+
+    case "$mode" in
+        live)
+            local -a live_args=()
+            [[ -n "$filter_re" ]] && live_args+=(--filter "$filter_re")
+            [[ -n "$duration" ]]  && live_args+=(--duration "$duration")
+            call_container_engine exec "$CONTAINER_NAME" \
+                /scan/src/bin/pyspy_live.sh "${live_args[@]}"
+            ;;
+        harness)
+            if [ "$routes_only" = true ] || [ "$list_only" = true ]; then
+                call_container_engine exec "$CONTAINER_NAME" \
+                    sh -c "cd /scan && python3 -m src.bin.pyspy_bench $(printf '%q ' "${bench_args[@]}")"
+            else
+                local ts
+                ts="$(date -u +%Y%m%d_%H%M%S)"
+                local profile_path="/scan/outputs/profiles/profile_${ts}.json"
+                # Bench harness writes its own bench_<ts>.json/md alongside.
+                # py-spy occasionally reports a benign "No child process" error
+                # on shutdown after the speedscope JSON has already been written;
+                # check the file presence instead of trusting the exit code.
+                local _exec_status=0
+                call_container_engine exec "$CONTAINER_NAME" \
+                    sh -c "cd /scan && py-spy record --output $profile_path --format speedscope --rate 100 -- python3 -m src.bin.pyspy_bench $(printf '%q ' "${bench_args[@]}")" \
+                    || _exec_status=$?
+                if call_container_engine exec "$CONTAINER_NAME" test -s "$profile_path"; then
+                    echo
+                    echo "[pyspy] flamegraph: $VULNSCOUT_OUTPUTS_DIR/profiles/profile_${ts}.json"
+                    echo "[pyspy] open with: https://www.speedscope.app/  (drag the JSON in)"
+                    return 0
+                fi
+                return "$_exec_status"
+            fi
+            ;;
+    esac
 }
 
 parse_and_run() {
@@ -371,6 +489,13 @@ parse_and_run() {
                 _v="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
                 echo "VulnScout $_v"
                 shift ;;
+            --pyspy)
+                shift
+                # Collect every remaining flag for the helper; consumes rest of argv.
+                local -a pyspy_args=()
+                while [[ $# -gt 0 ]]; do pyspy_args+=("$1"); shift; done
+                cmd_pyspy "${pyspy_args[@]}"
+                return $? ;;
             update)
                 local _cur_ver _new_ver _running_img
                 _cur_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
