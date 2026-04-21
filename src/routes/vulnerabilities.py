@@ -28,45 +28,48 @@ TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 def _latest_scan_id_for_variant(variant_uuid):
     """Return the active Scan IDs for the given variant.
 
-    The current view is the union of the latest SBOM scan and the latest tool
-    scan (if any).  Returns a list of 0–2 scan IDs.
+    The current view is the union of the latest SBOM scan and the latest
+    tool scan **per source** (nvd, osv, grype, …).  This ensures that
+    running an OSV scan does not hide CVEs discovered by a previous NVD
+    scan.
     """
     rows = db.session.execute(
-        db.select(Scan.id, Scan.scan_type)
+        db.select(Scan.id, Scan.scan_type, Scan.scan_source)
         .where(Scan.variant_id == variant_uuid)
         .order_by(Scan.timestamp.desc())
     ).all()
     ids: list = []
-    seen_types: set = set()
-    for scan_id, scan_type in rows:
+    seen_keys: set = set()  # "sbom" or "tool:<source>"
+    for scan_id, scan_type, scan_source in rows:
         st = scan_type or "sbom"
-        if st not in seen_types:
-            seen_types.add(st)
+        key = f"tool:{scan_source}" if st == "tool" else "sbom"
+        if key not in seen_keys:
+            seen_keys.add(key)
             ids.append(scan_id)
-        if len(seen_types) >= 2:          # sbom + tool
-            break
     return ids
 
 
 def _latest_scan_ids_for_project(project_uuid):
     """Return the active Scan IDs for each variant in the project.
 
-    For every variant the latest SBOM scan and the latest tool scan (if any)
-    are included so the view = latest SBOM ∪ latest tool scan.
+    For every variant the latest SBOM scan and the latest tool scan **per
+    source** (nvd, osv, grype, …) are included so the view =
+    latest SBOM ∪ latest tool scans from all sources.
     """
     rows = db.session.execute(
-        db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.timestamp)
+        db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
         .where(Variant.project_id == project_uuid)
         .order_by(Scan.variant_id, Scan.timestamp.desc())
     ).all()
     ids: list = []
-    seen: dict = {}  # variant_id -> set of scan_types already picked
-    for scan_id, vid, scan_type, _ts in rows:
+    seen: dict = {}  # variant_id -> set of keys already picked
+    for scan_id, vid, scan_type, scan_source, _ts in rows:
         st = scan_type or "sbom"
+        key = f"tool:{scan_source}" if st == "tool" else "sbom"
         variant_seen = seen.setdefault(vid, set())
-        if st not in variant_seen:
-            variant_seen.add(st)
+        if key not in variant_seen:
+            variant_seen.add(key)
             ids.append(scan_id)
     return ids
 
