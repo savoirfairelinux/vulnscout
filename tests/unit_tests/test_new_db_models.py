@@ -736,7 +736,7 @@ class TestMetricsModelExtra:
         assert metrics.version == "2.0"
 
     def test_from_cvss_duplicate_fallback(self, app, vuln, metrics):
-        """from_cvss() falls back to SELECT when INSERT raises (lines 131-132)."""
+        """from_cvss() falls back to SELECT when INSERT raises IntegrityError."""
         from src.models.cvss import CVSS
         from sqlalchemy.exc import IntegrityError
         from unittest.mock import patch as mock_patch
@@ -751,8 +751,8 @@ class TestMetricsModelExtra:
         )
         # Clear _seen so from_cvss attempts the INSERT path
         Metrics._seen.discard((vuln.id, cvss.version, float(cvss.base_score)))
-        # Mock create() to raise IntegrityError, forcing the SELECT fallback (lines 131-132)
-        with mock_patch.object(Metrics, "create", side_effect=IntegrityError("stmt", {}, None)):
+        # Mock session.flush() to raise IntegrityError, forcing the SELECT fallback
+        with mock_patch.object(_db.session, "flush", side_effect=IntegrityError("stmt", {}, None)):
             result = Metrics.from_cvss(cvss, vuln.id)
         assert result is not None
         assert result.id == metrics.id

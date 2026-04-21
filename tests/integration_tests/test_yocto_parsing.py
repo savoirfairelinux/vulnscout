@@ -451,3 +451,303 @@ def test_yocto_summary_stored_as_description(yocto_parser):
     assert "description" in vuln.texts
     assert vuln.texts["description"] == "This is the vulnerability summary text."
     assert "summary" not in vuln.texts
+
+
+# ---------------------------------------------------------------------------
+# CVSS vector string parsing tests
+# ---------------------------------------------------------------------------
+
+def test_cvss_v3_vector_string_from_yocto(yocto_parser):
+    """The CVSSv3 vector should use the full 'vectorString' field, not 'vector'."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "base-files",
+            "version": "3.0.14",
+            "issue": [{
+                "id": "CVE-2018-6557",
+                "status": "Unpatched",
+                "summary": "The MOTD update script vulnerability.",
+                "scorev2": "4.4",
+                "scorev3": "7.0",
+                "scorev4": "0.0",
+                "vector": "LOCAL",
+                "vectorString": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2018-6557"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2018-6557")
+    assert vuln is not None
+
+    # Should have both v2 and v3 CVSS entries
+    assert len(vuln.severity_cvss) == 2
+
+    v3 = [c for c in vuln.severity_cvss if c.version == "3.1"]
+    assert len(v3) == 1
+    assert v3[0].vector_string == "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    assert v3[0].base_score == 7.0
+
+    # v2 should NOT use the v3 vectorString
+    v2 = [c for c in vuln.severity_cvss if c.version == "2.0"]
+    assert len(v2) == 1
+    assert v2[0].vector_string == ""  # vectorString starts with CVSS: → not used for v2
+    assert v2[0].base_score == 4.4
+
+
+def test_cvss_v2_only_vector_string_from_yocto(yocto_parser):
+    """When only scorev2 is non-zero, the CVSSv2 vector should use vectorString (no CVSS: prefix)."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "acl",
+            "version": "2.3.2",
+            "issue": [{
+                "id": "CVE-2009-4411",
+                "status": "Patched",
+                "summary": "The setfacl and getfacl commands vulnerability.",
+                "scorev2": "3.7",
+                "scorev3": "0.0",
+                "scorev4": "0.0",
+                "vector": "LOCAL",
+                "vectorString": "AV:L/AC:H/Au:N/C:P/I:P/A:P",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2009-4411"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2009-4411")
+    assert vuln is not None
+
+    # Only v2 since scorev3 = 0.0
+    assert len(vuln.severity_cvss) == 1
+    assert vuln.severity_cvss[0].version == "2.0"
+    assert vuln.severity_cvss[0].vector_string == "AV:L/AC:H/Au:N/C:P/I:P/A:P"
+    assert vuln.severity_cvss[0].base_score == 3.7
+
+
+def test_cvss_v4_support(yocto_parser):
+    """CVSSv4 scores should be parsed when scorev4 is non-zero."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "libfoo",
+            "version": "2.0",
+            "issue": [{
+                "id": "CVE-2025-V4TEST",
+                "status": "Unpatched",
+                "summary": "A CVSSv4-scored vulnerability.",
+                "scorev2": "0.0",
+                "scorev3": "0.0",
+                "scorev4": "8.7",
+                "vector": "NETWORK",
+                "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-V4TEST"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2025-V4TEST")
+    assert vuln is not None
+    assert len(vuln.severity_cvss) == 1
+    assert vuln.severity_cvss[0].version == "4.0"
+    assert vuln.severity_cvss[0].vector_string == "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    assert vuln.severity_cvss[0].base_score == 8.7
+    assert vuln.severity_label == "high"
+
+
+def test_cvss_all_versions_present(yocto_parser):
+    """When all three CVSS versions have non-zero scores, all three should be registered."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "libbar",
+            "version": "3.0",
+            "issue": [{
+                "id": "CVE-2025-ALLV",
+                "status": "Unpatched",
+                "summary": "All CVSS versions present.",
+                "scorev2": "5.0",
+                "scorev3": "7.5",
+                "scorev4": "8.0",
+                "vector": "NETWORK",
+                "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-ALLV"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2025-ALLV")
+    assert vuln is not None
+    assert len(vuln.severity_cvss) == 3
+    versions = {c.version for c in vuln.severity_cvss}
+    assert versions == {"2.0", "3.1", "4.0"}
+
+    # v4 gets the vectorString (starts with CVSS:4)
+    v4 = [c for c in vuln.severity_cvss if c.version == "4.0"][0]
+    assert v4.vector_string.startswith("CVSS:4.0/")
+    assert v4.base_score == 8.0
+
+    # v3 does NOT get the vectorString (it starts with CVSS:4, not CVSS:3)
+    v3 = [c for c in vuln.severity_cvss if c.version == "3.1"][0]
+    assert v3.vector_string == ""
+    assert v3.base_score == 7.5
+
+    # v2 does NOT get the vectorString either (starts with CVSS:)
+    v2 = [c for c in vuln.severity_cvss if c.version == "2.0"][0]
+    assert v2.vector_string == ""
+    assert v2.base_score == 5.0
+
+
+def test_cvss_no_vector_string_field(yocto_parser):
+    """When there's no vectorString field at all, CVSS scores still get created with empty vectors."""
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "libnovc",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2025-NOVEC",
+                "status": "Unpatched",
+                "summary": "No vector string.",
+                "scorev2": "5.0",
+                "scorev3": "7.5"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-2025-NOVEC")
+    assert vuln is not None
+    assert len(vuln.severity_cvss) == 2
+    for c in vuln.severity_cvss:
+        assert c.vector_string == ""
+    assert vuln.severity_label == "high"  # 7.5 → high
+
+
+# ---------------------------------------------------------------------------
+# DB persistence tests — verify data survives the DB round-trip
+# ---------------------------------------------------------------------------
+
+def test_yocto_description_persisted_to_db(yocto_parser):
+    """Description from the Yocto CVE check JSON must be persisted to the DB."""
+    from src.models.vulnerability import Vulnerability as VulnModel
+    from src.extensions import db
+
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "test-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2025-DBDESC",
+                "status": "Unpatched",
+                "summary": "DB persistence test description.",
+                "scorev3": "6.5",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-DBDESC"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    db.session.commit()
+
+    # Load fresh from DB (bypassing all caches)
+    db.session.expire_all()
+    record = VulnModel.get_by_id("CVE-2025-DBDESC")
+    assert record is not None
+    assert record.description == "DB persistence test description."
+    assert record.status == "medium"
+    assert "https://nvd.nist.gov/vuln/detail/CVE-2025-DBDESC" in (record.links or [])
+
+
+def test_yocto_cvss_metrics_persisted_to_db(yocto_parser):
+    """CVSS metrics from the Yocto CVE check JSON must be persisted as Metrics rows."""
+    from src.models.vulnerability import Vulnerability as VulnModel
+    from src.models.metrics import Metrics
+    from src.extensions import db
+
+    data = {
+        "version": "1",
+        "package": [{
+            "name": "test-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2025-DBCVSS",
+                "status": "Unpatched",
+                "summary": "CVSS DB persistence test.",
+                "scorev2": "5.0",
+                "scorev3": "9.8",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-DBCVSS"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data)
+    db.session.commit()
+
+    # Load metrics fresh from DB
+    db.session.expire_all()
+    metrics = db.session.execute(
+        db.select(Metrics).where(Metrics.vulnerability_id == "CVE-2025-DBCVSS")
+    ).scalars().all()
+    assert len(metrics) == 2
+
+    versions = {m.version: m for m in metrics}
+    assert "3.1" in versions
+    assert float(versions["3.1"].score) == 9.8
+    assert versions["3.1"].vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+    assert "2.0" in versions
+    assert float(versions["2.0"].score) == 5.0
+
+
+def test_yocto_reimport_updates_metadata(yocto_parser):
+    """Re-importing with enriched metadata should update DB even when packages don't change."""
+    from src.models.vulnerability import Vulnerability as VulnModel
+    from src.extensions import db
+
+    # First import: minimal data (no summary, no CVSS)
+    data_minimal = {
+        "version": "1",
+        "package": [{
+            "name": "test-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2025-REIMPORT",
+                "status": "Unpatched",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-REIMPORT"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data_minimal)
+    db.session.commit()
+
+    record = VulnModel.get_by_id("CVE-2025-REIMPORT")
+    assert record is not None
+    assert record.description is None
+
+    # Second import: same CVE + package, but now with description and CVSS
+    data_enriched = {
+        "version": "1",
+        "package": [{
+            "name": "test-pkg",
+            "version": "1.0",
+            "issue": [{
+                "id": "CVE-2025-REIMPORT",
+                "status": "Unpatched",
+                "summary": "Now with a description.",
+                "scorev3": "7.5",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2025-REIMPORT"
+            }]
+        }]
+    }
+    yocto_parser.load_from_dict(data_enriched)
+    db.session.commit()
+
+    db.session.expire_all()
+    record = VulnModel.get_by_id("CVE-2025-REIMPORT")
+    assert record is not None
+    assert record.description == "Now with a description."
+    assert record.status == "high"

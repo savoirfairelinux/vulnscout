@@ -79,10 +79,24 @@ class YoctoVulns:
                     if "description" in issue:
                         vuln.add_text(issue.get("description"), "yocto description")
 
+                    vector_string = issue.get("vectorString", "")
+
+                    if "scorev4" in issue and issue["scorev4"] != "0.0":
+                        v4_vector = vector_string if vector_string.startswith("CVSS:4") else ""
+                        cvss_item = CVSS(
+                            "4.0",
+                            v4_vector,
+                            "unknown",
+                            float(issue.get("scorev4")),
+                            0.0,
+                            0.0
+                        )
+                        vuln.register_cvss(cvss_item)
                     if "scorev3" in issue and issue["scorev3"] != "0.0":
+                        v3_vector = vector_string if vector_string.startswith("CVSS:3") else ""
                         cvss_item = CVSS(
                             "3.1",
-                            f"CVSS:3.1/AV:{issue['vector']}" if "vector" in issue else "",
+                            v3_vector,
                             "unknown",
                             float(issue.get("scorev3")),
                             0.0,
@@ -90,9 +104,12 @@ class YoctoVulns:
                         )
                         vuln.register_cvss(cvss_item)
                     if "scorev2" in issue and issue["scorev2"] != "0.0":
+                        v2_vector = vector_string if (
+                            vector_string and not vector_string.startswith("CVSS:")
+                        ) else ""
                         cvss_item = CVSS(
                             "2.0",
-                            f"AV:{issue['vector']}" if "vector" in issue else "",
+                            v2_vector,
                             "unknown",
                             float(issue.get("scorev2")),
                             0.0,
