@@ -774,7 +774,7 @@ class TestClassifyFindingChangesUnit:
                 "package_version": "1.16.0",
                 "vulnerability_id": "CVE-2020-35492",
             }]
-            truly_add, truly_rem, upgraded = _classify_finding_changes(
+            truly_add, truly_rem, upgraded, upgraded_keys = _classify_finding_changes(
                 added, removed, [(pkg_old, pkg_new)]
             )
             assert len(upgraded) == 1
@@ -783,6 +783,7 @@ class TestClassifyFindingChangesUnit:
             assert upgraded[0]["new_version"] == "1.17.0"
             assert len(truly_add) == 0
             assert len(truly_rem) == 0
+            assert len(upgraded_keys) == 1
 
     def test_no_upgrade_different_vuln(self, upgrade_app):
         """Findings on different vulns don't match as upgrades."""
@@ -814,9 +815,10 @@ class TestClassifyFindingChangesUnit:
                 "package_version": "1.16.0",
                 "vulnerability_id": "CVE-2020-35492",
             }]
-            truly_add, truly_rem, upgraded = _classify_finding_changes(
+            truly_add, truly_rem, upgraded, upgraded_keys = _classify_finding_changes(
                 added, removed, [(pkg_old, pkg_new)]
             )
             assert len(upgraded) == 0
             assert len(truly_add) == 1
             assert len(truly_rem) == 1
+            assert len(upgraded_keys) == 0
