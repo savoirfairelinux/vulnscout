@@ -84,7 +84,21 @@ def _sql_compute_facets_global() -> dict:
     Set members match what _compute_facets() would produce when no client
     filters are applied, except ``sources`` which is approximated from the
     same SBOMDocument.format mapping used by _populate_found_by().
+
+    Result is cached in-process keyed on a cheap content signature
+    (counts of vulns / assessments / sboms + max assessment timestamp) so
+    that repeat page loads avoid re-running the GROUP BY scan over all
+    findings used to build ``first_scan_dates``.
     """
+    sig = db.session.execute(db.text(
+        "SELECT (SELECT COUNT(*) FROM vulnerabilities),"
+        " (SELECT COUNT(*) FROM assessments),"
+        " (SELECT COUNT(*) FROM sbom_documents),"
+        " (SELECT MAX(timestamp) FROM assessments)"
+    )).first()
+    cached = getattr(_sql_compute_facets_global, "_cache", None)
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     severities: set[str] = set()
     # Severity is computed from the max metrics.score per vuln, bucketed
     # the same way CVSS.severity() does. Match the lowercase labels that
@@ -166,13 +180,15 @@ def _sql_compute_facets_global() -> dict:
         if min_ts is not None:
             first_scan_ts.add(int(round(min_ts.timestamp())) * 1000)
 
-    return {
+    result = {
         "severities": sorted(severities),
         "statuses": sorted(statuses),
         "sources": sorted(sources),
         "attack_vectors": sorted(attack_vectors),
         "first_scan_dates": sorted(first_scan_ts),
     }
+    _sql_compute_facets_global._cache = (sig, result)
+    return result
 
 
 def _populate_found_by(

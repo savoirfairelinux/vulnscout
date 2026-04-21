@@ -165,6 +165,11 @@ def _compute_evolution(
 
 def init_app(app):
 
+    # In-process cache for the unscoped metrics response. Invalidated by a
+    # cheap content signature query so any DB mutation (ingestion, new
+    # assessment) auto-invalidates without explicit hooks.
+    _metrics_cache: dict = {"sig": None, "by_scale": {}}
+
     @app.route('/api/metrics')
     def get_metrics():
         variant_id_raw = request.args.get('variant_id')
@@ -216,6 +221,33 @@ def init_app(app):
             }
 
         # ── Scoped vulnerability IDs ─────────────────────────────────────
+        # When scoped, ``vuln_ids`` materialises the in-scope set used as a
+        # WHERE filter. When unscoped, we set ``unscoped = True`` and skip
+        # the IN-list filtering everywhere below: re-binding an 11k-element
+        # IN list across 5+ queries is the single biggest cost of this
+        # endpoint. The natural table joins already give us "all vulns".
+        unscoped = scope_variant is None and scope_project is None
+
+        # Cache lookup for the unscoped response. The signature query is
+        # cheap (4 COUNT/MAX queries on indexed columns) and invalidates
+        # automatically on any DB mutation.
+        if unscoped:
+            sig_row = db.session.execute(db.text(
+                "SELECT (SELECT COUNT(*) FROM vulnerabilities),"
+                " (SELECT COUNT(*) FROM assessments),"
+                " (SELECT COUNT(*) FROM findings),"
+                " (SELECT MAX(timestamp) FROM assessments)"
+            )).first()
+            sig = (sig_row, scale, unit)
+            if _metrics_cache["sig"] == sig_row:
+                cached = _metrics_cache["by_scale"].get((scale, unit))
+                if cached is not None:
+                    return cached
+            else:
+                # DB has changed — drop all per-(scale,unit) entries
+                _metrics_cache["sig"] = sig_row
+                _metrics_cache["by_scale"] = {}
+
         if scope_variant is not None or scope_project is not None:
             if not current_scan_ids:
                 return _empty()
@@ -225,24 +257,36 @@ def init_app(app):
                 .where(Observation.scan_id.in_(current_scan_ids))
                 .distinct()
             ).scalars().all())
+            if not vuln_ids:
+                return _empty()
         else:
-            vuln_ids = list(db.session.execute(
-                db.select(Vulnerability.id)
-            ).scalars().all())
+            # Unscoped — skip the 11k-element IN-list. We still need a
+            # cheap existence check so we can short-circuit on an empty DB.
+            has_any = db.session.execute(
+                db.select(Vulnerability.id).limit(1)
+            ).first()
+            if not has_any:
+                return _empty()
+            vuln_ids = []  # sentinel; only used for the active-vuln list later
 
-        if not vuln_ids:
-            return _empty()
+        def _vfilter(query, column):
+            """Apply ``column.in_(vuln_ids)`` only when scoped."""
+            if unscoped:
+                return query
+            return query.where(column.in_(vuln_ids))
 
         # ── 1. Severity distribution ─────────────────────────────────────
         # Prefer max CVSS score; fall back to the vulnerability's status column
         sev_rows = db.session.execute(
-            db.select(
+            _vfilter(
+                db.select(
+                    Vulnerability.id,
+                    Vulnerability.status,
+                    func.max(MetricsModel.score).label('max_score'),
+                )
+                .outerjoin(MetricsModel, MetricsModel.vulnerability_id == Vulnerability.id),
                 Vulnerability.id,
-                Vulnerability.status,
-                func.max(MetricsModel.score).label('max_score'),
             )
-            .outerjoin(MetricsModel, MetricsModel.vulnerability_id == Vulnerability.id)
-            .where(Vulnerability.id.in_(vuln_ids))
             .group_by(Vulnerability.id, Vulnerability.status)
         ).all()
 
@@ -258,14 +302,16 @@ def init_app(app):
         # Lightweight query: only the columns needed for evolution and status aggregation.
         # Full assessment details are fetched separately for top-vulns only.
         slim_assess_rows = db.session.execute(
-            db.select(
+            _vfilter(
+                db.select(
+                    Finding.vulnerability_id,
+                    Assessment.timestamp,
+                    Assessment.status,
+                    Assessment.simplified_status,
+                )
+                .join(Finding, Assessment.finding_id == Finding.id),
                 Finding.vulnerability_id,
-                Assessment.timestamp,
-                Assessment.status,
-                Assessment.simplified_status,
             )
-            .join(Finding, Assessment.finding_id == Finding.id)
-            .where(Finding.vulnerability_id.in_(vuln_ids))
             .order_by(Finding.vulnerability_id, Assessment.timestamp)
         ).all()
 
@@ -288,16 +334,33 @@ def init_app(app):
         latest_status_by_vuln: dict[str, str] = latest_sstat_by_vuln
 
         status_counts = [0, 0, 0, 0]  # Not affected, Fixed, Pending Assessment, Exploitable
-        for vid in vuln_ids:
-            sstat = latest_status_by_vuln.get(vid, 'Pending Assessment')
-            if sstat == 'Not affected':
-                status_counts[0] += 1
-            elif sstat == 'Fixed':
-                status_counts[1] += 1
-            elif sstat == 'Pending Assessment':
-                status_counts[2] += 1
-            else:
-                status_counts[3] += 1
+        if unscoped:
+            # Total = COUNT(*) of vulnerabilities; assessed counts come from rows
+            total_vulns = db.session.execute(
+                db.select(func.count(Vulnerability.id))
+            ).scalar() or 0
+            for sstat in latest_status_by_vuln.values():
+                if sstat == 'Not affected':
+                    status_counts[0] += 1
+                elif sstat == 'Fixed':
+                    status_counts[1] += 1
+                elif sstat == 'Pending Assessment':
+                    status_counts[2] += 1
+                else:
+                    status_counts[3] += 1
+            assessed = sum(status_counts)
+            status_counts[2] += max(0, total_vulns - assessed)
+        else:
+            for vid in vuln_ids:
+                sstat = latest_status_by_vuln.get(vid, 'Pending Assessment')
+                if sstat == 'Not affected':
+                    status_counts[0] += 1
+                elif sstat == 'Fixed':
+                    status_counts[1] += 1
+                elif sstat == 'Pending Assessment':
+                    status_counts[2] += 1
+                else:
+                    status_counts[3] += 1
 
         # ── 3. Evolution data ────────────────────────────────────────────
         checkpoints = _generate_checkpoints(scale, unit)
@@ -311,8 +374,9 @@ def init_app(app):
             .join(SBOMPackage, SBOMPackage.package_id == Finding.package_id)
             .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
             .where(SBOMDocument.format.isnot(None))
-            .where(Finding.vulnerability_id.in_(vuln_ids))
         )
+        if not unscoped:
+            source_query = source_query.where(Finding.vulnerability_id.in_(vuln_ids))
         if scope_variant is not None:
             source_query = (
                 source_query
@@ -372,7 +436,6 @@ def init_app(app):
                     func.count(Finding.vulnerability_id.distinct()).label('cnt'),
                 )
                 .join(Finding, Finding.package_id == Package.id)
-                .where(Finding.vulnerability_id.in_(vuln_ids))
                 .group_by(Package.name, Package.version)
                 .order_by(func.count(Finding.vulnerability_id.distinct()).desc())
                 .limit(5)
@@ -384,10 +447,22 @@ def init_app(app):
         ]
 
         # ── 6. Top unfixed vulnerabilities ────────────────────────────────
-        active_vuln_ids = [
-            vid for vid in vuln_ids
-            if latest_status_by_vuln.get(vid, 'Pending Assessment') not in ('Fixed', 'Not affected')
-        ]
+        if unscoped:
+            # Cheap: vulns marked Fixed/Not affected are typically a small set;
+            # the *active* set = all vulns minus that small exclusion set.
+            non_active_ids = {
+                vid for vid, sstat in latest_status_by_vuln.items()
+                if sstat in ('Fixed', 'Not affected')
+            }
+            active_q = db.select(Vulnerability.id)
+            if non_active_ids:
+                active_q = active_q.where(~Vulnerability.id.in_(non_active_ids))
+            active_vuln_ids = list(db.session.execute(active_q).scalars().all())
+        else:
+            active_vuln_ids = [
+                vid for vid in vuln_ids
+                if latest_status_by_vuln.get(vid, 'Pending Assessment') not in ('Fixed', 'Not affected')
+            ]
 
         if not active_vuln_ids:
             top_vulns: list = []
@@ -437,6 +512,57 @@ def init_app(app):
 
             # Build response ordered by rank
             records_by_id = {r.id: r for r in top_records}
+
+            # Bulk-load all assessments for the top-5 in a single query,
+            # then group by vuln_id. Replaces the per-vuln SELECT loop.
+            bulk_assess_rows = db.session.execute(
+                db.select(
+                    Finding.vulnerability_id,
+                    Assessment.id.label('assess_id'),
+                    Assessment.source,
+                    Assessment.status,
+                    Assessment.simplified_status,
+                    Assessment.status_notes,
+                    Assessment.justification,
+                    Assessment.impact_statement,
+                    Assessment.responses,
+                    Assessment.workaround,
+                    Assessment.timestamp,
+                    Assessment.variant_id,
+                    Package.name.label('pkg_name'),
+                    Package.version.label('pkg_version'),
+                )
+                .join(Finding, Assessment.finding_id == Finding.id)
+                .join(Package, Finding.package_id == Package.id)
+                .where(Finding.vulnerability_id.in_(top5_ids))
+                .order_by(Finding.vulnerability_id, Assessment.timestamp)
+            ).all()
+            assess_by_vuln: dict[str, list[dict]] = {}
+            for row in bulk_assess_rows:
+                vid_b = row.vulnerability_id
+                ts = row.timestamp
+                ts_str = (
+                    ts.isoformat() if ts is not None and hasattr(ts, 'isoformat')
+                    else (str(ts) if ts else None)
+                )
+                sstat = row.simplified_status or STATUS_TO_SIMPLIFIED.get(row.status or '', 'Pending Assessment')
+                assess_by_vuln.setdefault(vid_b, []).append({
+                    "id": str(row.assess_id),
+                    "source": row.source or "",
+                    "vuln_id": vid_b,
+                    "packages": [f"{row.pkg_name}@{row.pkg_version}"],
+                    "variant_id": str(row.variant_id) if row.variant_id else None,
+                    "timestamp": ts_str,
+                    "last_update": ts_str or "",
+                    "status": row.status or "",
+                    "simplified_status": sstat or 'Pending Assessment',
+                    "status_notes": row.status_notes or "",
+                    "justification": row.justification or "",
+                    "impact_statement": row.impact_statement or "",
+                    "responses": list(row.responses or []),
+                    "workaround": row.workaround or "",
+                })
+
             top_vulns = []
             for rank_idx, vid in enumerate(top5_ids):
                 record = records_by_id.get(vid)
@@ -445,55 +571,7 @@ def init_app(app):
                 vuln_dict = record.to_dict()
                 vuln_dict['packages_current'] = sorted(pkgs_current.get(vid, []))
                 vuln_dict['simplified_status'] = latest_status_by_vuln.get(vid, 'Pending Assessment')
-
-                # Fetch full assessment details for this top-5 vuln (modal data)
-                top_assess_rows = db.session.execute(
-                    db.select(
-                        Assessment.id.label('assess_id'),
-                        Assessment.source,
-                        Assessment.status,
-                        Assessment.simplified_status,
-                        Assessment.status_notes,
-                        Assessment.justification,
-                        Assessment.impact_statement,
-                        Assessment.responses,
-                        Assessment.workaround,
-                        Assessment.timestamp,
-                        Assessment.variant_id,
-                        Package.name.label('pkg_name'),
-                        Package.version.label('pkg_version'),
-                    )
-                    .join(Finding, Assessment.finding_id == Finding.id)
-                    .join(Package, Finding.package_id == Package.id)
-                    .where(Finding.vulnerability_id == vid)
-                    .order_by(Assessment.timestamp)
-                ).all()
-
-                assess_dicts = []
-                for row in top_assess_rows:
-                    ts = row.timestamp
-                    ts_str = (
-                        ts.isoformat() if ts is not None and hasattr(ts, 'isoformat')
-                        else (str(ts) if ts else None)
-                    )
-                    sstat = row.simplified_status or STATUS_TO_SIMPLIFIED.get(row.status or '', 'Pending Assessment')
-                    assess_dicts.append({
-                        "id": str(row.assess_id),
-                        "source": row.source or "",
-                        "vuln_id": vid,
-                        "packages": [f"{row.pkg_name}@{row.pkg_version}"],
-                        "variant_id": str(row.variant_id) if row.variant_id else None,
-                        "timestamp": ts_str,
-                        "last_update": ts_str or "",
-                        "status": row.status or "",
-                        "simplified_status": sstat or 'Pending Assessment',
-                        "status_notes": row.status_notes or "",
-                        "justification": row.justification or "",
-                        "impact_statement": row.impact_statement or "",
-                        "responses": list(row.responses or []),
-                        "workaround": row.workaround or "",
-                    })
-                vuln_dict['assessments'] = assess_dicts
+                vuln_dict['assessments'] = assess_by_vuln.get(vid, [])
                 vuln_dict['variants'] = []
 
                 top_vulns.append({
@@ -506,7 +584,7 @@ def init_app(app):
                     "vuln": vuln_dict,
                 })
 
-        return {
+        result_payload = {
             "vuln_by_severity": severity_counts,
             "vuln_by_status": status_counts,
             "vuln_evolution": {"labels": labels, "data": evolution_counts},
@@ -514,3 +592,6 @@ def init_app(app):
             "top_packages": top_packages,
             "top_vulns": top_vulns,
         }
+        if unscoped:
+            _metrics_cache["by_scale"][(scale, unit)] = result_payload
+        return result_payload
