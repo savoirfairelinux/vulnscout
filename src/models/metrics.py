@@ -119,15 +119,21 @@ class Metrics(Base):
         # _seen is pre-populated from the DB at startup for all existing metrics.
         # Reaching here means this is genuinely new — skip the existence SELECT
         # and attempt the insert directly. On the rare race/duplicate, fall back.
+        #
+        # Use flush() instead of create() (which calls commit()) so the
+        # caller's SAVEPOINT context stays open for subsequent metric inserts.
         try:
             with db.session.begin_nested():
-                return cls.create(
+                record = cls(
                     vulnerability_id=vid,
                     version=cvss.version,
                     score=cvss.base_score,
                     vector=cvss.vector_string,
                     author=cvss.author,
                 )
+                db.session.add(record)
+                db.session.flush()
+                return record
         except Exception:
             return db.session.execute(
                 db.select(Metrics).where(
