@@ -51,11 +51,13 @@ function FindingDiffTable({ entries, label, colorClass }: {
     colorClass: string;
 }) {
     const [filter, setFilter] = useState('');
+    const hasOrigin = entries.some(e => e.origin);
     const filtered = filter
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.package_version.toLowerCase().includes(filter.toLowerCase()) ||
-            e.vulnerability_id.toLowerCase().includes(filter.toLowerCase())
+            e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -83,6 +85,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
                                 <th className="px-3 py-2">Vulnerability</th>
+                                {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
                         </thead>
                         <tbody>
@@ -91,6 +94,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
+                                    {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
                             ))}
                         </tbody>
@@ -273,14 +277,19 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
     );
 }
 
-function VulnDiffList({ vulns, label, colorClass }: {
+function VulnDiffList({ vulns, label, colorClass, originMap }: {
     vulns: string[];
     label: string;
     colorClass: string;
+    originMap?: Record<string, string[]>;
 }) {
     const [filter, setFilter] = useState('');
+    const hasOrigin = !!originMap && Object.keys(originMap).length > 0;
     const filtered = filter
-        ? vulns.filter(v => v.toLowerCase().includes(filter.toLowerCase()))
+        ? vulns.filter(v =>
+            v.toLowerCase().includes(filter.toLowerCase()) ||
+            (originMap?.[v] || []).some(o => o.toLowerCase().includes(filter.toLowerCase()))
+        )
         : vulns;
 
     return (
@@ -307,12 +316,14 @@ function VulnDiffList({ vulns, label, colorClass }: {
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase">
                             <tr>
                                 <th className="px-3 py-2">CVE / Vulnerability ID</th>
+                                {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
                         </thead>
                         <tbody>
                             {filtered.map((v) => (
                                 <tr key={v} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{v}</td>
+                                    {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{(originMap?.[v] || []).join(', ')}</td>}
                                 </tr>
                             ))}
                         </tbody>
@@ -723,13 +734,25 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                     label={diff.is_first ? "All vulnerabilities" : "New vulnerabilities"}
                                     colorClass="text-green-400"
                                 />
-                                {!diff.is_first && (
-                                    <VulnDiffList
-                                        vulns={diff.vulns_removed}
-                                        label="Removed vulnerabilities"
-                                        colorClass="text-red-400"
-                                    />
-                                )}
+                                {!diff.is_first && (() => {
+                                    // Build origin map from findings_removed
+                                    const originMap: Record<string, string[]> = {};
+                                    for (const f of diff.findings_removed) {
+                                        if (f.origin) {
+                                            const origins = originMap[f.vulnerability_id] || [];
+                                            if (!origins.includes(f.origin)) origins.push(f.origin);
+                                            originMap[f.vulnerability_id] = origins;
+                                        }
+                                    }
+                                    return (
+                                        <VulnDiffList
+                                            vulns={diff.vulns_removed}
+                                            label="Removed vulnerabilities"
+                                            colorClass="text-red-400"
+                                            originMap={originMap}
+                                        />
+                                    );
+                                })()}
                             </>
                         )}
                         {diff && section === 'newly_detected' && isToolScan && (

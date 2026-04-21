@@ -36,6 +36,7 @@ type FindingDiffEntry = {
     package_version: string;
     package_id: string;
     vulnerability_id: string;
+    origin?: string;
 };
 
 type PackageDiffEntry = {
