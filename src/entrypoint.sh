@@ -37,6 +37,8 @@ Input commands:
   --add-cdx <path>          Add a CycloneDX file
   --add-grype <path>        Add a Grype results file
   --perform-grype-scan      Perform a Grype scan on the added inputs
+  --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
+  --perform-osv-scan        Run an OSV PURL-based vulnerability scan
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
@@ -292,7 +294,7 @@ cmd_scan() {
     [[ ${#INIT_APP_ARGS[@]} -gt 4 ]]     && has_inputs=true
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
-    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]]; then
+    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
@@ -322,6 +324,20 @@ cmd_scan() {
                 echo "Warning: CycloneDX export produced no file, skipping Grype scan."
             fi
             rm -rf "$grype_tmp"
+        fi
+
+        # If an NVD scan was requested, run it synchronously via the flask CLI.
+        if [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]]; then
+            echo "Running NVD scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            (cd "$BASE_DIR" && flask --app src.bin.webapp nvd-scan \
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+        fi
+
+        # If an OSV scan was requested, run it synchronously via the flask CLI.
+        if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
+            echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
         fi
 
         # merger_ci.py emits lines of the form  ::STATUS::<step>::<message>
@@ -500,6 +516,8 @@ function set_status() {
 MATCH_CONDITION=""
 SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
+NVD_SCAN_REQUESTED=false
+OSV_SCAN_REQUESTED=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
@@ -594,6 +612,10 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --perform-nvd-scan)
+            NVD_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --perform-osv-scan)
+            OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
         --delete-scan)
