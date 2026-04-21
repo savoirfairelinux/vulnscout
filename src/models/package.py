@@ -4,101 +4,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-import re
 import semver
 from typing import Optional
 from ..extensions import db, Base
-
-
-# ---------------------------------------------------------------------------
-# Well-known CPE mappings: package name patterns → (part, vendor, product)
-# The NVD CPE dictionary uses specific vendor:product pairs that often
-# differ from distro package names.  This table lets VulnScout translate
-# common package names into their canonical CPE representation so that
-# NVD queries return meaningful results.
-# Keys are compiled regexes matched against the *lowercased* package name.
-# ---------------------------------------------------------------------------
-_KNOWN_CPE_MAPPINGS: list[tuple[re.Pattern, str, str, str]] = [
-    # Linux kernel
-    (re.compile(r"^(linux|kernel|kernel-image|linux-image|linux-kernel)"),
-     "o", "linux", "linux_kernel"),
-    # GNU core utilities
-    (re.compile(r"^(glibc|libc6|eglibc)$"), "a", "gnu", "glibc"),
-    (re.compile(r"^(openssl|libssl)"), "a", "openssl", "openssl"),
-    (re.compile(r"^(busybox)$"), "a", "busybox", "busybox"),
-    (re.compile(r"^(bash)$"), "a", "gnu", "bash"),
-    (re.compile(r"^(tar)$"), "a", "gnu", "tar"),
-    (re.compile(r"^(gzip)$"), "a", "gnu", "gzip"),
-    (re.compile(r"^(wget)$"), "a", "gnu", "wget"),
-    (re.compile(r"^(curl|libcurl)"), "a", "haxx", "curl"),
-    (re.compile(r"^(zlib)$"), "a", "zlib", "zlib"),
-    (re.compile(r"^(sqlite|libsqlite)"), "a", "sqlite", "sqlite"),
-    (re.compile(r"^(openssh|libssh)"), "a", "openbsd", "openssh"),
-    (re.compile(r"^(dbus|libdbus)"), "a", "freedesktop", "dbus"),
-    (re.compile(r"^(systemd|libsystemd|udev)"), "a", "systemd_project", "systemd"),
-    (re.compile(r"^(sudo)$"), "a", "sudo_project", "sudo"),
-    (re.compile(r"^(binutils|ld|as|objdump)$"), "a", "gnu", "binutils"),
-    (re.compile(r"^(gcc|libgcc|libstdc\+\+)"), "a", "gnu", "gcc"),
-    (re.compile(r"^(python|python3|libpython)"), "a", "python", "python"),
-    (re.compile(r"^(perl)$"), "a", "perl", "perl"),
-    (re.compile(r"^(nginx)$"), "a", "f5", "nginx"),
-    (re.compile(r"^(apache2|httpd)$"), "a", "apache", "http_server"),
-    (re.compile(r"^(u-boot)"), "a", "denx", "u-boot"),
-    (re.compile(r"^(grub|grub2)"), "a", "gnu", "grub2"),
-    (re.compile(r"^(expat|libexpat)"), "a", "libexpat_project", "libexpat"),
-    (re.compile(r"^(libxml2)$"), "a", "xmlsoft", "libxml2"),
-    (re.compile(r"^(libpng)"), "a", "libpng", "libpng"),
-    (re.compile(r"^(libtiff)"), "a", "libtiff", "libtiff"),
-    (re.compile(r"^(libjpeg|jpeg)"), "a", "ijg", "libjpeg"),
-    (re.compile(r"^(freetype)"), "a", "freetype", "freetype"),
-    (re.compile(r"^(cups)$"), "a", "openprinting", "cups"),
-    (re.compile(r"^(samba)$"), "a", "samba", "samba"),
-    (re.compile(r"^(ntp)$"), "a", "ntp", "ntp"),
-    (re.compile(r"^(dhcp|isc-dhcp)"), "a", "isc", "dhcp"),
-    (re.compile(r"^(bind|named)$"), "a", "isc", "bind"),
-    (re.compile(r"^(dnsmasq)$"), "a", "thekelleys", "dnsmasq"),
-    (re.compile(r"^(avahi)"), "a", "avahi", "avahi"),
-    (re.compile(r"^(bluez)$"), "a", "bluez", "bluez"),
-    (re.compile(r"^(wpa_supplicant|wpa-supplicant)$"), "a", "w1.fi", "wpa_supplicant"),
-    (re.compile(r"^(gnutls|libgnutls)"), "a", "gnu", "gnutls"),
-    (re.compile(r"^(gstreamer)"), "a", "gstreamer_project", "gstreamer"),
-    (re.compile(r"^(libarchive)$"), "a", "libarchive", "libarchive"),
-    (re.compile(r"^(util-linux)$"), "a", "kernel", "util-linux"),
-    (re.compile(r"^(coreutils)$"), "a", "gnu", "coreutils"),
-    (re.compile(r"^(shadow|shadow-utils)$"), "a", "shadow_project", "shadow"),
-    (re.compile(r"^(xz|liblzma|xz-utils)"), "a", "tukaani", "xz"),
-]
-
-
-def normalize_cpe(cpe: str, pkg_name: str = "") -> str:
-    """Normalize a CPE 2.3 string for NVD compatibility.
-
-    Fixes:
-    - Replace ``*`` in the *part* field with ``a`` (application).
-    - Look up known package-to-CPE mappings to set the correct
-      vendor and product when they are currently wildcards.
-    """
-    parts = cpe.split(":")
-    if len(parts) < 6:
-        return cpe
-
-    # Fix part field: NVD rejects * — default to 'a'
-    if parts[2] == "*":
-        parts[2] = "a"
-
-    # Try well-known mappings when vendor or product is still a wildcard
-    if parts[3] == "*" or parts[4] == "*":
-        lookup_name = (pkg_name or parts[4]).lower().strip()
-        for pattern, part, vendor, product in _KNOWN_CPE_MAPPINGS:
-            if pattern.search(lookup_name):
-                parts[2] = part
-                if parts[3] == "*":
-                    parts[3] = vendor
-                if parts[4] == "*" or parts[4] == lookup_name:
-                    parts[4] = product
-                break
-
-    return ":".join(parts)
 
 
 class Package(Base):
@@ -177,7 +85,6 @@ class Package(Base):
         """Add a single cpe (str) identifier to the package if not already present."""
         if not cpe:
             return
-        cpe = normalize_cpe(cpe, self.name or "")
         current = list(self.cpe or [])
         if cpe not in current:
             current.append(cpe)
