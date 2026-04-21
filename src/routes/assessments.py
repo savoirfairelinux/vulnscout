@@ -26,6 +26,63 @@ def init_app(app):
     def _get_all_db_assessments():
         return DBAssessment.get_all()
 
+    def _all_assessment_dicts_fast() -> list[dict]:
+        """Return all assessments serialised to dicts via projection queries.
+
+        Bypasses ORM hydration on the hot path: one query for assessment
+        columns + finding.vulnerability_id + package.name/version,
+        producing dicts in the same shape as ``Assessment.to_dict()``.
+        """
+        rows = db.session.execute(
+            db.select(
+                DBAssessment.id,
+                DBAssessment.source,
+                DBAssessment.origin,
+                DBAssessment.variant_id,
+                DBAssessment.timestamp,
+                DBAssessment.status,
+                DBAssessment.status_notes,
+                DBAssessment.justification,
+                DBAssessment.impact_statement,
+                DBAssessment.responses,
+                DBAssessment.workaround,
+                Finding.vulnerability_id,
+                Package.name,
+                Package.version,
+            )
+            .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+            .outerjoin(Package, Finding.package_id == Package.id)
+            .order_by(DBAssessment.timestamp)
+        ).all()
+
+        result: list[dict] = []
+        for (
+            aid, source, origin, variant_id, timestamp, status, status_notes,
+            justification, impact_statement, responses, workaround,
+            vuln_id, pkg_name, pkg_version,
+        ) in rows:
+            ts_iso = timestamp.isoformat() if timestamp is not None and hasattr(timestamp, "isoformat") else (
+                str(timestamp) if timestamp is not None else None
+            )
+            packages = [f"{pkg_name}@{pkg_version}"] if pkg_name is not None else []
+            result.append({
+                "id": str(aid),
+                "source": source or "",
+                "origin": origin or "sbom",
+                "vuln_id": vuln_id or "",
+                "packages": packages,
+                "variant_id": str(variant_id) if variant_id else None,
+                "timestamp": ts_iso,
+                "last_update": ts_iso or "",
+                "status": status or "",
+                "status_notes": status_notes or "",
+                "justification": justification or "",
+                "impact_statement": impact_statement or "",
+                "responses": list(responses or []),
+                "workaround": workaround or "",
+            })
+        return result
+
     def _save_openvex():
         """Re-generate and save the OpenVEX file from current DB state."""
         try:
@@ -70,7 +127,7 @@ def init_app(app):
             else:
                 assessments = []
         else:
-            assessments = [a.to_dict() for a in _get_all_db_assessments()]
+            assessments = _all_assessment_dicts_fast()
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments

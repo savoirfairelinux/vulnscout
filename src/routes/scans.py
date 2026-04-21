@@ -328,6 +328,51 @@ def _load_scan_with_findings(scan_id: uuid_module.UUID) -> Scan | None:
     ).scalar_one_or_none()
 
 
+def _scan_finding_pairs(scan_id: uuid_module.UUID) -> list[tuple]:
+    """Return [(finding_id, vulnerability_id, package_id), ...] for one scan.
+
+    Lightweight projection used by the diff endpoint to compute set
+    differences without hydrating Observation / Finding / Package ORM
+    instances for every row.
+    """
+    return list(db.session.execute(
+        db.select(Observation.finding_id, Finding.vulnerability_id, Finding.package_id)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .where(Observation.scan_id == scan_id)
+    ).all())
+
+
+def _hydrate_findings_for_diff(finding_ids: set) -> dict:
+    """Return {finding_id: dict(_obs_to_dict-shaped)} for the given set.
+
+    Loads only the (small) set of findings that are actually added/removed
+    in a diff, joined with their package, in one query.
+    """
+    if not finding_ids:
+        return {}
+    rows = db.session.execute(
+        db.select(
+            Finding.id,
+            Finding.vulnerability_id,
+            Finding.package_id,
+            Package.name,
+            Package.version,
+        )
+        .outerjoin(Package, Finding.package_id == Package.id)
+        .where(Finding.id.in_(finding_ids))
+    ).all()
+    return {
+        fid: {
+            "finding_id": str(fid),
+            "package_name": pname or "unknown",
+            "package_version": pver or "",
+            "package_id": str(pid),
+            "vulnerability_id": vid,
+        }
+        for fid, vid, pid, pname, pver in rows
+    }
+
+
 def _obs_to_dict(obs: Observation) -> dict:
     f = obs.finding
     pkg = f.package
@@ -453,7 +498,7 @@ def init_app(app):
         except ValueError:
             return jsonify({"error": "Invalid scan id"}), 400
 
-        scan = _load_scan_with_findings(scan_uuid)
+        scan = ScanController.get(scan_uuid)
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
@@ -465,28 +510,30 @@ def init_app(app):
                 prev_scan_id = all_variant_scans[i - 1].id
                 break
 
-        # --- Findings diff ---
-        current_finding_ids = {obs.finding_id for obs in scan.observations}
-        curr_vulns = {obs.finding.vulnerability_id for obs in scan.observations}
+        # --- Findings diff (lightweight projections, no ORM hydration) ---
+        curr_pairs = _scan_finding_pairs(scan.id)
+        current_finding_ids = {fid for fid, _, _ in curr_pairs}
+        curr_vulns = {vid for _, vid, _ in curr_pairs}
 
         if prev_scan_id is None:
-            findings_added = [_obs_to_dict(obs) for obs in scan.observations]
-            findings_removed: list = []
+            added_fids = current_finding_ids
+            removed_fids: set = set()
             vulns_added = sorted(curr_vulns)
             vulns_removed: list = []
         else:
-            prev_scan = _load_scan_with_findings(prev_scan_id)
-            prev_finding_ids = {obs.finding_id for obs in prev_scan.observations} if prev_scan else set()
-            prev_vulns = {obs.finding.vulnerability_id for obs in prev_scan.observations} if prev_scan else set()
+            prev_pairs = _scan_finding_pairs(prev_scan_id)
+            prev_finding_ids = {fid for fid, _, _ in prev_pairs}
+            prev_vulns = {vid for _, vid, _ in prev_pairs}
             added_fids = current_finding_ids - prev_finding_ids
             removed_fids = prev_finding_ids - current_finding_ids
-            findings_added = [_obs_to_dict(obs) for obs in scan.observations if obs.finding_id in added_fids]
-            findings_removed = (
-                [_obs_to_dict(obs) for obs in prev_scan.observations if obs.finding_id in removed_fids]
-                if prev_scan else []
-            )
             vulns_added = sorted(curr_vulns - prev_vulns)
             vulns_removed = sorted(prev_vulns - curr_vulns)
+
+        # Hydrate only the diff set (added + removed) — typically a small
+        # fraction of total findings — in one query joined with Package.
+        finding_dicts = _hydrate_findings_for_diff(added_fids | removed_fids)
+        findings_added = [finding_dicts[fid] for fid in added_fids if fid in finding_dicts]
+        findings_removed = [finding_dicts[fid] for fid in removed_fids if fid in finding_dicts]
 
         # --- Packages diff ---
         scans_to_query = [scan.id] if prev_scan_id is None else [scan.id, prev_scan_id]

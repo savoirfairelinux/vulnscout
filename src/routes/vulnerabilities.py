@@ -77,6 +77,104 @@ _FORMAT_TO_FOUND_BY: dict[str, str] = {
 }
 
 
+def _sql_compute_facets_global() -> dict:
+    """Compute facets for the unscoped vulnerability listing via SQL aggregations.
+
+    Avoids hydrating the full vuln set; used by the paginated fast path.
+    Set members match what _compute_facets() would produce when no client
+    filters are applied, except ``sources`` which is approximated from the
+    same SBOMDocument.format mapping used by _populate_found_by().
+    """
+    severities: set[str] = set()
+    # Severity is computed from the max metrics.score per vuln, bucketed
+    # the same way CVSS.severity() does. Match the lowercase labels that
+    # _populate_facets() would have produced from to_dict() output.
+    max_score_rows = db.session.execute(
+        db.select(func.max(Metrics.score))
+        .where(Metrics.score.isnot(None))
+        .group_by(Metrics.vulnerability_id)
+    ).all()
+    for (s,) in max_score_rows:
+        if s is None:
+            continue
+        sf = float(s)
+        if sf < 4:
+            severities.add("low")
+        elif sf < 7:
+            severities.add("medium")
+        elif sf < 9:
+            severities.add("high")
+        else:
+            severities.add("critical")
+    # Vulns without any metrics fall back to status/"unknown"
+    has_no_metrics = db.session.execute(
+        db.select(Vulnerability.id)
+        .outerjoin(Metrics, Vulnerability.id == Metrics.vulnerability_id)
+        .where(Metrics.id.is_(None))
+        .limit(1)
+    ).first() is not None
+    if has_no_metrics:
+        severities.add("unknown")
+
+    statuses = {
+        s for (s,) in db.session.execute(
+            db.select(DBAssessment.simplified_status)
+            .where(DBAssessment.simplified_status.isnot(None))
+            .distinct()
+        ).all() if s
+    }
+    has_unassessed = db.session.execute(
+        db.select(Vulnerability.id)
+        .outerjoin(Finding, Vulnerability.id == Finding.vulnerability_id)
+        .outerjoin(DBAssessment, DBAssessment.finding_id == Finding.id)
+        .where(DBAssessment.id.is_(None))
+        .limit(1)
+    ).first() is not None
+    if has_unassessed:
+        statuses.add("Pending Assessment")
+
+    formats = {
+        f for (f,) in db.session.execute(
+            db.select(SBOMDocument.format)
+            .where(SBOMDocument.format.isnot(None))
+            .distinct()
+        ).all() if f
+    }
+    sources = {_FORMAT_TO_FOUND_BY.get(f, f) for f in formats}
+
+    attack_vectors: set[str] = set()
+    av_rows = db.session.execute(
+        db.select(Metrics.vector).where(Metrics.vector.isnot(None)).distinct()
+    ).all()
+    _AV_MAP = {"AV:N": "NETWORK", "AV:A": "ADJACENT", "AV:L": "LOCAL", "AV:P": "PHYSICAL"}
+    for (vec,) in av_rows:
+        if not vec:
+            continue
+        for token, label in _AV_MAP.items():
+            if token in vec:
+                attack_vectors.add(label)
+
+    first_scan_ts: set[int] = set()
+    rows = db.session.execute(
+        db.select(func.min(Scan.timestamp))
+        .select_from(Finding)
+        .join(Observation, Finding.id == Observation.finding_id)
+        .join(Scan, Observation.scan_id == Scan.id)
+        .group_by(Finding.vulnerability_id)
+    ).all()
+    for (min_ts,) in rows:
+        if min_ts is not None:
+            first_scan_ts.add(int(round(min_ts.timestamp())) * 1000)
+
+    return {
+        "severities": sorted(severities),
+        "statuses": sorted(statuses),
+        "sources": sorted(sources),
+        "attack_vectors": sorted(attack_vectors),
+        "first_scan_dates": sorted(first_scan_ts),
+    }
+
+
 def _populate_found_by(
     records: list,
     variant_uuid=None,
@@ -408,6 +506,219 @@ def init_app(app):
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
         current_scan_ids: list = []
+
+        # ------------------------------------------------------------------
+        # Fast path: paginated, unscoped, no client filters or custom sort.
+        # The default frontend page-load hits this. Loads only the page-size
+        # records (vs all 11k) and computes facets via SQL aggregations.
+        # ------------------------------------------------------------------
+        _page_arg = request.args.get('page', type=int)
+        _fmt = request.args.get('format', 'list')
+        _filter_keys = {
+            "search", "severity", "simplified_status", "found_by", "package",
+            "epss_min", "epss_max", "severity_min", "severity_max",
+            "attack_vector", "published_date_filter", "first_scan_date",
+        }
+        _has_filters = any(request.args.get(k) for k in _filter_keys)
+        _sort_by = request.args.get('sort_by', 'id')
+        _sort_dir = request.args.get('sort_dir', 'asc')
+        _fast_path_eligible = (
+            _page_arg is not None
+            and _fmt != "dict"
+            and not (variant_id or project_id or compare_variant_id)
+            and not _has_filters
+            and _sort_by == "id"
+            and _sort_dir in ("asc", "desc")
+        )
+        if _fast_path_eligible:
+            page_size = min(max(request.args.get('page_size', 50, type=int), 1), 500)
+            page = max(_page_arg, 1)
+            start = (page - 1) * page_size
+
+            total = db.session.execute(
+                db.select(func.count(Vulnerability.id))
+            ).scalar() or 0
+
+            order_clause = (
+                Vulnerability.id.desc() if _sort_dir == "desc" else Vulnerability.id.asc()
+            )
+            page_records = list(db.session.execute(
+                db.select(Vulnerability)
+                .order_by(order_clause)
+                .limit(page_size)
+                .offset(start)
+            ).scalars().all())
+
+            page_vuln_ids = [r.id for r in page_records]
+            if page_vuln_ids:
+                # Bulk-load metrics, packages, effort for just this page
+                metric_rows = db.session.execute(
+                    db.select(Metrics).where(Metrics.vulnerability_id.in_(page_vuln_ids))
+                ).scalars().all()
+                metrics_by_vuln: dict[str, list] = {}
+                for m in metric_rows:
+                    metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
+
+                pkg_rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Package.name, Package.version)
+                    .join(Package, Finding.package_id == Package.id)
+                    .where(Finding.vulnerability_id.in_(page_vuln_ids))
+                    .distinct()
+                ).all()
+                pkgs_by_vuln: dict[str, list[str]] = {}
+                for vid, pname, pver in pkg_rows:
+                    pkgs_by_vuln.setdefault(vid, []).append(f"{pname}@{pver}")
+
+                te_rows = db.session.execute(
+                    db.select(
+                        Finding.vulnerability_id,
+                        TimeEstimate.optimistic,
+                        TimeEstimate.likely,
+                        TimeEstimate.pessimistic,
+                    )
+                    .join(Finding, TimeEstimate.finding_id == Finding.id)
+                    .where(Finding.vulnerability_id.in_(page_vuln_ids))
+                ).all()
+                effort_by_vuln: dict[str, tuple] = {}
+                for vid, opti, like, pess in te_rows:
+                    if vid not in effort_by_vuln:
+                        effort_by_vuln[vid] = (opti, like, pess)
+
+                from sqlalchemy.orm import attributes as orm_attrs
+                for r in page_records:
+                    r.packages = pkgs_by_vuln.get(r.id, [])
+                    te = effort_by_vuln.get(r.id)
+                    if te:
+                        opti, like, pess = te
+
+                        def _h(v):
+                            if v is None:
+                                return None
+                            return Iso8601Duration(f"PT{v}H")
+                        r.effort = {
+                            "optimistic": _h(opti),
+                            "likely": _h(like),
+                            "pessimistic": _h(pess),
+                        }
+                    orm_attrs.set_committed_value(r, 'findings', [])
+                    orm_attrs.set_committed_value(
+                        r, 'metrics', metrics_by_vuln.get(r.id, [])
+                    )
+
+            _populate_found_by(page_records, None, None)
+            page_vulns = [r.to_dict() for r in page_records]
+
+            if page_vuln_ids:
+                # packages_current = packages (no scope)
+                for v in page_vulns:
+                    v["packages_current"] = list(v["packages"])
+
+                # variants enrichment via latest-scan join
+                latest_ts_sub = (
+                    db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
+                    .group_by(Scan.variant_id)
+                    .subquery()
+                )
+                latest_scan_sub = (
+                    db.select(Scan.id)
+                    .join(
+                        latest_ts_sub,
+                        (Scan.variant_id == latest_ts_sub.c.variant_id)
+                        & (Scan.timestamp == latest_ts_sub.c.max_ts),
+                    )
+                    .subquery()
+                )
+                rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Variant.name)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .join(Variant, Scan.variant_id == Variant.id)
+                    .where(Finding.vulnerability_id.in_(page_vuln_ids))
+                    .where(Observation.scan_id.in_(db.select(latest_scan_sub.c.id)))
+                    .distinct()
+                ).all()
+                variant_names_by_vuln: dict = {}
+                for vuln_id, variant_name in rows:
+                    variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
+                for v in page_vulns:
+                    v["variants"] = sorted(variant_names_by_vuln.get(v["id"], []))
+
+                first_scan_rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, func.min(Scan.timestamp))
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Finding.vulnerability_id.in_(page_vuln_ids))
+                    .group_by(Finding.vulnerability_id)
+                ).all()
+                first_scan_by_vuln: dict = {}
+                for vuln_id, min_ts in first_scan_rows:
+                    first_scan_by_vuln[str(vuln_id)] = min_ts.isoformat() if min_ts else None
+                for v in page_vulns:
+                    v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
+
+                assess_rows = db.session.execute(
+                    db.select(
+                        Finding.vulnerability_id,
+                        DBAssessment.id,
+                        DBAssessment.status,
+                        DBAssessment.simplified_status,
+                        DBAssessment.status_notes,
+                        DBAssessment.justification,
+                        DBAssessment.impact_statement,
+                        DBAssessment.workaround,
+                        DBAssessment.timestamp,
+                        DBAssessment.responses,
+                        DBAssessment.variant_id,
+                        DBAssessment.finding_id,
+                        Package.name,
+                        Package.version,
+                    )
+                    .join(Finding, DBAssessment.finding_id == Finding.id)
+                    .join(Package, Finding.package_id == Package.id, isouter=True)
+                    .where(Finding.vulnerability_id.in_(page_vuln_ids))
+                    .order_by(Finding.vulnerability_id, DBAssessment.timestamp)
+                ).all()
+                assessments_by_vuln: dict = {}
+                for row in assess_rows:
+                    vid = str(row.vulnerability_id)
+                    ts = row.timestamp.isoformat() if row.timestamp else ""
+                    pkg_str = f"{row.name}@{row.version}" if row.name else ""
+                    simplified = row.simplified_status or _S2S.get(row.status or "", "Pending Assessment")
+                    assessments_by_vuln.setdefault(vid, []).append({
+                        "id": str(row.id),
+                        "vuln_id": vid,
+                        "packages": [pkg_str] if pkg_str else [],
+                        "variant_id": str(row.variant_id) if row.variant_id else None,
+                        "status": row.status or "",
+                        "simplified_status": simplified,
+                        "status_notes": row.status_notes or "",
+                        "justification": row.justification or "",
+                        "impact_statement": row.impact_statement or "",
+                        "responses": list(row.responses or []),
+                        "workaround": row.workaround or "",
+                        "timestamp": ts,
+                        "last_update": ts,
+                    })
+                for v in page_vulns:
+                    vid = v["id"]
+                    v_assessments = assessments_by_vuln.get(vid, [])
+                    v["assessments"] = v_assessments
+                    if v_assessments:
+                        latest = v_assessments[-1]
+                        v["status"] = latest["status"]
+                        v["simplified_status"] = latest["simplified_status"]
+                    else:
+                        v["status"] = "unknown"
+                        v["simplified_status"] = "Pending Assessment"
+
+            return {
+                "items": page_vulns,
+                "total": int(total),
+                "page": page,
+                "page_size": page_size,
+                "facets": _sql_compute_facets_global(),
+            }
+
         if variant_id and compare_variant_id:
             try:
                 base_uuid = uuid.UUID(variant_id)
