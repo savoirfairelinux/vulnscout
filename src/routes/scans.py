@@ -781,8 +781,10 @@ def init_app(app):
         findings_upgraded.sort(key=lambda f: (f["package_name"], f["vulnerability_id"]))
 
         # --- Newly detected (tool scans only): findings/vulns that are in
-        # this tool scan but NOT in the latest SBOM scan AND NOT already
-        # present in the previous tool scan.
+        # this tool scan but NOT in the SBOM baseline that was active at
+        # scan time AND NOT already present in the previous tool scan.
+        # Using the SBOM active at scan time (not the globally latest)
+        # ensures counts stay stable when a newer SBOM is imported later.
         newly_detected_findings_count = None
         newly_detected_vulns_count = None
         newly_detected_findings_list = None
@@ -792,8 +794,11 @@ def init_app(app):
             sbom_fids: set = set()
             sbom_vids: set = set()
             if sbom_scans:
-                latest_sbom = sbom_scans[-1]  # ordered by timestamp
-                sbom_scan_loaded = _load_scan_with_findings(latest_sbom.id)
+                sbom_at_time = _sbom_active_at(sbom_scans, scan.timestamp)
+                if sbom_at_time:
+                    sbom_scan_loaded = _load_scan_with_findings(sbom_at_time.id)
+                else:
+                    sbom_scan_loaded = None
                 if sbom_scan_loaded:
                     sbom_fids = {obs.finding_id for obs in sbom_scan_loaded.observations}
                     sbom_vids = {obs.finding.vulnerability_id for obs in sbom_scan_loaded.observations}
