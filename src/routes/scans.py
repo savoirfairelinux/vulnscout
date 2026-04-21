@@ -255,6 +255,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # package-level info for upgrade classification.
     scan_data = []
     all_fids_needing_lookup: set = set()
+    all_pkg_ids_needing_lookup: set = set()
 
     for scan in scans:
         curr_f = findings_map.get(scan.id, set())
@@ -278,24 +279,39 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             raw_added_p = curr_p - prev_p
             raw_removed_p = prev_p - curr_p
             if raw_added_p or raw_removed_p:
-                pkg_lk = _package_rows(raw_added_p | raw_removed_p)
-                truly_added, truly_removed, upgraded = _classify_package_changes(
-                    raw_added_p, raw_removed_p, pkg_lk
-                )
-                entry["truly_added_p"] = len(truly_added)
-                entry["truly_removed_p"] = len(truly_removed)
-                entry["truly_removed_ids"] = truly_removed
-                entry["upgraded_pairs"] = upgraded
-
-                if upgraded:
-                    prev_f = findings_map.get(prev.id, set())
-                    raw_added_f = curr_f - prev_f
-                    raw_removed_f = prev_f - curr_f
-                    entry["raw_added_f"] = raw_added_f
-                    entry["raw_removed_f"] = raw_removed_f
-                    all_fids_needing_lookup |= raw_added_f | raw_removed_f
+                entry["_raw_added_p"] = raw_added_p
+                entry["_raw_removed_p"] = raw_removed_p
+                all_pkg_ids_needing_lookup |= raw_added_p | raw_removed_p
 
         scan_data.append(entry)
+
+    # Single batch query: package_id -> Package for all changed packages
+    all_pkg_lookup = _package_rows(all_pkg_ids_needing_lookup)
+
+    # Second mini-pass: classify packages and collect finding IDs
+    for entry in scan_data:
+        raw_added_p = entry.pop("_raw_added_p", None)
+        if raw_added_p is None:
+            continue
+        raw_removed_p = entry.pop("_raw_removed_p", set())
+        truly_added, truly_removed, upgraded = _classify_package_changes(
+            raw_added_p, raw_removed_p, all_pkg_lookup
+        )
+        entry["truly_added_p"] = len(truly_added)
+        entry["truly_removed_p"] = len(truly_removed)
+        entry["truly_removed_ids"] = truly_removed
+        entry["upgraded_pairs"] = upgraded
+
+        if upgraded:
+            scan = entry["scan"]
+            prev = entry["prev"]
+            curr_f = entry["curr_f"]
+            prev_f = findings_map.get(prev.id, set())
+            raw_added_f = curr_f - prev_f
+            raw_removed_f = prev_f - curr_f
+            entry["raw_added_f"] = raw_added_f
+            entry["raw_removed_f"] = raw_removed_f
+            all_fids_needing_lookup |= raw_added_f | raw_removed_f
 
     # Single batch query: finding_id -> (package_id, vulnerability_id)
     # Include all tool-scan finding IDs so we can check which ones belong
@@ -314,6 +330,13 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         ).all()
         fid_to_info = {r[0]: (r[1], r[2]) for r in rows}
 
+    # Pre-build reverse index: tool-scan finding → package_id
+    # so scan-result computation can filter by package set in O(1).
+    tool_fid_to_pkg: dict = {}  # finding_id → package_id (tool scans only)
+    for fid in tool_scan_fids:
+        info = fid_to_info.get(fid)
+        if info:
+            tool_fid_to_pkg[fid] = info[0]
     # Second pass: build result dicts
     # Track latest tool-scan findings/vulns per (variant, source) as we
     # iterate in chronological order so we can compute the "global" result
@@ -362,53 +385,71 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
             src_key = (scan.variant_id, scan.scan_source)
 
-            # Global state BEFORE this scan
+            # SBOM active package set — used to filter tool findings.
+            sbom_pkg = packages_map.get(
+                sbom_at_time.id, set()
+            ) if sbom_at_time else set()
+
+            def _filtered_tool_f(f_ids: set) -> set:
+                """Return only findings whose package is in the active SBOM."""
+                return {fid for fid in f_ids
+                        if tool_fid_to_pkg.get(fid) in sbom_pkg}
+
+            # Global state BEFORE this scan (filtered to SBOM packages)
             global_before_f = set(baseline_f)
             global_before_v = set(baseline_v)
             for (vid, _src), f_ids in running_src_findings.items():
                 if vid == scan.variant_id:
-                    global_before_f |= f_ids
-            for (vid, _src), v_ids in running_src_vulns.items():
-                if vid == scan.variant_id:
-                    global_before_v |= v_ids
+                    global_before_f |= _filtered_tool_f(f_ids)
+            for fid in global_before_f - baseline_f:
+                info = fid_to_info.get(fid)
+                if info:
+                    global_before_v.add(info[1])
 
             # Update running tracker for this source
             running_src_findings[src_key] = curr_f
             running_src_vulns[src_key] = curr_v
 
-            # Global state AFTER this scan
+            # Global state AFTER this scan (filtered to SBOM packages)
             global_f = set(baseline_f)
             global_v = set(baseline_v)
             for (vid, _src), f_ids in running_src_findings.items():
                 if vid == scan.variant_id:
-                    global_f |= f_ids
-            for (vid, _src), v_ids in running_src_vulns.items():
-                if vid == scan.variant_id:
-                    global_v |= v_ids
+                    global_f |= _filtered_tool_f(f_ids)
+            for fid in global_f - baseline_f:
+                info = fid_to_info.get(fid)
+                if info:
+                    global_v.add(info[1])
 
             base["is_first"] = (prev is None)
             base["packages_added"] = 0
             base["packages_removed"] = 0
             base["packages_upgraded"] = 0
+            base["packages_unchanged"] = 0
             base["findings_upgraded"] = 0
+            base["findings_unchanged"] = 0
             base["findings_added"] = len(global_f - global_before_f)
             base["findings_removed"] = len(global_before_f - global_f)
             base["vulns_added"] = len(global_v - global_before_v)
             base["vulns_removed"] = len(global_before_v - global_v)
+            base["vulns_unchanged"] = 0
 
             # "Newly detected" = findings/vulns added to the global result.
             base["newly_detected_findings"] = base["findings_added"]
             base["newly_detected_vulns"] = base["vulns_added"]
 
-            # Branch result = SBOM baseline (at scan time) ∪ this tool scan
-            sbom_pkg = packages_map.get(
-                sbom_at_time.id, set()
-            ) if sbom_at_time else set()
-            base["branch_finding_count"] = len(baseline_f | curr_f)
-            base["branch_vuln_count"] = len(baseline_v | curr_v)
+            # Branch result = SBOM baseline ∪ this tool scan (already filtered)
+            branch_f = baseline_f | _filtered_tool_f(curr_f)
+            branch_v = set(baseline_v)
+            for fid in branch_f - baseline_f:
+                info = fid_to_info.get(fid)
+                if info:
+                    branch_v.add(info[1])
+            base["branch_finding_count"] = len(branch_f)
+            base["branch_vuln_count"] = len(branch_v)
             base["branch_package_count"] = len(sbom_pkg)
 
-            # Global result = SBOM baseline (at scan time) ∪ all tool sources
+            # Global result = already-filtered global_f / global_v
             base["global_finding_count"] = len(global_f)
             base["global_vuln_count"] = len(global_v)
             base["global_package_count"] = len(sbom_pkg)
@@ -419,11 +460,14 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["findings_added"] = None
             base["findings_removed"] = None
             base["findings_upgraded"] = None
+            base["findings_unchanged"] = None
             base["packages_added"] = None
             base["packages_removed"] = None
             base["packages_upgraded"] = None
+            base["packages_unchanged"] = None
             base["vulns_added"] = None
             base["vulns_removed"] = None
+            base["vulns_unchanged"] = None
         else:
             prev_f = findings_map.get(prev.id, set())
             prev_v = vulns_map.get(prev.id, set())
@@ -435,78 +479,79 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
             base["packages_upgraded"] = len(upgraded_pairs)
 
-            raw_added_f = curr_f - prev_f
-            raw_removed_f = prev_f - curr_f
-
-            upgraded_removed_fids: set = set()
-            if upgraded_pairs and entry["raw_added_f"]:
-                # Classify findings on upgraded packages with 1:1 matching
-                # (mirrors _classify_finding_changes in the detail view).
-                upgraded_old_ids = {str(old_pkg.id) for old_pkg, _ in upgraded_pairs}
-                upgraded_new_ids = {str(new_pkg.id) for _, new_pkg in upgraded_pairs}
-                # Group removed findings on upgraded-old packages by vuln
-                _rem_by_vuln: dict = {}
-                for fid in raw_removed_f:
-                    info = fid_to_info.get(fid)
-                    if info and str(info[0]) in upgraded_old_ids:
-                        _rem_by_vuln.setdefault(info[1], []).append(fid)
-                # Match added findings on upgraded-new packages 1:1
-                upgraded_count = 0
-                for fid in raw_added_f:
-                    info = fid_to_info.get(fid)
-                    if info and str(info[0]) in upgraded_new_ids:
-                        candidates = _rem_by_vuln.get(info[1], [])
-                        if candidates:
-                            upgraded_removed_fids.add(candidates.pop(0))
-                            upgraded_count += 1
-                base["findings_upgraded"] = upgraded_count
-                base["findings_added"] = len(raw_added_f) - upgraded_count
-                base["findings_removed"] = len(raw_removed_f) - upgraded_count
-            else:
-                base["findings_upgraded"] = 0
-                base["findings_added"] = len(raw_added_f)
-                base["findings_removed"] = len(raw_removed_f)
-
-            base["vulns_added"] = len(curr_v - prev_v)
-            base["vulns_removed"] = len(prev_v - curr_v)
-
-            # Include tool-scan findings on removed/upgraded-old packages
-            # in the removed counts so the history matches the detail view.
-            gone_pkg_ids: set = set()
-            gone_pkg_ids |= entry.get("truly_removed_ids", set())
-            for old_pkg, _new_pkg in upgraded_pairs:
-                gone_pkg_ids.add(old_pkg.id)
-            if gone_pkg_ids:
-                extra_removed_f = 0
-                extra_removed_v: set = set()
-                # Dedup must mirror the detail view's already_removed sets:
-                # - findings: only the SBOM truly-removed (not upgraded)
-                # - vulns: only the SBOM-removed vuln IDs
-                # Upgraded SBOM findings had their count subtracted, so
-                # re-adding them via tool scans is correct.
-                sbom_truly_removed = raw_removed_f - upgraded_removed_fids
-                _seen_fids: set = set(sbom_truly_removed)
-                _seen_vids: set = set(prev_v - curr_v)
-                for (vid, _src), f_ids in running_src_findings.items():
-                    if vid != scan.variant_id:
-                        continue
+            # --- Compute current scan result (SBOM ∪ tool-scan on active pkgs) ---
+            curr_pkg_id_set = entry["curr_p"]
+            curr_scan_result_f = set(curr_f)
+            for (vid, _src), f_ids in running_src_findings.items():
+                if vid == scan.variant_id:
                     for fid in f_ids:
-                        if fid in _seen_fids:
-                            continue
-                        info = fid_to_info.get(fid)
-                        if info is None:
-                            continue
-                        pkg_id, vuln_id = info
-                        if pkg_id in gone_pkg_ids:
-                            extra_removed_f += 1
-                            _seen_fids.add(fid)
-                            if vuln_id not in _seen_vids:
-                                _seen_vids.add(vuln_id)
-                                extra_removed_v.add(vuln_id)
-                if extra_removed_f:
-                    base["findings_removed"] += extra_removed_f
-                if extra_removed_v:
-                    base["vulns_removed"] += len(extra_removed_v)
+                        if tool_fid_to_pkg.get(fid) in curr_pkg_id_set:
+                            curr_scan_result_f.add(fid)
+            curr_scan_result_v: set = set(curr_v)  # start with complete SBOM vulns
+            for fid in curr_scan_result_f - curr_f:  # add vulns from tool findings only
+                info = fid_to_info.get(fid)
+                if info:
+                    curr_scan_result_v.add(info[1])
+
+            # --- Compute previous scan result (prev SBOM ∪ tool-scan on prev pkgs) ---
+            # This uses the CURRENT running_src_findings (which includes all
+            # tool scans that ran between the two SBOMs), reflecting what the
+            # user would have seen on the previous card right before this SBOM.
+            prev_v = vulns_map.get(prev.id, set())
+            prev_sr_f = set(prev_f)
+            for (vid, _src), f_ids in running_src_findings.items():
+                if vid == scan.variant_id:
+                    for fid in f_ids:
+                        if tool_fid_to_pkg.get(fid) in prev_pkgs:
+                            prev_sr_f.add(fid)
+            prev_sr_v: set = set(prev_v)  # start with complete prev SBOM vulns
+            for fid in prev_sr_f - prev_f:  # add vulns from tool findings only
+                info = fid_to_info.get(fid)
+                if info:
+                    prev_sr_v.add(info[1])
+
+            # --- Classify findings using scan result diffs ---
+            # new + upgraded + unchanged = current scan result
+            # removed + upgraded + unchanged = previous scan result
+            sr_new_f = curr_scan_result_f - prev_sr_f
+            sr_gone_f = prev_sr_f - curr_scan_result_f
+            sr_unchanged_f = prev_sr_f & curr_scan_result_f
+
+            upgraded_old_ids_set: set = {old_pkg.id for old_pkg, _ in upgraded_pairs}
+            upgraded_new_ids_set: set = {new_pkg.id for _, new_pkg in upgraded_pairs}
+
+            # Group gone findings on upgraded-old packages by vuln
+            _rem_by_vuln: dict = {}
+            for fid in sr_gone_f:
+                info = fid_to_info.get(fid)
+                if info and info[0] in upgraded_old_ids_set:
+                    _rem_by_vuln.setdefault(info[1], []).append(fid)
+            # Match new findings on upgraded-new packages 1:1
+            sr_upgraded_count = 0
+            for fid in sr_new_f:
+                info = fid_to_info.get(fid)
+                if info and info[0] in upgraded_new_ids_set:
+                    candidates = _rem_by_vuln.get(info[1], [])
+                    if candidates:
+                        candidates.pop(0)
+                        sr_upgraded_count += 1
+
+            base["findings_added"] = len(sr_new_f) - sr_upgraded_count
+            base["findings_removed"] = len(sr_gone_f) - sr_upgraded_count
+            base["findings_upgraded"] = sr_upgraded_count
+            base["findings_unchanged"] = len(sr_unchanged_f)
+
+            # --- vulns: all from scan result ---
+            base["vulns_added"] = len(curr_scan_result_v - prev_sr_v)
+            base["vulns_removed"] = len(prev_sr_v - curr_scan_result_v)
+            base["vulns_unchanged"] = len(prev_sr_v & curr_scan_result_v)
+
+            # Unchanged packages = intersection minus upgraded (old+new) IDs
+            unchanged_pkg_ids = entry["curr_p"] & prev_pkgs
+            for old_pkg, new_pkg in upgraded_pairs:
+                unchanged_pkg_ids.discard(old_pkg.id)
+                unchanged_pkg_ids.discard(new_pkg.id)
+            base["packages_unchanged"] = len(unchanged_pkg_ids)
 
         # ---- Non-tool (SBOM) scans: set tool-only fields to None ----
         if not is_tool_scan:
@@ -516,21 +561,30 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["branch_vuln_count"] = None
             base["branch_package_count"] = None
 
-            # Scan Result for SBOM scans = SBOM ∪ all latest tool-scan sources
+            # Scan Result for SBOM scans = SBOM ∪ tool-scan findings
+            # BUT only tool-scan findings whose package is still in the
+            # current SBOM (removed/upgraded-away packages are dropped).
             has_tool_scans = any(
                 vid == scan.variant_id for (vid, _src) in running_src_findings
             )
             if has_tool_scans:
-                merge_f = set(curr_f)
-                merge_v = set(curr_v)
-                for (vid, _src), f_ids in running_src_findings.items():
-                    if vid == scan.variant_id:
-                        merge_f |= f_ids
-                for (vid, _src), v_ids in running_src_vulns.items():
-                    if vid == scan.variant_id:
-                        merge_v |= v_ids
-                base["global_finding_count"] = len(merge_f)
-                base["global_vuln_count"] = len(merge_v)
+                # Reuse curr_scan_result_f/v if already computed in the diff
+                # section above (i.e. prev is not None); otherwise compute now.
+                if prev is None:
+                    curr_pkg_id_set = entry["curr_p"]
+                    curr_scan_result_f = set(curr_f)
+                    for (vid, _src), f_ids in running_src_findings.items():
+                        if vid == scan.variant_id:
+                            for fid in f_ids:
+                                if tool_fid_to_pkg.get(fid) in curr_pkg_id_set:
+                                    curr_scan_result_f.add(fid)
+                    curr_scan_result_v = set(curr_v)  # complete SBOM vulns
+                    for fid in curr_scan_result_f - curr_f:  # add tool vulns
+                        info = fid_to_info.get(fid)
+                        if info:
+                            curr_scan_result_v.add(info[1])
+                base["global_finding_count"] = len(curr_scan_result_f)
+                base["global_vuln_count"] = len(curr_scan_result_v)
                 base["global_package_count"] = len(entry["curr_p"])
             else:
                 base["global_finding_count"] = None
@@ -603,8 +657,9 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
         findings_removed: list of obs dicts that were removed
         upgraded_pairs: list of (old_pkg, new_pkg) Package objects
 
-    Returns (truly_added, truly_removed, upgraded_findings) where
-    upgraded_findings is a list of dicts with vuln_id, pkg_name, old_version, new_version.
+    Returns (truly_added, truly_removed, upgraded_findings, upgraded_keys) where
+    upgraded_findings is a list of dicts with vuln_id, pkg_name, old_version, new_version,
+    and upgraded_keys is a set of (vuln_id, old_pkg_id_str) pairs that were matched.
     """
     # Build set of (old_pkg_id, new_pkg_id) from upgraded pairs
     upgraded_pkg_map = {}  # old_pkg_id -> new_pkg Package
@@ -622,6 +677,7 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
     upgraded_findings = []
     matched_added_ids = set()
     matched_removed_ids = set()
+    matched_upgraded_keys: set = set()  # (vuln_id, old_pkg_id_str)
 
     for f_added in findings_added:
         pkg_id = f_added["package_id"]
@@ -644,11 +700,12 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
             })
             matched_added_ids.add(f_added["finding_id"])
             matched_removed_ids.add(f_removed["finding_id"])
+            matched_upgraded_keys.add(key)
             break
 
     truly_added = [f for f in findings_added if f["finding_id"] not in matched_added_ids]
     truly_removed = [f for f in findings_removed if f["finding_id"] not in matched_removed_ids]
-    return truly_added, truly_removed, upgraded_findings
+    return truly_added, truly_removed, upgraded_findings, matched_upgraded_keys
 
 
 # ---------------------------------------------------------------------------
@@ -834,59 +891,172 @@ def init_app(app):
                 for old_pkg, new_pkg in upgraded_pairs
             ]
 
-        # --- Classify findings on upgraded packages ---
-        if prev_scan_id is not None and upgraded_pairs:
-            findings_added, findings_removed, findings_upgraded = _classify_finding_changes(
-                findings_added, findings_removed, upgraded_pairs
-            )
+        # --- Classify findings using scan-result diffs ---
+        # For SBOM scans: scan result = SBOM ∪ tool-scan findings on
+        # that SBOM's active packages.  The diff is between the current
+        # and previous scan results so all categories are consistent:
+        #   new + upgraded + unchanged  = current scan result
+        #   removed + upgraded + unchanged = previous scan result
+        if not is_tool_scan and prev_scan_id is not None:
+            # Collect latest tool scans for this variant that were active
+            # at this SBOM's timestamp (mirrors the list view's chronological
+            # running_src_findings snapshot).
+            tool_scans = [
+                s for s in all_variant_scans
+                if (s.scan_type or "sbom") == "tool"
+                and s.timestamp <= scan.timestamp
+            ]
+            latest_tool_by_source: dict = {}
+            for ts in tool_scans:
+                src = ts.scan_source or ""
+                prev_ts = latest_tool_by_source.get(src)
+                if prev_ts is None or ts.timestamp > prev_ts.timestamp:
+                    latest_tool_by_source[src] = ts
+
+            # Build finding_id → (obs_dict, origin) lookup for all sources
+            fid_obs_map: dict = {}  # finding_id → obs dict
+            fid_info: dict = {}     # finding_id → (pkg_id, vuln_id)
+            # Current SBOM observations
+            for obs in scan.observations:
+                fid = obs.finding_id
+                fid_obs_map[fid] = _obs_to_dict(obs, scan_origin)
+                fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
+            # Previous SBOM observations
+            for obs in prev_scan.observations:  # type: ignore[possibly-undefined]
+                fid = obs.finding_id
+                if fid not in fid_obs_map:
+                    fid_obs_map[fid] = _obs_to_dict(obs, scan_origin)
+                if fid not in fid_info:
+                    fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
+            # Tool-scan observations
+            for tool_scan_obj in latest_tool_by_source.values():
+                tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
+                if not tool_loaded:
+                    continue
+                tool_origin = _origin_for_scan(tool_loaded)
+                for obs in tool_loaded.observations:
+                    fid = obs.finding_id
+                    if fid not in fid_obs_map:
+                        fid_obs_map[fid] = _obs_to_dict(obs, tool_origin)
+                    if fid not in fid_info:
+                        fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
+
+            # Build current scan result = curr SBOM ∪ tool findings on curr pkgs
+            curr_sr_fids: set = set(current_finding_ids)
+            for tool_scan_obj in latest_tool_by_source.values():
+                tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
+                if not tool_loaded:
+                    continue
+                for obs in tool_loaded.observations:
+                    if obs.finding.package_id in curr_pkg_ids:
+                        curr_sr_fids.add(obs.finding_id)
+
+            # Build previous scan result = prev SBOM ∪ tool findings on prev pkgs
+            prev_sr_fids: set = set(prev_finding_ids)  # type: ignore[possibly-undefined]
+            for tool_scan_obj in latest_tool_by_source.values():
+                tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
+                if not tool_loaded:
+                    continue
+                for obs in tool_loaded.observations:
+                    if obs.finding.package_id in prev_pkg_ids:  # type: ignore[possibly-undefined]
+                        prev_sr_fids.add(obs.finding_id)
+
+            # Derive vuln sets from scan results — start from complete SBOM
+            # vuln sets and add only tool-scan vulns on top.
+            curr_sr_vids: set = set(curr_vulns)
+            for fid in curr_sr_fids - current_finding_ids:
+                info = fid_info.get(fid)
+                if info:
+                    curr_sr_vids.add(info[1])
+            prev_sr_vids: set = set(prev_vulns)  # type: ignore[possibly-undefined]
+            for fid in prev_sr_fids - prev_finding_ids:  # type: ignore[possibly-undefined]
+                info = fid_info.get(fid)
+                if info:
+                    prev_sr_vids.add(info[1])
+
+            # Diff scan results
+            sr_new_fids = curr_sr_fids - prev_sr_fids
+            sr_gone_fids = prev_sr_fids - curr_sr_fids
+            sr_unchanged_fids = prev_sr_fids & curr_sr_fids
+
+            # 1:1 upgrade matching
+            upgraded_old_ids_set: set = {old_pkg.id for old_pkg, _ in upgraded_pairs}
+            upgraded_new_ids_set: set = {new_pkg.id for _, new_pkg in upgraded_pairs}
+            upgraded_old_to_new: dict = {}
+            for old_pkg, new_pkg in upgraded_pairs:
+                upgraded_old_to_new[old_pkg.id] = (old_pkg, new_pkg)
+
+            # Group gone findings on upgraded-old packages by vuln
+            _rem_by_vuln: dict = {}  # vuln_id → [(fid, pkg_id)]
+            for fid in sr_gone_fids:
+                info = fid_info.get(fid)
+                if info and info[0] in upgraded_old_ids_set:
+                    _rem_by_vuln.setdefault(info[1], []).append((fid, info[0]))
+
+            # Match new findings on upgraded-new packages 1:1
+            sr_upgraded_fids_new: set = set()   # fids from new (on new pkg)
+            sr_upgraded_fids_gone: set = set()   # fids from gone (on old pkg)
+            findings_upgraded_list: list = []
+            for fid in sr_new_fids:
+                info = fid_info.get(fid)
+                if info and info[0] in upgraded_new_ids_set:
+                    candidates = _rem_by_vuln.get(info[1], [])
+                    if candidates:
+                        old_fid, old_pkg_id = candidates.pop(0)
+                        sr_upgraded_fids_new.add(fid)
+                        sr_upgraded_fids_gone.add(old_fid)
+                        old_pkg, new_pkg = upgraded_old_to_new[old_pkg_id]
+                        obs_dict = fid_obs_map.get(fid, {})
+                        findings_upgraded_list.append({
+                            "vulnerability_id": info[1],
+                            "package_name": old_pkg.name or "unknown",
+                            "old_version": old_pkg.version or "",
+                            "new_version": new_pkg.version or "",
+                            "origin": obs_dict.get("origin", scan_origin),
+                        })
+
+            findings_added = [
+                fid_obs_map[fid] for fid in sr_new_fids - sr_upgraded_fids_new
+                if fid in fid_obs_map
+            ]
+            findings_removed = [
+                fid_obs_map[fid] for fid in sr_gone_fids - sr_upgraded_fids_gone
+                if fid in fid_obs_map
+            ]
+            findings_upgraded = findings_upgraded_list
+            findings_unchanged = [
+                fid_obs_map[fid] for fid in sr_unchanged_fids
+                if fid in fid_obs_map
+            ]
+
+            vulns_added = sorted(curr_sr_vids - prev_sr_vids)
+            vulns_removed = sorted(prev_sr_vids - curr_sr_vids)
+            vulns_unchanged = sorted(prev_sr_vids & curr_sr_vids)
+
+            # Unchanged packages
+            unchanged_pkg_ids = curr_pkg_ids & prev_pkg_ids  # type: ignore[possibly-undefined]
+            for old_pkg, new_pkg in upgraded_pairs:
+                unchanged_pkg_ids.discard(old_pkg.id)
+                unchanged_pkg_ids.discard(new_pkg.id)
+            if unchanged_pkg_ids:
+                unchanged_pkg_lookup = _package_rows(unchanged_pkg_ids)
+                packages_unchanged = [
+                    _pkg_to_dict(unchanged_pkg_lookup[pid])
+                    for pid in unchanged_pkg_ids if pid in unchanged_pkg_lookup
+                ]
+            else:
+                packages_unchanged = []
+        elif not is_tool_scan:
+            # First SBOM scan — no previous scan result
+            findings_upgraded = []
+            findings_unchanged = []
+            vulns_unchanged = []
+            packages_unchanged = []
         else:
             findings_upgraded = []
-
-        # --- For SBOM scans: include tool-scan findings on removed/upgraded
-        # old packages so the user sees all CVEs that disappear from the
-        # global view when packages are dropped. ---
-        if not is_tool_scan and prev_scan_id is not None:
-            # Collect package IDs that are no longer in the new SBOM
-            gone_pkg_ids: set = set()
-            if truly_removed_ids:  # type: ignore[possibly-undefined]
-                gone_pkg_ids |= truly_removed_ids
-            for old_pkg, _new_pkg in upgraded_pairs:
-                gone_pkg_ids.add(old_pkg.id)
-
-            if gone_pkg_ids:
-                # Find active tool scans for this variant (latest per source)
-                tool_scans = [
-                    s for s in all_variant_scans
-                    if (s.scan_type or "sbom") == "tool"
-                ]
-                # Group by source, keep latest (scans are ordered by timestamp)
-                latest_tool_by_source: dict = {}
-                for ts in tool_scans:
-                    src = ts.scan_source or ""
-                    prev_ts = latest_tool_by_source.get(src)
-                    if prev_ts is None or ts.timestamp > prev_ts.timestamp:
-                        latest_tool_by_source[src] = ts
-
-                already_removed_fids = {f["finding_id"] for f in findings_removed}
-                already_removed_vids = set(vulns_removed)
-                for tool_scan_obj in latest_tool_by_source.values():
-                    tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
-                    if not tool_loaded:
-                        continue
-                    tool_origin = _origin_for_scan(tool_loaded)
-                    for obs in tool_loaded.observations:
-                        f = obs.finding
-                        if f.package_id in gone_pkg_ids:
-                            fid_str = str(f.id)
-                            if fid_str not in already_removed_fids:
-                                already_removed_fids.add(fid_str)
-                                findings_removed.append(
-                                    _obs_to_dict(obs, tool_origin)
-                                )
-                            vid = f.vulnerability_id
-                            if vid not in already_removed_vids:
-                                already_removed_vids.add(vid)
-                                vulns_removed.append(vid)
+            findings_unchanged = []
+            vulns_unchanged = []
+            packages_unchanged = []
 
         # Sort for stable output
         packages_added.sort(key=lambda p: (p["package_name"], p["package_version"]))
@@ -894,15 +1064,12 @@ def init_app(app):
         packages_upgraded.sort(key=lambda p: (p["package_name"], p["old_version"]))
         findings_upgraded.sort(key=lambda f: (f["package_name"], f["vulnerability_id"]))
 
-        # --- Newly detected (tool scans only): findings/vulns that are in
-        # this tool scan but NOT in the SBOM baseline that was active at
-        # scan time AND NOT already present in the previous tool scan.
-        # Using the SBOM active at scan time (not the globally latest)
-        # ensures counts stay stable when a newer SBOM is imported later.
+        # --- Newly detected (tool scans only) ---
         newly_detected_findings_count = None
         newly_detected_vulns_count = None
         newly_detected_findings_list = None
         newly_detected_vulns_list = None
+
         if is_tool_scan:
             sbom_scans = [s for s in all_variant_scans if (s.scan_type or "sbom") == "sbom"]
             sbom_fids: set = set()
@@ -949,11 +1116,14 @@ def init_app(app):
             "findings_added": findings_added,
             "findings_removed": findings_removed,
             "findings_upgraded": findings_upgraded,
+            "findings_unchanged": findings_unchanged,
             "packages_added": packages_added,
             "packages_removed": packages_removed,
             "packages_upgraded": packages_upgraded,
+            "packages_unchanged": packages_unchanged,
             "vulns_added": vulns_added,
             "vulns_removed": vulns_removed,
+            "vulns_unchanged": vulns_unchanged,
             "newly_detected_findings": newly_detected_findings_count,
             "newly_detected_vulns": newly_detected_vulns_count,
             "newly_detected_findings_list": newly_detected_findings_list,
@@ -995,6 +1165,20 @@ def init_app(app):
             if sbom_scans:
                 sbom_scan = sbom_scans[-1]
                 contributing_scan_ids.append(sbom_scan.id)
+        else:
+            # SBOM scan: include latest tool scan per source so the global
+            # view shows SBOM ∪ all tool-scan sources (matching list view).
+            all_variant_scans = ScanController.get_by_variant(scan.variant_id)
+            latest_tool_by_source: dict = {}
+            for s in all_variant_scans:
+                if (s.scan_type or "sbom") == "tool":
+                    src = s.scan_source or ""
+                    prev = latest_tool_by_source.get(src)
+                    if prev is None or s.timestamp > prev.timestamp:
+                        latest_tool_by_source[src] = s
+            for tool_s in latest_tool_by_source.values():
+                if tool_s.id not in contributing_scan_ids:
+                    contributing_scan_ids.append(tool_s.id)
 
         # --- Packages with source ---
         # Packages come from SBOM documents only (tool scans don't add packages)
@@ -1032,11 +1216,15 @@ def init_app(app):
                 if loaded:
                     loaded_scans[sid] = loaded
 
+        # Active package IDs = packages from the SBOM scan (not tool scans)
+        active_pkg_ids: set = set(pkg_map.keys())
+
         finding_map: dict = {}   # finding_id -> dict
         vuln_set: dict = {}      # vulnerability_id -> set of sources
         for sid, loaded in loaded_scans.items():
             s_type = loaded.scan_type or "sbom"
-            if s_type == "tool":
+            is_tool = s_type == "tool"
+            if is_tool:
                 source_labels = {
                     "grype": "Grype",
                     "nvd": "NVD CPE",
@@ -1056,6 +1244,11 @@ def init_app(app):
                 fid = obs.finding_id
                 f = obs.finding
                 pkg = f.package
+                # For tool-scan findings on an SBOM scan's global view,
+                # only include findings whose package is still active
+                # (present in the current SBOM).
+                if is_tool and not is_tool_scan and f.package_id not in active_pkg_ids:
+                    continue
                 if fid not in finding_map:
                     finding_map[fid] = {
                         "finding_id": str(fid),

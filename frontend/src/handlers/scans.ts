@@ -19,6 +19,9 @@ type Scan = {
     packages_upgraded: number | null;
     vulns_added: number | null;
     vulns_removed: number | null;
+    vulns_unchanged: number | null;
+    findings_unchanged: number | null;
+    packages_unchanged: number | null;
     newly_detected_findings: number | null;
     newly_detected_vulns: number | null;
     branch_finding_count: number | null;
@@ -58,6 +61,7 @@ type FindingUpgradeEntry = {
     package_name: string;
     old_version: string;
     new_version: string;
+    origin?: string;
 };
 
 type ScanDiff = {
@@ -71,11 +75,14 @@ type ScanDiff = {
     findings_added: FindingDiffEntry[];
     findings_removed: FindingDiffEntry[];
     findings_upgraded: FindingUpgradeEntry[];
+    findings_unchanged: FindingDiffEntry[];
     packages_added: PackageDiffEntry[];
     packages_removed: PackageDiffEntry[];
     packages_upgraded: PackageUpgradeEntry[];
+    packages_unchanged: PackageDiffEntry[];
     vulns_added: string[];
     vulns_removed: string[];
+    vulns_unchanged: string[];
     newly_detected_findings: number | null;
     newly_detected_vulns: number | null;
     newly_detected_findings_list: FindingDiffEntry[] | null;

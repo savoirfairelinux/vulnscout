@@ -111,12 +111,14 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
     colorClass: string;
 }) {
     const [filter, setFilter] = useState('');
+    const hasOrigin = entries.some(e => !!e.origin);
     const filtered = filter
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
             e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
-            e.new_version.toLowerCase().includes(filter.toLowerCase())
+            e.new_version.toLowerCase().includes(filter.toLowerCase()) ||
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -145,6 +147,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Old Version</th>
                                 <th className="px-3 py-2">New Version</th>
                                 <th className="px-3 py-2">Vulnerability</th>
+                                {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
                         </thead>
                         <tbody>
@@ -154,6 +157,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
                                     <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
+                                    {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
                             ))}
                         </tbody>
@@ -607,6 +611,9 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.packages_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
                                             ↑{diff.packages_upgraded.length.toLocaleString()}
                                         </span>
+                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                            ={diff.packages_unchanged.length.toLocaleString()}
+                                        </span>
                                     </>
                                 )}
                             </button>
@@ -628,6 +635,9 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.findings_upgraded.length > 0 ? 'bg-yellow-900/40 text-yellow-300' : 'bg-gray-600 text-gray-400'}`}>
                                             ↑{diff.findings_upgraded.length.toLocaleString()}
                                         </span>
+                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                            ={diff.findings_unchanged.length.toLocaleString()}
+                                        </span>
                                     </>
                                 )}
                             </button>
@@ -644,6 +654,9 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         </span>
                                         <span className={`ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold ${diff.vulns_removed.length > 0 ? 'bg-red-900/40 text-red-300' : 'bg-gray-600 text-gray-400'}`}>
                                             −{diff.vulns_removed.length.toLocaleString()}
+                                        </span>
+                                        <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-gray-600 text-gray-400">
+                                            ={diff.vulns_unchanged.length.toLocaleString()}
                                         </span>
                                     </>
                                 )}
@@ -692,6 +705,13 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         colorClass="text-yellow-400"
                                     />
                                 )}
+                                {!diff.is_first && (
+                                    <PackageDiffTable
+                                        entries={diff.packages_unchanged}
+                                        label="Unchanged packages"
+                                        colorClass="text-gray-400"
+                                    />
+                                )}
                             </>
                         )}
                         {diff && section === 'findings' && (
@@ -718,6 +738,13 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         entries={diff.findings_upgraded}
                                         label="Findings on upgraded packages"
                                         colorClass="text-yellow-400"
+                                    />
+                                )}
+                                {!diff.is_first && (
+                                    <FindingDiffTable
+                                        entries={diff.findings_unchanged}
+                                        label="Unchanged findings"
+                                        colorClass="text-gray-400"
                                     />
                                 )}
                             </>
@@ -753,6 +780,13 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                                         />
                                     );
                                 })()}
+                                {!diff.is_first && (
+                                    <VulnDiffList
+                                        vulns={diff.vulns_unchanged}
+                                        label="Unchanged vulnerabilities"
+                                        colorClass="text-gray-400"
+                                    />
+                                )}
                             </>
                         )}
                         {diff && section === 'newly_detected' && isToolScan && (
@@ -1520,17 +1554,19 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                 {/* Vulnerabilities row */}
                                 <div className="flex items-center gap-2 flex-wrap mb-1">
                                     <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Vulnerabilities:</span>
-                                    {scan.is_first ? (
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                        </span>
-                                    ) : (
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
+                                    </span>
+                                    {!scan.is_first && (
                                         <>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                +{(scan.vulns_added ?? 0).toLocaleString()} vulnerabilities detected
+                                                {(scan.vulns_added ?? 0).toLocaleString()} new vulnerabilities
                                             </span>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                −{(scan.vulns_removed ?? 0).toLocaleString()} vulnerabilities detected
+                                                {(scan.vulns_removed ?? 0).toLocaleString()} vulnerabilities removed
+                                            </span>
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+                                                {(scan.vulns_unchanged ?? 0).toLocaleString()} vulnerabilities unchanged
                                             </span>
                                         </>
                                     )}
@@ -1538,20 +1574,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                 {/* Findings row */}
                                 <div className="flex items-center gap-2 flex-wrap mb-1">
                                     <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Findings:</span>
-                                    {scan.is_first ? (
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                        </span>
-                                    ) : (
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.finding_count ?? 0).toLocaleString()} findings detected
+                                    </span>
+                                    {!scan.is_first && (
                                         <>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                +{(scan.findings_added ?? 0).toLocaleString()} findings detected
+                                                {(scan.findings_added ?? 0).toLocaleString()} new findings
                                             </span>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                −{(scan.findings_removed ?? 0).toLocaleString()} findings detected
+                                                {(scan.findings_removed ?? 0).toLocaleString()} findings removed
                                             </span>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                ↑{(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
+                                                {(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
+                                            </span>
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+                                                {(scan.findings_unchanged ?? 0).toLocaleString()} findings unchanged
                                             </span>
                                         </>
                                     )}
@@ -1559,20 +1597,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                 {/* Packages row */}
                                 <div className="flex items-center gap-2 flex-wrap mb-1">
                                     <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Packages:</span>
-                                    {scan.is_first ? (
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.package_count ?? 0).toLocaleString()} packages
-                                        </span>
-                                    ) : (
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.package_count ?? 0).toLocaleString()} packages detected
+                                    </span>
+                                    {!scan.is_first && (
                                         <>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                +{(scan.packages_added ?? 0).toLocaleString()} packages
+                                                {(scan.packages_added ?? 0).toLocaleString()} new packages
                                             </span>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                −{(scan.packages_removed ?? 0).toLocaleString()} packages
+                                                {(scan.packages_removed ?? 0).toLocaleString()} packages removed
                                             </span>
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                ↑{(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
+                                                {(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
+                                            </span>
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
+                                                {(scan.packages_unchanged ?? 0).toLocaleString()} packages unchanged
                                             </span>
                                         </>
                                     )}
@@ -1585,17 +1625,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     </button>
                                 </div>
 
-                                {/* SBOM Result row */}
+                                {/* Scan Result row — uses global counts when tool scans exist, else SBOM-only */}
                                 <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                    <span className="text-xs font-bold text-cyan-400 uppercase tracking-wide">SBOM Result:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.package_count ?? 0).toLocaleString()} packages
+                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_package_count ?? scan.package_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.global_package_count ?? scan.package_count ?? 0).toLocaleString()} packages
                                     </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.finding_count ?? 0).toLocaleString()} findings detected
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_finding_count ?? scan.finding_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.global_finding_count ?? scan.finding_count ?? 0).toLocaleString()} findings
                                     </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
+                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_vuln_count ?? scan.vuln_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                        {(scan.global_vuln_count ?? scan.vuln_count ?? 0).toLocaleString()} vulnerabilities
                                     </span>
                                     <button
                                         onClick={() => setOpenGlobalId(scan.id)}
@@ -1604,28 +1644,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         Details
                                     </button>
                                 </div>
-
-                                {/* Scan Result (SBOM ∪ all tool scans) — only when tool scans exist */}
-                                {scan.global_finding_count != null && (
-                                    <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                        <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_package_count ?? 0).toLocaleString()} packages
-                                        </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_finding_count ?? 0).toLocaleString()} findings detected
-                                        </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                        </span>
-                                        <button
-                                            onClick={() => setOpenGlobalId(scan.id)}
-                                            className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                        >
-                                            Details
-                                        </button>
-                                    </div>
-                                )}
                                 </>
                                 )}
 
@@ -1637,10 +1655,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                             {(scan.global_package_count ?? 0).toLocaleString()} packages
                                         </span>
                                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_finding_count ?? 0).toLocaleString()} findings detected
+                                            {(scan.global_finding_count ?? 0).toLocaleString()} findings
                                         </span>
                                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities detected
+                                            {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities
                                         </span>
                                         <button
                                             onClick={() => setOpenGlobalId(scan.id)}

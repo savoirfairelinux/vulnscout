@@ -447,7 +447,7 @@ def init_app(app):
             return jsonify({"error": "No valid SBOM files provided."}), 400
 
         # All files validated — now create the scan and register documents
-        scan = ScanController.create("", variant.id)
+        scan = ScanController.create("empty description", variant.id)
         tmp_paths: list[str] = []
 
         for tmp_path, filename, fmt in validated_files:
