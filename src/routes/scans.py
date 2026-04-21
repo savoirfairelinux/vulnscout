@@ -1224,17 +1224,15 @@ def init_app(app):
                 ).scalars().all()
 
                 # 2. Collect CPE names from packages
-                # A CPE is queryable when it has a valid part (a/o/h) and
-                # at least a non-wildcard product.  Wildcard vendor is
-                # acceptable — the NVD virtualMatchString API handles it.
-                _valid_cpe_parts = {"a", "o", "h"}
+                # A CPE is queryable when it has at least a non-wildcard
+                # product (parts[4]).  Wildcard part/vendor/version are
+                # acceptable — the NVD virtualMatchString API handles
+                # pattern matching for those.
                 cpe_to_pkgs: dict = {}  # cpeName -> list[Package]
                 for pkg in packages:
                     for cpe in (pkg.cpe or []):
                         parts = cpe.split(":")
-                        if (len(parts) >= 6
-                                and parts[2] in _valid_cpe_parts
-                                and parts[4] != "*"):
+                        if len(parts) >= 6 and parts[4] != "*":
                             cpe_to_pkgs.setdefault(cpe, []).append(pkg)
 
                 if not cpe_to_pkgs:
@@ -1283,13 +1281,14 @@ def init_app(app):
                     )
                     try:
                         # Use virtualMatchString when the CPE contains
-                        # wildcard fields (vendor/version) so the NVD
-                        # applies pattern matching instead of a
+                        # wildcard fields (part/vendor/version) so the
+                        # NVD applies pattern matching instead of a
                         # dictionary lookup.
                         cpe_parts = cpe_name.split(":")
                         has_wildcards = (
                             len(cpe_parts) >= 6
-                            and (cpe_parts[3] == "*"
+                            and (cpe_parts[2] == "*"
+                                 or cpe_parts[3] == "*"
                                  or cpe_parts[5] == "*")
                         )
                         nvd_vulns = nvd.api_get_cves_by_cpe(
