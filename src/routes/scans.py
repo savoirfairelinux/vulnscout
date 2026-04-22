@@ -2,6 +2,7 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import json
 import uuid as uuid_module
 
 from flask import jsonify
@@ -11,6 +12,7 @@ from ..controllers.scans import ScanController
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..models.scan import Scan
+from ..models.scan_diff_cache import ScanDiffCache
 from ..models.observation import Observation
 from ..models.finding import Finding
 from ..models.sbom_document import SBOMDocument
@@ -602,6 +604,114 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Cache — computed diff fields
+# ---------------------------------------------------------------------------
+
+# Fields stored in ScanDiffCache (must match the model columns).
+_CACHE_FIELDS = (
+    "finding_count", "package_count", "vuln_count", "is_first",
+    "findings_added", "findings_removed", "findings_upgraded", "findings_unchanged",
+    "packages_added", "packages_removed", "packages_upgraded", "packages_unchanged",
+    "vulns_added", "vulns_removed", "vulns_unchanged",
+    "newly_detected_findings", "newly_detected_vulns",
+    "branch_finding_count", "branch_vuln_count", "branch_package_count",
+    "global_finding_count", "global_vuln_count", "global_package_count",
+)
+
+
+def _store_cache(results: list[dict]) -> None:
+    """Upsert computed diff data into scan_diff_cache for each result dict."""
+    if not results:
+        return
+    scan_ids = [uuid_module.UUID(r["id"]) for r in results]
+    # Delete existing cache rows for these scans
+    db.session.execute(
+        db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+    )
+    for r in results:
+        row = ScanDiffCache(scan_id=uuid_module.UUID(r["id"]))
+        for field in _CACHE_FIELDS:
+            setattr(row, field, r.get(field))
+        formats = r.get("formats")
+        row.formats_json = json.dumps(formats) if formats is not None else None
+        db.session.add(row)
+    db.session.commit()
+
+
+def _read_cache(scans: list[Scan]) -> list[dict] | None:
+    """Try to build the list-view response entirely from cache.
+
+    Returns the list of result dicts (same shape as _serialize_list_with_diff)
+    if every scan has a cache entry.  Returns ``None`` on any cache miss so
+    the caller can fall back to full computation.
+    """
+    if not scans:
+        return []
+    scan_ids = [s.id for s in scans]
+    rows = db.session.execute(
+        db.select(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+    ).scalars().all()
+    cache_map = {r.scan_id: r for r in rows}
+    if len(cache_map) != len(scan_ids):
+        return None  # cache miss
+    # Build variant info for display names
+    variant_map = _variant_info(list({s.variant_id for s in scans}))
+    result = []
+    for scan in scans:
+        c = cache_map[scan.id]
+        base = ScanController.serialize(scan)
+        variant_name, project_name = variant_map.get(scan.variant_id, (None, None))
+        base["variant_name"] = variant_name
+        base["project_name"] = project_name
+        for field in _CACHE_FIELDS:
+            base[field] = getattr(c, field)
+        base["formats"] = json.loads(c.formats_json) if c.formats_json else []
+        result.append(base)
+    return result
+
+
+def recompute_variant_cache(variant_id) -> None:
+    """Re-compute and store the scan-history diff cache for *variant_id*.
+
+    Call this after any mutation that affects scan history (SBOM upload,
+    tool scan completion, scan deletion).
+    """
+    scans = Scan.get_by_variant_id(variant_id)
+    if not scans:
+        # No scans left — clear any stale cache rows
+        db.session.execute(
+            db.delete(ScanDiffCache).where(
+                ScanDiffCache.scan_id.in_(
+                    db.select(Scan.id).where(Scan.variant_id == variant_id)
+                )
+            )
+        )
+        db.session.commit()
+        return
+    results = _serialize_list_with_diff(scans)
+    _store_cache(results)
+
+
+def invalidate_variant_cache(variant_id) -> None:
+    """Delete cached scan-history data for *variant_id*.
+
+    The cache will be lazily rebuilt the next time a list endpoint is hit.
+    Use this when the calling context cannot easily recompute (e.g. a
+    background thread that spawns sub-processes without direct DB access).
+    """
+    scan_ids = [
+        row[0] for row in db.session.execute(
+            db.select(Scan.id).where(Scan.variant_id == variant_id)
+        ).all()
+    ]
+    if scan_ids:
+        db.session.execute(
+            db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+        )
+        db.session.commit()
+
+
+# ---------------------------------------------------------------------------
 # Helpers — detailed diff (for the diff endpoint)
 # ---------------------------------------------------------------------------
 
@@ -720,7 +830,12 @@ def init_app(app):
     @app.route('/api/scans')
     def list_all_scans():
         scans = ScanController.get_all()
-        return jsonify(_serialize_list_with_diff(scans))
+        cached = _read_cache(scans)
+        if cached is not None:
+            return jsonify(cached)
+        result = _serialize_list_with_diff(scans)
+        _store_cache(result)
+        return jsonify(result)
 
     @app.route('/api/projects/<project_id>/scans')
     def list_scans_by_project(project_id):
@@ -728,7 +843,12 @@ def init_app(app):
         if project is None:
             return jsonify({"error": "Project not found"}), 404
         scans = ScanController.get_by_project(project_id)
-        return jsonify(_serialize_list_with_diff(scans))
+        cached = _read_cache(scans)
+        if cached is not None:
+            return jsonify(cached)
+        result = _serialize_list_with_diff(scans)
+        _store_cache(result)
+        return jsonify(result)
 
     @app.route('/api/variants/<variant_id>/scans')
     def list_scans_by_variant(variant_id):
@@ -736,7 +856,12 @@ def init_app(app):
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
         scans = ScanController.get_by_variant(variant_id)
-        return jsonify(_serialize_list_with_diff(scans))
+        cached = _read_cache(scans)
+        if cached is not None:
+            return jsonify(cached)
+        result = _serialize_list_with_diff(scans)
+        _store_cache(result)
+        return jsonify(result)
 
     @app.route('/api/scans/<scan_id>', methods=['PATCH'])
     def update_scan(scan_id):
@@ -773,6 +898,9 @@ def init_app(app):
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
+        # Remember variant so we can recompute cache after deletion.
+        variant_id = scan.variant_id
+
         # Collect finding IDs referenced by this scan's observations
         # *before* the cascade delete removes them.
         finding_ids = {obs.finding_id for obs in (scan.observations or [])}
@@ -796,6 +924,9 @@ def init_app(app):
                         orphaned_count += 1
             if orphaned_count:
                 db.session.commit()
+
+        # Recompute scan-history cache for the affected variant.
+        recompute_variant_cache(variant_id)
 
         return jsonify({
             "deleted": True,
@@ -1415,6 +1546,13 @@ def init_app(app):
                     )
                     _grype_scans_in_progress[vid_str]["done_count"] = 4
 
+                    # Invalidate scan-history cache so next list request recomputes.
+                    try:
+                        with app.app_context():
+                            invalidate_variant_cache(variant_uuid)
+                    except Exception:
+                        pass  # non-critical; cache rebuilt lazily on next request
+
                     done_logs = _grype_scans_in_progress[vid_str].get("logs", [])
                     done_logs.append("✓ Grype scan complete")
                     _grype_scans_in_progress[vid_str] = {
@@ -1832,6 +1970,12 @@ def init_app(app):
 
                 db.session.commit()
 
+                # Recompute scan-history cache for the affected variant.
+                try:
+                    recompute_variant_cache(variant_uuid)
+                except Exception:
+                    pass  # non-critical; cache rebuilt lazily
+
                 done_logs = _nvd_scans_in_progress[vid_str].get(
                     "logs", []
                 )
@@ -2159,6 +2303,12 @@ def init_app(app):
                                     )
 
                 db.session.commit()
+
+                # Recompute scan-history cache for the affected variant.
+                try:
+                    recompute_variant_cache(variant_uuid)
+                except Exception:
+                    pass  # non-critical; cache rebuilt lazily
 
                 done_logs = _osv_scans_in_progress[vid_str].get(
                     "logs", []
