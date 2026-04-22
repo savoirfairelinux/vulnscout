@@ -162,6 +162,13 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
             except Exception as e:
                 verbose(f"settings/upload: EPSS enrichment failed: {e}")
 
+            # Recompute scan-history cache for the affected variant.
+            try:
+                from ..routes.scans import recompute_variant_cache
+                recompute_variant_cache(variant_id)
+            except Exception as e:
+                verbose(f"settings/upload: Cache recompute failed: {e}")
+
             _upload_status[upload_id] = {
                 "status": "done",
                 "message": "SBOM imported successfully.",
