@@ -188,21 +188,6 @@ def _prev_scan_map(scans: list[Scan]) -> dict:
 # Helpers — serialisation for list view
 # ---------------------------------------------------------------------------
 
-def _latest_sbom_scan_per_variant(scans: list[Scan]) -> dict:
-    """Return {variant_id: latest_sbom_Scan} from the given scan list.
-
-    Only considers scans with scan_type == 'sbom' (or NULL which defaults to
-    'sbom').  For each variant, keeps the scan with the latest timestamp.
-    """
-    latest: dict = {}
-    for s in scans:
-        if (s.scan_type or "sbom") != "sbom":
-            continue
-        prev = latest.get(s.variant_id)
-        if prev is None or s.timestamp > prev.timestamp:
-            latest[s.variant_id] = s
-    return latest
-
 
 def _sbom_scans_by_variant(scans: list[Scan]) -> dict:
     """Return {variant_id: [sbom_scan, …]} ordered by timestamp ascending.
@@ -978,7 +963,10 @@ def init_app(app):
             prev_vulns = {obs.finding.vulnerability_id for obs in prev_scan.observations} if prev_scan else set()
             added_fids = current_finding_ids - prev_finding_ids
             removed_fids = prev_finding_ids - current_finding_ids
-            findings_added = [_obs_to_dict(obs, scan_origin) for obs in scan.observations if obs.finding_id in added_fids]
+            findings_added = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations if obs.finding_id in added_fids
+            ]
             findings_removed = (
                 [_obs_to_dict(obs, scan_origin) for obs in prev_scan.observations if obs.finding_id in removed_fids]
                 if prev_scan else []
