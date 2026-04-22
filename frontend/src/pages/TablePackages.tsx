@@ -6,7 +6,6 @@ import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
-import Popup from "../components/Popup";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
@@ -42,51 +41,6 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 }
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
-
-function CpeCell({ version, cpe }: { version: string; cpe?: string[] }) {
-    const [showCpeBox, setShowCpeBox] = useState(false);
-    const buttonRef = useRef<HTMLSpanElement>(null);
-
-    return (
-        <div className="flex items-center justify-center h-full text-center gap-1">
-            <span>{version}</span>
-            {cpe && cpe.length > 0 && (
-                <>
-                    <span
-                        ref={buttonRef}
-                        className="cursor-pointer text-blue-400 hover:text-blue-300 px-2 py-0.5 bg-blue-900/30 border border-blue-500/40 rounded text-xs font-semibold"
-                        onClick={() => setShowCpeBox(!showCpeBox)}
-                    >
-                        CPE
-                    </span>
-                    <Popup
-                        isOpen={showCpeBox}
-                        onClose={() => setShowCpeBox(false)}
-                        anchorRef={buttonRef}
-                        className="!text-base whitespace-normal"
-                    >
-                        <div className="flex flex-col gap-2">
-                            {cpe.map((cpeStr, index) => (
-                                <div key={index} className="flex items-center gap-2">
-                                    <span className="text-base">{cpeStr}</span>
-                                </div>
-                            ))}
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setShowCpeBox(false);
-                                }}
-                                className="text-gray-400 hover:text-white self-end text-base"
-                            >
-                                ✕
-                            </button>
-                        </div>
-                    </Popup>
-                </>
-            )}
-        </div>
-    );
-}
 
 function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [showSeverity, setShowSeverity] = useState(false);
@@ -177,28 +131,81 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
+    const defaultVisibleColumns = ['Name', 'Version', 'CPE', 'PURL', 'Vulnerabilities', 'Variants', 'Sources'];
+    const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setShowSeverity(false);
+        setVisibleColumns(defaultVisibleColumns);
     }
 
-    const columns = useMemo(() => {
+    const columnDisplayNames = useMemo(() => ({
+        'name': 'Name',
+        'version': 'Version',
+        'cpe': 'CPE',
+        'purl': 'PURL',
+        'vulnerabilities': 'Vulnerabilities',
+        'variants': 'Variants',
+        'remainingPendingVulns': 'Remaining Pending Vulnerabilities',
+        'source': 'Sources',
+        'actions': 'Actions',
+    }), []);
+
+    const allColumns = useMemo(() => {
         const columnHelper = createColumnHelper<Package>()
         return [
             columnHelper.accessor('name', {
+                id: 'name',
                 header: () => <div className="flex items-center justify-center">Name</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
                 footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
             columnHelper.accessor('version', {
+                id: 'version',
                 header: () => <div className="flex items-center justify-center">Version</div>,
+                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                size: 80
+            }),
+            columnHelper.accessor('cpe', {
+                id: 'cpe',
+                header: () => <div className="flex items-center justify-center">CPE</div>,
                 cell: info => {
-                    const version = info.getValue();
-                    const cpe = info.row.original.cpe;
-                    return <CpeCell version={version} cpe={cpe} />;
-                }
+                    const cpeList = info.getValue();
+                    if (!cpeList || cpeList.length === 0) return <div className="flex items-center justify-center h-full text-neutral-500">—</div>;
+                    return (
+                        <div className="flex items-center justify-center h-full">
+                            <div className="flex flex-col gap-1 justify-center min-w-0 w-full">
+                                {cpeList.map((c: string, i: number) => (
+                                    <span key={i} title={c} className="block px-2 py-0.5 rounded-full text-xs font-mono bg-sky-900 text-sky-300 max-w-full truncate">{c}</span>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                },
+                enableSorting: false,
+                size: 200
+            }),
+            columnHelper.accessor('purl', {
+                id: 'purl',
+                header: () => <div className="flex items-center justify-center">PURL</div>,
+                cell: info => {
+                    const purls = info.getValue();
+                    if (!purls || purls.length === 0) return <div className="flex items-center justify-center h-full text-neutral-500">—</div>;
+                    return (
+                        <div className="flex items-center justify-center h-full">
+                            <div className="flex flex-col gap-1 justify-center min-w-0 w-full">
+                                {purls.map((p: string, i: number) => (
+                                    <span key={i} title={p} className="block px-2 py-0.5 rounded-full text-xs font-mono bg-cyan-900 text-cyan-300 max-w-full truncate">{p}</span>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                },
+                enableSorting: false,
+                size: 200
             }),
             columnHelper.accessor(
             row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
@@ -215,7 +222,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 );
                 },
                 sortingFn: (a, b) => sortVunerabilitiesFn(a, b, []),
-                size: 80
+                size: 50
             }
             ),
             columnHelper.accessor('variants', {
@@ -250,15 +257,17 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                         const countB = b.original.vulnerabilities['Pending Assessment'] ?? 0;
                         return countA - countB;
                     },
-                    size: 80
+                    size: 50
                 }
             ),
             columnHelper.accessor('source', {
+                id: 'source',
                 header: () => <div className="flex items-center justify-center">Sources</div>,
                 cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()?.join(', ')}</div>,
                 enableSorting: false
             }),
             columnHelper.accessor(row => row, {
+                id: 'actions',
                 header: 'Actions',
                 cell: info => (
                     <div className="flex items-center justify-center h-full">
@@ -276,6 +285,15 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             })
         ]
     }, [showSeverity, onShowVulns]);
+
+    const columns = useMemo(() => {
+        return allColumns.filter(col => {
+            const colId = col.id as string;
+            if (colId === 'actions') return true;
+            const displayName = columnDisplayNames[colId as keyof typeof columnDisplayNames];
+            return displayName && visibleColumns.includes(displayName);
+        });
+    }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const filteredPackages = useMemo(() => {
         return packages.filter((el) => {
@@ -320,6 +338,22 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     </div>
                 )}
             </div>
+
+            <FilterOption
+                label="Columns"
+                options={[
+                    'Name',
+                    'Version',
+                    'CPE',
+                    'PURL',
+                    'Vulnerabilities',
+                    'Variants',
+                    'Remaining Pending Vulnerabilities',
+                    'Sources',
+                ]}
+                selected={visibleColumns}
+                setSelected={setVisibleColumns}
+            />
 
             <FilterOption
                 label="Source"
