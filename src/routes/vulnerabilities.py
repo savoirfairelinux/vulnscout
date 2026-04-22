@@ -389,48 +389,41 @@ def init_app(app):
                 for v in vulns:
                     v["packages_current"] = list(v["packages"])
 
-            # Enrich each vuln dict with sorted variant names, restricted to latest scans
-            # and scoped to the current project/variant to avoid cross-project leaks.
-            latest_ts_base = (
-                db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-            )
-            if _scope_variant is not None:
-                _v = db.session.get(Variant, _scope_variant)
-                if _v and _v.project_id:
-                    latest_ts_base = (
-                        latest_ts_base
-                        .join(Variant, Scan.variant_id == Variant.id)
-                        .where(Variant.project_id == _v.project_id)
-                    )
+            # Enrich each vuln dict with sorted variant names, restricted to
+            # the active scans (latest SBOM + latest per-source tool scans)
+            # so that the result is consistent with the vulnerabilities shown.
+            if current_scan_ids:
+                # Re-use the same scan IDs that were used to load vulns
+                active_scan_ids = current_scan_ids
+            else:
+                # Fallback (no variant/project scope): compute active scans
+                # for every variant using the same multi-source logic.
+                if _scope_variant is not None:
+                    active_scan_ids = _latest_scan_id_for_variant(_scope_variant)
+                elif _scope_project is not None:
+                    active_scan_ids = _latest_scan_ids_for_project(_scope_project)
                 else:
-                    latest_ts_base = latest_ts_base.where(
-                        Scan.variant_id == _scope_variant
-                    )
-            elif _scope_project is not None:
-                latest_ts_base = (
-                    latest_ts_base
+                    # All variants across all projects
+                    all_variant_ids = [
+                        vid for (vid,) in db.session.execute(
+                            db.select(Variant.id)
+                        ).all()
+                    ]
+                    active_scan_ids = []
+                    for vid in all_variant_ids:
+                        active_scan_ids.extend(_latest_scan_id_for_variant(vid))
+            if active_scan_ids:
+                rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Variant.name)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
                     .join(Variant, Scan.variant_id == Variant.id)
-                    .where(Variant.project_id == _scope_project)
-                )
-            latest_ts_sub = latest_ts_base.group_by(Scan.variant_id).subquery()
-            latest_scan_sub = (
-                db.select(Scan.id)
-                .join(
-                    latest_ts_sub,
-                    (Scan.variant_id == latest_ts_sub.c.variant_id)
-                    & (Scan.timestamp == latest_ts_sub.c.max_ts),
-                )
-                .subquery()
-            )
-            rows = db.session.execute(
-                db.select(Finding.vulnerability_id, Variant.name)
-                .join(Observation, Finding.id == Observation.finding_id)
-                .join(Scan, Observation.scan_id == Scan.id)
-                .join(Variant, Scan.variant_id == Variant.id)
-                .where(Finding.vulnerability_id.in_(vuln_ids))
-                .where(Observation.scan_id.in_(db.select(latest_scan_sub.c.id)))
-                .distinct()
-            ).all()
+                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .where(Observation.scan_id.in_(active_scan_ids))
+                    .distinct()
+                ).all()
+            else:
+                rows = []
             variant_names_by_vuln: dict = {}
             for vuln_id, variant_name in rows:
                 variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
