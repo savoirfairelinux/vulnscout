@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Unit tests for src/controllers/osv_client.py — OSVClient."""

@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Tests for _run_grype_scan inner logic, tool-scan diffs, and
