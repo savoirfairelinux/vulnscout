@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -653,6 +653,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     >
                         <FontAwesomeIcon icon={faCircleQuestion} />
                     </button>
+                    <a
+                        href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#review"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="documentation"
+                        title="Open documentation"
+                        className="text-white hover:text-blue-300 transition-colors"
+                    >
+                        <FontAwesomeIcon icon={faBook} />
+                    </a>
                     {showShortcutHelper && (
                         <div
                             ref={shortcutDropdownRef}

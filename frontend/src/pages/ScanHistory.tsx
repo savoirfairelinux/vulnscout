@@ -19,7 +19,7 @@ import {
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
@@ -1066,6 +1066,16 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const menuBar = (
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <h1 className="text-lg font-bold">Scan History</h1>
+            <a
+                href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#scan-history"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="documentation"
+                title="Open documentation"
+                className="text-white hover:text-blue-300 transition-colors"
+            >
+                <FontAwesomeIcon icon={faBook} />
+            </a>
 
             {/* Hide empty scans toggle */}
             <button
