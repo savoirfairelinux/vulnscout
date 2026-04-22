@@ -2,6 +2,35 @@
 
 VulnScout's web interface is the way most users interact with vulnerability data day-to-day. Once an SBOM has been imported and enriched, the interactive mode gives you everything needed to explore, filter, assess, and track vulnerabilities without leaving the application.
 
+## How Assessments Works
+
+### Starting a New Project
+
+When you first import an SBOM into VulnScout, the application scans its contents and creates a finding for every vulnerability-to-package association it discovers.
+
+If the SBOM source does not include any assessment data, those findings start with a **Pending assessment**, which means you will need to review the finding and make a decision about it (either it affects your system, or it doesn't or it was already fixed).
+
+However, many SBOM sources carry assessments / triage decisions. Yocto CVE-check results, for example, mark vulnerabilities as Patched, Ignored, or Unpatched; CycloneDX and SPDX 3 documents often include full VEX analysis blocks; and OpenVEX files provide standalone assessment records. When VulnScout ingests these, it creates assessments automatically with an `sbom` origin, so you may see some CVEs already labelled as **Fixed** or **Not affected** before you have done any manual triage.
+
+### What "Pending Assessment" Means
+
+VulnScout groups all assessment statuses into four simplified categories:
+
+- **Pending Assessment**: the vulnerability has not been assessed yet. 
+- **Exploitable**: the vulnerability is confirmed to affect your product in its current configuration.
+- **Not affected**: the vulnerability does not apply (the vulnerable code is not present, not reachable, or already mitigated). A justification is required when selecting this status.
+- **Fixed**: the vulnerability has been patched or resolved.
+
+### Goal of the Interactive Mode
+
+The interactive mode is where you investigate each CVE and record your triage decisions. The typical workflow is:
+
+0. Look for vulnerabilities that are **Pending assessment**: you can directly click on the orange part of the pie chart in the home page, or use the filters in the Vulnerabilities tab to see these CVEs.
+1. Review the vulnerability details: read the description, check the CVSS score and EPSS probability, inspect which packages are affected, and follow the reference links for advisories and patches.
+2. Assess: set a status, provide a justification when required, add notes explaining your reasoning, and optionally document a workaround or estimate remediation effort.
+
+Assessments you create through the web dashboard are stored with a `custom` origin, which distinguishes them from the  assessments that were imported automatically. On subsequent SBOM re-imports, upstream assessments may be updated by newer VEX data, but your own assessments are always preserved as separate records.
+
 ---
 
 ## Vulnerability Table
@@ -82,7 +111,7 @@ The time-estimate editor lets you record optimistic, likely, and pessimistic dur
 
 ### Assessments
 
-Assessments are the core triage artefact. Each assessment captures a status (under investigation, exploitable, not affected, fixed, false positive), an optional justification, impact statement, status notes, and workaround. Assessments are displayed in a timeline, grouped by date and content, with the most recent at the top.
+Assessments are the core triage artefact. Each assessment captures a status (pending assessment, exploitable, not affected, fixed), an optional justification, impact statement, status notes, and workaround. Assessments are displayed in a timeline, grouped by date and content, with the most recent at the top.
 
 In editing mode, a form at the top of the timeline lets you create a new assessment. You can select which packages and which variants the assessment applies to, and VulnScout will create the appropriate records. Existing assessments can be edited inline or deleted.
 
