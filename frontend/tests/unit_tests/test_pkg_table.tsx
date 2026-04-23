@@ -301,6 +301,14 @@ describe('Packages Table', () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
 
+        const user = userEvent.setup();
+
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
+
         // ASSERT: CPE values should be directly visible (no popup needed)
         const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
         expect(cpeId).toBeTruthy();
@@ -339,6 +347,14 @@ describe('Packages Table', () => {
 
         render(<TablePackages packages={packagesNoCpe} />);
 
+        const user = userEvent.setup();
+
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
+
         // ASSERT: No CPE text should be present, dash placeholder shown
         expect(screen.queryByText(/cpe:2\.3/)).toBeNull();
         expect(screen.getAllByText('—').length).toBeGreaterThan(0);
@@ -364,6 +380,14 @@ describe('Packages Table', () => {
         ];
 
         render(<TablePackages packages={packagesMultiCpe} />);
+
+        const user = userEvent.setup();
+
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
 
         // ASSERT: Both CPE IDs should be directly visible
         const cpeId1 = await screen.getByText(/cpe:2.3:a:vendor:multi-cpe:1.0.0/);
@@ -573,6 +597,14 @@ describe('Packages Table', () => {
 
     test('CPE values have title attribute for hover tooltip', async () => {
         render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
 
         const cpeSpan = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
         expect(cpeSpan).toBeTruthy();
