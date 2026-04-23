@@ -66,119 +66,82 @@ def _populate_found_by(
 ) -> None:
     """Populate the transient found_by list on each record.
 
-    Two complementary sources of attribution are combined:
-
-    1. **SBOM documents** — walks Finding → SBOMPackage → SBOMDocument to
-       discover which SBOM-document formats are linked to each vulnerability's
-       affected packages, then maps them to the legacy found_by strings
-       consumed by the frontend chart.
-
-       Attribution logic to avoid false-positives from package-list SBOM files:
-       - ``grype`` and ``yocto_cve_check`` are dedicated scanners: their
-         presence is always authoritative.
-       - ``spdx``, ``cdx``, ``openvex`` are dual-purpose: they are only
-         attributed when NO dedicated scanner document also contains that same
-         package.
-
-    2. **Tool scans** — walks Finding → Observation → Scan where
-       ``scan_type='tool'`` to discover enrichment sources (NVD CPE, OSV, …).
-       These scans create Observation records but no SBOMDocument, so they
-       must be queried separately.
-
-    When *active_scan_ids* is provided the queries are scoped to exactly
-    those scans — this prevents historical scan data from leaking into the
-    attribution (e.g. an old grype scan incorrectly claiming credit for
-    vulnerabilities actually discovered via a newer SPDX import).
-
-    Otherwise variant_uuid / project_uuid are used as a broader scope.
+    For each vulnerability, find the **earliest** scan that first observed
+    it and attribute it to that scan's source (SBOMDocument format or
+    tool scan_source).  The first scan that introduced a CVE gets credit.
     """
     if not records:
         return
 
     vuln_ids = [r.id for r in records]
 
-    # ------------------------------------------------------------------
-    # 1. SBOM-document attribution
-    # ------------------------------------------------------------------
+    # For every vuln, get the scan that first observed it (min timestamp).
+    first_scan_subq = (
+        db.select(
+            Finding.vulnerability_id,
+            func.min(Scan.timestamp).label("min_ts"),
+        )
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(Finding.vulnerability_id.in_(vuln_ids))
+        .group_by(Finding.vulnerability_id)
+    ).subquery()
 
-    base_query = (
-        db.select(Finding.vulnerability_id, Finding.package_id, SBOMDocument.format)
+    # Now join back to get the scan details for that earliest observation.
+    rows = db.session.execute(
+        db.select(
+            Finding.vulnerability_id,
+            Scan.scan_type,
+            Scan.scan_source,
+            SBOMDocument.format.label("doc_format"),
+        )
         .select_from(Finding)
-        .join(SBOMPackage, SBOMPackage.package_id == Finding.package_id)
-        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-        .where(SBOMDocument.format.isnot(None))
-    )
-
-    if active_scan_ids:
-        # Scope to the exact active scans — most precise
-        base_query = base_query.where(SBOMDocument.scan_id.in_(active_scan_ids))
-    elif variant_uuid is not None:
-        base_query = (
-            base_query
-            .join(Scan, Scan.id == SBOMDocument.scan_id)
-            .where(Scan.variant_id == variant_uuid)
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .join(
+            first_scan_subq,
+            db.and_(
+                first_scan_subq.c.vulnerability_id == Finding.vulnerability_id,
+                first_scan_subq.c.min_ts == Scan.timestamp,
+            ),
         )
-    elif project_uuid is not None:
-        base_query = (
-            base_query
-            .join(Scan, Scan.id == SBOMDocument.scan_id)
-            .join(Variant, Variant.id == Scan.variant_id)
-            .where(Variant.project_id == project_uuid)
+        .outerjoin(
+            SBOMDocument,
+            db.and_(
+                SBOMDocument.scan_id == Scan.id,
+                SBOMDocument.format.isnot(None),
+            ),
         )
-    else:
-        base_query = base_query.where(Finding.vulnerability_id.in_(vuln_ids))
+        .distinct()
+    ).all()
 
-    rows = db.session.execute(base_query.distinct()).all()
+    # When a scan has multiple SBOMDocuments (e.g. spdx + grype in same
+    # merge), collect all formats and prefer non-dedicated scanner formats
+    # (spdx, cdx) over dedicated ones (grype) for attribution.
+    vuln_formats: dict[str, dict] = {}
+    for vuln_id, scan_type, scan_source, doc_format in rows:
+        entry = vuln_formats.setdefault(vuln_id, {
+            "doc_formats": set(),
+            "scan_type": scan_type,
+            "scan_source": scan_source,
+        })
+        if doc_format is not None:
+            entry["doc_formats"].add(doc_format)
 
-    # Group collected formats by (vuln_id, package_id)
-    pkg_formats: dict[tuple, set[str]] = {}
-    for vuln_id, pkg_id, fmt in rows:
-        key = (vuln_id, str(pkg_id))
-        pkg_formats.setdefault(key, set()).add(fmt)
-
-    # Determine the sources to attribute for each vulnerability
     found_by_map: dict[str, set[str]] = {}
-    for (vuln_id, _pkg_id), formats in pkg_formats.items():
-        dedicated = formats & _DEDICATED_SCANNER_FORMATS
-        sources = dedicated if dedicated else formats
-        for fmt in sources:
-            mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+    for vuln_id, entry in vuln_formats.items():
+        doc_formats = entry["doc_formats"]
+        if doc_formats:
+            # Prefer non-dedicated (spdx, cdx, openvex) over dedicated (grype, yocto)
+            non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
+            chosen = non_dedicated if non_dedicated else doc_formats
+            for fmt in chosen:
+                mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+                found_by_map.setdefault(vuln_id, set()).add(mapped)
+        elif entry["scan_source"] is not None:
+            mapped = _TOOL_SOURCE_TO_FOUND_BY.get(entry["scan_source"], entry["scan_source"])
             found_by_map.setdefault(vuln_id, set()).add(mapped)
 
-    # ------------------------------------------------------------------
-    # 2. Tool-scan attribution (NVD CPE, OSV, …)
-    # ------------------------------------------------------------------
-    tool_query = (
-        db.select(Finding.vulnerability_id, Scan.scan_source)
-        .select_from(Finding)
-        .join(Observation, Finding.id == Observation.finding_id)
-        .join(Scan, Observation.scan_id == Scan.id)
-        .where(Scan.scan_type == "tool")
-        .where(Scan.scan_source.isnot(None))
-    )
-
-    if active_scan_ids:
-        tool_query = tool_query.where(Observation.scan_id.in_(active_scan_ids))
-    elif variant_uuid is not None:
-        tool_query = tool_query.where(Scan.variant_id == variant_uuid)
-    elif project_uuid is not None:
-        tool_query = (
-            tool_query
-            .join(Variant, Variant.id == Scan.variant_id)
-            .where(Variant.project_id == project_uuid)
-        )
-    else:
-        tool_query = tool_query.where(Finding.vulnerability_id.in_(vuln_ids))
-
-    tool_rows = db.session.execute(tool_query.distinct()).all()
-
-    for vuln_id, scan_source in tool_rows:
-        mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
-        found_by_map.setdefault(vuln_id, set()).add(mapped)
-
-    # ------------------------------------------------------------------
-    # Apply found_by to records
-    # ------------------------------------------------------------------
     for record in records:
         for scanner in found_by_map.get(record.id, set()):
             record.add_found_by(scanner)
