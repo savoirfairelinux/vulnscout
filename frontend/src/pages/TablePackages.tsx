@@ -131,7 +131,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
-    const defaultVisibleColumns = ['Name', 'Version', 'CPE', 'PURL', 'Vulnerabilities', 'Variants', 'Sources'];
+    const defaultVisibleColumns = ['Name', 'Version', 'Vulnerabilities', 'Variants', 'Sources'];
     const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
 
     const resetFilters = () => {
