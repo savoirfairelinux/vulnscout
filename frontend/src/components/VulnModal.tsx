@@ -794,6 +794,9 @@ type AssessmentGroup = {
                                             if (source === 'grype') return 'Grype';
                                             if (source === 'cyclonedx') return 'CycloneDx';
                                             if (source === 'local_user_data') return 'Local User Data';
+                                            if (source === 'spdx3') return 'SPDX3';
+                                            if (source === 'nvd_cpe') return 'NVD CPE';
+                                            if (source === 'osv') return 'OSV';
                                             return source;
                                         })
                                         .join(', ')
