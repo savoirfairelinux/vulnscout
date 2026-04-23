@@ -174,22 +174,24 @@ def test_list_all_variants_multiple_projects(app_with_variants, init_files):
 # ---------------------------------------------------------------------------
 
 def test_variants_by_vuln_no_observations(client):
-    """CVE with a finding but no observations → no variants linked."""
+    """CVE with a finding and the demo observation → only the demo variant."""
     response = client.get("/api/vulnerabilities/CVE-2020-35492/variants")
     assert response.status_code == 200
     data = json.loads(response.data)
-    assert data == []
+    # setup_demo_db creates one observation linking to the "default" variant
+    assert len(data) == 1
+    assert data[0]["name"] == "default"
 
 
 def test_variants_by_vuln_returns_linked_variants(client_with_variants):
-    """Both variants observed for CVE-2020-35492 are returned."""
+    """All three variants observed for CVE-2020-35492 are returned (demo + a + b)."""
     response = client_with_variants.get("/api/vulnerabilities/CVE-2020-35492/variants")
     assert response.status_code == 200
     data = json.loads(response.data)
     assert isinstance(data, list)
-    assert len(data) == 2
+    assert len(data) == 3
     names = {v["name"] for v in data}
-    assert names == {"variant-a", "variant-b"}
+    assert names == {"default", "variant-a", "variant-b"}
 
 
 def test_variants_by_vuln_fields(client_with_variants):

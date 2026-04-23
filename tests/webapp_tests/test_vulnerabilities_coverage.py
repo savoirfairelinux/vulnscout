@@ -669,3 +669,226 @@ def test_patch_batch_vulnerability_effort_invalid_variant_id(client):
     assert data["error_count"] >= 1
     assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
                for e in data["errors"])
+
+
+# ---------------------------------------------------------------------------
+# _populate_found_by: non-dedicated format (SPDX) and tool-source paths
+# ---------------------------------------------------------------------------
+
+def test_found_by_spdx_format(app, client):
+    """When earliest scan has an SPDX SBOMDocument, found_by should contain 'spdx3'."""
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_package import SBOMPackage
+    from datetime import datetime, timezone
+
+    with app.app_context():
+        # Create an alternate package & vulnerability
+        pkg = Package.find_or_create("spdx-test-pkg", "2.0.0", [], [], "")
+        db.session.commit()
+        vuln = Vulnerability.create_record(
+            id="CVE-SPDX-0001",
+            description="Test vuln for spdx found_by path",
+            status="medium",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, "CVE-SPDX-0001")
+
+        # Create a scan with a SPDX SBOMDocument (non-dedicated format)
+        import uuid as _uuid
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        spdx_doc = SBOMDocument(
+            id=_uuid.uuid4(),
+            path="/demo/spdx.spdx.json",
+            source_name="spdx.spdx.json",
+            format="spdx",
+            scan_id=scan.id,
+        )
+        db.session.add(spdx_doc)
+        db.session.add(SBOMPackage(sbom_document_id=spdx_doc.id, package_id=pkg.id))
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+
+    # Query the vulnerability through the API
+    response = client.get("/api/vulnerabilities")
+    data = json.loads(response.data)
+    spdx_vuln = next((v for v in data if v["id"] == "CVE-SPDX-0001"), None)
+    assert spdx_vuln is not None
+    assert "spdx3" in spdx_vuln["found_by"]
+
+
+def test_found_by_tool_scan_nvd(app, client):
+    """When earliest scan is a tool scan with scan_source='nvd', found_by should contain 'nvd_cpe'."""
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from datetime import datetime, timezone
+
+    with app.app_context():
+        pkg = Package.find_or_create("nvd-test-pkg", "3.0.0", [], [], "")
+        db.session.commit()
+        vuln = Vulnerability.create_record(
+            id="CVE-NVD-0001",
+            description="Test vuln for NVD tool scan path",
+            status="low",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, "CVE-NVD-0001")
+
+        import uuid as _uuid
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            scan_type="tool",
+            scan_source="nvd",
+            timestamp=datetime(2019, 1, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+
+    response = client.get("/api/vulnerabilities")
+    data = json.loads(response.data)
+    nvd_vuln = next((v for v in data if v["id"] == "CVE-NVD-0001"), None)
+    assert nvd_vuln is not None
+    assert "nvd_cpe" in nvd_vuln["found_by"]
+
+
+def test_found_by_mixed_formats_prefers_non_dedicated(app, client):
+    """When a scan has both spdx + grype docs, found_by should prefer the non-dedicated (spdx) format."""
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_package import SBOMPackage
+    from datetime import datetime, timezone
+
+    with app.app_context():
+        pkg = Package.find_or_create("mixed-test-pkg", "4.0.0", [], [], "")
+        db.session.commit()
+        vuln = Vulnerability.create_record(
+            id="CVE-MIXED-0001",
+            description="Test vuln for mixed format preference",
+            status="high",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, "CVE-MIXED-0001")
+
+        import uuid as _uuid
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            timestamp=datetime(2018, 1, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        # Two docs in the same scan: spdx + grype
+        spdx_doc = SBOMDocument(
+            id=_uuid.uuid4(), path="/demo/spdx.json", source_name="spdx.json",
+            format="spdx", scan_id=scan.id,
+        )
+        grype_doc = SBOMDocument(
+            id=_uuid.uuid4(), path="/demo/grype.json", source_name="grype.json",
+            format="grype", scan_id=scan.id,
+        )
+        db.session.add(spdx_doc)
+        db.session.add(grype_doc)
+        db.session.add(SBOMPackage(sbom_document_id=spdx_doc.id, package_id=pkg.id))
+        db.session.add(SBOMPackage(sbom_document_id=grype_doc.id, package_id=pkg.id))
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+
+    response = client.get("/api/vulnerabilities")
+    data = json.loads(response.data)
+    mixed_vuln = next((v for v in data if v["id"] == "CVE-MIXED-0001"), None)
+    assert mixed_vuln is not None
+    # Should prefer spdx (non-dedicated) over grype (dedicated)
+    assert "spdx3" in mixed_vuln["found_by"]
+    assert "grype" not in mixed_vuln["found_by"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — variant/project with no scans → empty list
+# ---------------------------------------------------------------------------
+
+def test_get_vulns_variant_no_scans(app, client):
+    """GET with variant_id of a variant that has no scans returns []."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("NoScanProject")
+        variant = Variant.create("noscan-variant", project.id)
+        vid = str(variant.id)
+    response = client.get(f"/api/vulnerabilities?variant_id={vid}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+def test_get_vulns_project_no_scans(app, client):
+    """GET with project_id of a project that has no scans returns []."""
+    from src.extensions import db
+    from src.models.project import Project
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("NoScanProject2")
+        pid = str(project.id)
+    response = client.get(f"/api/vulnerabilities?project_id={pid}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities?project_id=... (with data — covers bulk-load paths)
+# ---------------------------------------------------------------------------
+
+def test_get_vulns_by_project_id_with_data(app, client):
+    """GET with a valid project_id that has scans returns vulns with metrics/packages/effort."""
+    # The demo project "11111111..." has a scan with a CVE
+    pid = "11111111-1111-1111-1111-111111111111"
+    response = client.get(f"/api/vulnerabilities?project_id={pid}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    vuln = data[0]
+    assert "id" in vuln
+    assert "packages" in vuln
+    assert "severity" in vuln
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities (no scope) — covers fallback scope
+# ---------------------------------------------------------------------------
+
+def test_get_vulns_global_no_scope(client):
+    """GET without variant_id or project_id returns all vulns (fallback)."""
+    response = client.get("/api/vulnerabilities")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    # Check enrichment fields
+    vuln = data[0]
+    assert "variants" in vuln
+    assert "first_scan_date" in vuln
