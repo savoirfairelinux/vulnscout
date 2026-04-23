@@ -62,6 +62,7 @@ def _populate_found_by(
     records: list,
     variant_uuid=None,
     project_uuid=None,
+    active_scan_ids: list | None = None,
 ) -> None:
     """Populate the transient found_by list on each record.
 
@@ -84,8 +85,12 @@ def _populate_found_by(
        These scans create Observation records but no SBOMDocument, so they
        must be queried separately.
 
-    When variant_uuid or project_uuid is provided, only data belonging to
-    that variant or project is considered.
+    When *active_scan_ids* is provided the queries are scoped to exactly
+    those scans — this prevents historical scan data from leaking into the
+    attribution (e.g. an old grype scan incorrectly claiming credit for
+    vulnerabilities actually discovered via a newer SPDX import).
+
+    Otherwise variant_uuid / project_uuid are used as a broader scope.
     """
     if not records:
         return
@@ -96,10 +101,6 @@ def _populate_found_by(
     # 1. SBOM-document attribution
     # ------------------------------------------------------------------
 
-    # Build the base query explicitly from Finding so that SBOMDocument does not
-    # end up in the implicit FROM clause (which would happen if we referenced
-    # SBOMDocument.format without select_from(), causing a cartesian product or
-    # a silent no-op when the second .join(SBOMDocument) is evaluated).
     base_query = (
         db.select(Finding.vulnerability_id, Finding.package_id, SBOMDocument.format)
         .select_from(Finding)
@@ -108,7 +109,10 @@ def _populate_found_by(
         .where(SBOMDocument.format.isnot(None))
     )
 
-    if variant_uuid is not None:
+    if active_scan_ids:
+        # Scope to the exact active scans — most precise
+        base_query = base_query.where(SBOMDocument.scan_id.in_(active_scan_ids))
+    elif variant_uuid is not None:
         base_query = (
             base_query
             .join(Scan, Scan.id == SBOMDocument.scan_id)
@@ -153,7 +157,9 @@ def _populate_found_by(
         .where(Scan.scan_source.isnot(None))
     )
 
-    if variant_uuid is not None:
+    if active_scan_ids:
+        tool_query = tool_query.where(Observation.scan_id.in_(active_scan_ids))
+    elif variant_uuid is not None:
         tool_query = tool_query.where(Scan.variant_id == variant_uuid)
     elif project_uuid is not None:
         tool_query = (
@@ -407,7 +413,8 @@ def init_app(app):
             records = Vulnerability.get_all()
             _scope_variant = None
             _scope_project = None
-        _populate_found_by(records, _scope_variant, _scope_project)
+        _populate_found_by(records, _scope_variant, _scope_project,
+                           active_scan_ids=current_scan_ids or None)
         vulns = [r.to_dict() for r in records]
 
         vuln_ids = [v["id"] for v in vulns]
