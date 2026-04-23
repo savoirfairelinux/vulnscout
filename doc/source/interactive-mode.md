@@ -10,16 +10,34 @@ When you first import an SBOM into VulnScout, the application scans its contents
 
 If the SBOM source does not include any assessment data, those findings start with a **Pending assessment**, which means you will need to review the finding and make a decision about it (either it affects your system, or it doesn't or it was already fixed).
 
-However, many SBOM sources carry assessments / triage decisions. Yocto CVE-check results, for example, mark vulnerabilities as Patched, Ignored, or Unpatched; CycloneDX and SPDX 3 documents often include full VEX analysis blocks; and OpenVEX files provide standalone assessment records. When VulnScout ingests these, it creates assessments automatically with an `sbom` origin, so you may see some CVEs already labelled as **Fixed** or **Not affected** before you have done any manual triage.
+However, many SBOM sources carry assessments / triage decisions. Yocto CVE-check results, for example, mark vulnerabilities as Patched, Ignored, or Unpatched; CycloneDX and SPDX 3 documents often include full VEX analysis blocks; and OpenVEX files provide standalone assessment records. When VulnScout ingests these, it creates assessments automatically, so you may see some CVEs already labelled as **Fixed** or **Not affected** before you have done any manual triage.
 
-### What "Pending Assessment" Means
+### Scanners
+
+An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
+
+- **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It offers broad coverage across many ecosystems.
+- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages.
+- **OSV-Scanner** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. Its PURL matching tends to be more precise than CPE-based lookup.
+
+By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
+
+### Assessment Status in Vulnscout
 
 VulnScout groups all assessment statuses into four simplified categories:
 
 - **Pending Assessment**: the vulnerability has not been assessed yet. 
-- **Exploitable**: the vulnerability is confirmed to affect your product in its current configuration.
-- **Not affected**: the vulnerability does not apply (the vulnerable code is not present, not reachable, or already mitigated). A justification is required when selecting this status.
+- **Exploitable**: the vulnerability is confirmed to affect your product in its current configuration and represents danger for it as defined in the threat model.
+- **Not affected**: the vulnerability does not apply — even if the vulnerable package is present on the device, the CVE may not match your threat model (for example, the vulnerable code path is not reachable, or the attack vector does not exist in your environment). A justification is required when selecting this status.
 - **Fixed**: the vulnerability has been patched or resolved.
+
+### Threat Model
+
+A vulnerability present in Vulnscout does not necessarily mean they represent a real danger to your device. A CVE describes a potential weakness whether it is actually exploitable depends on how the affected component is built, configured, and used in your specific environment.
+
+For example, consider a CVE that can only be triggered when a particular compile-time flag is enabled. If your build does not use that flag, the vulnerable code path is never included, and the CVE cannot be exploited on your device. Similarly, a network-facing vulnerability has no impact on a system that is never connected to a network.
+
+This is why triage matters: the goal is not to patch every CVE blindly, but to determine which ones are relevant given your threat model and mark the rest as **Not affected** with a clear justification.
 
 ### Goal of the Interactive Mode
 
