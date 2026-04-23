@@ -878,7 +878,7 @@ type AssessmentGroup = {
                         <div className="mb-6 mt-6">
                             <h3 className="font-bold mb-2">Links</h3>
                             <ul>
-                                {[...new Set([vuln.datasource, ...vuln.urls])].map(url => (
+                                {vuln.urls.map(url => (
                                     <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
                                 ))}
                             </ul>
