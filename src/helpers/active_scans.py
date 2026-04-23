@@ -88,6 +88,48 @@ def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
 
 
 # ------------------------------------------------------------------
+# SBOM-only scan IDs (for package queries)
+# ------------------------------------------------------------------
+
+def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
+    """Return only the SBOM-type scan ID(s) from the active set for *variant_uuid*.
+
+    Packages come exclusively from SBOM scans (tool scans don't create
+    SBOMDocuments), so the packages route should use this instead of
+    ``active_scan_ids_for_variant``.
+    """
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.scan_type)
+        .where(Scan.variant_id == variant_uuid)
+        .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
+        .order_by(Scan.timestamp.desc())
+        .limit(1)
+    ).all()
+    return [r[0] for r in rows]
+
+
+def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
+    """Return only the SBOM-type scan ID(s) from the active set for *project_uuid*.
+
+    One latest SBOM scan per variant.
+    """
+    rows = db.session.execute(
+        db.select(Scan.id, Scan.variant_id, Scan.timestamp)
+        .join(Variant, Scan.variant_id == Variant.id)
+        .where(Variant.project_id == project_uuid)
+        .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
+        .order_by(Scan.variant_id, Scan.timestamp.desc())
+    ).all()
+    ids: list = []
+    seen_variants: set = set()
+    for scan_id, vid, _ts in rows:
+        if vid not in seen_variants:
+            seen_variants.add(vid)
+            ids.append(scan_id)
+    return ids
+
+
+# ------------------------------------------------------------------
 # Active package IDs (from SBOM scans only)
 # ------------------------------------------------------------------
 

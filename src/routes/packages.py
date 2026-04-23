@@ -11,8 +11,8 @@ from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 from ..helpers.active_scans import (
-    active_scan_ids_for_variant,
-    active_scan_ids_for_project,
+    active_sbom_scan_ids_for_variant,
+    active_sbom_scan_ids_for_project,
 )
 
 
@@ -73,15 +73,15 @@ def init_app(app):
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
-            latest_ids = active_scan_ids_for_variant(variant_uuid)
-            if not latest_ids:
+            sbom_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+            if not sbom_ids:
                 pkgs = []
             else:
                 pkg_ids_sub = (
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(latest_ids))
+                    .where(SBOMDocument.scan_id.in_(sbom_ids))
                     .distinct()
                 )
                 pkgs = list(db.session.execute(
@@ -94,15 +94,15 @@ def init_app(app):
                 project_uuid = uuid.UUID(project_id)
             except ValueError:
                 return {"error": "Invalid project_id"}, 400
-            latest_ids = active_scan_ids_for_project(project_uuid)
-            if not latest_ids:
+            sbom_ids = active_sbom_scan_ids_for_project(project_uuid)
+            if not sbom_ids:
                 pkgs = []
             else:
                 pkg_ids_sub = (
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(latest_ids))
+                    .where(SBOMDocument.scan_id.in_(sbom_ids))
                     .distinct()
                 )
                 pkgs = list(db.session.execute(
