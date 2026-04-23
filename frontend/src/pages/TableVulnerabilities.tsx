@@ -457,6 +457,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     ? 'CycloneDx'
                     : source === 'spdx3'
                     ? 'SPDX3'
+                    : source === 'nvd_cpe'
+                    ? 'NVD CPE'
+                    : source === 'osv'
+                    ? 'OSV'
                     : source
             ),
         [sources_list]
@@ -825,6 +829,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                                 ? 'CycloneDx'
                                 : source === 'spdx3'
                                 ? 'SPDX3'
+                                : source === 'nvd_cpe'
+                                ? 'NVD CPE'
+                                : source === 'osv'
+                                ? 'OSV'
                                 : source
                         )
                         .join(', ')}
