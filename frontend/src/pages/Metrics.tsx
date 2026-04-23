@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
         import TableGeneric from "../components/TableGeneric";
         import SeverityTag from "../components/SeverityTag";
         import VulnModal from "../components/VulnModal";
+        import { formatSourceName } from "../helpers/sourceNames";
         import type { Assessment } from "../handlers/assessments";
 
         ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
@@ -109,20 +110,7 @@ import { useMemo, useState } from "react";
             return date;
         }
 
-        function formatSourceName(source: string): string {
-            const map: Record<string, string> = {
-                openvex: 'OpenVex',
-                local_user_data: 'Local User Data',
-                yocto: 'Yocto',
-                spdx3: 'SPDX3',
-                grype: 'Grype',
-                cyclonedx: 'CycloneDx',
-                nvd_cpe: 'NVD CPE',
-                osv: 'OSV',
-            };
 
-            return map[source] || source;
-        }
 
 
 

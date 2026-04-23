@@ -12,6 +12,7 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
 
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
@@ -443,66 +444,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, []), [vulnerabilities])
 
     const sources_display_list = useMemo(
-        () =>
-            sources_list.map(source =>
-                source === 'openvex'
-                    ? 'OpenVex'
-                    : source === 'local_user_data'
-                    ? 'Local User Data'
-                    : source === 'yocto'
-                    ? 'Yocto'
-                    : source === 'grype'
-                    ? 'Grype'
-                    : source === 'cyclonedx'
-                    ? 'CycloneDx'
-                    : source === 'spdx3'
-                    ? 'SPDX3'
-                    : source === 'nvd_cpe'
-                    ? 'NVD CPE'
-                    : source === 'osv'
-                    ? 'OSV'
-                    : source
-            ),
+        () => sources_list.map(formatSourceName),
         [sources_list]
     );
-
-    const formatSourceName = (source: string) =>
-        source === 'openvex'
-            ? 'OpenVex'
-            : source === 'local_user_data'
-            ? 'Local User Data'
-            : source === 'yocto'
-            ? 'Yocto'
-            : source === 'grype'
-            ? 'Grype'
-            : source === 'cyclonedx'
-            ? 'CycloneDx'
-            : source === 'spdx3'
-            ? 'SPDX3'
-            : source === 'nvd_cpe'
-            ? 'NVD CPE'
-            : source === 'osv'
-            ? 'OSV'
-            : source;
-
-    const getOriginalSourceName = (displayName: string) =>
-        displayName === 'OpenVex'
-            ? 'openvex'
-            : displayName === 'Yocto'
-            ? 'yocto'
-            : displayName === 'Local User Data'
-            ? 'local_user_data'
-            : displayName === 'Grype'
-            ? 'grype'
-            : displayName === 'CycloneDx'
-            ? 'cyclonedx'
-            : displayName === 'SPDX3'
-            ? 'spdx3'
-            : displayName === 'NVD CPE'
-            ? 'nvd_cpe'
-            : displayName === 'OSV'
-            ? 'osv'
-            : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -816,25 +760,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
                     {info.renderValue()
-                        ?.map((source: string) =>
-                            source === 'openvex'
-                                ? 'OpenVex'
-                                : source === 'local_user_data'
-                                ? 'Local User Data'
-                                : source === 'yocto'
-                                ? 'Yocto'
-                                : source === 'grype'
-                                ? 'Grype'
-                                : source === 'cyclonedx'
-                                ? 'CycloneDx'
-                                : source === 'spdx3'
-                                ? 'SPDX3'
-                                : source === 'nvd_cpe'
-                                ? 'NVD CPE'
-                                : source === 'osv'
-                                ? 'OSV'
-                                : source
-                        )
+                        ?.map(formatSourceName)
                         .join(', ')}
                 </div>
             ),

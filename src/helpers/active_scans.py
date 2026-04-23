@@ -99,7 +99,7 @@ def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
     ``active_scan_ids_for_variant``.
     """
     rows = db.session.execute(
-        db.select(Scan.id, Scan.scan_type)
+        db.select(Scan.id)
         .where(Scan.variant_id == variant_uuid)
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
         .order_by(Scan.timestamp.desc())

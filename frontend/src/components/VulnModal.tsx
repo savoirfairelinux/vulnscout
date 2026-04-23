@@ -18,6 +18,7 @@ import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
+import { formatSourceName } from '../helpers/sourceNames';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -788,17 +789,7 @@ type AssessmentGroup = {
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
                                     {vuln.found_by
-                                        .map(source => {
-                                            if (source === 'openvex') return 'OpenVex';
-                                            if (source === 'yocto') return 'Yocto';
-                                            if (source === 'grype') return 'Grype';
-                                            if (source === 'cyclonedx') return 'CycloneDx';
-                                            if (source === 'local_user_data') return 'Local User Data';
-                                            if (source === 'spdx3') return 'SPDX3';
-                                            if (source === 'nvd_cpe') return 'NVD CPE';
-                                            if (source === 'osv') return 'OSV';
-                                            return source;
-                                        })
+                                        .map(formatSourceName)
                                         .join(', ')
                                     }
                                 </li>
