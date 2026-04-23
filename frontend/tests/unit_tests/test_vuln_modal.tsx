@@ -106,17 +106,17 @@ describe('Vulnerability Modal', () => {
         expect(desc).toBeInTheDocument();
     })
 
-    test('render urls and datasource', async () => {
+    test('render urls without datasource', async () => {
         // ARRANGE
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT
-        const datasource = await screen.getByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i);
         const url = await screen.getByText(/security-tracker\.debian\.org\/tracker\/CVE-2010-1234/i);
 
         // ASSERT
-        expect(datasource).toBeInTheDocument();
         expect(url).toBeInTheDocument();
+        // datasource is metadata, not a link — it should NOT appear in the Links section
+        expect(screen.queryByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i)).not.toBeInTheDocument();
     })
 
     test('render efforts estimations', async () => {
