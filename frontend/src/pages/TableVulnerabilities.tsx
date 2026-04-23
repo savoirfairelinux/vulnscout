@@ -475,6 +475,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ? 'CycloneDx'
             : source === 'spdx3'
             ? 'SPDX3'
+            : source === 'nvd_cpe'
+            ? 'NVD CPE'
+            : source === 'osv'
+            ? 'OSV'
             : source;
 
     const getOriginalSourceName = (displayName: string) =>
@@ -490,6 +494,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ? 'cyclonedx'
             : displayName === 'SPDX3'
             ? 'spdx3'
+            : displayName === 'NVD CPE'
+            ? 'nvd_cpe'
+            : displayName === 'OSV'
+            ? 'osv'
             : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
