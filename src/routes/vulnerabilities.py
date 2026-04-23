@@ -247,19 +247,7 @@ def init_app(app):
             if not latest_ids:
                 records = []
             else:
-                # Restrict tool-scan findings to packages still in the SBOM
-                _active_pkg_ids = active_package_ids_for_scans(latest_ids)
                 _obs_filter = Observation.scan_id.in_(latest_ids)
-                if _active_pkg_ids:
-                    # Include observation when: SBOM scan, OR package in SBOM
-                    _obs_filter = db.and_(
-                        _obs_filter,
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_active_pkg_ids),
-                        ),
-                    )
                 records = list(db.session.execute(
                     db.select(Vulnerability)
                     .options(
@@ -269,7 +257,6 @@ def init_app(app):
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
                     .where(_obs_filter)
                     .distinct()
                     .order_by(Vulnerability.id)
@@ -290,22 +277,11 @@ def init_app(app):
 
                 # Subquery for vulnerability IDs visible in these scans,
                 # used to avoid huge literal IN-lists in secondary queries.
-                # Restrict tool-scan findings to packages still in the SBOM.
-                _active_pkg_ids = active_package_ids_for_scans(latest_ids)
                 vuln_ids_base = (
                     db.select(Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
-                if _active_pkg_ids:
-                    vuln_ids_base = vuln_ids_base.where(
-                        db.or_(
-                            Scan.scan_type.is_(None),
-                            Scan.scan_type == "sbom",
-                            Finding.package_id.in_(_active_pkg_ids),
-                        )
-                    )
                 vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
