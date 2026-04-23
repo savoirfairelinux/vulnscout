@@ -18,7 +18,6 @@ from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 from ..helpers.verbose import verbose
 from ..helpers.active_scans import (
