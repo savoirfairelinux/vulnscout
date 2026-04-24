@@ -113,32 +113,30 @@ def set_error(progress_dict: dict, vid_str: str, error: str):
 def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid_str: str | None = None):
     """Return the active ``Package`` list for *variant_uuid*.
 
-    Looks at the latest SBOM + tool scans, resolves their package sets
-    and loads the ``Package`` objects.
+    Looks at the latest **SBOM** scan for the variant, resolves its
+    package set and loads the ``Package`` objects.  Tool scans are
+    intentionally excluded because they may contain packages from other
+    variants (e.g. the Grype export is global).
 
     Returns ``(packages, error_string_or_None)``.  When *progress_dict*
     and *vid_str* are provided the function sets an error state on failure.
     """
-    latest_rows = db.session.execute(
-        db.select(Scan.id, Scan.scan_type)
+    # Find the latest SBOM scan for this variant
+    sbom_row = db.session.execute(
+        db.select(Scan.id)
         .where(Scan.variant_id == variant_uuid)
+        .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
         .order_by(Scan.timestamp.desc())
-    ).all()
-    latest_ids: list = []
-    seen_types: set = set()
-    for sid, stype in latest_rows:
-        st = stype or "sbom"
-        if st not in seen_types:
-            seen_types.add(st)
-            latest_ids.append(sid)
-        if len(seen_types) >= 2:
-            break
+        .limit(1)
+    ).scalar()
 
-    if not latest_ids:
-        err = "No scans found for variant"
+    if sbom_row is None:
+        err = "No SBOM scan found for variant"
         if progress_dict and vid_str:
             set_error(progress_dict, vid_str, err)
         return [], err
+
+    latest_ids = [sbom_row]
 
     # Batch query: scan_id -> set(package_id) via sbom_documents
     rows = db.session.execute(

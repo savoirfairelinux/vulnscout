@@ -200,7 +200,7 @@ class TestDoNvdScan:
         )
         data = json.loads(resp_status.data)
         assert data["status"] == "error"
-        assert "No scans found" in data["error"]
+        assert "No SBOM scan found" in data["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +284,7 @@ class TestDoOsvScan:
         )
         data = json.loads(resp_status.data)
         assert data["status"] == "error"
-        assert "No scans found" in data["error"]
+        assert "No SBOM scan found" in data["error"]
 
 
 # ---------------------------------------------------------------------------
