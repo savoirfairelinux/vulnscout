@@ -247,8 +247,11 @@ def init_app(app):
             if not latest_ids:
                 records = []
             else:
-                _obs_filter = Observation.scan_id.in_(latest_ids)
-                records = list(db.session.execute(
+                # Filter tool-scan findings to only include packages
+                # present in the active SBOM, preventing stale/cross-variant
+                # vulns from appearing in the Vulnerability tab.
+                _pkg_ids = active_package_ids_for_scans(latest_ids)
+                query = (
                     db.select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
@@ -257,9 +260,19 @@ def init_app(app):
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .where(_obs_filter)
-                    .distinct()
-                    .order_by(Vulnerability.id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Observation.scan_id.in_(latest_ids))
+                )
+                if _pkg_ids:
+                    query = query.where(
+                        db.or_(
+                            Scan.scan_type.is_(None),
+                            Scan.scan_type == "sbom",
+                            Finding.package_id.in_(_pkg_ids),
+                        )
+                    )
+                records = list(db.session.execute(
+                    query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
         elif project_id:
             try:
@@ -275,13 +288,25 @@ def init_app(app):
             else:
                 from ..models.time_estimate import TimeEstimate
 
+                # Filter tool-scan findings by active SBOM packages
+                _pkg_ids = active_package_ids_for_scans(latest_ids)
+
                 # Subquery for vulnerability IDs visible in these scans,
                 # used to avoid huge literal IN-lists in secondary queries.
                 vuln_ids_base = (
                     db.select(Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
                 )
+                if _pkg_ids:
+                    vuln_ids_base = vuln_ids_base.where(
+                        db.or_(
+                            Scan.scan_type.is_(None),
+                            Scan.scan_type == "sbom",
+                            Finding.package_id.in_(_pkg_ids),
+                        )
+                    )
                 vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
