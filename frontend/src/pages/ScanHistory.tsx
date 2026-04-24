@@ -19,8 +19,10 @@ import {
     type OsvState,
 } from "../handlers/osvScanState";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
+import Variants from "../handlers/variant";
+import type { Variant } from "../handlers/variant";
 
 type Props = {
     variantId?: string;
@@ -869,6 +871,13 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showOsv, setShowOsv] = useState(true);
     const [showNvd, setShowNvd] = useState(true);
 
+    // Scan menu state
+    const [scanMenuOpen, setScanMenuOpen] = useState(false);
+    const [allVariants, setAllVariants] = useState<Variant[]>([]);
+    const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
+    const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv']));
+    const scanMenuRef = useRef<HTMLDivElement>(null);
+
     // Global Grype scan state — survives tab switches
     const grypeState: GrypeState = useSyncExternalStore(subscribe, getSnapshot);
     const grypeStatus = grypeState.status;
@@ -941,28 +950,55 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    async function handleTriggerGrypeScan() {
-        if (effectiveVariantIds.length === 0) return;
-        await triggerScan(effectiveVariantIds);
+    // Fetch all variants for the scan menu
+    useEffect(() => {
+        Variants.listAll().then(vs => {
+            setAllVariants(vs);
+            // Default: select all effective variants
+            setSelectedVariantIds(new Set(
+                variantId ? [variantId] : vs.map(v => v.id)
+            ));
+        });
+    }, [variantId]);
+
+    // Close scan menu on outside click
+    useEffect(() => {
+        function handleClickOutside(e: MouseEvent) {
+            if (scanMenuRef.current && !scanMenuRef.current.contains(e.target as Node)) {
+                setScanMenuOpen(false);
+            }
+        }
+        if (scanMenuOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [scanMenuOpen]);
+
+    function toggleVariant(vid: string) {
+        setSelectedVariantIds(prev => {
+            const next = new Set(prev);
+            if (next.has(vid)) next.delete(vid); else next.add(vid);
+            return next;
+        });
     }
 
-    async function handleTriggerNvdScan() {
-        if (effectiveVariantIds.length === 0) return;
-        await nvdTriggerScan(effectiveVariantIds);
+    function toggleScanType(t: string) {
+        setSelectedScanTypes(prev => {
+            const next = new Set(prev);
+            if (next.has(t)) next.delete(t); else next.add(t);
+            return next;
+        });
     }
 
-    async function handleTriggerOsvScan() {
-        if (effectiveVariantIds.length === 0) return;
-        await osvTriggerScan(effectiveVariantIds);
-    }
-
-    async function handleTriggerAllScans() {
-        if (effectiveVariantIds.length === 0) return;
-        await Promise.all([
-            triggerScan(effectiveVariantIds),
-            nvdTriggerScan(effectiveVariantIds),
-            osvTriggerScan(effectiveVariantIds),
-        ]);
+    async function handleRunSelectedScans() {
+        const vids = [...selectedVariantIds];
+        if (vids.length === 0 || selectedScanTypes.size === 0) return;
+        setScanMenuOpen(false);
+        const promises: Promise<void>[] = [];
+        if (selectedScanTypes.has('grype')) promises.push(triggerScan(vids));
+        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(vids));
+        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(vids));
+        await Promise.all(promises);
     }
 
     useEffect(() => {
@@ -1081,7 +1117,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 NVD
             </button>
 
-            {/* Right side: status + scan buttons */}
+            {/* Right side: status + scan menu */}
             <div className="ml-auto flex items-center gap-3">
                 {grypeError && (
                     <span className="text-sm text-red-400">{grypeError}</span>
@@ -1101,65 +1137,121 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 {osvStatus === 'done' && (
                     <span className="text-sm text-green-400">OSV scan complete!</span>
                 )}
-                {canTriggerScan && (
-                    <button
-                        onClick={handleTriggerAllScans}
-                        disabled={allRunning || loading}
-                        className={[
-                            "inline-flex items-center gap-2 px-3 py-1 rounded text-sm font-semibold transition-colors",
-                            allRunning
-                                ? "bg-cyan-800/50 text-cyan-300 cursor-wait"
-                                : "bg-cyan-700 hover:bg-cyan-600 text-white",
-                        ].join(' ')}
-                    >
-                        <FontAwesomeIcon icon={faCrosshairs} />
-                        {allRunning ? 'Scanning…' : 'Scan All'}
-                    </button>
+
+                {/* Scan status badges */}
+                {grypeStatus === 'running' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-purple-800/50 text-purple-300">
+                        <FontAwesomeIcon icon={faBug} /> Grype… {grypeProgress ?? ''}
+                    </span>
                 )}
-                {canTriggerScan && (
-                    <button
-                        onClick={handleTriggerGrypeScan}
-                        disabled={grypeStatus === 'running' || loading}
-                        className={[
-                            "inline-flex items-center gap-2 px-3 py-1 rounded text-sm font-semibold transition-colors",
-                            grypeStatus === 'running'
-                                ? "bg-purple-800/50 text-purple-300 cursor-wait"
-                                : "bg-purple-700 hover:bg-purple-600 text-white",
-                        ].join(' ')}
-                    >
-                        <FontAwesomeIcon icon={faBug} />
-                        {grypeStatus === 'running' ? `Grype Scan… ${grypeProgress ?? ''}` : 'Perform Grype Scan'}
-                    </button>
+                {nvdStatus === 'running' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-orange-800/50 text-orange-300">
+                        <FontAwesomeIcon icon={faShieldHalved} /> NVD… {nvdProgress ?? ''}
+                    </span>
                 )}
-                {canTriggerScan && (
-                    <button
-                        onClick={handleTriggerNvdScan}
-                        disabled={nvdStatus === 'running' || loading}
-                        className={[
-                            "inline-flex items-center gap-2 px-3 py-1 rounded text-sm font-semibold transition-colors",
-                            nvdStatus === 'running'
-                                ? "bg-orange-800/50 text-orange-300 cursor-wait"
-                                : "bg-orange-700 hover:bg-orange-600 text-white",
-                        ].join(' ')}
-                    >
-                        <FontAwesomeIcon icon={faShieldHalved} />
-                        {nvdStatus === 'running' ? `NVD Scan… ${nvdProgress ?? ''}` : 'Perform NVD Scan'}
-                    </button>
+                {osvStatus === 'running' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-green-800/50 text-green-300">
+                        <FontAwesomeIcon icon={faLeaf} /> OSV… {osvProgress ?? ''}
+                    </span>
                 )}
+
+                {/* Run Scans dropdown */}
                 {canTriggerScan && (
-                    <button
-                        onClick={handleTriggerOsvScan}
-                        disabled={osvStatus === 'running' || loading}
-                        className={[
-                            "inline-flex items-center gap-2 px-3 py-1 rounded text-sm font-semibold transition-colors",
-                            osvStatus === 'running'
-                                ? "bg-green-800/50 text-green-300 cursor-wait"
-                                : "bg-green-700 hover:bg-green-600 text-white",
-                        ].join(' ')}
-                    >
-                        <FontAwesomeIcon icon={faLeaf} />
-                        {osvStatus === 'running' ? `OSV Scan… ${osvProgress ?? ''}` : 'Perform OSV Scan'}
-                    </button>
+                    <div className="relative" ref={scanMenuRef}>
+                        <button
+                            onClick={() => setScanMenuOpen(o => !o)}
+                            disabled={allRunning || loading}
+                            className={[
+                                "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
+                                allRunning
+                                    ? "bg-cyan-800/50 text-cyan-300 cursor-wait"
+                                    : "bg-cyan-700 hover:bg-cyan-600 text-white",
+                            ].join(' ')}
+                        >
+                            <FontAwesomeIcon icon={faPlay} />
+                            {allRunning ? 'Scanning…' : 'Run Scans'}
+                        </button>
+
+                        {scanMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1 z-50 w-72 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
+
+                                {/* Scan types */}
+                                <div className="mb-3">
+                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Scan types</div>
+                                    {([
+                                        { key: 'grype', label: 'Grype', icon: faBug, color: 'purple' },
+                                        { key: 'nvd', label: 'NVD CPE', icon: faShieldHalved, color: 'orange' },
+                                        { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
+                                    ] as const).map(({ key, label, icon, color }) => (
+                                        <label
+                                            key={key}
+                                            className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedScanTypes.has(key)}
+                                                onChange={() => toggleScanType(key)}
+                                                className="rounded accent-cyan-500"
+                                            />
+                                            <FontAwesomeIcon icon={icon} className={`text-${color}-400 w-4`} />
+                                            <span className="text-neutral-200">{label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+
+                                {/* Variants */}
+                                <div className="mb-3">
+                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Variants</div>
+                                    <div className="max-h-40 overflow-y-auto">
+                                        {allVariants.length === 0 && (
+                                            <span className="text-xs text-neutral-500 italic">No variants found</span>
+                                        )}
+                                        {allVariants.map(v => (
+                                            <label
+                                                key={v.id}
+                                                className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedVariantIds.has(v.id)}
+                                                    onChange={() => toggleVariant(v.id)}
+                                                    className="rounded accent-cyan-500"
+                                                />
+                                                <span className="text-neutral-200 truncate">{v.name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    {allVariants.length > 1 && (
+                                        <div className="flex gap-2 mt-1">
+                                            <button
+                                                onClick={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
+                                                className="text-xs text-sky-400 hover:text-sky-300"
+                                            >Select all</button>
+                                            <button
+                                                onClick={() => setSelectedVariantIds(new Set())}
+                                                className="text-xs text-sky-400 hover:text-sky-300"
+                                            >Select none</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Run button */}
+                                <button
+                                    onClick={handleRunSelectedScans}
+                                    disabled={selectedVariantIds.size === 0 || selectedScanTypes.size === 0}
+                                    className={[
+                                        "w-full py-1.5 rounded text-sm font-semibold transition-colors",
+                                        selectedVariantIds.size === 0 || selectedScanTypes.size === 0
+                                            ? "bg-neutral-700 text-neutral-500 cursor-not-allowed"
+                                            : "bg-cyan-700 hover:bg-cyan-600 text-white",
+                                    ].join(' ')}
+                                >
+                                    <FontAwesomeIcon icon={faPlay} className="mr-1" />
+                                    Run {selectedScanTypes.size} scan{selectedScanTypes.size !== 1 ? 's' : ''} on {selectedVariantIds.size} variant{selectedVariantIds.size !== 1 ? 's' : ''}
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 )}
             </div>
         </div>
