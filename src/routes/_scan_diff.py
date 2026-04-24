@@ -586,6 +586,12 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         ).all()
         fid_to_info = {r[0]: (r[1], r[2]) for r in rows}
 
+    # Pre-build per-variant scan lists so that contributing-scan helpers
+    # only see scans from the same variant (avoids cross-variant leaks).
+    _scans_by_variant: dict = {}  # variant_id -> [Scan, …]
+    for s in scans:
+        _scans_by_variant.setdefault(s.variant_id, []).append(s)
+
     # Second pass: build result dicts
     # Track latest tool-scan findings/vulns per (variant, source) as we
     # iterate in chronological order so we can compute the "global" result
@@ -615,8 +621,9 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             # Compute the global result BEFORE and AFTER this scan using
             # shared helpers that do a proper DB-level JOIN, so vuln/
             # finding counts are always accurate.
-            sbom_before, tools_before = _contributing_scans_before(scan, scans)
-            sbom_after, tools_after = _contributing_scans_at(scan, scans)
+            variant_scans = _scans_by_variant.get(scan.variant_id, [])
+            sbom_before, tools_before = _contributing_scans_before(scan, variant_scans)
+            sbom_after, tools_after = _contributing_scans_at(scan, variant_scans)
 
             before_fids, before_vids, _ = _global_result_id_sets(
                 sbom_before, tools_before)
@@ -684,7 +691,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             # Enable SBOM-package filtering so that tool findings for
             # packages removed between the two SBOMs are correctly
             # classified as "removed" rather than "unchanged".
-            _, latest_tool = _contributing_scans_at(scan, scans)
+            variant_scans = _scans_by_variant.get(scan.variant_id, [])
+            _, latest_tool = _contributing_scans_at(scan, variant_scans)
             curr_scan_result_f, curr_scan_result_v, _ = (
                 _global_result_id_sets(
                     scan, latest_tool,
@@ -750,7 +758,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                 vid == scan.variant_id for (vid, _src) in running_src_findings
             )
             if has_tool_scans:
-                g_f, g_v, g_p = _global_result_counts(scan, scans)
+                variant_scans = _scans_by_variant.get(scan.variant_id, [])
+                g_f, g_v, g_p = _global_result_counts(scan, variant_scans)
                 base["global_finding_count"] = g_f
                 base["global_vuln_count"] = g_v
                 base["global_package_count"] = g_p
