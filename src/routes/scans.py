@@ -216,9 +216,11 @@ def init_app(app):
             sbom_after, tools_after = _contributing_scans_at(
                 scan, all_variant_scans)
             _global_before_f, _global_before_v, _ = _global_result_id_sets(
-                sbom_before, tools_before)
+                sbom_before, tools_before,
+                filter_tool_by_sbom_pkgs=True)
             _global_after_f, _global_after_v, _ = _global_result_id_sets(
-                sbom_after, tools_after)
+                sbom_after, tools_after,
+                filter_tool_by_sbom_pkgs=True)
 
             added_fids = _global_after_f - _global_before_f
             removed_fids = _global_before_f - _global_after_f

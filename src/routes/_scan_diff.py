@@ -258,12 +258,13 @@ def _global_result_id_sets(
 
     When *filter_tool_by_sbom_pkgs* is ``True``, tool-scan findings are
     only included if their package is present in the active SBOM.  This
-    is needed for SBOM-to-SBOM diffs so that findings for packages that
-    were removed in the new SBOM are correctly classified as "removed"
-    rather than "unchanged".  For tool-scan diffs and Scan Result
-    counts, leave it ``False`` so that all tool findings are counted
-    (tool scanners may produce Package records with different IDs than
-    the SBOM).
+    prevents cross-variant contamination when the Grype export includes
+    packages from all variants, and also ensures that findings for
+    packages removed between two SBOMs are correctly classified as
+    "removed" rather than "unchanged".
+
+    All call sites should pass ``True``; the default remains ``False``
+    only for backward compatibility.
     """
     if sbom_scan is None:
         return set(), set(), set()
@@ -317,7 +318,7 @@ def _global_result_counts(
     """
     sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
     fids, vids, pkg_ids = _global_result_id_sets(
-        sbom_scan, latest_tool, filter_tool_by_sbom_pkgs=False)
+        sbom_scan, latest_tool, filter_tool_by_sbom_pkgs=True)
     return len(fids), len(vids), len(pkg_ids)
 
 
@@ -384,6 +385,11 @@ def _global_result_full(
     ]
     contributing_ids = list(dict.fromkeys(contributing_ids))
 
+    # IDs of tool scans — used to filter out findings for packages not
+    # present in this variant's SBOM (prevents cross-variant leaks when
+    # the Grype export includes packages from all variants).
+    tool_scan_ids: set = {s.id for s in latest_tool.values()}
+
     # --- Packages (from SBOM only) ---
     pkg_rows = db.session.execute(
         db.select(
@@ -448,6 +454,9 @@ def _global_result_full(
     finding_map: dict = {}
     vuln_set: dict = {}
     for sid, fid, pkg_id, vid, pname, pversion in obs_rows:
+        # Skip tool-scan findings whose package is not in the SBOM
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
         source_label = scan_source_labels.get(sid, "Unknown")
         if fid not in finding_map:
             finding_map[fid] = {
@@ -626,9 +635,11 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             sbom_after, tools_after = _contributing_scans_at(scan, variant_scans)
 
             before_fids, before_vids, _ = _global_result_id_sets(
-                sbom_before, tools_before)
+                sbom_before, tools_before,
+                filter_tool_by_sbom_pkgs=True)
             after_fids, after_vids, after_pkg_ids = _global_result_id_sets(
-                sbom_after, tools_after)
+                sbom_after, tools_after,
+                filter_tool_by_sbom_pkgs=True)
 
             # Update running tracker (still needed by the SBOM branch)
             src_key = (scan.variant_id, scan.scan_source)
@@ -654,7 +665,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
-                sbom_after, {scan.scan_source or "": scan})
+                sbom_after, {scan.scan_source or "": scan},
+                filter_tool_by_sbom_pkgs=True)
             base["branch_finding_count"] = len(branch_fids)
             base["branch_vuln_count"] = len(branch_vids)
             base["branch_package_count"] = len(branch_pkg_ids)
