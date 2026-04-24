@@ -245,6 +245,8 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
 def _global_result_id_sets(
     sbom_scan,
     tool_scans: dict,
+    *,
+    filter_tool_by_sbom_pkgs: bool = False,
 ) -> tuple:
     """Return ``(finding_ids, vuln_ids, package_ids)`` for a global result.
 
@@ -254,9 +256,14 @@ def _global_result_id_sets(
     Uses a single batch DB query with a JOIN so that vulnerability IDs
     are always accurate (no secondary lookup required).
 
-    Tool-scan findings are included unconditionally (no SBOM-package
-    filtering) because tool scans always analyse the exported SBOM, so
-    every finding they produce is inherently on an SBOM package.
+    When *filter_tool_by_sbom_pkgs* is ``True``, tool-scan findings are
+    only included if their package is present in the active SBOM.  This
+    is needed for SBOM-to-SBOM diffs so that findings for packages that
+    were removed in the new SBOM are correctly classified as "removed"
+    rather than "unchanged".  For tool-scan diffs and Scan Result
+    counts, leave it ``False`` so that all tool findings are counted
+    (tool scanners may produce Package records with different IDs than
+    the SBOM).
     """
     if sbom_scan is None:
         return set(), set(), set()
@@ -270,9 +277,16 @@ def _global_result_id_sets(
         sbom_scan.id, set()
     )
 
+    if filter_tool_by_sbom_pkgs:
+        tool_scan_ids: set = {s.id for s in tool_scans.values()}
+    else:
+        tool_scan_ids = set()  # empty → no filtering
+
     finding_rows = db.session.execute(
         db.select(
+            Observation.scan_id,
             Observation.finding_id,
+            Finding.package_id,
             Finding.vulnerability_id,
         )
         .join(Finding, Finding.id == Observation.finding_id)
@@ -281,7 +295,11 @@ def _global_result_id_sets(
 
     global_fids: set = set()
     global_vids: set = set()
-    for fid, vid in finding_rows:
+    for sid, fid, pkg_id, vid in finding_rows:
+        # When filtering is enabled, skip tool-scan findings whose
+        # package is not in the active SBOM.
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
         global_fids.add(fid)
         global_vids.add(vid)
 
@@ -295,11 +313,11 @@ def _global_result_counts(
     """Compute (finding_count, vuln_count, package_count) for the global
     result at *scan* using batch DB queries.
 
-    The global result is: SBOM packages/findings ∪ tool findings whose
-    package is in the active SBOM.
+    The global result is: SBOM packages/findings ∪ all tool findings.
     """
     sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
-    fids, vids, pkg_ids = _global_result_id_sets(sbom_scan, latest_tool)
+    fids, vids, pkg_ids = _global_result_id_sets(
+        sbom_scan, latest_tool, filter_tool_by_sbom_pkgs=False)
     return len(fids), len(vids), len(pkg_ids)
 
 
@@ -568,13 +586,6 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         ).all()
         fid_to_info = {r[0]: (r[1], r[2]) for r in rows}
 
-    # Pre-build reverse index: tool-scan finding → package_id
-    # so scan-result computation can filter by package set in O(1).
-    tool_fid_to_pkg: dict = {}  # finding_id → package_id (tool scans only)
-    for fid in tool_scan_fids:
-        info = fid_to_info.get(fid)
-        if info:
-            tool_fid_to_pkg[fid] = info[0]
     # Second pass: build result dicts
     # Track latest tool-scan findings/vulns per (variant, source) as we
     # iterate in chronological order so we can compute the "global" result
@@ -582,7 +593,6 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # Also track the SBOM baseline that was active at each tool scan's
     # timestamp so historical counts stay stable.
     running_src_findings: dict = {}  # (variant_id, source) -> set
-    running_src_vulns: dict = {}     # (variant_id, source) -> set
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -616,7 +626,6 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             # Update running tracker (still needed by the SBOM branch)
             src_key = (scan.variant_id, scan.scan_source)
             running_src_findings[src_key] = curr_f
-            running_src_vulns[src_key] = curr_v
 
             base["is_first"] = (prev is None)
             base["packages_added"] = 0
@@ -663,8 +672,6 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["vulns_removed"] = None
             base["vulns_unchanged"] = None
         else:
-            prev_f = findings_map.get(prev.id, set())
-            prev_v = vulns_map.get(prev.id, set())
             base["is_first"] = False
 
             upgraded_pairs = entry["upgraded_pairs"]
@@ -673,31 +680,19 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
             base["packages_upgraded"] = len(upgraded_pairs)
 
-            # --- Compute current scan result (SBOM ∪ all tool-scan findings) ---
-            curr_scan_result_f = set(curr_f)
-            for (vid, _src), f_ids in running_src_findings.items():
-                if vid == scan.variant_id:
-                    curr_scan_result_f |= f_ids
-            curr_scan_result_v: set = set(curr_v)  # start with complete SBOM vulns
-            for fid in curr_scan_result_f - curr_f:  # add vulns from tool findings only
-                info = fid_to_info.get(fid)
-                if info:
-                    curr_scan_result_v.add(info[1])
-
-            # --- Compute previous scan result (prev SBOM ∪ all tool-scan findings) ---
-            # This uses the CURRENT running_src_findings (which includes all
-            # tool scans that ran between the two SBOMs), reflecting what the
-            # user would have seen on the previous card right before this SBOM.
-            prev_v = vulns_map.get(prev.id, set())
-            prev_sr_f = set(prev_f)
-            for (vid, _src), f_ids in running_src_findings.items():
-                if vid == scan.variant_id:
-                    prev_sr_f |= f_ids
-            prev_sr_v: set = set(prev_v)  # start with complete prev SBOM vulns
-            for fid in prev_sr_f - prev_f:  # add vulns from tool findings only
-                info = fid_to_info.get(fid)
-                if info:
-                    prev_sr_v.add(info[1])
+            # --- Compute scan-result sets via the shared helper ---
+            # Enable SBOM-package filtering so that tool findings for
+            # packages removed between the two SBOMs are correctly
+            # classified as "removed" rather than "unchanged".
+            _, latest_tool = _contributing_scans_at(scan, scans)
+            curr_scan_result_f, curr_scan_result_v, _ = (
+                _global_result_id_sets(
+                    scan, latest_tool,
+                    filter_tool_by_sbom_pkgs=True))
+            prev_sr_f, prev_sr_v, _ = (
+                _global_result_id_sets(
+                    prev, latest_tool,
+                    filter_tool_by_sbom_pkgs=True))
 
             # --- Classify findings using scan result diffs ---
             # new + upgraded + unchanged = current scan result
