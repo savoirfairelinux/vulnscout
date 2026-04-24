@@ -527,28 +527,30 @@ def init_app(app):
                     return
 
                 # 2. Collect packages with PURL identifiers
-                pkg_purl_list: list[tuple] = []
-                seen_purls: set = set()
+                # A package may carry several PURLs (e.g. generic + apk);
+                # query ALL of them so we don't miss vulnerabilities that
+                # are only indexed under a specific ecosystem PURL.
+                purl_to_pkgs: dict[str, list] = {}
+                pkgs_with_purls: set = set()
                 for pkg in packages:
                     for purl in (pkg.purl or []):
                         purl_str = str(purl).strip()
                         if (purl_str
-                                and purl_str.startswith("pkg:")
-                                and purl_str not in seen_purls):
-                            seen_purls.add(purl_str)
-                            pkg_purl_list.append((purl_str, pkg))
-                            break
+                                and purl_str.startswith("pkg:")):
+                            purl_to_pkgs.setdefault(purl_str, []).append(pkg)
+                            pkgs_with_purls.add(pkg.id)
 
-                if not pkg_purl_list:
+                if not purl_to_pkgs:
                     set_error(_osv_scans_in_progress, vid_str,
                               "No packages with valid PURL identifiers")
                     return
 
-                total_pkgs = len(pkg_purl_list)
-                _osv_scans_in_progress[vid_str]["total"] = total_pkgs
+                total_purls = len(purl_to_pkgs)
+                _osv_scans_in_progress[vid_str]["total"] = total_purls
                 _osv_scans_in_progress[vid_str]["logs"].append(
                     f"Found {len(packages)} packages, "
-                    f"{total_pkgs} with PURL identifiers to query"
+                    f"{len(pkgs_with_purls)} with PURL identifiers "
+                    f"({total_purls} unique PURLs to query)"
                 )
 
                 # 3. Create a tool scan
@@ -562,22 +564,21 @@ def init_app(app):
                 observation_pairs: set = set()
                 assessed_findings: set = set()
 
-                for idx, (purl_str, pkg) in enumerate(pkg_purl_list, 1):
+                for idx, (purl_str, pkgs) in enumerate(
+                    purl_to_pkgs.items(), 1
+                ):
                     _osv_scans_in_progress[vid_str]["progress"] = (
-                        f"{idx}/{total_pkgs} packages"
-                    )
-                    pkg_label = (
-                        f"{pkg.name}@{pkg.version}" if pkg.name else purl_str
+                        f"{idx}/{total_purls} PURLs"
                     )
                     _osv_scans_in_progress[vid_str]["logs"].append(
-                        f"[{idx}/{total_pkgs}] Querying {pkg_label}…"
+                        f"[{idx}/{total_purls}] Querying {purl_str}…"
                     )
                     try:
                         osv_vulns = osv.query_by_purl(purl_str)
                     except Exception as e:
                         log_entry = (
-                            f"[{idx}/{total_pkgs}] ERROR "
-                            f"{pkg_label}: {str(e)[:200]}"
+                            f"[{idx}/{total_purls}] ERROR "
+                            f"{purl_str}: {str(e)[:200]}"
                         )
                         _osv_scans_in_progress[vid_str]["logs"].append(log_entry)
                         _osv_scans_in_progress[vid_str]["done_count"] = idx
@@ -591,12 +592,12 @@ def init_app(app):
                         ids_str = ', '.join(vuln_ids[:10])
                         ellip = '…' if len(vuln_ids) > 10 else ''
                         log_entry = (
-                            f"[{idx}/{total_pkgs}] {pkg_label} → "
+                            f"[{idx}/{total_purls}] {purl_str} → "
                             f"{len(vuln_ids)} vuln(s): {ids_str}{ellip}"
                         )
                     else:
                         log_entry = (
-                            f"[{idx}/{total_pkgs}] {pkg_label}"
+                            f"[{idx}/{total_purls}] {purl_str}"
                             f" → no vulnerabilities"
                         )
                     _osv_scans_in_progress[vid_str]["logs"].append(log_entry)
@@ -636,11 +637,12 @@ def init_app(app):
                                     existing_vuln.update_record(
                                         description=osv_desc, commit=False)
 
-                            finding = Finding.get_or_create(pkg.id, vid)
-                            create_observation_and_assessment(
-                                finding, scan, variant_uuid, "osv",
-                                observation_pairs, assessed_findings,
-                            )
+                            for pkg in pkgs:
+                                finding = Finding.get_or_create(pkg.id, vid)
+                                create_observation_and_assessment(
+                                    finding, scan, variant_uuid, "osv",
+                                    observation_pairs, assessed_findings,
+                                )
 
                 db.session.commit()
 
@@ -652,18 +654,19 @@ def init_app(app):
                 done_logs = _osv_scans_in_progress[vid_str].get("logs", [])
                 done_logs.append(
                     f"✓ Scan complete — found {len(vulns_found)} "
-                    f"unique vulnerabilities across {total_pkgs} packages"
+                    f"unique vulnerabilities across {total_purls} PURLs "
+                    f"({len(pkgs_with_purls)} packages)"
                 )
                 _osv_scans_in_progress[vid_str] = {
                     "status": "done",
                     "error": None,
                     "progress": (
                         f"Found {len(vulns_found)} vulnerabilities "
-                        f"across {total_pkgs} packages"
+                        f"across {total_purls} PURLs"
                     ),
                     "logs": done_logs,
-                    "total": total_pkgs,
-                    "done_count": total_pkgs,
+                    "total": total_purls,
+                    "done_count": total_purls,
                 }
 
             except Exception as e:
