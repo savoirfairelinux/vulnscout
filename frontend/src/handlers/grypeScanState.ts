@@ -13,6 +13,7 @@ const manager = new ScanStateManager(
     (vid) => ScansHandler.triggerGrypeScan(vid),
     (vid) => ScansHandler.getGrypeScanStatus(vid),
     "Grype",
+    true, // serial: run one variant at a time (flask process is global)
 );
 
 export const subscribe = manager.subscribe;
