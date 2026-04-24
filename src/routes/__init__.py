@@ -11,6 +11,7 @@ from .epss_progress import init_app as init_epss_progress_app
 from .project import init_app as init_project_app
 from .variant import init_app as init_variant_app
 from .scans import init_app as init_scans_app
+from .scan_triggers import init_app as init_scan_triggers_app
 from .config import init_app as init_config_app
 from .notifications import init_app as init_notifications_app
 from .settings import init_app as init_settings_app
@@ -27,6 +28,7 @@ def init_app(app):
     init_project_app(app)
     init_variant_app(app)
     init_scans_app(app)
+    init_scan_triggers_app(app)
     init_config_app(app)
     init_notifications_app(app)
     init_settings_app(app)

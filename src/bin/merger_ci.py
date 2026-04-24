@@ -1065,7 +1065,7 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
 
-    from ..routes.scans import _packages_by_scan_ids
+    from ..routes._scan_queries import _packages_by_scan_ids
     pkg_sets = _packages_by_scan_ids(latest_ids)
     all_pkg_ids: set = set()
     for s in pkg_sets.values():
@@ -1293,7 +1293,7 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
 
-    from ..routes.scans import _packages_by_scan_ids
+    from ..routes._scan_queries import _packages_by_scan_ids
     pkg_sets = _packages_by_scan_ids(latest_ids)
     all_pkg_ids: set = set()
     for s in pkg_sets.values():
