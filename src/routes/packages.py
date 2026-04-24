@@ -14,6 +14,7 @@ from ..helpers.active_scans import (
     active_sbom_scan_ids_for_variant,
     active_sbom_scan_ids_for_project,
 )
+from ._scan_queries import _packages_by_scan_ids, _package_rows
 
 
 def init_app(app):
@@ -77,18 +78,10 @@ def init_app(app):
             if not sbom_ids:
                 pkgs = []
             else:
-                pkg_ids_sub = (
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(sbom_ids))
-                    .distinct()
-                )
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(pkg_ids_sub))
-                    .order_by(Package.name)
-                ).scalars().all())
+                pkg_sets = _packages_by_scan_ids(sbom_ids)
+                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
+                pkg_lookup = _package_rows(all_pkg_ids)
+                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
         elif project_id:
             try:
                 project_uuid = uuid.UUID(project_id)
@@ -98,18 +91,10 @@ def init_app(app):
             if not sbom_ids:
                 pkgs = []
             else:
-                pkg_ids_sub = (
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(sbom_ids))
-                    .distinct()
-                )
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(pkg_ids_sub))
-                    .order_by(Package.name)
-                ).scalars().all())
+                pkg_sets = _packages_by_scan_ids(sbom_ids)
+                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
+                pkg_lookup = _package_rows(all_pkg_ids)
+                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
         else:
             pkgs = Package.get_all()
         result = [pkg.to_dict() for pkg in pkgs]
