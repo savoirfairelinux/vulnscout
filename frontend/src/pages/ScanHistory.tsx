@@ -620,7 +620,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                             )}
                             <button className={tabCls('findings')} onClick={() => setSection('findings')}>
                                 Findings
-                                {diff.is_first ? (
+                                {(diff.is_first || isToolScan) ? (
                                     <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
                                         {diff.finding_count.toLocaleString()}
                                     </span>
@@ -643,7 +643,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                             </button>
                             <button className={tabCls('vulnerabilities')} onClick={() => setSection('vulnerabilities')}>
                                 Vulnerabilities
-                                {diff.is_first ? (
+                                {(diff.is_first || isToolScan) ? (
                                     <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-900/40 text-blue-300">
                                         {diff.vuln_count.toLocaleString()}
                                     </span>
@@ -716,76 +716,93 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
                         )}
                         {diff && section === 'findings' && (
                             <>
-                                {diff.is_first && (
-                                    <p className="text-sm text-gray-400 mb-4 italic">
-                                        This is the first scan — all {diff.finding_count.toLocaleString()} findings are listed below.
-                                    </p>
-                                )}
-                                <FindingDiffTable
-                                    entries={diff.findings_added}
-                                    label={diff.is_first ? "All findings" : "Added findings"}
-                                    colorClass="text-green-400"
-                                />
-                                {!diff.is_first && (
-                                    <FindingDiffTable
-                                        entries={diff.findings_removed}
-                                        label="Removed findings"
-                                        colorClass="text-red-400"
-                                    />
-                                )}
-                                {!diff.is_first && diff.findings_upgraded.length > 0 && (
-                                    <FindingUpgradeDiffTable
-                                        entries={diff.findings_upgraded}
-                                        label="Findings on upgraded packages"
-                                        colorClass="text-yellow-400"
-                                    />
-                                )}
-                                {!diff.is_first && (
-                                    <FindingDiffTable
-                                        entries={diff.findings_unchanged}
-                                        label="Unchanged findings"
-                                        colorClass="text-gray-400"
-                                    />
+                                {(diff.is_first || isToolScan) ? (
+                                    <>
+                                        <p className="text-sm text-gray-400 mb-4 italic">
+                                            {diff.is_first
+                                                ? `This is the first scan — all ${diff.finding_count.toLocaleString()} findings are listed below.`
+                                                : `All ${diff.finding_count.toLocaleString()} findings detected by this scan.`}
+                                        </p>
+                                        <FindingDiffTable
+                                            entries={diff.all_findings ?? diff.findings_added}
+                                            label="All findings"
+                                            colorClass="text-cyan-400"
+                                        />
+                                    </>
+                                ) : (
+                                    <>
+                                        <FindingDiffTable
+                                            entries={diff.findings_added}
+                                            label="Added findings"
+                                            colorClass="text-green-400"
+                                        />
+                                        <FindingDiffTable
+                                            entries={diff.findings_removed}
+                                            label="Removed findings"
+                                            colorClass="text-red-400"
+                                        />
+                                        {diff.findings_upgraded.length > 0 && (
+                                            <FindingUpgradeDiffTable
+                                                entries={diff.findings_upgraded}
+                                                label="Findings on upgraded packages"
+                                                colorClass="text-yellow-400"
+                                            />
+                                        )}
+                                        <FindingDiffTable
+                                            entries={diff.findings_unchanged}
+                                            label="Unchanged findings"
+                                            colorClass="text-gray-400"
+                                        />
+                                    </>
                                 )}
                             </>
                         )}
                         {diff && section === 'vulnerabilities' && (
                             <>
-                                {diff.is_first && (
-                                    <p className="text-sm text-gray-400 mb-4 italic">
-                                        This is the first scan — all {diff.vuln_count.toLocaleString()} vulnerabilities are listed below.
-                                    </p>
-                                )}
-                                <VulnDiffList
-                                    vulns={diff.vulns_added}
-                                    label={diff.is_first ? "All vulnerabilities" : "New vulnerabilities"}
-                                    colorClass="text-green-400"
-                                />
-                                {!diff.is_first && (() => {
-                                    // Build origin map from findings_removed
-                                    const originMap: Record<string, string[]> = {};
-                                    for (const f of diff.findings_removed) {
-                                        if (f.origin) {
-                                            const origins = originMap[f.vulnerability_id] || [];
-                                            if (!origins.includes(f.origin)) origins.push(f.origin);
-                                            originMap[f.vulnerability_id] = origins;
-                                        }
-                                    }
-                                    return (
+                                {(diff.is_first || isToolScan) ? (
+                                    <>
+                                        <p className="text-sm text-gray-400 mb-4 italic">
+                                            {diff.is_first
+                                                ? `This is the first scan — all ${diff.vuln_count.toLocaleString()} vulnerabilities are listed below.`
+                                                : `All ${diff.vuln_count.toLocaleString()} vulnerabilities detected by this scan.`}
+                                        </p>
                                         <VulnDiffList
-                                            vulns={diff.vulns_removed}
-                                            label="Removed vulnerabilities"
-                                            colorClass="text-red-400"
-                                            originMap={originMap}
+                                            vulns={diff.all_vulns ?? diff.vulns_added}
+                                            label="All vulnerabilities"
+                                            colorClass="text-cyan-400"
                                         />
-                                    );
-                                })()}
-                                {!diff.is_first && (
-                                    <VulnDiffList
-                                        vulns={diff.vulns_unchanged}
-                                        label="Unchanged vulnerabilities"
-                                        colorClass="text-gray-400"
-                                    />
+                                    </>
+                                ) : (
+                                    <>
+                                        <VulnDiffList
+                                            vulns={diff.vulns_added}
+                                            label="New vulnerabilities"
+                                            colorClass="text-green-400"
+                                        />
+                                        {(() => {
+                                            const originMap: Record<string, string[]> = {};
+                                            for (const f of diff.findings_removed) {
+                                                if (f.origin) {
+                                                    const origins = originMap[f.vulnerability_id] || [];
+                                                    if (!origins.includes(f.origin)) origins.push(f.origin);
+                                                    originMap[f.vulnerability_id] = origins;
+                                                }
+                                            }
+                                            return (
+                                                <VulnDiffList
+                                                    vulns={diff.vulns_removed}
+                                                    label="Removed vulnerabilities"
+                                                    colorClass="text-red-400"
+                                                    originMap={originMap}
+                                                />
+                                            );
+                                        })()}
+                                        <VulnDiffList
+                                            vulns={diff.vulns_unchanged}
+                                            label="Unchanged vulnerabilities"
+                                            colorClass="text-gray-400"
+                                        />
+                                    </>
                                 )}
                             </>
                         )}
@@ -1501,8 +1518,8 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         </>
                                     ) : (
                                         <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vulns_added ?? 0).toLocaleString()} vulnerabilities detected
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
                                             </span>
                                             {scan.newly_detected_vulns != null && (
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_vulns > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
@@ -1528,8 +1545,8 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         </>
                                     ) : (
                                         <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_added ?? 0).toLocaleString()} findings detected
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
+                                                {(scan.finding_count ?? 0).toLocaleString()} findings detected
                                             </span>
                                             {scan.newly_detected_findings != null && (
                                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_findings > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>

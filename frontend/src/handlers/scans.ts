@@ -87,6 +87,8 @@ type ScanDiff = {
     newly_detected_vulns: number | null;
     newly_detected_findings_list: FindingDiffEntry[] | null;
     newly_detected_vulns_list: string[] | null;
+    all_findings: FindingDiffEntry[] | null;
+    all_vulns: string[] | null;
 };
 
 type GlobalResultFinding = {
