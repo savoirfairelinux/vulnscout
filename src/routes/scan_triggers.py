@@ -15,8 +15,12 @@ from flask import jsonify
 
 from ..models.scan import Scan
 from ..models.finding import Finding
+from ..models.package import Package
 from ..models.project import Project
+from ..models.sbom_package import SBOMPackage
+from ..models.sbom_document import SBOMDocument
 from ..extensions import db
+from ..views.grype_vulns import GrypeVulns
 
 from ._scan_helpers import (
     validate_trigger,
@@ -61,6 +65,27 @@ def init_app(app):
         project_name = project.name if project else "unknown"
         variant_name = variant.name
         vid_str = str(variant_uuid)
+
+        # Collect the variant's SBOM package (name, version) set so we can
+        # filter the grype output to only this variant's packages.  We query
+        # here (in request context) because the background thread has no DB
+        # session.
+        sbom_pkg_set: set = set()
+        sbom_scan_id = db.session.execute(
+            db.select(Scan.id)
+            .where(Scan.variant_id == variant_uuid)
+            .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
+            .order_by(Scan.timestamp.desc())
+            .limit(1)
+        ).scalar()
+        if sbom_scan_id is not None:
+            pkg_rows = db.session.execute(
+                db.select(Package.name, Package.version)
+                .join(SBOMPackage, SBOMPackage.package_id == Package.id)
+                .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                .where(SBOMDocument.scan_id == sbom_scan_id)
+            ).all()
+            sbom_pkg_set = {(r[0], r[1]) for r in pkg_rows}
 
         init_progress(_grype_scans_in_progress, vid_str, total=4)
 
@@ -117,6 +142,34 @@ def init_app(app):
                     _grype_scans_in_progress[vid_str]["logs"].append(
                         "[2/4] Grype scan complete"
                     )
+
+                    # 2.5 Filter grype output to only keep matches for
+                    #     packages present in this variant's SBOM.  The
+                    #     CycloneDX export is global (all variants), so
+                    #     grype may report vulnerabilities for packages
+                    #     that do not belong to this variant.
+                    if sbom_pkg_set:
+                        import json as _json
+                        with open(grype_out, "r") as gf:
+                            grype_data = _json.load(gf)
+                        orig_count = len(grype_data.get("matches", []))
+                        filtered = []
+                        for match in grype_data.get("matches", []):
+                            artifact = match.get("artifact", {})
+                            name = GrypeVulns._normalize_artifact_name(
+                                artifact.get("name", ""),
+                                artifact.get("purl"),
+                            )
+                            version = artifact.get("version", "")
+                            if (name, version) in sbom_pkg_set:
+                                filtered.append(match)
+                        grype_data["matches"] = filtered
+                        with open(grype_out, "w") as gf:
+                            _json.dump(grype_data, gf)
+                        _grype_scans_in_progress[vid_str]["logs"].append(
+                            f"[2/4] Filtered: {len(filtered)}/{orig_count}"
+                            f" matches kept (variant SBOM packages only)"
+                        )
 
                     # 3. Merge Grype results as a tool scan
                     _grype_scans_in_progress[vid_str]["progress"] = "3/4 Merging results"
