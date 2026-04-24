@@ -129,6 +129,7 @@ def _build_variant_enrichment_db(app):
         # SBOM documents (required for SBOM scans to be meaningful)
         sbom_s1 = SBOMDocument.create("/alpha/sbom.json", "grype", scan_s1.id)
         SBOMPackage.create(sbom_s1.id, pkg_cairo.id)
+        SBOMPackage.create(sbom_s1.id, pkg_libpng.id)
         sbom_s3 = SBOMDocument.create("/beta/sbom.json", "grype", scan_s3.id)
         SBOMPackage.create(sbom_s3.id, pkg_cairo.id)
         _db.session.commit()
@@ -433,6 +434,16 @@ class TestMultipleToolSources:
                 id="CVE-2022-37434", description="zlib vuln"
             )
             finding_c = Finding.get_or_create(pkg_zlib.id, vuln_c.id)
+
+            # Register zlib in alpha's SBOM so it passes active-package
+            # filtering (tool scans only surface SBOM packages).
+            from src.models.sbom_document import SBOMDocument
+            from src.models.sbom_package import SBOMPackage
+            sbom_docs = SBOMDocument.get_by_scan(
+                uuid.UUID(ids["scan_s1_id"])
+            )
+            if sbom_docs:
+                SBOMPackage.create(sbom_docs[0].id, pkg_zlib.id)
             _db.session.commit()
 
             Observation.create(finding_id=finding_c.id, scan_id=scan_osv.id)
