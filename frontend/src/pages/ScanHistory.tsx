@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, GlobalResult } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss, type GrypeState } from "../handlers/grypeScanState";
+import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
     getSnapshot as nvdGetSnapshot,
     setOnDone as nvdSetOnDone,
     triggerScan as nvdTriggerScan,
     dismiss as nvdDismiss,
-    type NvdState,
 } from "../handlers/nvdScanState";
 import {
     subscribe as osvSubscribe,
@@ -16,8 +15,9 @@ import {
     setOnDone as osvSetOnDone,
     triggerScan as osvTriggerScan,
     dismiss as osvDismiss,
-    type OsvState,
 } from "../handlers/osvScanState";
+import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
+import ScanProgressPanel from "../components/ScanProgressPanel";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
@@ -878,23 +878,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv']));
     const scanMenuRef = useRef<HTMLDivElement>(null);
 
-    // Global Grype scan state — survives tab switches
-    const grypeState: GrypeState = useSyncExternalStore(subscribe, getSnapshot);
-    const grypeStatus = grypeState.status;
-    const grypeError = grypeState.error;
-    const grypeProgress = grypeState.progress;
+    // Global Grype scan state — survives tab switches (per-variant)
+    const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
+    const grypeRunning = grypeEntries.some(e => e.status === "running");
 
-    // Global NVD scan state — survives tab switches
-    const nvdState: NvdState = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
-    const nvdStatus = nvdState.status;
-    const nvdError = nvdState.error;
-    const nvdProgress = nvdState.progress;
+    // Global NVD scan state — survives tab switches (per-variant)
+    const nvdEntries: ScanManagerSnapshot = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
+    const nvdRunning = nvdEntries.some(e => e.status === "running");
 
-    // Global OSV scan state — survives tab switches
-    const osvState: OsvState = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
-    const osvStatus = osvState.status;
-    const osvError = osvState.error;
-    const osvProgress = osvState.progress;
+    // Global OSV scan state — survives tab switches (per-variant)
+    const osvEntries: ScanManagerSnapshot = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
+    const osvRunning = osvEntries.some(e => e.status === "running");
 
     const refreshScans = useCallback(() => {
         ScansHandler.list(variantId, projectId)
@@ -944,9 +938,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // If a scan finished while we were away, refresh the list on mount
     useEffect(() => {
-        if (grypeStatus === 'done') refreshScans();
-        if (nvdStatus === 'done') refreshScans();
-        if (osvStatus === 'done') refreshScans();
+        if (grypeEntries.some(e => e.status === 'done')) refreshScans();
+        if (nvdEntries.some(e => e.status === 'done')) refreshScans();
+        if (osvEntries.some(e => e.status === 'done')) refreshScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -991,13 +985,15 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     }
 
     async function handleRunSelectedScans() {
-        const vids = [...selectedVariantIds];
-        if (vids.length === 0 || selectedScanTypes.size === 0) return;
+        const variants = allVariants
+            .filter(v => selectedVariantIds.has(v.id))
+            .map(v => ({ id: v.id, name: v.name }));
+        if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanMenuOpen(false);
         const promises: Promise<void>[] = [];
-        if (selectedScanTypes.has('grype')) promises.push(triggerScan(vids));
-        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(vids));
-        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(vids));
+        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants));
+        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants));
+        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants));
         await Promise.all(promises);
     }
 
@@ -1017,7 +1013,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
-    const allRunning = grypeStatus === 'running' || nvdStatus === 'running' || osvStatus === 'running';
+    const allRunning = grypeRunning || nvdRunning || osvRunning;
 
     // Filter out "empty" scans (no changes) when toggle is active
     const displayedScans = hideEmptyScans
@@ -1117,44 +1113,8 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 NVD
             </button>
 
-            {/* Right side: status + scan menu */}
+            {/* Right side: scan menu */}
             <div className="ml-auto flex items-center gap-3">
-                {grypeError && (
-                    <span className="text-sm text-red-400">{grypeError}</span>
-                )}
-                {grypeStatus === 'done' && (
-                    <span className="text-sm text-green-400">Grype scan complete!</span>
-                )}
-                {nvdError && (
-                    <span className="text-sm text-red-400">{nvdError}</span>
-                )}
-                {nvdStatus === 'done' && (
-                    <span className="text-sm text-green-400">NVD scan complete!</span>
-                )}
-                {osvError && (
-                    <span className="text-sm text-red-400">{osvError}</span>
-                )}
-                {osvStatus === 'done' && (
-                    <span className="text-sm text-green-400">OSV scan complete!</span>
-                )}
-
-                {/* Scan status badges */}
-                {grypeStatus === 'running' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-purple-800/50 text-purple-300">
-                        <FontAwesomeIcon icon={faBug} /> Grype… {grypeProgress ?? ''}
-                    </span>
-                )}
-                {nvdStatus === 'running' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-orange-800/50 text-orange-300">
-                        <FontAwesomeIcon icon={faShieldHalved} /> NVD… {nvdProgress ?? ''}
-                    </span>
-                )}
-                {osvStatus === 'running' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-green-800/50 text-green-300">
-                        <FontAwesomeIcon icon={faLeaf} /> OSV… {osvProgress ?? ''}
-                    </span>
-                )}
-
                 {/* Run Scans dropdown */}
                 {canTriggerScan && (
                     <div className="relative" ref={scanMenuRef}>
@@ -1257,169 +1217,39 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         </div>
     );
 
-    const grypePct = grypeState.total > 0
-        ? Math.round((grypeState.doneCount / grypeState.total) * 100)
-        : 0;
+    // ---- Per-variant progress panels ----
+    const grypeColors = { border: "border-purple-700/60", headerBg: "bg-purple-900/40", iconText: "text-purple-400", titleText: "text-purple-200", subtitleText: "text-purple-300/80", bar: "bg-purple-500" };
+    const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40", iconText: "text-orange-400", titleText: "text-orange-200", subtitleText: "text-orange-300/80", bar: "bg-orange-500" };
+    const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
 
-    const grypeLogBoxRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        const el = grypeLogBoxRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-    }, [grypeState.logs.length]);
-
-    const grypeProgressPanel = (grypeStatus === "running" || grypeStatus === "done" || (grypeStatus === "error" && grypeState.logs.length > 0)) ? (
-        <div className="mb-4 rounded-lg border border-purple-700/60 bg-neutral-900 overflow-hidden">
-            {/* Header + progress bar */}
-            <div className="px-4 py-2 flex items-center gap-3 bg-purple-900/40">
-                <FontAwesomeIcon icon={faBug} className="text-purple-400" />
-                <span className="text-sm font-semibold text-purple-200">
-                    Grype Scan {grypeStatus === "running" ? "in progress" : grypeStatus === "error" ? "failed" : "complete"}
-                </span>
-                <span className="text-xs text-purple-300/80 ml-auto">
-                    {grypeState.progress ?? ""}
-                    {grypeState.total > 0 && ` (${grypePct}%)`}
-                </span>
-                {grypeStatus !== "running" && (
-                    <button onClick={grypeDismiss} title="Close" className="text-neutral-400 hover:text-white transition-colors ml-1">
-                        <FontAwesomeIcon icon={faXmark} className="text-sm" />
-                    </button>
-                )}
-            </div>
-            {/* Progress bar */}
-            <div className="w-full h-2 bg-neutral-800">
-                <div
-                    className={[
-                        "h-full transition-all duration-500 ease-out",
-                        grypeStatus === "done" ? "bg-green-500" : "bg-purple-500",
-                    ].join(" ")}
-                    style={{ width: `${grypePct}%` }}
-                />
-            </div>
-            {/* Log box */}
-            <div ref={grypeLogBoxRef} className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700">
-                {grypeState.logs.length === 0 && grypeStatus === "running" && (
-                    <div className="text-neutral-500 italic">Waiting for first results…</div>
-                )}
-                {grypeState.logs.map((line, i) => (
-                    <div key={i} className={line.startsWith("[") && line.includes("ERROR") ? "text-red-400" : line.startsWith("✓") ? "text-green-400 font-semibold" : ""}>
-                        {line}
-                    </div>
-                ))}
-            </div>
-        </div>
-    ) : null;
-
-    const nvdPct = nvdState.total > 0
-        ? Math.round((nvdState.doneCount / nvdState.total) * 100)
-        : 0;
-
-    const nvdLogBoxRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        const el = nvdLogBoxRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-    }, [nvdState.logs.length]);
-
-    const nvdProgressPanel = (nvdStatus === "running" || nvdStatus === "done" || (nvdStatus === "error" && nvdState.logs.length > 0)) ? (
-        <div className="mb-4 rounded-lg border border-orange-700/60 bg-neutral-900 overflow-hidden">
-            {/* Header + progress bar */}
-            <div className="px-4 py-2 flex items-center gap-3 bg-orange-900/40">
-                <FontAwesomeIcon icon={faShieldHalved} className="text-orange-400" />
-                <span className="text-sm font-semibold text-orange-200">
-                    NVD Scan {nvdStatus === "running" ? "in progress" : nvdStatus === "error" ? "failed" : "complete"}
-                </span>
-                <span className="text-xs text-orange-300/80 ml-auto">
-                    {nvdState.progress ?? ""}
-                    {nvdState.total > 0 && ` (${nvdPct}%)`}
-                </span>
-                {nvdStatus !== "running" && (
-                    <button onClick={nvdDismiss} title="Close" className="text-neutral-400 hover:text-white transition-colors ml-1">
-                        <FontAwesomeIcon icon={faXmark} className="text-sm" />
-                    </button>
-                )}
-            </div>
-            {/* Progress bar */}
-            <div className="w-full h-2 bg-neutral-800">
-                <div
-                    className={[
-                        "h-full transition-all duration-500 ease-out",
-                        nvdStatus === "done" ? "bg-green-500" : "bg-orange-500",
-                    ].join(" ")}
-                    style={{ width: `${nvdPct}%` }}
-                />
-            </div>
-            {/* Log box */}
-            <div ref={nvdLogBoxRef} className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700">
-                {nvdState.logs.length === 0 && nvdStatus === "running" && (
-                    <div className="text-neutral-500 italic">Waiting for first results…</div>
-                )}
-                {nvdState.logs.map((line, i) => (
-                    <div key={i} className={line.startsWith("[") && line.includes("ERROR") ? "text-red-400" : line.startsWith("✓") ? "text-green-400 font-semibold" : ""}>
-                        {line}
-                    </div>
-                ))}
-            </div>
-        </div>
-    ) : null;
-
-    const osvPct = osvState.total > 0
-        ? Math.round((osvState.doneCount / osvState.total) * 100)
-        : 0;
-
-    const osvLogBoxRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        const el = osvLogBoxRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-    }, [osvState.logs.length]);
-
-    const osvProgressPanel = (osvStatus === "running" || osvStatus === "done" || (osvStatus === "error" && osvState.logs.length > 0)) ? (
-        <div className="mb-4 rounded-lg border border-green-700/60 bg-neutral-900 overflow-hidden">
-            {/* Header + progress bar */}
-            <div className="px-4 py-2 flex items-center gap-3 bg-green-900/40">
-                <FontAwesomeIcon icon={faLeaf} className="text-green-400" />
-                <span className="text-sm font-semibold text-green-200">
-                    OSV Scan {osvStatus === "running" ? "in progress" : osvStatus === "error" ? "failed" : "complete"}
-                </span>
-                <span className="text-xs text-green-300/80 ml-auto">
-                    {osvState.progress ?? ""}
-                    {osvState.total > 0 && ` (${osvPct}%)`}
-                </span>
-                {osvStatus !== "running" && (
-                    <button onClick={osvDismiss} title="Close" className="text-neutral-400 hover:text-white transition-colors ml-1">
-                        <FontAwesomeIcon icon={faXmark} className="text-sm" />
-                    </button>
-                )}
-            </div>
-            {/* Progress bar */}
-            <div className="w-full h-2 bg-neutral-800">
-                <div
-                    className={[
-                        "h-full transition-all duration-500 ease-out",
-                        osvStatus === "done" ? "bg-green-500" : "bg-green-500",
-                    ].join(" ")}
-                    style={{ width: `${osvPct}%` }}
-                />
-            </div>
-            {/* Log box */}
-            <div ref={osvLogBoxRef} className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700">
-                {osvState.logs.length === 0 && osvStatus === "running" && (
-                    <div className="text-neutral-500 italic">Waiting for first results…</div>
-                )}
-                {osvState.logs.map((line, i) => (
-                    <div key={i} className={line.startsWith("[") && line.includes("ERROR") ? "text-red-400" : line.startsWith("✓") ? "text-green-400 font-semibold" : ""}>
-                        {line}
-                    </div>
-                ))}
-            </div>
-        </div>
-    ) : null;
+    const progressPanels = (
+        <>
+            {grypeEntries
+                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .map(entry => (
+                    <ScanProgressPanel key={`grype-${entry.variantId}`} entry={entry} label="Grype Scan" icon={faBug} colors={grypeColors} onDismiss={() => grypeDismiss(entry.variantId)} />
+                ))
+            }
+            {nvdEntries
+                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .map(entry => (
+                    <ScanProgressPanel key={`nvd-${entry.variantId}`} entry={entry} label="NVD Scan" icon={faShieldHalved} colors={nvdColors} onDismiss={() => nvdDismiss(entry.variantId)} />
+                ))
+            }
+            {osvEntries
+                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .map(entry => (
+                    <ScanProgressPanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
+                ))
+            }
+        </>
+    );
 
     if (loading) {
         return (
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {grypeProgressPanel}
-                {nvdProgressPanel}
-                {osvProgressPanel}
+                {progressPanels}
                 <div className="flex items-center justify-center h-32 text-gray-400">
                     Loading scan history…
                 </div>
@@ -1430,9 +1260,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return (
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {grypeProgressPanel}
-                {nvdProgressPanel}
-                {osvProgressPanel}
+                {progressPanels}
                 <div className="flex items-center justify-center h-32 text-red-400">
                     {error}
                 </div>
@@ -1443,9 +1271,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return (
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {grypeProgressPanel}
-                {nvdProgressPanel}
-                {osvProgressPanel}
+                {progressPanels}
                 <div className="flex items-center justify-center h-32 text-gray-400 dark:text-neutral-400">
                     No scans found.
                 </div>
@@ -1474,9 +1300,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {grypeProgressPanel}
-                {nvdProgressPanel}
-                {osvProgressPanel}
+                {progressPanels}
 
                 {/* Timeline rows */}
                 <div className="relative">
