@@ -6,6 +6,7 @@ import json
 import uuid as uuid_module
 
 from flask import jsonify
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import selectinload
 
 from ..controllers.scans import ScanController
@@ -219,6 +220,273 @@ def _sbom_active_at(sbom_list: list, timestamp) -> "Scan | None":
     return result
 
 
+# ---------------------------------------------------------------------------
+# Shared helper — global result (Scan Result) at a point in time
+# ---------------------------------------------------------------------------
+
+def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
+    """Determine the scans that contribute to the global result at *scan*.
+
+    Returns ``(sbom_scan_or_None, tool_scan_dict)`` where *tool_scan_dict*
+    is ``{scan_source: Scan}`` — the latest tool scan per source at
+    *scan.timestamp* (with *scan* itself replacing any earlier same-source).
+    """
+    scan_type = scan.scan_type or "sbom"
+    is_tool = scan_type == "tool"
+
+    sbom_scans = [
+        s for s in all_variant_scans
+        if (s.scan_type or "sbom") == "sbom"
+    ]
+    sbom_scans.sort(key=lambda s: s.timestamp)
+
+    if is_tool:
+        sbom_scan = _sbom_active_at(sbom_scans, scan.timestamp)
+    else:
+        sbom_scan = scan  # the scan IS the SBOM
+
+    # Latest tool scan per source at scan's timestamp
+    latest_tool: dict = {}  # source -> Scan
+    for s in all_variant_scans:
+        if (s.scan_type or "sbom") != "tool":
+            continue
+        if s.timestamp > scan.timestamp:
+            continue
+        src = s.scan_source or ""
+        prev = latest_tool.get(src)
+        if prev is None or s.timestamp > prev.timestamp:
+            latest_tool[src] = s
+    # The current scan (if tool) replaces same-source
+    if is_tool:
+        latest_tool[scan.scan_source or ""] = scan
+
+    return sbom_scan, latest_tool
+
+
+def _global_result_id_sets(
+    sbom_scan,
+    tool_scans: dict,
+) -> tuple:
+    """Return ``(finding_ids, vuln_ids, package_ids)`` for a global result.
+
+    *sbom_scan* is the SBOM scan (or ``None``), *tool_scans* is
+    ``{source: Scan}`` — the contributing tool scans.
+
+    Uses a single batch DB query with a JOIN so that vulnerability IDs
+    are always accurate (no secondary lookup required).
+
+    Tool-scan findings are included unconditionally (no SBOM-package
+    filtering) because tool scans always analyse the exported SBOM, so
+    every finding they produce is inherently on an SBOM package.
+    """
+    if sbom_scan is None:
+        return set(), set(), set()
+
+    contributing_ids = [sbom_scan.id] + [
+        s.id for s in tool_scans.values()
+    ]
+    contributing_ids = list(dict.fromkeys(contributing_ids))
+
+    sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
+        sbom_scan.id, set()
+    )
+
+    finding_rows = db.session.execute(
+        db.select(
+            Observation.finding_id,
+            Finding.vulnerability_id,
+        )
+        .join(Finding, Finding.id == Observation.finding_id)
+        .where(Observation.scan_id.in_(contributing_ids))
+    ).all()
+
+    global_fids: set = set()
+    global_vids: set = set()
+    for fid, vid in finding_rows:
+        global_fids.add(fid)
+        global_vids.add(vid)
+
+    return global_fids, global_vids, sbom_pkg_ids
+
+
+def _global_result_counts(
+    scan: Scan,
+    all_variant_scans: list[Scan],
+) -> tuple:
+    """Compute (finding_count, vuln_count, package_count) for the global
+    result at *scan* using batch DB queries.
+
+    The global result is: SBOM packages/findings ∪ tool findings whose
+    package is in the active SBOM.
+    """
+    sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
+    fids, vids, pkg_ids = _global_result_id_sets(sbom_scan, latest_tool)
+    return len(fids), len(vids), len(pkg_ids)
+
+
+def _contributing_scans_before(
+    scan: Scan,
+    all_variant_scans: list[Scan],
+) -> tuple:
+    """Like ``_contributing_scans_at`` but for the state **before** *scan*.
+
+    For a tool scan this means: same SBOM, same other-source tool scans,
+    but the *previous* same-source tool scan (if any) instead of *scan*.
+    """
+    scan_type = scan.scan_type or "sbom"
+    is_tool = scan_type == "tool"
+
+    sbom_scans = [
+        s for s in all_variant_scans
+        if (s.scan_type or "sbom") == "sbom"
+    ]
+    sbom_scans.sort(key=lambda s: s.timestamp)
+
+    if is_tool:
+        sbom_scan = _sbom_active_at(sbom_scans, scan.timestamp)
+    else:
+        sbom_scan = scan
+
+    # Latest tool scan per source, *excluding* the current scan.
+    latest_tool: dict = {}
+    for s in all_variant_scans:
+        if (s.scan_type or "sbom") != "tool":
+            continue
+        if s.id == scan.id:
+            continue
+        if s.timestamp > scan.timestamp:
+            continue
+        src = s.scan_source or ""
+        prev = latest_tool.get(src)
+        if prev is None or s.timestamp > prev.timestamp:
+            latest_tool[src] = s
+
+    return sbom_scan, latest_tool
+
+
+def _global_result_full(
+    scan: Scan,
+    all_variant_scans: list[Scan],
+) -> dict:
+    """Compute the full global result (packages, findings, vulns with
+    sources) for the Scan Result detail modal.
+
+    Returns a dict ready for ``jsonify()``.
+    """
+    sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
+    if sbom_scan is None:
+        return {
+            "scan_id": str(scan.id),
+            "scan_type": scan.scan_type or "sbom",
+            "packages": [], "findings": [], "vulnerabilities": [],
+            "package_count": 0, "finding_count": 0, "vuln_count": 0,
+        }
+
+    contributing_ids = [sbom_scan.id] + [
+        s.id for s in latest_tool.values()
+    ]
+    contributing_ids = list(dict.fromkeys(contributing_ids))
+
+    # --- Packages (from SBOM only) ---
+    pkg_rows = db.session.execute(
+        db.select(
+            Package.id, Package.name, Package.version,
+            SBOMDocument.source_name, SBOMDocument.format,
+        )
+        .join(SBOMPackage, SBOMPackage.package_id == Package.id)
+        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+        .where(SBOMDocument.scan_id == sbom_scan.id)
+    ).all()
+    pkg_map: dict = {}
+    sbom_pkg_ids: set = set()
+    for pid, pname, pversion, src_name, src_fmt in pkg_rows:
+        sbom_pkg_ids.add(pid)
+        source_label = f"{src_name} ({src_fmt})" if src_fmt else src_name
+        if pid not in pkg_map:
+            pkg_map[pid] = {
+                "package_id": str(pid),
+                "package_name": pname or "unknown",
+                "package_version": pversion or "",
+                "sources": [source_label],
+            }
+        else:
+            if source_label not in pkg_map[pid]["sources"]:
+                pkg_map[pid]["sources"].append(source_label)
+    packages = sorted(
+        pkg_map.values(),
+        key=lambda p: (p["package_name"], p["package_version"]),
+    )
+
+    # --- Build scan_id -> source_label mapping ---
+    # For SBOM scan: use SBOM document names
+    sbom_loaded = _load_scan_with_findings(sbom_scan.id)
+    sbom_doc_names = []
+    if sbom_loaded and hasattr(sbom_loaded, 'sbom_documents'):
+        for doc in (sbom_loaded.sbom_documents or []):
+            label = (
+                f"{doc.source_name} ({doc.format})"
+                if doc.format else doc.source_name
+            )
+            sbom_doc_names.append(label)
+    sbom_source_label = ", ".join(sbom_doc_names) if sbom_doc_names else "SBOM Scan"
+
+    scan_source_labels: dict = {sbom_scan.id: sbom_source_label}
+    for tool_scan in latest_tool.values():
+        scan_source_labels[tool_scan.id] = _TOOL_SOURCE_LABELS.get(
+            tool_scan.scan_source or "", "Vulnerability Scan"
+        )
+
+    # --- Findings & vulns (batch query) ---
+    obs_rows = db.session.execute(
+        db.select(
+            Observation.scan_id, Observation.finding_id,
+            Finding.package_id, Finding.vulnerability_id,
+            Package.name, Package.version,
+        )
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Package, Package.id == Finding.package_id)
+        .where(Observation.scan_id.in_(contributing_ids))
+    ).all()
+
+    finding_map: dict = {}
+    vuln_set: dict = {}
+    for sid, fid, pkg_id, vid, pname, pversion in obs_rows:
+        source_label = scan_source_labels.get(sid, "Unknown")
+        if fid not in finding_map:
+            finding_map[fid] = {
+                "finding_id": str(fid),
+                "package_name": pname or "unknown",
+                "package_version": pversion or "",
+                "package_id": str(pkg_id),
+                "vulnerability_id": vid,
+                "sources": [source_label],
+            }
+        else:
+            if source_label not in finding_map[fid]["sources"]:
+                finding_map[fid]["sources"].append(source_label)
+        vuln_set.setdefault(vid, set()).add(source_label)
+
+    findings = sorted(
+        finding_map.values(),
+        key=lambda f: (f["vulnerability_id"], f["package_name"]),
+    )
+    vulnerabilities = [
+        {"vulnerability_id": vid, "sources": sorted(srcs)}
+        for vid, srcs in sorted(vuln_set.items())
+    ]
+
+    return {
+        "scan_id": str(scan.id),
+        "scan_type": scan.scan_type or "sbom",
+        "packages": packages,
+        "findings": findings,
+        "vulnerabilities": vulnerabilities,
+        "package_count": len(packages),
+        "finding_count": len(findings),
+        "vuln_count": len(vulnerabilities),
+    }
+
+
 def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     if not scans:
         return []
@@ -353,60 +621,21 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
         if is_tool_scan:
             # ---- Tool scan: diff against the GLOBAL state ----
-            # Use the SBOM baseline that was active at THIS scan's timestamp
-            # so that a later SBOM import doesn't retroactively change the
-            # "newly detected" counts of earlier tool scans.
-            sbom_at_time = _sbom_active_at(
-                sbom_lists.get(scan.variant_id, []),
-                scan.timestamp,
-            )
-            if sbom_at_time and sbom_at_time.id not in _sbom_cache:
-                _sbom_cache[sbom_at_time.id] = (
-                    findings_map.get(sbom_at_time.id, set()),
-                    vulns_map.get(sbom_at_time.id, set()),
-                )
-            if sbom_at_time:
-                baseline_f, baseline_v = _sbom_cache[sbom_at_time.id]
-            else:
-                baseline_f, baseline_v = set(), set()
+            # Compute the global result BEFORE and AFTER this scan using
+            # shared helpers that do a proper DB-level JOIN, so vuln/
+            # finding counts are always accurate.
+            sbom_before, tools_before = _contributing_scans_before(scan, scans)
+            sbom_after, tools_after = _contributing_scans_at(scan, scans)
 
+            before_fids, before_vids, _ = _global_result_id_sets(
+                sbom_before, tools_before)
+            after_fids, after_vids, after_pkg_ids = _global_result_id_sets(
+                sbom_after, tools_after)
+
+            # Update running tracker (still needed by the SBOM branch)
             src_key = (scan.variant_id, scan.scan_source)
-
-            # SBOM active package set — used to filter tool findings.
-            sbom_pkg = packages_map.get(
-                sbom_at_time.id, set()
-            ) if sbom_at_time else set()
-
-            def _filtered_tool_f(f_ids: set) -> set:
-                """Return only findings whose package is in the active SBOM."""
-                return {fid for fid in f_ids
-                        if tool_fid_to_pkg.get(fid) in sbom_pkg}
-
-            # Global state BEFORE this scan (filtered to SBOM packages)
-            global_before_f = set(baseline_f)
-            global_before_v = set(baseline_v)
-            for (vid, _src), f_ids in running_src_findings.items():
-                if vid == scan.variant_id:
-                    global_before_f |= _filtered_tool_f(f_ids)
-            for fid in global_before_f - baseline_f:
-                info = fid_to_info.get(fid)
-                if info:
-                    global_before_v.add(info[1])
-
-            # Update running tracker for this source
             running_src_findings[src_key] = curr_f
             running_src_vulns[src_key] = curr_v
-
-            # Global state AFTER this scan (filtered to SBOM packages)
-            global_f = set(baseline_f)
-            global_v = set(baseline_v)
-            for (vid, _src), f_ids in running_src_findings.items():
-                if vid == scan.variant_id:
-                    global_f |= _filtered_tool_f(f_ids)
-            for fid in global_f - baseline_f:
-                info = fid_to_info.get(fid)
-                if info:
-                    global_v.add(info[1])
 
             base["is_first"] = (prev is None)
             base["packages_added"] = 0
@@ -415,31 +644,28 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["packages_unchanged"] = 0
             base["findings_upgraded"] = 0
             base["findings_unchanged"] = 0
-            base["findings_added"] = len(global_f - global_before_f)
-            base["findings_removed"] = len(global_before_f - global_f)
-            base["vulns_added"] = len(global_v - global_before_v)
-            base["vulns_removed"] = len(global_before_v - global_v)
+            base["findings_added"] = len(after_fids - before_fids)
+            base["findings_removed"] = len(before_fids - after_fids)
+            base["vulns_added"] = len(after_vids - before_vids)
+            base["vulns_removed"] = len(before_vids - after_vids)
             base["vulns_unchanged"] = 0
 
-            # "Newly detected" = findings/vulns added to the global result.
-            base["newly_detected_findings"] = base["findings_added"]
-            base["newly_detected_vulns"] = base["vulns_added"]
+            # "Newly detected" ≡ net additions to the global result so
+            # that  prev Scan Result + newly_detected == Scan Result.
+            base["newly_detected_vulns"] = len(after_vids - before_vids)
+            base["newly_detected_findings"] = len(after_fids - before_fids)
 
-            # Branch result = SBOM baseline ∪ this tool scan (already filtered)
-            branch_f = baseline_f | _filtered_tool_f(curr_f)
-            branch_v = set(baseline_v)
-            for fid in branch_f - baseline_f:
-                info = fid_to_info.get(fid)
-                if info:
-                    branch_v.add(info[1])
-            base["branch_finding_count"] = len(branch_f)
-            base["branch_vuln_count"] = len(branch_v)
-            base["branch_package_count"] = len(sbom_pkg)
+            # Branch result = SBOM ∪ THIS tool scan only (one source)
+            branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
+                sbom_after, {scan.scan_source or "": scan})
+            base["branch_finding_count"] = len(branch_fids)
+            base["branch_vuln_count"] = len(branch_vids)
+            base["branch_package_count"] = len(branch_pkg_ids)
 
-            # Global result = already-filtered global_f / global_v
-            base["global_finding_count"] = len(global_f)
-            base["global_vuln_count"] = len(global_v)
-            base["global_package_count"] = len(sbom_pkg)
+            # Global result = SBOM ∪ ALL tool sources (same helper)
+            base["global_finding_count"] = len(after_fids)
+            base["global_vuln_count"] = len(after_vids)
+            base["global_package_count"] = len(after_pkg_ids)
 
             base["formats"] = []
         elif prev is None:
@@ -466,21 +692,19 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["packages_removed"] = entry.get("truly_removed_p", len(prev_pkgs - entry["curr_p"]))
             base["packages_upgraded"] = len(upgraded_pairs)
 
-            # --- Compute current scan result (SBOM ∪ tool-scan on active pkgs) ---
+            # --- Compute current scan result (SBOM ∪ all tool-scan findings) ---
             curr_pkg_id_set = entry["curr_p"]
             curr_scan_result_f = set(curr_f)
             for (vid, _src), f_ids in running_src_findings.items():
                 if vid == scan.variant_id:
-                    for fid in f_ids:
-                        if tool_fid_to_pkg.get(fid) in curr_pkg_id_set:
-                            curr_scan_result_f.add(fid)
+                    curr_scan_result_f |= f_ids
             curr_scan_result_v: set = set(curr_v)  # start with complete SBOM vulns
             for fid in curr_scan_result_f - curr_f:  # add vulns from tool findings only
                 info = fid_to_info.get(fid)
                 if info:
                     curr_scan_result_v.add(info[1])
 
-            # --- Compute previous scan result (prev SBOM ∪ tool-scan on prev pkgs) ---
+            # --- Compute previous scan result (prev SBOM ∪ all tool-scan findings) ---
             # This uses the CURRENT running_src_findings (which includes all
             # tool scans that ran between the two SBOMs), reflecting what the
             # user would have seen on the previous card right before this SBOM.
@@ -488,9 +712,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             prev_sr_f = set(prev_f)
             for (vid, _src), f_ids in running_src_findings.items():
                 if vid == scan.variant_id:
-                    for fid in f_ids:
-                        if tool_fid_to_pkg.get(fid) in prev_pkgs:
-                            prev_sr_f.add(fid)
+                    prev_sr_f |= f_ids
             prev_sr_v: set = set(prev_v)  # start with complete prev SBOM vulns
             for fid in prev_sr_f - prev_f:  # add vulns from tool findings only
                 info = fid_to_info.get(fid)
@@ -548,31 +770,15 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["branch_vuln_count"] = None
             base["branch_package_count"] = None
 
-            # Scan Result for SBOM scans = SBOM ∪ tool-scan findings
-            # BUT only tool-scan findings whose package is still in the
-            # current SBOM (removed/upgraded-away packages are dropped).
+            # Scan Result — shared helper (SBOM ∪ filtered tool findings)
             has_tool_scans = any(
                 vid == scan.variant_id for (vid, _src) in running_src_findings
             )
             if has_tool_scans:
-                # Reuse curr_scan_result_f/v if already computed in the diff
-                # section above (i.e. prev is not None); otherwise compute now.
-                if prev is None:
-                    curr_pkg_id_set = entry["curr_p"]
-                    curr_scan_result_f = set(curr_f)
-                    for (vid, _src), f_ids in running_src_findings.items():
-                        if vid == scan.variant_id:
-                            for fid in f_ids:
-                                if tool_fid_to_pkg.get(fid) in curr_pkg_id_set:
-                                    curr_scan_result_f.add(fid)
-                    curr_scan_result_v = set(curr_v)  # complete SBOM vulns
-                    for fid in curr_scan_result_f - curr_f:  # add tool vulns
-                        info = fid_to_info.get(fid)
-                        if info:
-                            curr_scan_result_v.add(info[1])
-                base["global_finding_count"] = len(curr_scan_result_f)
-                base["global_vuln_count"] = len(curr_scan_result_v)
-                base["global_package_count"] = len(entry["curr_p"])
+                g_f, g_v, g_p = _global_result_counts(scan, scans)
+                base["global_finding_count"] = g_f
+                base["global_vuln_count"] = g_v
+                base["global_package_count"] = g_p
             else:
                 base["global_finding_count"] = None
                 base["global_vuln_count"] = None
@@ -604,15 +810,28 @@ _CACHE_FIELDS = (
 )
 
 
+def _ensure_cache_table() -> None:
+    """Create the scan_diff_cache table if it doesn't exist.
+
+    This handles the case where the table was manually dropped or
+    the database was migrated without the cache table.
+    """
+    ScanDiffCache.__table__.create(db.engine, checkfirst=True)
+
+
 def _store_cache(results: list[dict]) -> None:
     """Upsert computed diff data into scan_diff_cache for each result dict."""
     if not results:
         return
     scan_ids = [uuid_module.UUID(r["id"]) for r in results]
-    # Delete existing cache rows for these scans
-    db.session.execute(
-        db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
-    )
+    try:
+        # Delete existing cache rows for these scans
+        db.session.execute(
+            db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+        )
+    except OperationalError:
+        db.session.rollback()
+        _ensure_cache_table()
     for r in results:
         row = ScanDiffCache(scan_id=uuid_module.UUID(r["id"]))
         for field in _CACHE_FIELDS:
@@ -633,9 +852,16 @@ def _read_cache(scans: list[Scan]) -> list[dict] | None:
     if not scans:
         return []
     scan_ids = [s.id for s in scans]
-    rows = db.session.execute(
-        db.select(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
-    ).scalars().all()
+    try:
+        rows = db.session.execute(
+            db.select(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+        ).scalars().all()
+    except OperationalError:
+        # Table is missing — recreate it and signal a cache miss so the
+        # caller recomputes from source data and populates the new table.
+        db.session.rollback()
+        _ensure_cache_table()
+        return None
     cache_map = {r.scan_id: r for r in rows}
     if len(cache_map) != len(scan_ids):
         return None  # cache miss
@@ -664,14 +890,18 @@ def recompute_variant_cache(variant_id) -> None:
     scans = Scan.get_by_variant_id(variant_id)
     if not scans:
         # No scans left — clear any stale cache rows
-        db.session.execute(
-            db.delete(ScanDiffCache).where(
-                ScanDiffCache.scan_id.in_(
-                    db.select(Scan.id).where(Scan.variant_id == variant_id)
+        try:
+            db.session.execute(
+                db.delete(ScanDiffCache).where(
+                    ScanDiffCache.scan_id.in_(
+                        db.select(Scan.id).where(Scan.variant_id == variant_id)
+                    )
                 )
             )
-        )
-        db.session.commit()
+            db.session.commit()
+        except OperationalError:
+            db.session.rollback()
+            _ensure_cache_table()
         return
     results = _serialize_list_with_diff(scans)
     _store_cache(results)
@@ -684,16 +914,20 @@ def invalidate_variant_cache(variant_id) -> None:
     Use this when the calling context cannot easily recompute (e.g. a
     background thread that spawns sub-processes without direct DB access).
     """
-    scan_ids = [
-        row[0] for row in db.session.execute(
-            db.select(Scan.id).where(Scan.variant_id == variant_id)
-        ).all()
-    ]
-    if scan_ids:
-        db.session.execute(
-            db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
-        )
-        db.session.commit()
+    try:
+        scan_ids = [
+            row[0] for row in db.session.execute(
+                db.select(Scan.id).where(Scan.variant_id == variant_id)
+            ).all()
+        ]
+        if scan_ids:
+            db.session.execute(
+                db.delete(ScanDiffCache).where(ScanDiffCache.scan_id.in_(scan_ids))
+            )
+            db.session.commit()
+    except OperationalError:
+        db.session.rollback()
+        _ensure_cache_table()
 
 
 # ---------------------------------------------------------------------------
@@ -952,7 +1186,106 @@ def init_app(app):
         current_finding_ids = {obs.finding_id for obs in scan.observations}
         curr_vulns = {obs.finding.vulnerability_id for obs in scan.observations}
 
-        if prev_scan_id is None:
+        if is_tool_scan:
+            # Tool scan: diff against the GLOBAL state
+            # (SBOM baseline ∪ latest findings for every tool source).
+            # This mirrors the list-view logic in _serialize_list_with_diff,
+            # including SBOM-package filtering of tool-scan findings.
+            _sbom_scans = [
+                s for s in all_variant_scans
+                if (s.scan_type or "sbom") == "sbom"
+            ]
+            _sbom_at_time = (
+                _sbom_active_at(_sbom_scans, scan.timestamp)
+                if _sbom_scans else None
+            )
+            if _sbom_at_time:
+                _sbom_loaded = _load_scan_with_findings(_sbom_at_time.id)
+                _sbom_fids = (
+                    {o.finding_id for o in _sbom_loaded.observations}
+                    if _sbom_loaded else set()
+                )
+                _sbom_vids = (
+                    {o.finding.vulnerability_id for o in _sbom_loaded.observations}
+                    if _sbom_loaded else set()
+                )
+            else:
+                _sbom_fids: set = set()
+                _sbom_vids: set = set()
+
+            def _unfiltered_obs(loaded_scan) -> tuple[set, set]:
+                """Return (finding_ids, vuln_ids) from a loaded scan."""
+                fids: set = set()
+                vids: set = set()
+                if not loaded_scan:
+                    return fids, vids
+                for o in loaded_scan.observations:
+                    fids.add(o.finding_id)
+                    vids.add(o.finding.vulnerability_id)
+                return fids, vids
+
+            # Latest tool scan per source BEFORE this scan (excl. this scan)
+            _tool_before = [
+                s for s in all_variant_scans
+                if (s.scan_type or "sbom") == "tool"
+                and s.id != scan.id
+                and s.timestamp <= scan.timestamp
+            ]
+            _latest_per_src: dict = {}
+            for _ts in sorted(_tool_before, key=lambda s: s.timestamp):
+                _latest_per_src[_ts.scan_source] = _ts
+
+            # Accumulate findings from OTHER tool sources
+            _other_fids: set = set()
+            _other_vids: set = set()
+            for _src, _ts in _latest_per_src.items():
+                if _src != scan_source:
+                    _loaded = _load_scan_with_findings(_ts.id)
+                    _f, _v = _unfiltered_obs(_loaded)
+                    _other_fids |= _f
+                    _other_vids |= _v
+
+            # Previous same-source scan findings
+            _prev_src_scan = _latest_per_src.get(scan_source)
+            if _prev_src_scan:
+                _prev_loaded = _load_scan_with_findings(_prev_src_scan.id)
+                _prev_fids, _prev_vids = _unfiltered_obs(_prev_loaded)
+            else:
+                _prev_loaded = None
+                _prev_fids: set = set()
+                _prev_vids: set = set()
+
+            # Current scan findings (all, no filtering)
+            _curr_fids: set = {obs.finding_id for obs in scan.observations}
+            _curr_vids: set = {obs.finding.vulnerability_id for obs in scan.observations}
+
+            # Global state BEFORE this scan
+            _global_before_f = _sbom_fids | _other_fids | _prev_fids
+            _global_before_v = _sbom_vids | _other_vids | _prev_vids
+
+            # Global state AFTER (current scan replaces same-source)
+            _global_after_f = _sbom_fids | _other_fids | _curr_fids
+            _global_after_v = _sbom_vids | _other_vids | _curr_vids
+
+            added_fids = _global_after_f - _global_before_f
+            removed_fids = _global_before_f - _global_after_f
+
+            findings_added = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations if obs.finding_id in added_fids
+            ]
+            if _prev_loaded:
+                _prev_origin = _origin_for_scan(_prev_src_scan)
+                findings_removed = [
+                    _obs_to_dict(obs, _prev_origin)
+                    for obs in _prev_loaded.observations
+                    if obs.finding_id in removed_fids
+                ]
+            else:
+                findings_removed: list = []
+            vulns_added = sorted(_global_after_v - _global_before_v)
+            vulns_removed = sorted(_global_before_v - _global_after_v)
+        elif prev_scan_id is None:
             findings_added = [_obs_to_dict(obs, scan_origin) for obs in scan.observations]
             findings_removed: list = []
             vulns_added = sorted(curr_vulns)
@@ -1060,25 +1393,23 @@ def init_app(app):
                     if fid not in fid_info:
                         fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
 
-            # Build current scan result = curr SBOM ∪ tool findings on curr pkgs
+            # Build current scan result = curr SBOM ∪ all tool findings
             curr_sr_fids: set = set(current_finding_ids)
             for tool_scan_obj in latest_tool_by_source.values():
                 tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
                 if not tool_loaded:
                     continue
                 for obs in tool_loaded.observations:
-                    if obs.finding.package_id in curr_pkg_ids:
-                        curr_sr_fids.add(obs.finding_id)
+                    curr_sr_fids.add(obs.finding_id)
 
-            # Build previous scan result = prev SBOM ∪ tool findings on prev pkgs
+            # Build previous scan result = prev SBOM ∪ all tool findings
             prev_sr_fids: set = set(prev_finding_ids)  # type: ignore[possibly-undefined]
             for tool_scan_obj in latest_tool_by_source.values():
                 tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
                 if not tool_loaded:
                     continue
                 for obs in tool_loaded.observations:
-                    if obs.finding.package_id in prev_pkg_ids:  # type: ignore[possibly-undefined]
-                        prev_sr_fids.add(obs.finding_id)
+                    prev_sr_fids.add(obs.finding_id)
 
             # Derive vuln sets from scan results — start from complete SBOM
             # vuln sets and add only tool-scan vulns on top.
@@ -1184,45 +1515,36 @@ def init_app(app):
         findings_upgraded.sort(key=lambda f: (f["package_name"], f["vulnerability_id"]))
 
         # --- Newly detected (tool scans only) ---
+        # Vulns from THIS scan not in the previous global result,
+        # plus findings linked to those new vulns.
         newly_detected_findings_count = None
         newly_detected_vulns_count = None
         newly_detected_findings_list = None
         newly_detected_vulns_list = None
 
         if is_tool_scan:
-            sbom_scans = [s for s in all_variant_scans if (s.scan_type or "sbom") == "sbom"]
-            sbom_fids: set = set()
-            sbom_vids: set = set()
-            if sbom_scans:
-                sbom_at_time = _sbom_active_at(sbom_scans, scan.timestamp)
-                if sbom_at_time:
-                    sbom_scan_loaded = _load_scan_with_findings(sbom_at_time.id)
-                else:
-                    sbom_scan_loaded = None
-                if sbom_scan_loaded:
-                    sbom_fids = {obs.finding_id for obs in sbom_scan_loaded.observations}
-                    sbom_vids = {obs.finding.vulnerability_id for obs in sbom_scan_loaded.observations}
-
-            # Start from findings/vulns not in SBOM
-            new_fids = current_finding_ids - sbom_fids
-            new_vids = curr_vulns - sbom_vids
-
-            # Subtract what was already present in the previous tool scan
-            if prev_scan_id is not None:
-                prev_scan_loaded = _load_scan_with_findings(prev_scan_id)
-                if prev_scan_loaded:
-                    prev_tool_fids = {obs.finding_id for obs in prev_scan_loaded.observations}
-                    new_fids = new_fids - prev_tool_fids
-                    prev_tool_vids = {obs.finding.vulnerability_id for obs in prev_scan_loaded.observations}
-                    new_vids = new_vids - prev_tool_vids
-
-            newly_detected_findings_count = len(new_fids)
-            newly_detected_vulns_count = len(new_vids)
+            # Use the filtered global sets so that
+            # prev Scan Result + newly_detected == Scan Result.
+            _new_vids = _global_after_v - _global_before_v
+            _new_fids = _global_after_f - _global_before_f
+            newly_detected_vulns_count = len(_new_vids)
+            newly_detected_vulns_list = sorted(_new_vids)
             newly_detected_findings_list = [
-                _obs_to_dict(obs, scan_origin) for obs in scan.observations
-                if obs.finding_id in new_fids
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations
+                if obs.finding_id in _new_fids
             ]
-            newly_detected_vulns_list = sorted(new_vids)
+            newly_detected_findings_count = len(newly_detected_findings_list)
+
+        # For tool scans, provide flat lists of ALL findings/vulns from this scan
+        all_findings_list = None
+        all_vulns_list = None
+        if is_tool_scan:
+            all_findings_list = [
+                _obs_to_dict(obs, scan_origin)
+                for obs in scan.observations
+            ]
+            all_vulns_list = sorted(curr_vulns)
 
         return jsonify({
             "scan_id": str(scan.id),
@@ -1247,6 +1569,8 @@ def init_app(app):
             "newly_detected_vulns": newly_detected_vulns_count,
             "newly_detected_findings_list": newly_detected_findings_list,
             "newly_detected_vulns_list": newly_detected_vulns_list,
+            "all_findings": all_findings_list,
+            "all_vulns": all_vulns_list,
         })
 
     # ------------------------------------------------------------------
@@ -1259,9 +1583,8 @@ def init_app(app):
         time of *scan_id* together with their source (SBOM document name /
         format or scan source label).
 
-        For an SBOM scan the merge result is just that scan's own data.
-        For a tool scan the merge result is the union of the latest SBOM
-        scan for the same variant **plus** this tool scan.
+        Uses the shared ``_global_result_full`` helper so that the counts
+        are consistent with the list view's *Scan Result* badges.
         """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -1272,133 +1595,8 @@ def init_app(app):
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
-        scan_type = scan.scan_type or "sbom"
-        is_tool_scan = scan_type == "tool"
-
-        # Determine which scans contribute to the global view
-        contributing_scan_ids: list = [scan.id]
-        sbom_scan = None
-        if is_tool_scan:
-            all_variant_scans = ScanController.get_by_variant(scan.variant_id)
-            sbom_scans = [s for s in all_variant_scans if (s.scan_type or "sbom") == "sbom"]
-            if sbom_scans:
-                sbom_scan = sbom_scans[-1]
-                contributing_scan_ids.append(sbom_scan.id)
-        else:
-            # SBOM scan: include latest tool scan per source so the global
-            # view shows SBOM ∪ all tool-scan sources (matching list view).
-            all_variant_scans = ScanController.get_by_variant(scan.variant_id)
-            latest_tool_by_source: dict = {}
-            for s in all_variant_scans:
-                if (s.scan_type or "sbom") == "tool":
-                    src = s.scan_source or ""
-                    prev = latest_tool_by_source.get(src)
-                    if prev is None or s.timestamp > prev.timestamp:
-                        latest_tool_by_source[src] = s
-            for tool_s in latest_tool_by_source.values():
-                if tool_s.id not in contributing_scan_ids:
-                    contributing_scan_ids.append(tool_s.id)
-
-        # --- Packages with source ---
-        # Packages come from SBOM documents only (tool scans don't add packages)
-        pkg_rows = db.session.execute(
-            db.select(
-                Package.id, Package.name, Package.version,
-                SBOMDocument.source_name, SBOMDocument.format, SBOMDocument.scan_id,
-            )
-            .join(SBOMPackage, SBOMPackage.package_id == Package.id)
-            .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-            .where(SBOMDocument.scan_id.in_(contributing_scan_ids))
-        ).all()
-        # Deduplicate by package id, keep all sources
-        pkg_map: dict = {}  # package_id -> dict
-        for pid, pname, pversion, src_name, src_fmt, src_scan_id in pkg_rows:
-            source_label = f"{src_name} ({src_fmt})" if src_fmt else src_name
-            if pid not in pkg_map:
-                pkg_map[pid] = {
-                    "package_id": str(pid),
-                    "package_name": pname or "unknown",
-                    "package_version": pversion or "",
-                    "sources": [source_label],
-                }
-            else:
-                if source_label not in pkg_map[pid]["sources"]:
-                    pkg_map[pid]["sources"].append(source_label)
-        packages = sorted(pkg_map.values(), key=lambda p: (p["package_name"], p["package_version"]))
-
-        # --- Findings & vulnerabilities with source ---
-        # Load observations from all contributing scans
-        loaded_scans: dict = {scan.id: scan}  # already loaded
-        for sid in contributing_scan_ids:
-            if sid not in loaded_scans:
-                loaded = _load_scan_with_findings(sid)
-                if loaded:
-                    loaded_scans[sid] = loaded
-
-        # Active package IDs = packages from the SBOM scan (not tool scans)
-        active_pkg_ids: set = set(pkg_map.keys())
-
-        finding_map: dict = {}   # finding_id -> dict
-        vuln_set: dict = {}      # vulnerability_id -> set of sources
-        for sid, loaded in loaded_scans.items():
-            s_type = loaded.scan_type or "sbom"
-            is_tool = s_type == "tool"
-            if is_tool:
-                source_labels = {
-                    "grype": "Grype",
-                    "nvd": "NVD CPE",
-                    "osv": "OSV",
-                }
-                source_label = source_labels.get(
-                    loaded.scan_source or "", "Vulnerability Scan"
-                )
-            else:
-                # Use SBOM document names as source
-                doc_names = []
-                for doc in (loaded.sbom_documents if hasattr(loaded, 'sbom_documents') else []):
-                    label = f"{doc.source_name} ({doc.format})" if doc.format else doc.source_name
-                    doc_names.append(label)
-                source_label = ", ".join(doc_names) if doc_names else "SBOM Scan"
-            for obs in loaded.observations:
-                fid = obs.finding_id
-                f = obs.finding
-                pkg = f.package
-                # For tool-scan findings on an SBOM scan's global view,
-                # only include findings whose package is still active
-                # (present in the current SBOM).
-                if is_tool and not is_tool_scan and f.package_id not in active_pkg_ids:
-                    continue
-                if fid not in finding_map:
-                    finding_map[fid] = {
-                        "finding_id": str(fid),
-                        "package_name": pkg.name if pkg else "unknown",
-                        "package_version": pkg.version if pkg else "",
-                        "package_id": str(f.package_id),
-                        "vulnerability_id": f.vulnerability_id,
-                        "sources": [source_label],
-                    }
-                else:
-                    if source_label not in finding_map[fid]["sources"]:
-                        finding_map[fid]["sources"].append(source_label)
-                vid = f.vulnerability_id
-                vuln_set.setdefault(vid, set()).add(source_label)
-
-        findings = sorted(finding_map.values(), key=lambda f: (f["vulnerability_id"], f["package_name"]))
-        vulnerabilities = [
-            {"vulnerability_id": vid, "sources": sorted(srcs)}
-            for vid, srcs in sorted(vuln_set.items())
-        ]
-
-        return jsonify({
-            "scan_id": str(scan.id),
-            "scan_type": scan_type,
-            "packages": packages,
-            "findings": findings,
-            "vulnerabilities": vulnerabilities,
-            "package_count": len(packages),
-            "finding_count": len(findings),
-            "vuln_count": len(vulnerabilities),
-        })
+        all_variant_scans = ScanController.get_by_variant(scan.variant_id)
+        return jsonify(_global_result_full(scan, all_variant_scans))
 
     @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
     def trigger_grype_scan(variant_id):
