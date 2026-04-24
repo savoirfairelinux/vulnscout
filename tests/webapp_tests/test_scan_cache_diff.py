@@ -31,11 +31,14 @@ def _build_db(app):
     Project / Variant
         sbom_scan_a  (first SBOM)
             openssl@1.1.0  → CVE-2020-0001
-        sbom_scan_b  (second SBOM – upgrades openssl 1.1.0→1.1.1)
+            kernel@6.12    → (SBOM package, will be removed in sbom B)
+        tool_scan    (tool scan, source=nvd, BETWEEN the two SBOMs)
+            kernel@6.12    → CVE-2021-8888  (tool finding on soon-removed pkg)
+            openssl@1.1.1  → CVE-2021-9999  (tool finding on new-version pkg)
+        sbom_scan_b  (second SBOM – upgrades openssl, removes kernel)
             openssl@1.1.1  → CVE-2020-0001  (same vuln, upgraded pkg)
-        tool_scan    (tool scan, source=nvd)
-            openssl@1.1.1  → CVE-2021-9999  (tool-only finding)
     """
+    import time
     from src.models.project import Project
     from src.models.variant import Variant
     from src.models.scan import Scan
@@ -56,6 +59,7 @@ def _build_db(app):
         # --- First SBOM scan ---
         sbom_a = Scan.create("sbom A", variant.id, scan_type="sbom")
         pkg_old = Package.find_or_create("openssl", "1.1.0")
+        pkg_removed = Package.find_or_create("kernel", "6.12")
         vuln = Vulnerability.create_record(
             id="CVE-2020-0001", description="test vuln"
         )
@@ -64,30 +68,44 @@ def _build_db(app):
 
         doc_a = SBOMDocument.create("/a/sbom.json", "spdx", sbom_a.id)
         SBOMPackage.create(doc_a.id, pkg_old.id)
+        SBOMPackage.create(doc_a.id, pkg_removed.id)
         Observation.create(finding_id=finding_old.id, scan_id=sbom_a.id)
         _db.session.commit()
 
-        # --- Second SBOM scan (package upgrade) ---
-        sbom_b = Scan.create("sbom B", variant.id, scan_type="sbom")
+        # Small delay so tool_scan.timestamp > sbom_a.timestamp
+        time.sleep(0.05)
+
+        # --- Tool scan (between the two SBOMs) ---
+        tool_scan = Scan.create("NVD scan", variant.id, scan_type="tool")
+        tool_scan.scan_source = "nvd"
+        vuln_tool = Vulnerability.create_record(
+            id="CVE-2021-9999", description="tool vuln"
+        )
+        vuln_tool_removed = Vulnerability.create_record(
+            id="CVE-2021-8888", description="tool vuln on removed pkg"
+        )
         pkg_new = Package.find_or_create("openssl", "1.1.1")
+        finding_tool = Finding.get_or_create(pkg_new.id, vuln_tool.id)
+        finding_tool_removed = Finding.get_or_create(
+            pkg_removed.id, vuln_tool_removed.id)
+        _db.session.commit()
+
+        Observation.create(finding_id=finding_tool.id, scan_id=tool_scan.id)
+        Observation.create(
+            finding_id=finding_tool_removed.id, scan_id=tool_scan.id)
+        _db.session.commit()
+
+        # Small delay so sbom_b.timestamp > tool_scan.timestamp
+        time.sleep(0.05)
+
+        # --- Second SBOM scan (package upgrade, kernel removed) ---
+        sbom_b = Scan.create("sbom B", variant.id, scan_type="sbom")
         finding_new = Finding.get_or_create(pkg_new.id, vuln.id)
         _db.session.commit()
 
         doc_b = SBOMDocument.create("/b/sbom.json", "spdx", sbom_b.id)
         SBOMPackage.create(doc_b.id, pkg_new.id)
         Observation.create(finding_id=finding_new.id, scan_id=sbom_b.id)
-        _db.session.commit()
-
-        # --- Tool scan ---
-        tool_scan = Scan.create("empty description", variant.id, scan_type="tool")
-        tool_scan.scan_source = "nvd"
-        vuln_tool = Vulnerability.create_record(
-            id="CVE-2021-9999", description="tool vuln"
-        )
-        finding_tool = Finding.get_or_create(pkg_new.id, vuln_tool.id)
-        _db.session.commit()
-
-        Observation.create(finding_id=finding_tool.id, scan_id=tool_scan.id)
         _db.session.commit()
 
         return {
@@ -98,6 +116,7 @@ def _build_db(app):
             "tool_scan_id": str(tool_scan.id),
             "pkg_old_id": str(pkg_old.id),
             "pkg_new_id": str(pkg_new.id),
+            "pkg_removed_id": str(pkg_removed.id),
         }
 
 
@@ -391,3 +410,49 @@ class TestGlobalResultFullSources:
                 pkg_sources.extend(p["sources"])
             # Our SBOMDocument was created with format="spdx"
             assert any("spdx" in s for s in pkg_sources)
+
+
+# ===================================================================
+# _scan_diff.py — tool findings on removed packages must be "removed"
+# ===================================================================
+
+class TestToolFindingsOnRemovedPackages:
+    """Regression: when an SBOM removes a package, tool-scan findings for
+    that package must move to 'removed findings', not stay 'unchanged'.
+
+    Scenario:
+      SBOM A: pkg_old (kernel-image 6.12) → CVE-X
+      NVD tool scan: pkg_old → CVE-X  (tool finding)
+      SBOM B: pkg_new (linux-yocto 6.18) → CVE-X  (same vuln, new pkg)
+              pkg_old is removed
+
+    Expected diff on SBOM B:
+      - CVE-X via pkg_new: Added finding
+      - CVE-X via pkg_old (NVD): Removed finding  (NOT unchanged)
+    """
+
+    def test_tool_finding_for_removed_pkg_is_removed(self, app, ids):
+        from src.routes._scan_diff import _serialize_list_with_diff
+        from src.models.scan import Scan
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()  # chronological
+            result = _serialize_list_with_diff(scans)
+
+            # Find the second SBOM scan entry (sbom_b)
+            sbom_b_entry = None
+            for r in result:
+                if r["id"] == ids["sbom_b_id"]:
+                    sbom_b_entry = r
+                    break
+            assert sbom_b_entry is not None, "sbom_b not found in results"
+
+            # The NVD tool finding for the removed package should NOT be in
+            # unchanged — it should contribute to findings_removed.
+            # Before fix: findings_removed was 0 and findings_unchanged
+            # included the tool finding.
+            assert sbom_b_entry["findings_removed"] >= 1, (
+                f"Expected at least 1 removed finding (tool finding for "
+                f"removed pkg), got {sbom_b_entry['findings_removed']}"
+            )

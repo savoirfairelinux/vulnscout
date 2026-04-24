@@ -31,7 +31,9 @@ from ._scan_queries import (
 )
 from ._scan_diff import (
     _classify_package_changes,
-    _sbom_active_at,
+    _contributing_scans_at,
+    _contributing_scans_before,
+    _global_result_id_sets,
     _global_result_full,
     _serialize_list_with_diff,
 )
@@ -206,85 +208,17 @@ def init_app(app):
         curr_vulns = {obs.finding.vulnerability_id for obs in scan.observations}
 
         if is_tool_scan:
-            # Tool scan: diff against the GLOBAL state
-            # (SBOM baseline ∪ latest findings for every tool source).
-            # This mirrors the list-view logic in _serialize_list_with_diff,
-            # including SBOM-package filtering of tool-scan findings.
-            _sbom_scans = [
-                s for s in all_variant_scans
-                if (s.scan_type or "sbom") == "sbom"
-            ]
-            _sbom_at_time = (
-                _sbom_active_at(_sbom_scans, scan.timestamp)
-                if _sbom_scans else None
-            )
-            if _sbom_at_time:
-                _sbom_loaded = _load_scan_with_findings(_sbom_at_time.id)
-                _sbom_fids = (
-                    {o.finding_id for o in _sbom_loaded.observations}
-                    if _sbom_loaded else set()
-                )
-                _sbom_vids = (
-                    {o.finding.vulnerability_id for o in _sbom_loaded.observations}
-                    if _sbom_loaded else set()
-                )
-            else:
-                _sbom_fids: set = set()
-                _sbom_vids: set = set()
-
-            def _unfiltered_obs(loaded_scan) -> tuple[set, set]:
-                """Return (finding_ids, vuln_ids) from a loaded scan."""
-                fids: set = set()
-                vids: set = set()
-                if not loaded_scan:
-                    return fids, vids
-                for o in loaded_scan.observations:
-                    fids.add(o.finding_id)
-                    vids.add(o.finding.vulnerability_id)
-                return fids, vids
-
-            # Latest tool scan per source BEFORE this scan (excl. this scan)
-            _tool_before = [
-                s for s in all_variant_scans
-                if (s.scan_type or "sbom") == "tool"
-                and s.id != scan.id
-                and s.timestamp <= scan.timestamp
-            ]
-            _latest_per_src: dict = {}
-            for _ts in sorted(_tool_before, key=lambda s: s.timestamp):
-                _latest_per_src[_ts.scan_source] = _ts
-
-            # Accumulate findings from OTHER tool sources
-            _other_fids: set = set()
-            _other_vids: set = set()
-            for _src, _ts in _latest_per_src.items():
-                if _src != scan_source:
-                    _loaded = _load_scan_with_findings(_ts.id)
-                    _f, _v = _unfiltered_obs(_loaded)
-                    _other_fids |= _f
-                    _other_vids |= _v
-
-            # Previous same-source scan findings
-            _prev_src_scan = _latest_per_src.get(scan_source)
-            if _prev_src_scan:
-                _prev_loaded = _load_scan_with_findings(_prev_src_scan.id)
-                _prev_fids, _prev_vids = _unfiltered_obs(_prev_loaded)
-            else:
-                _prev_loaded = None
-                _prev_fids: set = set()
-                _prev_vids: set = set()
-
-            # Current scan findings (all, no filtering)
-            _curr_fids: set = {obs.finding_id for obs in scan.observations}
-            _curr_vids: set = {obs.finding.vulnerability_id for obs in scan.observations}
-
-            # Global state BEFORE this scan
-            _global_before_f = _sbom_fids | _other_fids | _prev_fids
-            _global_before_v = _sbom_vids | _other_vids | _prev_vids
-
-            # Global state AFTER (current scan replaces same-source)
-            _global_after_f = _sbom_fids | _other_fids | _curr_fids
-            _global_after_v = _sbom_vids | _other_vids | _curr_vids
+            # Tool scan: diff against the GLOBAL state using the same
+            # helpers as the list view (_contributing_scans_at/before +
+            # _global_result_id_sets) so that numbers are always in sync.
+            sbom_before, tools_before = _contributing_scans_before(
+                scan, all_variant_scans)
+            sbom_after, tools_after = _contributing_scans_at(
+                scan, all_variant_scans)
+            _global_before_f, _global_before_v, _ = _global_result_id_sets(
+                sbom_before, tools_before)
+            _global_after_f, _global_after_v, _ = _global_result_id_sets(
+                sbom_after, tools_after)
 
             added_fids = _global_after_f - _global_before_f
             removed_fids = _global_before_f - _global_after_f
@@ -293,11 +227,16 @@ def init_app(app):
                 _obs_to_dict(obs, scan_origin)
                 for obs in scan.observations if obs.finding_id in added_fids
             ]
-            if _prev_loaded:
-                _prev_origin = _origin_for_scan(_prev_src_scan)
+            # Removed findings come from the previous same-source scan
+            if prev_scan_id:
+                _prev_loaded = _load_scan_with_findings(prev_scan_id)
+                _prev_origin = (
+                    _origin_for_scan(_prev_loaded) if _prev_loaded
+                    else scan_origin
+                )
                 findings_removed = [
                     _obs_to_dict(obs, _prev_origin)
-                    for obs in _prev_loaded.observations
+                    for obs in (_prev_loaded.observations if _prev_loaded else [])
                     if obs.finding_id in removed_fids
                 ]
             else:
@@ -369,38 +308,31 @@ def init_app(app):
         #   new + upgraded + unchanged  = current scan result
         #   removed + upgraded + unchanged = previous scan result
         if not is_tool_scan and prev_scan_id is not None:
-            # Collect latest tool scans for this variant that were active
-            # at this SBOM's timestamp (mirrors the list view's chronological
-            # running_src_findings snapshot).
-            tool_scans = [
-                s for s in all_variant_scans
-                if (s.scan_type or "sbom") == "tool"
-                and s.timestamp <= scan.timestamp
-            ]
-            latest_tool_by_source: dict = {}
-            for ts in tool_scans:
-                src = ts.scan_source or ""
-                prev_ts = latest_tool_by_source.get(src)
-                if prev_ts is None or ts.timestamp > prev_ts.timestamp:
-                    latest_tool_by_source[src] = ts
+            # Use the same shared helpers as the list view so that
+            # counts are always in sync.  Enable SBOM-package filtering
+            # so tool findings for removed packages classify correctly.
+            _, latest_tool = _contributing_scans_at(scan, all_variant_scans)
+            curr_sr_fids, curr_sr_vids, _ = _global_result_id_sets(
+                scan, latest_tool, filter_tool_by_sbom_pkgs=True)
+            prev_sr_fids, prev_sr_vids, _ = _global_result_id_sets(
+                prev_scan, latest_tool,  # type: ignore[possibly-undefined]
+                filter_tool_by_sbom_pkgs=True)
 
-            # Build finding_id → (obs_dict, origin) lookup for all sources
+            # Build finding_id → (obs_dict, origin) lookup for full output.
+            # We still need to load observations for the detail response.
             fid_obs_map: dict = {}  # finding_id → obs dict
             fid_info: dict = {}     # finding_id → (pkg_id, vuln_id)
-            # Current SBOM observations
             for obs in scan.observations:
                 fid = obs.finding_id
                 fid_obs_map[fid] = _obs_to_dict(obs, scan_origin)
                 fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
-            # Previous SBOM observations
             for obs in prev_scan.observations:  # type: ignore[possibly-undefined]
                 fid = obs.finding_id
                 if fid not in fid_obs_map:
                     fid_obs_map[fid] = _obs_to_dict(obs, scan_origin)
                 if fid not in fid_info:
                     fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
-            # Tool-scan observations
-            for tool_scan_obj in latest_tool_by_source.values():
+            for tool_scan_obj in latest_tool.values():
                 tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
                 if not tool_loaded:
                     continue
@@ -411,37 +343,6 @@ def init_app(app):
                         fid_obs_map[fid] = _obs_to_dict(obs, tool_origin)
                     if fid not in fid_info:
                         fid_info[fid] = (obs.finding.package_id, obs.finding.vulnerability_id)
-
-            # Build current scan result = curr SBOM ∪ all tool findings
-            curr_sr_fids: set = set(current_finding_ids)
-            for tool_scan_obj in latest_tool_by_source.values():
-                tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
-                if not tool_loaded:
-                    continue
-                for obs in tool_loaded.observations:
-                    curr_sr_fids.add(obs.finding_id)
-
-            # Build previous scan result = prev SBOM ∪ all tool findings
-            prev_sr_fids: set = set(prev_finding_ids)  # type: ignore[possibly-undefined]
-            for tool_scan_obj in latest_tool_by_source.values():
-                tool_loaded = _load_scan_with_findings(tool_scan_obj.id)
-                if not tool_loaded:
-                    continue
-                for obs in tool_loaded.observations:
-                    prev_sr_fids.add(obs.finding_id)
-
-            # Derive vuln sets from scan results — start from complete SBOM
-            # vuln sets and add only tool-scan vulns on top.
-            curr_sr_vids: set = set(curr_vulns)
-            for fid in curr_sr_fids - current_finding_ids:
-                info = fid_info.get(fid)
-                if info:
-                    curr_sr_vids.add(info[1])
-            prev_sr_vids: set = set(prev_vulns)  # type: ignore[possibly-undefined]
-            for fid in prev_sr_fids - prev_finding_ids:  # type: ignore[possibly-undefined]
-                info = fid_info.get(fid)
-                if info:
-                    prev_sr_vids.add(info[1])
 
             # Diff scan results
             sr_new_fids = curr_sr_fids - prev_sr_fids
