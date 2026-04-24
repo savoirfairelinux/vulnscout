@@ -880,7 +880,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
-    const grypeRunning = grypeEntries.some(e => e.status === "running");
+    const grypeRunning = grypeEntries.some(e => e.status === "running" || e.status === "queued");
 
     // Global NVD scan state — survives tab switches (per-variant)
     const nvdEntries: ScanManagerSnapshot = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
@@ -1225,7 +1225,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const progressPanels = (
         <>
             {grypeEntries
-                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
                 .map(entry => (
                     <ScanProgressPanel key={`grype-${entry.variantId}`} entry={entry} label="Grype Scan" icon={faBug} colors={grypeColors} onDismiss={() => grypeDismiss(entry.variantId)} />
                 ))

@@ -42,9 +42,10 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
     }, [logs.length]);
 
     const statusText =
-        status === "running" ? "in progress"
-            : status === "error" ? "failed"
-                : "complete";
+        status === "queued" ? "queued"
+            : status === "running" ? "in progress"
+                : status === "error" ? "failed"
+                    : "complete";
 
     return (
         <div className={`mb-4 rounded-lg border ${colors.border} bg-neutral-900 overflow-hidden`}>
@@ -58,7 +59,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                     {progress ?? ""}
                     {total > 0 && ` (${pct}%)`}
                 </span>
-                {status !== "running" && (
+                {status !== "running" && status !== "queued" && (
                     <button
                         onClick={onDismiss}
                         title="Close"
@@ -71,13 +72,17 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
 
             {/* Progress bar */}
             <div className="w-full h-2 bg-neutral-800">
-                <div
-                    className={[
-                        "h-full transition-all duration-500 ease-out",
-                        status === "done" ? "bg-green-500" : colors.bar,
-                    ].join(" ")}
-                    style={{ width: `${pct}%` }}
-                />
+                {status === "queued" ? (
+                    <div className="h-full w-full bg-neutral-600 animate-pulse" />
+                ) : (
+                    <div
+                        className={[
+                            "h-full transition-all duration-500 ease-out",
+                            status === "done" ? "bg-green-500" : colors.bar,
+                        ].join(" ")}
+                        style={{ width: `${pct}%` }}
+                    />
+                )}
             </div>
 
             {/* Log box */}

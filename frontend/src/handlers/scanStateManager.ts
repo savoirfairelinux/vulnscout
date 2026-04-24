@@ -15,7 +15,7 @@
 export type ScanEntryState = {
     variantId: string;
     variantName: string;
-    status: "idle" | "running" | "done" | "error";
+    status: "idle" | "queued" | "running" | "done" | "error";
     error: string | null;
     progress: string | null;
     logs: string[];
@@ -56,6 +56,9 @@ export class ScanStateManager {
     /** Optional callback invoked when *all* running scans finish */
     private onDoneCallback: (() => void) | null = null;
 
+    /** Queue of variants waiting to be triggered (serial mode only) */
+    private pendingQueue: Array<{ id: string; name: string }> = [];
+
     constructor(
         /** Function to trigger a scan for one variant */
         private triggerFn: (vid: string) => Promise<{ ok: boolean; error?: string }>,
@@ -63,6 +66,13 @@ export class ScanStateManager {
         private statusFn: (vid: string) => Promise<StatusResponse>,
         /** Human label for error messages (e.g. "Grype") */
         private label: string,
+        /**
+         * When true, run scans one variant at a time — the next scan
+         * only starts after the previous one finishes.  This prevents
+         * concurrent backend processes that share global state (e.g.
+         * ``flask process``) from interfering with each other.
+         */
+        private serial: boolean = false,
     ) {}
 
     // ---- useSyncExternalStore API ----
@@ -104,10 +114,51 @@ export class ScanStateManager {
     /**
      * Trigger scans for one or more variants.
      * Each variant gets its own state entry and log panel.
+     *
+     * In **serial** mode only the first variant is triggered immediately;
+     * the rest are queued and started one-by-one as each finishes.
      */
     triggerScan = async (variants: Array<{ id: string; name: string }>) => {
         if (variants.length === 0) return;
 
+        if (this.serial) {
+            // Show all entries immediately; first is "running", rest are "queued"
+            for (let i = 0; i < variants.length; i++) {
+                const v = variants[i];
+                this.states.set(v.id, {
+                    variantId: v.id,
+                    variantName: v.name,
+                    status: i === 0 ? "running" : "queued",
+                    error: null,
+                    progress: i === 0 ? "starting" : "Queued",
+                    logs: i === 0 ? [] : ["Waiting for previous scan to finish…"],
+                    total: 0,
+                    doneCount: 0,
+                });
+            }
+            this.pendingQueue = variants.slice(1);
+            this.rebuildSnapshot();
+
+            // Trigger only the first variant
+            const first = variants[0];
+            const result = await this.triggerFn(first.id);
+            if (!result.ok) {
+                this.setVariantState(first.id, {
+                    status: "error",
+                    error: result.error ?? `Failed to start ${this.label} scan`,
+                    progress: null,
+                });
+                this.triggerNextInQueue();
+            }
+
+            // Start polling (will also advance the queue as variants finish)
+            if ([...this.states.values()].some((s) => s.status === "running")) {
+                this.startPolling();
+            }
+            return;
+        }
+
+        // ---- parallel mode (default) ----
         // Create "running" entries
         for (const v of variants) {
             this.states.set(v.id, {
@@ -167,16 +218,45 @@ export class ScanStateManager {
         }
     }
 
+    /**
+     * (Serial mode only) Trigger the next queued variant, if any.
+     */
+    private triggerNextInQueue() {
+        if (!this.serial || this.pendingQueue.length === 0) return;
+        const next = this.pendingQueue.shift()!;
+        this.setVariantState(next.id, {
+            status: "running",
+            progress: "starting",
+            logs: [],
+        });
+        this.triggerFn(next.id).then((result) => {
+            if (!result.ok) {
+                this.setVariantState(next.id, {
+                    status: "error",
+                    error: result.error ?? `Failed to start ${this.label} scan`,
+                    progress: null,
+                });
+                // Keep going — try next in queue
+                this.triggerNextInQueue();
+            }
+            // Polling is already running, will pick up the new running variant
+        });
+    }
+
     private startPolling() {
         this.stopPolling();
         this.pollTimer = setInterval(async () => {
             try {
+                // Only poll variants that are actually running (not queued)
                 const activeIds = [...this.states.entries()]
                     .filter(([, s]) => s.status === "running")
                     .map(([id]) => id);
 
                 if (activeIds.length === 0) {
-                    this.stopPolling();
+                    // Nothing running; if there are queued items, don't stop
+                    if (this.pendingQueue.length === 0) {
+                        this.stopPolling();
+                    }
                     return;
                 }
 
@@ -188,6 +268,7 @@ export class ScanStateManager {
                 );
 
                 let anyChanged = false;
+                let anyJustFinished = false;
 
                 for (const { vid, status } of results) {
                     const current = this.states.get(vid);
@@ -201,6 +282,7 @@ export class ScanStateManager {
                             progress: null,
                         });
                         anyChanged = true;
+                        anyJustFinished = true;
                     } else if (status.status === "done" || status.status === "idle") {
                         this.states.set(vid, {
                             ...current,
@@ -212,6 +294,7 @@ export class ScanStateManager {
                             doneCount: status.done_count ?? current.doneCount,
                         });
                         anyChanged = true;
+                        anyJustFinished = true;
                     } else if (status.status === "running" && status.progress) {
                         this.states.set(vid, {
                             ...current,
@@ -228,11 +311,16 @@ export class ScanStateManager {
                     this.rebuildSnapshot();
                 }
 
-                // If nothing is running any more, stop and fire onDone
+                // In serial mode, advance the queue when a scan finishes
+                if (anyJustFinished) {
+                    this.triggerNextInQueue();
+                }
+
+                // If nothing is running and nothing queued, stop and fire onDone
                 const stillRunning = [...this.states.values()].some(
                     (s) => s.status === "running",
                 );
-                if (!stillRunning) {
+                if (!stillRunning && this.pendingQueue.length === 0) {
                     this.stopPolling();
                     this.onDoneCallback?.();
                 }
