@@ -19,6 +19,7 @@ import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
 import { formatSourceName } from '../helpers/sourceNames';
+import { useDocUrl } from '../helpers/useDocUrl';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -54,6 +55,7 @@ type AssessmentGroup = {
 
   function VulnModal(props: Readonly<Props>) {
     const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -712,7 +714,7 @@ type AssessmentGroup = {
                                     <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
                                 </button>
                                 <a
-                                    href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#vulnerability-details"
+                                    href={docUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     aria-label="documentation"

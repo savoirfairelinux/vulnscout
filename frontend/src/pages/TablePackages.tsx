@@ -7,7 +7,8 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { useDocUrl } from '../helpers/useDocUrl';
 
 type Props = {
     packages: Package[];
@@ -43,6 +44,7 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
 function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
+    const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -381,6 +383,16 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 >
                     <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="text-white hover:text-blue-300 transition-colors"
+                >
+                    <FontAwesomeIcon icon={faBook} />
+                </a>
                 {showShortcutHelper && (
                     <div
                         ref={shortcutDropdownRef}

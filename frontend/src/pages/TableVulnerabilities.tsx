@@ -13,6 +13,7 @@ import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
+import { useDocUrl } from "../helpers/useDocUrl";
 
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
@@ -272,6 +273,7 @@ const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
 
+    const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
@@ -1273,7 +1275,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
                 <a
-                    href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#vulnerability-table"
+                    href={docUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="documentation"

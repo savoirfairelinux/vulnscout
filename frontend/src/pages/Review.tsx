@@ -17,6 +17,7 @@ import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import { useDocUrl } from '../helpers/useDocUrl';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -98,6 +99,7 @@ function formatDate(iso: string): string {
 }
 
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
+    const docUrl = useDocUrl("interactive-mode.html#review");
     const [assessments, setAssessments] = useState<Assessment[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
@@ -654,7 +656,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         <FontAwesomeIcon icon={faCircleQuestion} />
                     </button>
                     <a
-                        href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#review"
+                        href={docUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         aria-label="documentation"

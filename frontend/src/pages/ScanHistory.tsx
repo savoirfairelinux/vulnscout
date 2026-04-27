@@ -18,6 +18,7 @@ import {
 } from "../handlers/osvScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
+import { useDocUrl } from "../helpers/useDocUrl";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
@@ -857,6 +858,7 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
 // ---------------------------------------------------------------------------
 
 function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) {
+    const docUrl = useDocUrl("interactive-mode.html#scan-history");
     const [scans, setScans] = useState<Scan[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -1066,16 +1068,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const menuBar = (
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <h1 className="text-lg font-bold">Scan History</h1>
-            <a
-                href="https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#scan-history"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="documentation"
-                title="Open documentation"
-                className="text-white hover:text-blue-300 transition-colors"
-            >
-                <FontAwesomeIcon icon={faBook} />
-            </a>
 
             {/* Hide empty scans toggle */}
             <button
@@ -1129,8 +1121,18 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 NVD
             </button>
 
-            {/* Right side: scan menu */}
+            {/* Right side: doc link + scan menu */}
             <div className="ml-auto flex items-center gap-3">
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="text-white hover:text-blue-300 transition-colors"
+                >
+                    <FontAwesomeIcon icon={faBook} />
+                </a>
                 {/* Run Scans dropdown */}
                 {canTriggerScan && (
                     <div className="relative" ref={scanMenuRef}>
