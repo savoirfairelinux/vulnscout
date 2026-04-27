@@ -669,7 +669,7 @@ All trigger endpoints return `409 Conflict` if a scan of the same type is alread
 POST /api/variants/<variant_id>/grype-scan
 ```
 
-Exports the variant's packages as CycloneDX, runs Grype on the export, filters the results to only the variant's SBOM packages, and merges findings back as a tool scan.
+Runs Grype on the export, filters the results to only the variant's SBOM packages, and merges findings back as a tool scan.
 
 **Response:** `202 Accepted`
 ```json
