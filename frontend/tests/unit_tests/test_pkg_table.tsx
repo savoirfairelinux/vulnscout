@@ -154,16 +154,20 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
 
+        // Use package names as anchors since version strings may appear in
+        // row IDs/keys before the visible table cells.
         await user.click(version_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('1.0.0')).toBeLessThan(html.indexOf('2.0.0'));
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('dddeeefff'));
+            expect(html.indexOf('dddeeefff')).toBeLessThan(html.indexOf('xxxyyyzzz'));
         });
 
         await user.click(version_header); // alphabetical order -> reverse alphabetical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('2.0.0')).toBeLessThan(html.indexOf('1.0.0'));
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('dddeeefff'));
+            expect(html.indexOf('dddeeefff')).toBeLessThan(html.indexOf('aaabbbccc'));
         });
     })
 
