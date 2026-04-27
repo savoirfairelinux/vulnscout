@@ -9,3 +9,8 @@ global.fetch = jest.fn(() =>
     json: () => Promise.resolve({ version: '1.0.0-test' }),
   } as Response)
 );
+
+// Mock the useDocUrl hook so it never fires a real fetch during tests
+jest.mock('./src/helpers/useDocUrl', () => ({
+  useDocUrl: (path: string) => `https://vulnscout.readthedocs.io/en/test/${path}`,
+}));

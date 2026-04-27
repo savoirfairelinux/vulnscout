@@ -10,13 +10,14 @@ import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import { useDocUrl } from '../helpers/useDocUrl';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -98,6 +99,7 @@ function formatDate(iso: string): string {
 }
 
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
+    const docUrl = useDocUrl("interactive-mode.html#review");
     const [assessments, setAssessments] = useState<Assessment[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
@@ -653,6 +655,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     >
                         <FontAwesomeIcon icon={faCircleQuestion} />
                     </button>
+                    <a
+                        href={docUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="documentation"
+                        title="Open documentation"
+                        className="text-white hover:text-blue-300 transition-colors"
+                    >
+                        <FontAwesomeIcon icon={faBook} />
+                    </a>
                     {showShortcutHelper && (
                         <div
                             ref={shortcutDropdownRef}

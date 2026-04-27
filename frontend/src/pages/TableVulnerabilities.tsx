@@ -13,12 +13,13 @@ import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
+import { useDocUrl } from "../helpers/useDocUrl";
 
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -272,6 +273,7 @@ const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
 
+    const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
@@ -1272,6 +1274,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="text-white hover:text-blue-300 transition-colors"
+                >
+                    <FontAwesomeIcon icon={faBook} />
+                </a>
                 {showShortcutHelper && (
                     <div
                         ref={shortcutDropdownRef}
