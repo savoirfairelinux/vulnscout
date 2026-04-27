@@ -5,6 +5,50 @@ All endpoints return JSON unless otherwise noted. Routes are registered directly
 
 ---
 
+## Version & Status
+
+### Get Server Version
+
+```
+GET /api/version
+```
+
+Returns the running VulnScout version.
+
+**Response:**
+```json
+{ "version": "1.2.3" }
+```
+
+The value comes from the `VULNSCOUT_VERSION` environment variable (`"unknown"` when unset).
+
+### Get Initial Scan Status
+
+```
+GET /api/scan/status
+```
+
+Returns the progress of the container entrypoint import script. This endpoint is available even while the import is still running (all other `/api/*` routes return `503` until the script finishes).
+
+**Response:**
+```json
+{
+  "status": "running",
+  "maxsteps": 8,
+  "step": 3,
+  "message": "Merging SBOMs"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"running"` or `"done"` |
+| `maxsteps` | int | Total number of import steps |
+| `step` | int | Current step number |
+| `message` | string | Human-readable progress label |
+
+---
+
 ## Config
 
 ### Get Current Config
@@ -180,6 +224,8 @@ GET /api/vulnerabilities
 | `format` | string | `"list"` (default) or `"dict"` |
 
 **Response:** JSON array of vulnerability objects enriched with `packages_current`, `variants`, `first_scan_date` and `found_by`.
+
+> **Note:** When `variant_id` or `project_id` is provided, findings from tool scans (Grype, NVD, OSV) are automatically filtered to only include packages present in the variant's active SBOM. This prevents stale or cross-variant vulnerabilities from appearing. SBOM-scan findings are always included unconditionally.
 
 ### Get Single Vulnerability
 
@@ -527,18 +573,40 @@ PATCH /api/scans/<scan_id>
 
 **Response:** Updated scan object.
 
+### Delete Scan
+
+```
+DELETE /api/scans/<scan_id>
+```
+
+Deletes the scan and its observations. Findings that are no longer referenced by any observation are also removed.
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "scan_id": "...",
+  "orphaned_findings_removed": 3
+}
+```
+
 ### Get Scan Diff
 
 ```
 GET /api/scans/<scan_id>/diff
 ```
 
-Returns a detailed diff between this scan and the previous scan of the same variant.
+Returns a detailed diff between this scan and the previous scan of the same type (and source) for the same variant.
+
+For **SBOM scans**, the diff is computed against the *scan result* — that is, the merged union of the SBOM and active tool-scan findings filtered by SBOM packages. This means the numbers are consistent with the Scan Result badges shown in the list view.
+
+For **tool scans**, the diff reflects the change in the *global result* (SBOM ∪ tool scans) caused by this scan. Additionally, `newly_detected_*` and `all_*` fields provide the raw tool-scan contents.
 
 **Response:**
 ```
 {
   "scan_id": "...",
+  "scan_type": "sbom",
   "previous_scan_id": "...",
   "is_first": false,
   "finding_count": 120,
@@ -547,13 +615,130 @@ Returns a detailed diff between this scan and the previous scan of the same vari
   "findings_added": [...],
   "findings_removed": [...],
   "findings_upgraded": [...],
+  "findings_unchanged": [...],
   "packages_added": [...],
   "packages_removed": [...],
   "packages_upgraded": [...],
+  "packages_unchanged": [...],
   "vulns_added": [...],
-  "vulns_removed": [...]
+  "vulns_removed": [...],
+  "vulns_unchanged": [...],
+  "newly_detected_findings": null,
+  "newly_detected_vulns": null,
+  "newly_detected_findings_list": null,
+  "newly_detected_vulns_list": null,
+  "all_findings": null,
+  "all_vulns": null
 }
 ```
+
+| Field | Type | Scope | Description |
+|-------|------|-------|-------------|
+| `scan_type` | string | all | `"sbom"` or `"tool"` |
+| `findings_unchanged` | array | all | Findings present in both the current and previous scan result |
+| `packages_unchanged` | array | SBOM | Packages present in both scans |
+| `vulns_unchanged` | array | all | Vulnerability IDs present in both scan results |
+| `newly_detected_findings` | int\|null | tool | Count of findings new in the global result |
+| `newly_detected_vulns` | int\|null | tool | Count of vulnerabilities new in the global result |
+| `newly_detected_findings_list` | array\|null | tool | Finding objects newly detected in the global result |
+| `newly_detected_vulns_list` | array\|null | tool | Vulnerability IDs newly detected |
+| `all_findings` | array\|null | tool | All raw findings from this tool scan |
+| `all_vulns` | array\|null | tool | All vulnerability IDs from this tool scan |
+
+### Get Scan Global Result
+
+```
+GET /api/scans/<scan_id>/global-result
+```
+
+Returns every active finding, vulnerability, and package at the time of the given scan, combining SBOM and tool-scan data with source attribution. Tool-scan findings are filtered to packages present in the SBOM.
+
+**Response:** JSON object with `findings`, `vulnerabilities`, and `packages` arrays, each entry enriched with an `origin` field indicating the source (SBOM document name/format or tool scan source).
+
+---
+
+## Scan Triggers
+
+These endpoints trigger asynchronous vulnerability scans for a specific variant. Each returns `202 Accepted` immediately; use the corresponding `/status` endpoint to poll progress.
+
+All trigger endpoints return `409 Conflict` if a scan of the same type is already running for the variant, `404` if the variant is not found, and `503` if the required tool is unavailable (Grype only).
+
+### Trigger Grype Scan
+
+```
+POST /api/variants/<variant_id>/grype-scan
+```
+
+Exports the variant's packages as CycloneDX, runs Grype on the export, filters the results to only the variant's SBOM packages, and merges findings back as a tool scan.
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "variant_id": "..." }
+```
+
+Progress steps: `1/4 Exporting CycloneDX` → `2/4 Running Grype` → `3/4 Merging results` → `4/4 Processing`.
+
+### Check Grype Scan Status
+
+```
+GET /api/variants/<variant_id>/grype-scan/status
+```
+
+**Response:**
+```json
+{
+  "status": "running",
+  "error": null,
+  "progress": "2/4 Running Grype",
+  "logs": ["[1/4] CycloneDX export complete", "..."],
+  "total": 4,
+  "done_count": 1
+}
+```
+
+Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
+
+### Trigger NVD Scan
+
+```
+POST /api/variants/<variant_id>/nvd-scan
+```
+
+For every active package with CPE identifiers, queries the NVD CVE API and creates findings for any matched CVEs. Respects the `NVD_API_KEY` environment variable for higher rate limits.
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "variant_id": "..." }
+```
+
+### Check NVD Scan Status
+
+```
+GET /api/variants/<variant_id>/nvd-scan/status
+```
+
+Same response shape as Grype status. `total` is the number of unique CPEs to query, `done_count` tracks progress.
+
+### Trigger OSV Scan
+
+```
+POST /api/variants/<variant_id>/osv-scan
+```
+
+For every active package with PURL identifiers, queries the OSV API. All PURLs per package are queried (e.g. generic + ecosystem-specific) so no vulnerabilities are missed.
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "variant_id": "..." }
+```
+
+### Check OSV Scan Status
+
+```
+GET /api/variants/<variant_id>/osv-scan/status
+```
+
+Same response shape as Grype status. `total` is the number of unique PURLs to query.
 
 ---
 
