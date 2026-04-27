@@ -944,16 +944,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Fetch all variants for the scan menu
+    // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
-        Variants.listAll().then(vs => {
+        const fetchVariants = variantId
+            // Single variant selected → fetch all and filter to just that one
+            ? Variants.listAll().then(vs => vs.filter(v => v.id === variantId))
+            : projectId
+                // Project selected → only that project's variants
+                ? Variants.list(projectId)
+                // No scope → all variants
+                : Variants.listAll();
+
+        fetchVariants.then(vs => {
             setAllVariants(vs);
-            // Default: select all effective variants
-            setSelectedVariantIds(new Set(
-                variantId ? [variantId] : vs.map(v => v.id)
-            ));
+            setSelectedVariantIds(new Set(vs.map(v => v.id)));
         });
-    }, [variantId]);
+    }, [variantId, projectId]);
 
     // Close scan menu on outside click
     useEffect(() => {
