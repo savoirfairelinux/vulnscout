@@ -1,43 +1,38 @@
 # Interactive Mode
 
-VulnScout's web interface is the way most users interact with vulnerability data day-to-day. Once an SBOM has been imported and enriched, the interactive mode gives you everything needed to explore, filter, assess, and track vulnerabilities without leaving the application.
+VulnScout's web interface can be used to visualize, analyse, and classify your project vulnerabilities.
 
-## How Assessments Works
+## Getting Started with vulnerability analysis
 
 ### Starting a New Project
 
-When you first import an SBOM into VulnScout, the application scans its contents and creates a finding for every vulnerability-to-package association it discovers.
+When you first import an SBOM into VulnScout, the application scans its contents to load vulnerabilities, assessments (if present), and the package list.
 
-If the SBOM source does not include any assessment data, those findings start with a **Pending assessment**, which means you will need to review the finding and make a decision about it (either it affects your system, or it doesn't or it was already fixed).
+Vulnerabilities which are considered active or unpatched are set as **Pending assessment**. Based on the context of your product, the user will have to classify them as **Exploitable** or **Not affected**/**Fixed**. This classification using the product environment and scope is named **Threat model**.
 
-However, many SBOM sources carry assessments / triage decisions. Yocto CVE-check results, for example, mark vulnerabilities as Patched, Ignored, or Unpatched; CycloneDX and SPDX 3 documents often include full VEX analysis blocks; and OpenVEX files provide standalone assessment records. When VulnScout ingests these, it creates assessments automatically, so you may see some CVEs already labelled as **Fixed** or **Not affected** before you have done any manual triage.
+### Threat Model
 
-### Scanners
+Vulnerabilities present in your SBOM do not necessarily represent a real danger to your device. A Vulnerability describes a potential weakness — whether it is actually exploitable depends on how the affected component is built, configured, and used in your specific environment.
 
-An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
+For example, a network-facing vulnerability has no impact on a system that is never connected to a network.
 
-- **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It offers broad coverage across many ecosystems.
-- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages.
-- **OSV-Scanner** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. Its PURL matching tends to be more precise than CPE-based lookup.
+The objective of the vulnerability classification is to not patch every CVE blindly. Only keep the ones which are relevant given your threat model.
 
-By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
+Threat modeling is a process by which potential threats, such as structural vulnerabilities or the absence of appropriate safeguards, can be identified and enumerated, and countermeasures prioritized.
 
-### Assessment Status in Vulnscout
+Threat model example: All the vulnerabilities which can be exploitable via the serial port and which lead to privilege escalation or arbitrary code execution.
+
+In this example, a vulnerability which only leads to a data leak of the product, exploitable from the serial port, would not be considered exploitable and would be classified as **Not affected** even if the vulnerability exists and is present on the device.
+
+### Assessment Status in VulnScout
 
 VulnScout groups all assessment statuses into four simplified categories:
 
-- **Pending Assessment**: the vulnerability has not been assessed yet. 
+- **Pending Assessment**: the vulnerability has not been assessed yet.
 - **Exploitable**: the vulnerability is confirmed to affect your product in its current configuration and represents danger for it as defined in the threat model.
 - **Not affected**: the vulnerability does not apply — even if the vulnerable package is present on the device, the CVE may not match your threat model (for example, the vulnerable code path is not reachable, or the attack vector does not exist in your environment). A justification is required when selecting this status.
 - **Fixed**: the vulnerability has been patched or resolved.
 
-### Threat Model
-
-A vulnerability present in Vulnscout does not necessarily mean they represent a real danger to your device. A CVE describes a potential weakness whether it is actually exploitable depends on how the affected component is built, configured, and used in your specific environment.
-
-For example, consider a CVE that can only be triggered when a particular compile-time flag is enabled. If your build does not use that flag, the vulnerable code path is never included, and the CVE cannot be exploited on your device. Similarly, a network-facing vulnerability has no impact on a system that is never connected to a network.
-
-This is why triage matters: the goal is not to patch every CVE blindly, but to determine which ones are relevant given your threat model and mark the rest as **Not affected** with a clear justification.
 
 ### Goal of the Interactive Mode
 
@@ -47,13 +42,48 @@ The interactive mode is where you investigate each CVE and record your triage de
 1. Review the vulnerability details: read the description, check the CVSS score and EPSS probability, inspect which packages are affected, and follow the reference links for advisories and patches.
 2. Assess: set a status, provide a justification when required, add notes explaining your reasoning, and optionally document a workaround or estimate remediation effort.
 
-Assessments you create through the web dashboard are stored with a `custom` origin, which distinguishes them from the  assessments that were imported automatically. On subsequent SBOM re-imports, upstream assessments may be updated by newer VEX data, but your own assessments are always preserved as separate records.
+---
+
+## SBOM Table
+
+The SBOM table lists every package present in the imported SBOMs within your current scope. It provides a package-centric view of your software bill of materials, complementing the vulnerability-centric Vulnerability Table.
+
+### Search
+
+The search bar accepts free-text queries that match against package name, version, CPE, and PURL identifiers. Typing at least two characters triggers a fuzzy search powered by Fuse.js. The search supports the same expression language as the vulnerability table:
+
+- **`term`** — rows containing the term are shown.
+- **`term1 term2`** — AND semantics: both terms must match.
+- **`term1 | term2`** — OR semantics: either term matches.
+- **`-term`** — NOT: rows containing the term are excluded.
+
+A small **info icon** next to the search bar opens a quick-reference panel for this syntax. A **keyboard shortcut icon** on the right side of the toolbar shows available keyboard shortcuts (press `/` to focus the search bar, `↑`/`↓` to navigate rows, `Home`/`End` to jump to the first or last row).
+
+### Column Visibility
+
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Version, Vulnerabilities, Variants, and Sources. Additional columns available are:
+
+- **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
+- **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
+- **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
+
+### Filters
+
+- **Source**: restrict the table to packages originating from a specific SBOM source (e.g. a particular SPDX or CycloneDX document).
+
+### Severity Toggle
+
+The **Severity** toggle switch in the toolbar adds a colour-coded severity tag next to each package's vulnerability count, showing the highest severity among the package's associated vulnerabilities. This gives an at-a-glance view of which packages carry the most critical exposure.
+
+### Actions
+
+Each row has a **Show Vulnerabilities** button that navigates to the Vulnerability Table pre-filtered to show only the vulnerabilities associated with that specific package.
 
 ---
 
 ## Vulnerability Table
 
-Every vulnerability detected across imported SBOMs in your scope is listed here, and the toolbar across the top provides a rich set of controls to narrow down what you see and act on what matters.
+Every vulnerability detected across imported SBOMs in your scope is listed here, and the toolbar across the top provides a rich set of controls to narrow down what you see and act on what matters. The vulnerability pool is scoped to the **current scan result** — only vulnerabilities whose findings belong to packages present in the active SBOM are shown, ensuring that stale or cross-variant findings do not appear.
 
 ### Search
 
@@ -91,7 +121,7 @@ Each row has a checkbox on the left. Selecting one or more rows reveals the **mu
 
 ### Sorting
 
-Every sortable column header is clickable. Severity sorts by the standard ordering (Critical -> None) or by numeric score when the score-based filter is active. Status sorts by triage progression. Published Date and Last Updated sort chronologically. EPSS and Estimated Effort sort numerically. Clicking the same header again reverses the direction.
+Every sortable column header is clickable. Severity sorts by the standard ordering (Critical → None) or by numeric score when the score-based filter is active. Status sorts by triage progression. Published Date and Last Updated sort chronologically. EPSS and Estimated Effort sort numerically. Clicking the same header again reverses the direction.
 
 ### Opening a Vulnerability
 
@@ -101,7 +131,7 @@ Clicking a vulnerability's **ID cell** opens the detail modal in read-only mode.
 
 ## Vulnerability Details
 
-The Vulnerability Details is where individual vulnerability triage happens. It presents all the information VulnScout has gathered about a single CVE, and lets you modify assessments, CVSS vectors, and time estimates.
+The Vulnerability Details modal is where individual vulnerability triage happens. It presents all the information VulnScout has gathered about a single CVE, and lets you modify assessments, CVSS vectors, and time estimates.
 
 ### Header and Metadata
 
@@ -117,7 +147,7 @@ The modal header shows the CVE identifier and a set of action buttons. Below it,
 
 ### CVSS Vectors
 
-Each CVSS vector associated with the vulnerability is rendered as a gauge card showing the version, base score, and a visual breakdown of the vector's metrics. When editing is enabled, a **plus** button appears next to the CVSS heading, allowing you to add a custom CVSS vector string. This is useful when the upstream score doesn't reflect your environment — for instance, if a network-based vulnerability only affects an air-gapped system.
+Each CVSS vector associated with the vulnerability is rendered as a gauge card showing the version, base score, and a visual breakdown of the vector's metrics. When editing is enabled, a **plus** button appears next to the CVSS heading, allowing you to add a custom CVSS vector string (versions 2.0, 3.0, 3.1, and 4.0 are supported). This is useful when the upstream score doesn't reflect your environment — for instance, if a network-based vulnerability only affects an air-gapped system.
 
 ### Descriptions and Links
 
@@ -141,30 +171,32 @@ The modal footer contains **previous** and **next** buttons that move through th
 
 ---
 
-## Keyboard Shortcut Helper
-
-Both the vulnerability table and the modal header feature a **question-mark** icon that opens a floating panel listing the keyboard shortcuts available in the current context.
-
-### Table Shortcuts
-
-- **`/`** — focus the search bar.
-- **`↑` / `↓`** — move the row focus up or down.
-- **`Home` / `End`** — jump to the first or last row.
-- **`v`** — open the focused vulnerability in view mode.
-- **`e`** — open the focused vulnerability in edit mode.
-
-### Modal Shortcuts
-
-- **`←` / `→`** — navigate to the previous or next vulnerability.
-- **`Esc`** — close the modal (with confirmation if there are unsaved changes).
-
-The panel dismisses automatically when you click outside it.
-
----
-
 ## Scan History
 
-The scan history page provides a chronological record of every SBOM import that VulnScout has processed. Each time you load a new SBOM, VulnScout creates a scan entry that captures exactly what changed compared to the previous import. This makes it straightforward to track how your vulnerability landscape evolves over time, across builds, and across variants.
+The Scan History page provides a chronological record of every SBOM import and vulnerability scan that VulnScout has processed. Each time you load a new SBOM or run a scanner, VulnScout creates a scan entry that captures exactly what changed compared to the previous state. This makes it straightforward to track how your vulnerability landscape evolves over time, across builds, and across variants.
+
+### Scanners
+
+An SBOM lists the packages that make up your system, but a single vulnerability source rarely provides complete coverage. Different databases track different ecosystems, use different matching strategies, and update at different speeds. VulnScout cross-references your SBOM against several scanners to offer a wider set of information:
+
+- **NVD** correlates packages with NIST's National Vulnerability Database using CPE identifiers. It queries every CPE attached to each package, ensuring broad coverage across many ecosystems.
+- **Grype** leverages Anchore's vulnerability database, which combines multiple upstream feeds and applies its own matching heuristics. It is particularly effective at catching vulnerabilities in container and OS-level packages. Grype scans run serially (one at a time) because the underlying export process is global.
+- **OSV** queries the open-source OSV database, which aggregates advisories from language-specific ecosystems (PyPI, npm, Go, Rust, etc.) and Linux distributions. It queries every PURL attached to each package, providing precise ecosystem-level matching.
+
+By combining these sources, VulnScout reduces the chance of missing a relevant CVE while giving you the **Sources** column and filter to trace exactly where each finding originated. If a vulnerability is reported by multiple scanners, you can have higher confidence that it genuinely applies; if only one scanner flags it, that context helps you prioritise your triage effort.
+
+### Running Scans
+
+The **Run Scans** button in the top-right corner of the Scan History page opens a dropdown menu with two sections:
+
+- **Scan types** — checkboxes for Grype, NVD CPE, and OSV. Select which scanners you want to run.
+- **Variants** — checkboxes for the available variants. When a specific variant is selected in the project scope, only that variant appears here. When viewing a project, all variants within the project are listed. "Select all" and "Select none" shortcuts help when managing many variants.
+
+The bottom of the menu shows a summary button ("Run N scans on M variants") that launches the selected scans. Each scan runs independently and displays a per-variant progress panel below the toolbar, showing real-time logs, a progress bar, and the current step. Grype scans are queued and run one at a time; NVD and OSV scans can run in parallel.
+
+### Source Visibility Toggles
+
+Three coloured toggle buttons in the toolbar (Grype, NVD, OSV) let you show or hide scan entries by source. This is useful when you only want to see SBOM imports or a specific scanner's results without the others cluttering the timeline.
 
 ### Timeline Layout
 
@@ -174,7 +206,7 @@ Scans are displayed in a vertical timeline, most recent first. Each entry shows 
 - **Red** badges indicate removals: packages, findings, or vulnerabilities that were present before but are no longer in the SBOM.
 - **Yellow** badges indicate upgrades: packages whose version changed between scans, along with findings that shifted to a different package version.
 
-For the very first scan of a variant, the badges simply show total counts (packages, findings, vulnerabilities) since there is no prior scan to compare against.
+For the very first scan of a variant, the badges simply show total counts (packages, findings, vulnerabilities) since there is no prior scan to compare against. A **Hide empty scans** toggle filters out entries where nothing changed.
 
 ### Scan Descriptions
 
@@ -182,23 +214,24 @@ Each scan entry has an editable description field. Hovering over the entry revea
 
 ### Diff Details Modal
 
-Clicking the **Details** button on any scan entry opens a full diff modal. The modal is organised into three tabbed sections:
+Clicking the **Details** button on any scan entry opens a full diff modal. The modal is organised into tabbed sections:
 
 - **Packages** — lists every package that was added, removed, or upgraded between this scan and the previous one. Each table shows the package name and version, and upgraded packages display both the old and new version side by side.
 - **Findings** — shows the individual vulnerability-to-package associations that changed. Added findings are new detections; removed findings are associations that no longer apply (because the package was removed or the vulnerability was resolved upstream). Upgraded findings track cases where the same vulnerability now maps to a different package version.
 - **Vulnerabilities** — a higher-level view listing just the CVE identifiers that appeared or disappeared. This is the quickest way to see which new CVEs were introduced by a build change.
+- **Newly Detected** — lists findings and vulnerabilities that are net additions to the global scan result (i.e. not present in any previous scan). This section is especially relevant for tool scans where the distinction between "new to this tool" and "new overall" matters.
 
 Each tab header carries its own badge counts, and every table inside supports a text filter so you can search for a specific package or CVE without scrolling through long lists.
 
-### Documentation Link
+### Scan Result Modal
 
-A **book** icon sits next to the "Scan History" heading. It links to the [Scan History](https://vulnscout.readthedocs.io/en/latest/interactive-mode.html#scan-history) section of the VulnScout documentation on ReadTheDocs. The documentation site is not yet online — the link will become active once the docs are published.
+Clicking the **Scan Result** button on a scan entry opens a modal showing the complete state of the global result at that point in time — the union of SBOM packages and all tool-scan findings. The modal displays packages, findings, and vulnerabilities tabs, each with their total counts. This is useful for understanding the full picture at a given snapshot rather than just the delta.
 
 ---
 
 ## Review
 
-The review page gives you a consolidated view of every assessment that was created directly within VulnScout (as opposed to assessments imported from upstream SBOM documents). It is designed for auditing and exporting the triage decisions your team has made.
+The Review page gives you a consolidated view of every assessment that was created directly within VulnScout (as opposed to assessments imported from upstream SBOM documents). It is designed for auditing and exporting the triage decisions your team has made.
 
 ### Assessment Table
 

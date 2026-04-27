@@ -7,9 +7,9 @@ VulnScout Documentation
 
    introduction
    getting-started
-   interactive-mode
    vulnscout-script
    container-entrypoint
+   interactive-mode
    templates
    ci_conditions
    api
