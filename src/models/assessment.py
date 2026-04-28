@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy import orm
 from sqlalchemy.orm import Mapped, relationship, joinedload
 from ..extensions import db, Base
+from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
 from .package import Package
@@ -345,9 +346,7 @@ class Assessment(Base):
     # ==================================================================
 
     def to_dict(self) -> dict:
-        ts = self.timestamp
-        if ts is not None:
-            ts = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+        ts = ensure_utc_iso(self.timestamp)
         return {
             "id": str(self.id),
             "source": self.source or "",
@@ -409,9 +408,7 @@ class Assessment(Base):
         if self.justification in VALID_JUSTIFICATION_CDX_VEX and not self.impact_statement:
             openvex_impact = self.justification
 
-        ts = self.timestamp
-        if ts is not None and hasattr(ts, "isoformat"):
-            ts = ts.isoformat()
+        ts = ensure_utc_iso(self.timestamp)
 
         return {
             "vulnerability": {"name": self.vuln_id},
@@ -451,9 +448,7 @@ class Assessment(Base):
         elif self.impact_statement:
             detail = self.impact_statement
 
-        ts = self.timestamp
-        if ts is not None and hasattr(ts, "isoformat"):
-            ts = ts.isoformat()
+        ts = ensure_utc_iso(self.timestamp)
 
         return {
             "workaround": self.workaround or "",

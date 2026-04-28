@@ -109,6 +109,6 @@ def test_parse_components_json(spdx_parser):
     binutils = spdx_parser.packagesCtrl.get("binutils@2.38")
     assert "cpe:2.3:a:*:binutils:2.38:*:*:*:*:*:*:*" in binutils
     board = spdx_parser.packagesCtrl.get("xyz@rev2.3")
-    assert "cpe:2.3:h:*:xyz:rev2.3:*:*:*:*:*:*:*" in board
+    assert "cpe:2.3:a:*:xyz:rev2.3:*:*:*:*:*:*:*" in board
     linux = spdx_parser.packagesCtrl.get("linux@6.8.0-40-generic")
-    assert "cpe:2.3:o:*:linux:6.8.0-40-generic:*:*:*:*:*:*:*" in linux
+    assert "cpe:2.3:a:*:linux:6.8.0-40-generic:*:*:*:*:*:*:*" in linux

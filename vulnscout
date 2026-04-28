@@ -64,6 +64,8 @@ Input commands (can be chained, triggers scan automatically):
   --add-cdx <path>                Add a CycloneDX file
   --add-grype <path>              Add a Grype results file
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
+  --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
+  --perform-osv-scan              Run an OSV PURL-based vulnerability scan
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
@@ -307,6 +309,10 @@ parse_and_run() {
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
+            perform-nvd-scan|--perform-nvd-scan)
+                ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
+            perform-osv-scan|--perform-osv-scan)
+                ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)

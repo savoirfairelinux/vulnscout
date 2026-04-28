@@ -21,13 +21,65 @@ class GrypeVulns:
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
 
+    @staticmethod
+    def _normalize_artifact_name(name: str, purl: Optional[str] = None) -> str:
+        """Extract the canonical package name, avoiding namespace duplication.
+
+        When Grype reads a CycloneDX SBOM that has a ``group`` field, it
+        concatenates ``group/name`` in the artifact name.  If that combined
+        name is later re-exported as CycloneDX (with a ``group`` derived from
+        the CPE vendor), a second Grype scan ends up with
+        ``group/group/name``, growing indefinitely.
+
+        To break this cycle we prefer the package name from the PURL (which
+        never carries the group prefix) and fall-back to stripping repeated
+        namespace prefixes from *name*.
+        """
+        # 1. Try to extract the name from the PURL — it's always canonical.
+        if purl and "/" in purl:
+            try:
+                # PURLs look like  pkg:<type>/<namespace>/<name>@<version>
+                #              or  pkg:<type>/<name>@<version>
+                path_part = purl.split("://", 1)[-1] if "://" in purl else purl
+                # Remove 'pkg:' prefix
+                if path_part.startswith("pkg:"):
+                    path_part = path_part[4:]
+                # Remove type/  (e.g. "apk/", "generic/")
+                if "/" in path_part:
+                    path_part = path_part.split("/", 1)[1]
+                # Strip version (@...)
+                if "@" in path_part:
+                    path_part = path_part.rsplit("@", 1)[0]
+                # path_part may now be "namespace/name" or just "name"
+                # Take the last component as the package name
+                purl_name = path_part.rsplit("/", 1)[-1] if "/" in path_part else path_part
+                if purl_name:
+                    return purl_name
+            except Exception:
+                pass
+
+        # 2. Fallback: strip repeated leading namespace segments.
+        #    e.g. "openssl/openssl/openssl-foo" → "openssl-foo"
+        #         "openssl/openssl-foo" → "openssl-foo"
+        if "/" in name:
+            parts = name.split("/")
+            # Remove leading segments that are a prefix of the last segment
+            base = parts[-1]
+            return base
+
+        return name
+
     def parse_artifact_section(self, artifact: dict) -> Optional[str]:
         """Parse the `artifact` part of grype JSON output."""
         if "name" in artifact and "version" in artifact:
-            package = Package(artifact["name"], artifact["version"], [], [])
+            raw_name = artifact["name"]
+            purl_str = artifact.get("purl")
+            name = self._normalize_artifact_name(raw_name, purl_str)
 
-            if "purl" in artifact:
-                package.add_purl(artifact["purl"])
+            package = Package(name, artifact["version"], [], [])
+
+            if purl_str:
+                package.add_purl(purl_str)
             if "cpes" in artifact:
                 for cpe in artifact["cpes"]:
                     package.add_cpe(cpe)

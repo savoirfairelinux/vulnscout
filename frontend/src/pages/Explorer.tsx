@@ -18,8 +18,9 @@ import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
 import Review from './Review';
+import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
-import Assessments, { removeDuplicateAssessments } from '../handlers/assessments';
+import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
@@ -151,6 +152,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         );
     }, [loadData]);
 
+    const handleScanComplete = useCallback(() => {
+        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+    }, [loadData, currentVariantId, currentProjectId]);
 
 
     function appendAssessment(added: Assessment) {
@@ -196,6 +200,35 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             loadPatchData(updatedVulns);
         }
     }
+
+    // Update vulns state in-place after a Review tab edit or delete
+    const handleAssessmentChanged = useCallback((mutation: AssessmentMutation) => {
+        setVulns(prev => prev.map(vuln => {
+            if (vuln.id !== mutation.vulnId) return vuln;
+            let newAssessments: Assessment[];
+            if (mutation.type === 'delete') {
+                newAssessments = vuln.assessments.filter(a => !mutation.ids.includes(a.id));
+            } else {
+                const simplified = STATUS_VEX_TO_GRAPH[mutation.data.status] ?? mutation.data.status;
+                newAssessments = vuln.assessments.map(a =>
+                    mutation.ids.includes(a.id)
+                        ? { ...a, status: mutation.data.status, simplified_status: simplified,
+                               justification: mutation.data.justification,
+                               impact_statement: mutation.data.impact_statement,
+                               status_notes: mutation.data.status_notes,
+                               workaround: mutation.data.workaround }
+                        : a
+                );
+            }
+            if (newAssessments.length === 0) {
+                return { ...vuln, assessments: [], status: 'unknown', simplified_status: 'unknown' };
+            }
+            const latest = [...newAssessments].sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            )[0];
+            return { ...vuln, assessments: newAssessments, status: latest.status, simplified_status: latest.simplified_status };
+        }));
+    }, []);
 
     function goToVulnsTabWithFilter(filterType: "Source" | "Severity" | "Status" | "Package", value: string) {
         setFilterLabel(filterType);
@@ -274,8 +307,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     compareOperation={currentOperation}
                 />}
                 {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
-                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
-                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} />}
+                {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
+                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports />}
                 {tab === 'settings' && <Settings onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);

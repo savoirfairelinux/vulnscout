@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
         import TableGeneric from "../components/TableGeneric";
         import SeverityTag from "../components/SeverityTag";
         import VulnModal from "../components/VulnModal";
+        import { formatSourceName } from "../helpers/sourceNames";
         import type { Assessment } from "../handlers/assessments";
 
         ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
@@ -109,18 +110,7 @@ import { useMemo, useState } from "react";
             return date;
         }
 
-        function formatSourceName(source: string): string {
-            const map: Record<string, string> = {
-                openvex: 'OpenVex',
-                local_user_data: 'Local User Data',
-                yocto: 'Yocto',
-                spdx3: 'SPDX3',
-                grype: 'Grype',
-                cyclonedx: 'CycloneDx'
-            };
 
-            return map[source] || source;
-        }
 
 
 
@@ -466,19 +456,40 @@ const packageColumns = [
     };
 
               const dataSetVulnBySource = useMemo(() => {
-                const uniqueSources = Array.from(
-                    new Set(vulnerabilities.flatMap(vuln => vuln.found_by))
-                ).sort((a, b) =>
-                    vulnerabilities.filter(vuln => vuln.found_by.includes(b)).length -
-                    vulnerabilities.filter(vuln => vuln.found_by.includes(a)).length
+                // Each vulnerability is attributed to exactly ONE primary source
+                // so that the sum of all bars equals the total vulnerability count.
+                const SOURCE_PRIORITY: Record<string, number> = {
+                    grype: 1,
+                    yocto: 2,
+                    nvd_cpe: 3,
+                    osv: 4,
+                    cyclonedx: 5,
+                    spdx3: 6,
+                    openvex: 7,
+                    local_user_data: 8,
+                };
+
+                const countBySource: Record<string, number> = {};
+                vulnerabilities.forEach(vuln => {
+                    if (!vuln.found_by.length) return;
+                    // Pick the highest-priority (lowest number) source
+                    const primary = vuln.found_by.reduce((best, src) => {
+                        const bestPri = SOURCE_PRIORITY[best] ?? 99;
+                        const srcPri = SOURCE_PRIORITY[src] ?? 99;
+                        return srcPri < bestPri ? src : best;
+                    });
+                    countBySource[primary] = (countBySource[primary] || 0) + 1;
+                });
+
+                const sources = Object.keys(countBySource).sort(
+                    (a, b) => countBySource[b] - countBySource[a]
                 );
+
                 return {
-                    labels: uniqueSources.map(formatSourceName),
+                    labels: sources.map(formatSourceName),
                     datasets: [{
                         label: '# of Vulnerabilities',
-                        data: uniqueSources.map(source =>
-                            vulnerabilities.filter(vuln => vuln.found_by.includes(source)).length
-                        ),
+                        data: sources.map(source => countBySource[source]),
                         backgroundColor: 'rgba(0, 150, 150, 0.7)',
                         hoverOffset: 4
                     }]

@@ -238,8 +238,18 @@ class VulnerabilitiesController:
             db_record_cache=self._db_record_cache,
         )
 
-        def _persist_if_needed(stored: Vulnerability, new_packages: set[str]) -> None:
-            """Only persist if this vuln has new packages or hasn't been persisted yet."""
+        def _persist_if_needed(stored: Vulnerability, new_packages: set[str],
+                               merged: bool = False) -> None:
+            """Persist if this vuln has new packages, hasn't been persisted yet,
+            or was just merged with new metadata (texts/CVSS/links).
+
+            The ``persist_from_transient`` method already performs its own
+            change detection (comparing in-memory values against the cached DB
+            record), so calling it when there are no actual changes is cheap —
+            just a dict lookup + a few comparisons — and avoids silently
+            dropping metadata updates when only texts/CVSS/links changed
+            without new packages.
+            """
             canonical_id = stored.id
             known_pkgs = stored._persisted_packages
             if known_pkgs is None:
@@ -247,8 +257,8 @@ class VulnerabilitiesController:
                 _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
                 stored._persisted_packages = set(stored.packages)
                 self._persisted_ids.add(canonical_id)
-            elif new_packages - known_pkgs:
-                # New packages were added — need to create new Findings
+            elif (new_packages - known_pkgs) or merged:
+                # New packages or metadata may have changed — re-persist.
                 _persist_vuln_to_db(stored, use_savepoint=self.use_savepoints, **_caches)
                 stored._persisted_packages = set(stored.packages)
             # else: already persisted, nothing new — skip DB entirely
@@ -258,7 +268,7 @@ class VulnerabilitiesController:
             old_pkgs = set(stored.packages)
             stored.merge(vulnerability)
             new_pkgs = set(vulnerability.packages)
-            _persist_if_needed(stored, new_pkgs - old_pkgs)
+            _persist_if_needed(stored, new_pkgs - old_pkgs, merged=True)
             self._encountered_this_run.add(stored.id)
             return stored
 
@@ -268,7 +278,7 @@ class VulnerabilitiesController:
             old_pkgs = set(stored.packages)
             stored.merge(vulnerability)
             new_pkgs = set(vulnerability.packages)
-            _persist_if_needed(stored, new_pkgs - old_pkgs)
+            _persist_if_needed(stored, new_pkgs - old_pkgs, merged=True)
             self._encountered_this_run.add(stored.id)
             return stored
 
@@ -280,7 +290,7 @@ class VulnerabilitiesController:
                 old_pkgs = set(stored.packages)
                 stored.merge(vulnerability)
                 new_pkgs = set(vulnerability.packages)
-                _persist_if_needed(stored, new_pkgs - old_pkgs)
+                _persist_if_needed(stored, new_pkgs - old_pkgs, merged=True)
                 self._encountered_this_run.add(stored.id)
                 return stored
             if alias in self.alias_registered:
@@ -291,7 +301,7 @@ class VulnerabilitiesController:
                 old_pkgs = set(stored.packages)
                 stored.merge(vulnerability)
                 new_pkgs = set(vulnerability.packages)
-                _persist_if_needed(stored, new_pkgs - old_pkgs)
+                _persist_if_needed(stored, new_pkgs - old_pkgs, merged=True)
                 self._encountered_this_run.add(stored.id)
                 return stored
 

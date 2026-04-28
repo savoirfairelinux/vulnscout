@@ -193,7 +193,7 @@ def test_parse_assessments(spdx3_parser):
     assert "The vulnerable code is not present in this package" in not_affected.impact_statement
 
     affected = spdx3_parser.assessmentsCtrl.gets_by_vuln("CVE-2023-5678")[0]
-    assert affected.status == "affected"
+    assert affected.status == "under_investigation"
     assert len(affected.packages) == 1
     # exploitabilityConfirmed is not in the JUSTIFICATION_MAP, so it should not be set
     assert affected.justification == ""
@@ -288,6 +288,8 @@ def test_extract_vulnerabilities(spdx3_parser):
     assert vuln.namespace == "unknown"
     assert "https://www.cve.org/CVERecord?id=CVE-2023-1234" in vuln.urls
     assert "Inappropriate implementation in Intents in Google Chrome..." in vuln.texts.values()
+    # Description must be under "description" key to be persisted to the DB
+    assert vuln.texts.get("description") == "Inappropriate implementation in Intents in Google Chrome..."
 
 
 def test_package_vulnerability_relationships(spdx3_parser):
@@ -1366,3 +1368,152 @@ def test_parse_vex_relationship_no_cve_in_from(spdx3_parser):
     }
     result = spdx3_parser._parse_vex_relationship(element)
     assert result is None
+
+
+def test_spdx3_cvss_persisted_to_db(spdx3_parser):
+    """CVSS scores from security_CvssV*VulnAssessmentRelationship elements
+    must be persisted as Metrics rows in the DB, not just kept in-memory."""
+    from src.models.metrics import Metrics
+    from src.extensions import db
+
+    spdx3_parser.parse_from_dict({
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "created": "2025-04-08T13:09:06Z",
+                "createdBy": ["http://spdx.org/agents/test"],
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/test/package/foo",
+                "creationInfo": "_:CreationInfo1",
+                "name": "foo",
+                "software_packageVersion": "1.0",
+                "externalIdentifier": [{
+                    "type": "ExternalIdentifier",
+                    "externalIdentifierType": "cpe23Type",
+                    "identifier": "cpe:2.3:a:foo:foo:1.0:*:*:*:*:*:*:*"
+                }]
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-90001",
+                "creationInfo": "_:CreationInfo1",
+                "externalIdentifier": [{
+                    "type": "ExternalIdentifier",
+                    "externalIdentifierType": "cve",
+                    "identifier": "CVE-2025-90001",
+                    "identifierLocator": ["https://www.cve.org/CVERecord?id=CVE-2025-90001"]
+                }]
+            },
+            {
+                "type": "Relationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/relationship/1",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/test/package/foo",
+                "relationshipType": "hasAssociatedVulnerability",
+                "to": ["http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-90001"]
+            },
+            {
+                "type": "security_VexNotAffectedVulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/vex/1",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-90001",
+                "to": ["http://spdx.org/spdxdocs/test/package/foo"],
+                "relationshipType": "doesNotAffect"
+            },
+            {
+                "type": "security_CvssV3VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/cvss-v3/1",
+                "comment": "nvd@nist.gov",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-90001",
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/test/package/foo"],
+                "security_score": "9.8",
+                "security_severity": "critical",
+                "security_vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            },
+            {
+                "type": "security_CvssV2VulnAssessmentRelationship",
+                "spdxId": "http://spdx.org/spdxdocs/test/cvss-v2/1",
+                "creationInfo": "_:CreationInfo1",
+                "from": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-90001",
+                "relationshipType": "hasAssessmentFor",
+                "to": ["http://spdx.org/spdxdocs/test/package/foo"],
+                "security_score": "7.5",
+                "security_vectorString": "AV:N/AC:L/Au:N/C:P/I:P/A:P"
+            }
+        ]
+    })
+    db.session.commit()
+
+    # In-memory: severity_cvss should have both entries
+    vuln = spdx3_parser.vulnerabilitiesCtrl.get("CVE-2025-90001")
+    assert vuln is not None
+    assert len(vuln.severity_cvss) == 2
+
+    # DB: Metrics rows must exist
+    db.session.expire_all()
+    metrics = db.session.execute(
+        db.select(Metrics).where(Metrics.vulnerability_id == "CVE-2025-90001")
+    ).scalars().all()
+    assert len(metrics) == 2
+
+    versions = {m.version: m for m in metrics}
+    assert "3.1" in versions
+    assert float(versions["3.1"].score) == 9.8
+    assert versions["3.1"].vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+    assert "2.0" in versions
+    assert float(versions["2.0"].score) == 7.5
+    assert versions["2.0"].vector == "AV:N/AC:L/Au:N/C:P/I:P/A:P"
+
+
+def test_spdx3_description_persisted_to_db(spdx3_parser):
+    """SPDX3 vulnerability description must be stored under the 'description' key
+    and persisted to the DB description column."""
+    from src.models.vulnerability import Vulnerability as VulnModel
+    from src.extensions import db
+
+    spdx3_parser.parse_from_dict({
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "@graph": [
+            {
+                "type": "CreationInfo",
+                "@id": "_:CreationInfo1",
+                "created": "2025-04-08T13:09:06Z",
+                "createdBy": ["http://spdx.org/agents/test"],
+                "specVersion": "3.0.1"
+            },
+            {
+                "type": "security_Vulnerability",
+                "spdxId": "http://spdx.org/spdxdocs/test/vulnerability/CVE-2025-SPDX3DESC",
+                "creationInfo": "_:CreationInfo1",
+                "description": "Test description from SPDX3 vulnerability element.",
+                "externalIdentifier": [{
+                    "type": "ExternalIdentifier",
+                    "externalIdentifierType": "cve",
+                    "identifier": "CVE-2025-SPDX3DESC",
+                    "identifierLocator": ["https://www.cve.org/CVERecord?id=CVE-2025-SPDX3DESC"]
+                }]
+            }
+        ]
+    })
+    db.session.commit()
+
+    # Verify description is under the 'description' key in the in-memory DTO
+    vuln = spdx3_parser.vulnerabilitiesCtrl.get("CVE-2025-SPDX3DESC")
+    assert vuln is not None
+    assert vuln.texts.get("description") == "Test description from SPDX3 vulnerability element."
+
+    # Verify it persists to the DB
+    db.session.expire_all()
+    record = VulnModel.get_by_id("CVE-2025-SPDX3DESC")
+    assert record is not None
+    assert record.description == "Test description from SPDX3 vulnerability element."
+    # Verify to_dict returns it under "texts" → "description"
+    assert record.to_dict()["texts"]["description"] == "Test description from SPDX3 vulnerability element."

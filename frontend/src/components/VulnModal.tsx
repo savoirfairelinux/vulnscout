@@ -13,11 +13,13 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
+import { formatSourceName } from '../helpers/sourceNames';
+import { useDocUrl } from '../helpers/useDocUrl';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -53,6 +55,7 @@ type AssessmentGroup = {
 
   function VulnModal(props: Readonly<Props>) {
     const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
     const [clearTimeFields, setClearTimeFields] = useState(false);
@@ -699,7 +702,7 @@ type AssessmentGroup = {
                         </h3>
                         <div className="flex items-center space-x-2">
                             {/* Keyboard Shortcut Helper */}
-                            <div className="px-2 py-2 flex items-center relative">
+                            <div className="px-2 py-2 flex items-center gap-2 relative">
                                 <button
                                     ref={shortcutButtonRef}
                                     aria-label='shortcut helper'
@@ -710,6 +713,16 @@ type AssessmentGroup = {
                                 >
                                     <FontAwesomeIcon icon={faCircleQuestion} size='lg' />
                                 </button>
+                                <a
+                                    href={docUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label="documentation"
+                                    title="Open documentation"
+                                    className="hover:text-blue-400 transition-colors"
+                                >
+                                    <FontAwesomeIcon icon={faBook} size='lg' />
+                                </a>
                                 {showShortcutHelper && (
                                     <div
                                         ref={dropdownRef}
@@ -788,14 +801,7 @@ type AssessmentGroup = {
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
                                     {vuln.found_by
-                                        .map(source => {
-                                            if (source === 'openvex') return 'OpenVex';
-                                            if (source === 'yocto') return 'Yocto';
-                                            if (source === 'grype') return 'Grype';
-                                            if (source === 'cyclonedx') return 'CycloneDx';
-                                            if (source === 'local_user_data') return 'Local User Data';
-                                            return source;
-                                        })
+                                        .map(formatSourceName)
                                         .join(', ')
                                     }
                                 </li>
@@ -878,7 +884,7 @@ type AssessmentGroup = {
                         <div className="mb-6 mt-6">
                             <h3 className="font-bold mb-2">Links</h3>
                             <ul>
-                                {[...new Set([vuln.datasource, ...vuln.urls])].map(url => (
+                                {vuln.urls.map(url => (
                                     <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
                                 ))}
                             </ul>
@@ -915,6 +921,7 @@ type AssessmentGroup = {
                                             defaultStatus={defaultStatus}
                                             variants={availableVariants}
                                             availablePackages={vuln.packages}
+                                            defaultSelectedPackages={vuln.packages_current}
                                         />
                                     </li>
                                 )}
@@ -938,16 +945,18 @@ type AssessmentGroup = {
                                                 ))}
                                             </div>
                                             {(() => {
-                                                // Build the same content fingerprint used by groupAssessments,
-                                                // then find ALL matching records (across all variants) in the
+                                                // Build the same group key (date + content fingerprint) used by
+                                                // groupAssessments, then find ALL matching records in the
                                                 // unfiltered allVulnAssessments so we can show every variant tag
                                                 // even when the explorer is filtered to a single variant.
+                                                const groupDateKey = new Date(group.timestamp).toDateString();
                                                 const fp = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
                                                 const allVariantIds = [...new Set(
                                                     allVulnAssessments
                                                         .filter(a => {
+                                                            const aDateKey = new Date(a.timestamp).toDateString();
                                                             const afp = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
-                                                            return afp === fp && !!a.variant_id;
+                                                            return aDateKey === groupDateKey && afp === fp && !!a.variant_id;
                                                         })
                                                         .map(a => a.variant_id as string)
                                                 )];

@@ -12,12 +12,14 @@ import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
+import { useDocUrl } from "../helpers/useDocUrl";
 
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -271,6 +273,7 @@ const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
 
+    const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
@@ -443,54 +446,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, []), [vulnerabilities])
 
     const sources_display_list = useMemo(
-        () =>
-            sources_list.map(source =>
-                source === 'openvex'
-                    ? 'OpenVex'
-                    : source === 'local_user_data'
-                    ? 'Local User Data'
-                    : source === 'yocto'
-                    ? 'Yocto'
-                    : source === 'grype'
-                    ? 'Grype'
-                    : source === 'cyclonedx'
-                    ? 'CycloneDx'
-                    : source === 'spdx3'
-                    ? 'SPDX3'
-                    : source
-            ),
+        () => sources_list.map(formatSourceName),
         [sources_list]
     );
-
-    const formatSourceName = (source: string) =>
-        source === 'openvex'
-            ? 'OpenVex'
-            : source === 'local_user_data'
-            ? 'Local User Data'
-            : source === 'yocto'
-            ? 'Yocto'
-            : source === 'grype'
-            ? 'Grype'
-            : source === 'cyclonedx'
-            ? 'CycloneDx'
-            : source === 'spdx3'
-            ? 'SPDX3'
-            : source;
-
-    const getOriginalSourceName = (displayName: string) =>
-        displayName === 'OpenVex'
-            ? 'openvex'
-            : displayName === 'Yocto'
-            ? 'yocto'
-            : displayName === 'Local User Data'
-            ? 'local_user_data'
-            : displayName === 'Grype'
-            ? 'grype'
-            : displayName === 'CycloneDx'
-            ? 'cyclonedx'
-            : displayName === 'SPDX3'
-            ? 'spdx3'
-            : displayName;
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -804,21 +762,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
                     {info.renderValue()
-                        ?.map((source: string) =>
-                            source === 'openvex'
-                                ? 'OpenVex'
-                                : source === 'local_user_data'
-                                ? 'Local User Data'
-                                : source === 'yocto'
-                                ? 'Yocto'
-                                : source === 'grype'
-                                ? 'Grype'
-                                : source === 'cyclonedx'
-                                ? 'CycloneDx'
-                                : source === 'spdx3'
-                                ? 'SPDX3'
-                                : source
-                        )
+                        ?.map(formatSourceName)
                         .join(', ')}
                 </div>
             ),
@@ -1330,6 +1274,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="text-white hover:text-blue-300 transition-colors"
+                >
+                    <FontAwesomeIcon icon={faBook} />
+                </a>
                 {showShortcutHelper && (
                     <div
                         ref={shortcutDropdownRef}

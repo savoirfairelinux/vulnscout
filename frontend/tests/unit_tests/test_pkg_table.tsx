@@ -1,4 +1,4 @@
-import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import { describe, test, expect } from '@jest/globals';
@@ -94,14 +94,14 @@ describe('Packages Table', () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
 
-        // ACT
-        const name_col = await screen.getByRole('cell', {name: /aaabbbccc/});
-        const version_col = await screen.getByRole('cell', {name: /1.0.0/});
+        // ACT - use getAllByRole and pick the name column (first match)
+        const name_cols = await screen.getAllByRole('cell', {name: /aaabbbccc/});
+        const version_col = await screen.getByRole('cell', {name: /^1\.0\.0$/});
         const vuln_count_col = await screen.getByRole('cell', {name: /^8$/});
         const source_col = await screen.getByRole('cell', {name: /^hardcoded$/});
 
         // ASSERT
-        expect(name_col).toBeTruthy();
+        expect(name_cols.length).toBeGreaterThan(0);
         expect(version_col).toBeTruthy();
         expect(vuln_count_col).toBeTruthy();
         expect(source_col).toBeTruthy();
@@ -154,16 +154,20 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
         const version_header = await screen.getByRole('columnheader', {name: /version/i});
 
+        // Use package names as anchors since version strings may appear in
+        // row IDs/keys before the visible table cells.
         await user.click(version_header); // un-ordoned -> alphabetical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('1.0.0')).toBeLessThan(html.indexOf('2.0.0'));
+            expect(html.indexOf('aaabbbccc')).toBeLessThan(html.indexOf('dddeeefff'));
+            expect(html.indexOf('dddeeefff')).toBeLessThan(html.indexOf('xxxyyyzzz'));
         });
 
         await user.click(version_header); // alphabetical order -> reverse alphabetical order
         await waitFor(() => {
             const html = document.body.innerHTML;
-            expect(html.indexOf('2.0.0')).toBeLessThan(html.indexOf('1.0.0'));
+            expect(html.indexOf('xxxyyyzzz')).toBeLessThan(html.indexOf('dddeeefff'));
+            expect(html.indexOf('dddeeefff')).toBeLessThan(html.indexOf('aaabbbccc'));
         });
     })
 
@@ -196,10 +200,11 @@ describe('Packages Table', () => {
 
         await user.type(search_bar, 'yyy');
 
-        await waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
-
-        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
-        expect(pkg_xyz).toBeTruthy();
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).not.toContain('aaabbbccc');
+            expect(html).toContain('xxxyyyzzz');
+        }, { timeout: 2000 });
     })
 
     test('searching with negation text', async () => {
@@ -209,17 +214,14 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /aaabbbccc/});
-
         await user.type(search_bar, '-aaabbbccc');
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
-
-        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
-        const pkg_def = await screen.getByRole('cell', {name: /dddeeefff/});
-        
-        expect(pkg_xyz).toBeTruthy();
-        expect(pkg_def).toBeTruthy();
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).not.toContain('aaabbbccc');
+            expect(html).toContain('xxxyyyzzz');
+            expect(html).toContain('dddeeefff');
+        }, { timeout: 2000 });
     })
 
     test('searching with a combination of queries', async () => {
@@ -231,14 +233,12 @@ describe('Packages Table', () => {
 
         await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
 
-        // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
         await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /aaabbbccc/})).toBeNull();
-            expect(screen.queryByRole('cell', {name: /dddeeefff/})).toBeNull();
+            const html = document.body.innerHTML;
+            expect(html).not.toContain('aaabbbccc');
+            expect(html).not.toContain('dddeeefff');
+            expect(html).toContain('xxxyyyzzz');
         }, { timeout: 2000 });
-
-        const pkg_xyz = await screen.getByRole('cell', {name: /xxxyyyzzz/});
-        expect(pkg_xyz).toBeTruthy();
     })
 
     test('filter by source', async () => {
@@ -253,21 +253,24 @@ describe('Packages Table', () => {
 
         // ACT: select "cve-finder"
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
-        const deletion = waitForElementToBeRemoved(() => screen.queryByRole('cell', { name: /aaabbbccc/ }), { timeout: 2000 });
         await user.click(cveFinderCheckbox);
-        await deletion;
 
-        const pkg_xyz = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
-        expect(pkg_xyz).toBeTruthy();
+        // Wait until aaabbbccc is no longer visible (it's only in 'hardcoded' source)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).not.toContain('aaabbbccc');
+        }, { timeout: 2000 });
+
+        const pkg_xyz = screen.getAllByRole('cell', { name: /xxxyyyzzz/ });
+        expect(pkg_xyz.length).toBeGreaterThan(0);
 
         // REVERT CHANGE: uncheck "cve-finder"
         await user.click(cveFinderCheckbox);
 
-        const pkg_abc = await screen.getByRole('cell', { name: /aaabbbccc/ });
-        const pkg_xyz2 = await screen.getByRole('cell', { name: /xxxyyyzzz/ });
-
-        expect(pkg_abc).toBeTruthy();
-        expect(pkg_xyz2).toBeTruthy();
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+            expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
+        });
     })
 
     test('reset filters button clears all filters', async () => {
@@ -293,70 +296,26 @@ describe('Packages Table', () => {
         await user.click(resetBtn);
 
         // ASSERT: All packages should be visible again
-        await waitFor(async () => {
-            const pkg_abc = await screen.findByRole('cell', { name: /aaabbbccc/ });
-            expect(pkg_abc).toBeTruthy();
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
         });
     })
 
-    test('CPE button shows popup with CPE IDs', async () => {
+    test('CPE values are displayed inline in the table', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
 
-        // ACT: Click CPE button
-        const cpeButtons = await screen.getAllByText('CPE');
-        await user.click(cpeButtons[0]);
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
 
-        // ASSERT: CPE ID should be visible in popup
+        // ASSERT: CPE values should be directly visible (no popup needed)
         const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
         expect(cpeId).toBeTruthy();
-    })
-
-    test('CPE popup close button works', async () => {
-        // ARRANGE
-        render(<TablePackages packages={packages} />);
-
-        const user = userEvent.setup();
-
-        // Open CPE popup
-        const cpeButtons = await screen.getAllByText('CPE');
-        await user.click(cpeButtons[0]);
-
-        // ACT: Click close button in popup
-        const closeBtn = await screen.getByText('✕');
-        await user.click(closeBtn);
-
-        // ASSERT: CPE ID should no longer be visible
-        await waitFor(() => {
-            const cpeId = screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
-            expect(cpeId).toBe(null);
-        });
-    })
-
-    test('CPE popup closes when clicking CPE button again', async () => {
-        // ARRANGE
-        render(<TablePackages packages={packages} />);
-
-        const user = userEvent.setup();
-
-        // Open CPE popup
-        const cpeButtons = await screen.getAllByText('CPE');
-        await user.click(cpeButtons[0]);
-
-        // Verify popup is open
-        const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
-        expect(cpeId).toBeTruthy();
-
-        // ACT: Click CPE button again
-        await user.click(cpeButtons[0]);
-
-        // ASSERT: CPE ID should no longer be visible
-        await waitFor(() => {
-            const cpeId = screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
-            expect(cpeId).toBe(null);
-        });
     })
 
     test('show vulnerabilities button calls onShowVulns', async () => {
@@ -374,7 +333,7 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
-    test('package without CPE does not show CPE button', async () => {
+    test('package without CPE shows dash placeholder', async () => {
         // ARRANGE
         const packagesNoCpe: Package[] = [
             {
@@ -392,12 +351,20 @@ describe('Packages Table', () => {
 
         render(<TablePackages packages={packagesNoCpe} />);
 
-        // ACT & ASSERT
-        const cpeButtons = screen.queryAllByText('CPE');
-        expect(cpeButtons).toHaveLength(0);
+        const user = userEvent.setup();
+
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
+
+        // ASSERT: No CPE text should be present, dash placeholder shown
+        expect(screen.queryByText(/cpe:2\.3/)).toBeNull();
+        expect(screen.getAllByText('—').length).toBeGreaterThan(0);
     })
 
-    test('multiple CPE IDs are displayed in popup', async () => {
+    test('multiple CPE IDs are displayed inline', async () => {
         // ARRANGE
         const packagesMultiCpe: Package[] = [
             {
@@ -420,11 +387,13 @@ describe('Packages Table', () => {
 
         const user = userEvent.setup();
 
-        // ACT: Click CPE button
-        const cpeButton = await screen.getByText('CPE');
-        await user.click(cpeButton);
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
 
-        // ASSERT: Both CPE IDs should be visible
+        // ASSERT: Both CPE IDs should be directly visible
         const cpeId1 = await screen.getByText(/cpe:2.3:a:vendor:multi-cpe:1.0.0/);
         const cpeId2 = await screen.getByText(/cpe:2.3:a:another:multi-cpe:1.0.0/);
         expect(cpeId1).toBeTruthy();
@@ -598,12 +567,21 @@ describe('Packages Table', () => {
 
         render(<TablePackages packages={packagesWithPending} />);
 
-        // Verify both pending values are rendered
-        const cells = screen.getAllByRole('cell');
-        const pendingValues = cells.filter(c => c.textContent === '5' || c.textContent === '1');
-        expect(pendingValues.length).toBeGreaterThanOrEqual(2);
-
         const user = userEvent.setup();
+
+        // Enable "Remaining Pending Vulnerabilities" column via the Columns filter
+        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
+        await user.click(columnsBtn);
+        const pendingCheckbox = await screen.getByRole('checkbox', { name: /remaining pending/i });
+        await user.click(pendingCheckbox);
+
+        // Verify both pending values are rendered
+        await waitFor(() => {
+            const cells = screen.getAllByRole('cell');
+            const pendingValues = cells.filter(c => c.textContent === '5' || c.textContent === '1');
+            expect(pendingValues.length).toBeGreaterThanOrEqual(2);
+        });
+
         const pendingHeader = await screen.getByRole('columnheader', {name: /remaining pending/i});
 
         // Click to sort
@@ -621,21 +599,19 @@ describe('Packages Table', () => {
         });
     });
 
-    test('CPE popup closes on Escape key', async () => {
+    test('CPE values have title attribute for hover tooltip', async () => {
         render(<TablePackages packages={packages} />);
 
         const user = userEvent.setup();
 
-        const cpeButtons = await screen.getAllByText('CPE');
-        await user.click(cpeButtons[0]);
+        // ACT: Enable CPE column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const cpeCheckbox = screen.getByRole('checkbox', { name: /^CPE$/i });
+        await user.click(cpeCheckbox);
 
-        const cpeId = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
-        expect(cpeId).toBeTruthy();
-
-        await user.keyboard('{Escape}');
-
-        await waitFor(() => {
-            expect(screen.queryByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/)).toBeNull();
-        });
+        const cpeSpan = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
+        expect(cpeSpan).toBeTruthy();
+        expect(cpeSpan.getAttribute('title')).toContain('cpe:2.3:a:vendor:aaabbbccc:1.0.0');
     });
 });

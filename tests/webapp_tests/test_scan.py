@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Tests for src/routes/scans.py — covering all routes and helpers."""
@@ -221,6 +219,99 @@ class TestListScansByVariant:
         assert response.status_code == 404
         data = json.loads(response.data)
         assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# Scan diff cache
+# ---------------------------------------------------------------------------
+
+class TestScanDiffCache:
+    def test_second_request_uses_cache(self, client, ids):
+        """Second GET /api/scans should be served from cache."""
+        # First request populates cache
+        r1 = client.get("/api/scans")
+        assert r1.status_code == 200
+        data1 = json.loads(r1.data)
+        # Second request should hit cache and return identical data
+        r2 = client.get("/api/scans")
+        assert r2.status_code == 200
+        data2 = json.loads(r2.data)
+        assert len(data1) == len(data2)
+        for d1, d2 in zip(data1, data2):
+            assert d1["id"] == d2["id"]
+            assert d1["finding_count"] == d2["finding_count"]
+            assert d1["is_first"] == d2["is_first"]
+            assert d1["findings_added"] == d2["findings_added"]
+
+    def test_cache_hit_variant_endpoint(self, client, ids):
+        """Cache also works for variant-scoped endpoint."""
+        url = f"/api/variants/{ids['variant_id']}/scans"
+        r1 = client.get(url)
+        data1 = json.loads(r1.data)
+        r2 = client.get(url)
+        data2 = json.loads(r2.data)
+        assert len(data1) == len(data2)
+        for d1, d2 in zip(data1, data2):
+            assert d1["id"] == d2["id"]
+            assert d1["finding_count"] == d2["finding_count"]
+
+    def test_cache_hit_project_endpoint(self, client, ids):
+        """Cache also works for project-scoped endpoint."""
+        url = f"/api/projects/{ids['project_id']}/scans"
+        r1 = client.get(url)
+        data1 = json.loads(r1.data)
+        r2 = client.get(url)
+        data2 = json.loads(r2.data)
+        assert len(data1) == len(data2)
+        for d1, d2 in zip(data1, data2):
+            assert d1["id"] == d2["id"]
+            assert d1["finding_count"] == d2["finding_count"]
+
+    def test_recompute_variant_cache(self, app, client, ids):
+        """recompute_variant_cache rebuilds cache and subsequent GET uses it."""
+        from src.routes.scans import recompute_variant_cache
+        with app.app_context():
+            recompute_variant_cache(uuid.UUID(ids["variant_id"]))
+        # Should now be served from cache
+        r = client.get(f"/api/variants/{ids['variant_id']}/scans")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert len(data) == 2
+
+    def test_invalidate_variant_cache(self, app, client, ids):
+        """invalidate_variant_cache clears cache; next GET recomputes."""
+        from src.routes.scans import invalidate_variant_cache, recompute_variant_cache
+        with app.app_context():
+            recompute_variant_cache(uuid.UUID(ids["variant_id"]))
+            invalidate_variant_cache(uuid.UUID(ids["variant_id"]))
+        # Next request should recompute (cold cache)
+        r = client.get(f"/api/variants/{ids['variant_id']}/scans")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert len(data) == 2
+        assert data[0]["is_first"] is True
+
+    def test_delete_scan_recomputes_cache(self, app, client, ids):
+        """Deleting a scan recomputes the cache for the variant."""
+        # Populate cache via a first request
+        client.get("/api/scans")
+        # Delete scan_b
+        r = client.delete(f"/api/scans/{ids['scan_b_id']}")
+        assert r.status_code == 200
+        # The remaining scan should be served (cache was recomputed)
+        r2 = client.get(f"/api/variants/{ids['variant_id']}/scans")
+        data = json.loads(r2.data)
+        assert len(data) == 1
+        assert data[0]["id"] == ids["scan_a_id"]
+        assert data[0]["is_first"] is True
+
+    def test_recompute_empty_variant(self, app, ids):
+        """recompute_variant_cache on a variant with no scans doesn't crash."""
+        from src.routes.scans import recompute_variant_cache
+        fake_variant = uuid.uuid4()
+        with app.app_context():
+            # Should complete without error
+            recompute_variant_cache(fake_variant)
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +865,7 @@ class TestClassifyFindingChangesUnit:
                 "package_version": "1.16.0",
                 "vulnerability_id": "CVE-2020-35492",
             }]
-            truly_add, truly_rem, upgraded = _classify_finding_changes(
+            truly_add, truly_rem, upgraded, upgraded_keys = _classify_finding_changes(
                 added, removed, [(pkg_old, pkg_new)]
             )
             assert len(upgraded) == 1
@@ -783,6 +874,7 @@ class TestClassifyFindingChangesUnit:
             assert upgraded[0]["new_version"] == "1.17.0"
             assert len(truly_add) == 0
             assert len(truly_rem) == 0
+            assert len(upgraded_keys) == 1
 
     def test_no_upgrade_different_vuln(self, upgrade_app):
         """Findings on different vulns don't match as upgrades."""
@@ -814,9 +906,185 @@ class TestClassifyFindingChangesUnit:
                 "package_version": "1.16.0",
                 "vulnerability_id": "CVE-2020-35492",
             }]
-            truly_add, truly_rem, upgraded = _classify_finding_changes(
+            truly_add, truly_rem, upgraded, upgraded_keys = _classify_finding_changes(
                 added, removed, [(pkg_old, pkg_new)]
             )
             assert len(upgraded) == 0
             assert len(truly_add) == 1
             assert len(truly_rem) == 1
+            assert len(upgraded_keys) == 0
+
+
+# ---------------------------------------------------------------------------
+# Tool-scan integration (SBOM + tool scan, diff + global-result + list)
+# ---------------------------------------------------------------------------
+
+def _build_tool_scan_db(app):
+    """Set up: SBOM scan A → tool scan → SBOM scan B (different pkg version).
+
+    Layout
+    ------
+    ProjectT / VariantT
+        ScanA  (SBOM, pkg cairo@1.16.0, CVE-2020-35492)
+        ScanT  (tool/nvd, pkg cairo@1.16.0, CVE-TOOL-001)
+        ScanB  (SBOM, pkg cairo@1.17.0, CVE-2020-35492)
+    """
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from datetime import datetime, timezone, timedelta
+
+    with app.app_context():
+        _db.drop_all()
+        _db.create_all()
+
+        project = Project.create("ToolTestProject")
+        variant = Variant.create("ToolTestVariant", project.id)
+
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        # SBOM scan A — cairo@1.16.0 with CVE-2020-35492
+        scan_a = Scan(
+            description="sbom scan a", variant_id=variant.id,
+            scan_type="sbom", timestamp=t0,
+        )
+        _db.session.add(scan_a)
+        _db.session.flush()
+
+        pkg_old = Package.find_or_create("cairo", "1.16.0")
+        vuln1 = Vulnerability.create_record(id="CVE-2020-35492", description="cairo vuln")
+        finding1 = Finding.get_or_create(pkg_old.id, vuln1.id)
+        _db.session.commit()
+
+        sbom_a = SBOMDocument.create("/a/sbom.json", "spdx2", scan_a.id)
+        SBOMPackage.create(sbom_a.id, pkg_old.id)
+        Observation.create(finding_id=finding1.id, scan_id=scan_a.id)
+        _db.session.commit()
+
+        # Tool scan — same package, different CVE
+        scan_t = Scan(
+            description="nvd tool scan", variant_id=variant.id,
+            scan_type="tool", scan_source="nvd",
+            timestamp=t0 + timedelta(hours=1),
+        )
+        _db.session.add(scan_t)
+        _db.session.flush()
+
+        vuln_tool = Vulnerability.create_record(id="CVE-TOOL-001", description="tool vuln")
+        finding_tool = Finding.get_or_create(pkg_old.id, vuln_tool.id)
+        _db.session.commit()
+
+        Observation.create(finding_id=finding_tool.id, scan_id=scan_t.id)
+        _db.session.commit()
+
+        # SBOM scan B — cairo@1.17.0 (upgraded), same CVE-2020-35492
+        scan_b = Scan(
+            description="sbom scan b", variant_id=variant.id,
+            scan_type="sbom", timestamp=t0 + timedelta(hours=2),
+        )
+        _db.session.add(scan_b)
+        _db.session.flush()
+
+        pkg_new = Package.find_or_create("cairo", "1.17.0")
+        finding2 = Finding.get_or_create(pkg_new.id, vuln1.id)
+        _db.session.commit()
+
+        sbom_b = SBOMDocument.create("/b/sbom.json", "spdx2", scan_b.id)
+        SBOMPackage.create(sbom_b.id, pkg_new.id)
+        Observation.create(finding_id=finding2.id, scan_id=scan_b.id)
+        _db.session.commit()
+
+        return {
+            "project_id": str(project.id),
+            "variant_id": str(variant.id),
+            "scan_a_id": str(scan_a.id),
+            "scan_t_id": str(scan_t.id),
+            "scan_b_id": str(scan_b.id),
+        }
+
+
+@pytest.fixture()
+def tool_app(tmp_path):
+    import os
+    scan_file = tmp_path / "scan_status.txt"
+    scan_file.write_text("__END_OF_SCAN_SCRIPT__")
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    try:
+        application = create_app()
+        application.config.update({"TESTING": True, "SCAN_FILE": str(scan_file)})
+        ids = _build_tool_scan_db(application)
+        application._test_ids = ids
+        yield application
+    finally:
+        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+
+
+@pytest.fixture()
+def tool_client(tool_app):
+    return tool_app.test_client()
+
+
+@pytest.fixture()
+def tool_ids(tool_app):
+    return tool_app._test_ids
+
+
+class TestToolScanIntegration:
+    """Tests for scan history with tool scans present."""
+
+    def test_list_includes_tool_scan(self, tool_client, tool_ids):
+        """GET /api/scans includes tool scan with correct fields."""
+        r = tool_client.get("/api/scans")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert len(data) == 3
+        tool_scan = next(d for d in data if d["id"] == tool_ids["scan_t_id"])
+        assert tool_scan["scan_type"] == "tool"
+        assert tool_scan["scan_source"] == "nvd"
+        assert isinstance(tool_scan["newly_detected_findings"], int)
+        assert isinstance(tool_scan["newly_detected_vulns"], int)
+        assert isinstance(tool_scan["branch_finding_count"], int)
+        assert isinstance(tool_scan["global_finding_count"], int)
+
+    def test_sbom_scan_b_has_global_result(self, tool_client, tool_ids):
+        """Second SBOM scan has global result incorporating tool scan."""
+        r = tool_client.get("/api/scans")
+        data = json.loads(r.data)
+        scan_b = next(d for d in data if d["id"] == tool_ids["scan_b_id"])
+        assert scan_b["global_finding_count"] is not None
+        assert scan_b["global_finding_count"] >= scan_b["finding_count"]
+
+    def test_diff_with_tool_scans(self, tool_client, tool_ids):
+        """Diff for the second SBOM scan includes tool-scan contributions."""
+        r = tool_client.get(f"/api/scans/{tool_ids['scan_b_id']}/diff")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert data["is_first"] is False
+        assert data["previous_scan_id"] == tool_ids["scan_a_id"]
+        # Should have scan result counts
+        assert "finding_count" in data
+        assert "vuln_count" in data
+
+    def test_tool_scan_diff_is_first(self, tool_client, tool_ids):
+        """Tool scan diff has is_first=True (only shows added)."""
+        r = tool_client.get(f"/api/scans/{tool_ids['scan_t_id']}/diff")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert data["is_first"] is True
+        assert isinstance(data["findings_added"], list)
+
+    def test_global_result_endpoint(self, tool_client, tool_ids):
+        """GET /api/scans/<sbom_scan_b>/global-result returns packages."""
+        r = tool_client.get(f"/api/scans/{tool_ids['scan_b_id']}/global-result")
+        assert r.status_code == 200
+        data = json.loads(r.data)
+        assert "packages" in data
+        assert "findings" in data
+        assert "vulnerabilities" in data
+        assert len(data["packages"]) >= 1

@@ -4,42 +4,17 @@
 
 import uuid
 
-from sqlalchemy import func
 from ..models.package import Package
 from ..models.scan import Scan
 from ..models.variant import Variant
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
 from ..extensions import db
-
-
-def _latest_scan_id_for_variant(variant_uuid):
-    """Return the ID of the most recent Scan for the given variant, or None."""
-    return db.session.execute(
-        db.select(Scan.id)
-        .where(Scan.variant_id == variant_uuid)
-        .order_by(Scan.timestamp.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _latest_scan_ids_for_project(project_uuid):
-    """Return a list of Scan IDs – the latest scan for each variant in the project."""
-    latest_ts_sub = (
-        db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-        .join(Variant, Scan.variant_id == Variant.id)
-        .where(Variant.project_id == project_uuid)
-        .group_by(Scan.variant_id)
-        .subquery()
-    )
-    return list(db.session.execute(
-        db.select(Scan.id)
-        .join(
-            latest_ts_sub,
-            (Scan.variant_id == latest_ts_sub.c.variant_id)
-            & (Scan.timestamp == latest_ts_sub.c.max_ts),
-        )
-    ).scalars().all())
+from ..helpers.active_scans import (
+    active_sbom_scan_ids_for_variant,
+    active_sbom_scan_ids_for_project,
+)
+from ._scan_queries import _packages_by_scan_ids, _package_rows
 
 
 def init_app(app):
@@ -99,43 +74,27 @@ def init_app(app):
                 variant_uuid = uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
-            latest_id = _latest_scan_id_for_variant(variant_uuid)
-            if latest_id is None:
+            sbom_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+            if not sbom_ids:
                 pkgs = []
             else:
-                pkg_ids_sub = (
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id == latest_id)
-                    .distinct()
-                )
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(pkg_ids_sub))
-                    .order_by(Package.name)
-                ).scalars().all())
+                pkg_sets = _packages_by_scan_ids(sbom_ids)
+                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
+                pkg_lookup = _package_rows(all_pkg_ids)
+                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
         elif project_id:
             try:
                 project_uuid = uuid.UUID(project_id)
             except ValueError:
                 return {"error": "Invalid project_id"}, 400
-            latest_ids = _latest_scan_ids_for_project(project_uuid)
-            if not latest_ids:
+            sbom_ids = active_sbom_scan_ids_for_project(project_uuid)
+            if not sbom_ids:
                 pkgs = []
             else:
-                pkg_ids_sub = (
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(latest_ids))
-                    .distinct()
-                )
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(pkg_ids_sub))
-                    .order_by(Package.name)
-                ).scalars().all())
+                pkg_sets = _packages_by_scan_ids(sbom_ids)
+                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
+                pkg_lookup = _package_rows(all_pkg_ids)
+                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
         else:
             pkgs = Package.get_all()
         result = [pkg.to_dict() for pkg in pkgs]

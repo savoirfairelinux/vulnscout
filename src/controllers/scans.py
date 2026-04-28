@@ -7,6 +7,7 @@ import uuid
 from typing import Optional
 
 from ..models.scan import Scan
+from ..helpers.datetime_utils import ensure_utc_iso
 
 
 class ScanController:
@@ -27,7 +28,9 @@ class ScanController:
         return {
             "id": str(scan.id),
             "description": scan.description,
-            "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
+            "scan_type": scan.scan_type or "sbom",
+            "scan_source": scan.scan_source,
+            "timestamp": ensure_utc_iso(scan.timestamp),
             "variant_id": str(scan.variant_id),
         }
 
@@ -71,7 +74,8 @@ class ScanController:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create(description: str, variant_id: uuid.UUID | str) -> Scan:
+    def create(description: str, variant_id: uuid.UUID | str,
+               scan_type: str = "sbom", scan_source: str | None = None) -> Scan:
         """
         Create a new scan under *variant_id*.
 
@@ -79,7 +83,8 @@ class ScanController:
         """
         if isinstance(variant_id, str):
             variant_id = uuid.UUID(variant_id)
-        return Scan.create(description, variant_id)
+        return Scan.create(description, variant_id, scan_type=scan_type,
+                           scan_source=scan_source)
 
     @staticmethod
     def update(scan: Scan | uuid.UUID | str, description: str) -> Scan:

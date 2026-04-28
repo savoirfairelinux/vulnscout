@@ -197,7 +197,11 @@ class FastSPDX3:
         if not graph:
             return
 
-        self._extract_explicit_vulnerabilities(graph)
+        # Pre-build CVSS lookup so scores are available when vulnerabilities
+        # are first persisted via add(), avoiding a costly re-persist pass.
+        cvss_by_vuln = self._collect_cvss_from_graph(graph)
+
+        self._extract_explicit_vulnerabilities(graph, cvss_by_vuln)
 
         self._extract_vulnerabilities_cvss(graph)
 
@@ -218,7 +222,54 @@ class FastSPDX3:
         for vuln_id in vulnerabilities_to_remove:
             self.vulnerabilitiesCtrl.remove(vuln_id)
 
-    def _extract_explicit_vulnerabilities(self, graph: List[Dict]):
+    def _collect_cvss_from_graph(self, graph: List[Dict]) -> Dict[str, List["CVSS"]]:
+        """Pre-scan the graph for CVSS assessment relationships.
+
+        Returns a dict mapping CVE ID → list of CVSS objects so they can be
+        registered on the Vulnerability *before* the initial ``add()`` call,
+        ensuring the first DB persist already includes all CVSS data.
+        """
+        from collections import defaultdict
+        result: Dict[str, list] = defaultdict(list)
+
+        for element in graph:
+            if not isinstance(element, dict):
+                continue
+            if element.get('type') not in self.CVSS_ASSESSMENT_TYPES:
+                continue
+            if element.get('relationshipType') != 'hasAssessmentFor':
+                continue
+
+            from_value = element.get('from')
+            if not from_value:
+                continue
+            vuln_id = self._extract_cve_id(from_value)
+            if not vuln_id:
+                continue
+
+            vector_string = element.get('security_vectorString', '')
+
+            if element["type"] == "security_CvssV2VulnAssessmentRelationship":
+                cvss_version = "2.0"
+            else:
+                match = self.CVSS_PATTERN.search(vector_string)
+                if not match:
+                    continue
+                cvss_version = match.group(1)
+
+            result[vuln_id].append(CVSS(
+                cvss_version,
+                vector_string,
+                element.get('comment', 'unknown'),
+                float(element.get('security_score', '0')),
+                0.0,
+                0.0,
+            ))
+
+        return dict(result)
+
+    def _extract_explicit_vulnerabilities(self, graph: List[Dict],
+                                          cvss_by_vuln: Optional[Dict[str, List["CVSS"]]] = None):
         """
         Extract vulnerabilities explicitly defined as security_Vulnerability elements.
 
@@ -268,7 +319,13 @@ class FastSPDX3:
                         vulnerability.add_url(locator)
 
                 if description:
-                    vulnerability.add_text(description, "vulnerability description")
+                    vulnerability.add_text(description, "description")
+
+                # Register pre-collected CVSS scores so the initial add()
+                # persist includes them, avoiding a separate re-persist pass.
+                if cvss_by_vuln:
+                    for cvss_obj in cvss_by_vuln.get(cve_id, []):
+                        vulnerability.register_cvss(cvss_obj)
 
                 self.vulnerabilitiesCtrl.add(vulnerability)
 
@@ -294,6 +351,7 @@ class FastSPDX3:
             "security_vectorString": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:L/A:N"
         }
         """
+        modified_vulns: set[str] = set()
         for element in graph:
             if not isinstance(element, dict):
                 continue
@@ -332,6 +390,7 @@ class FastSPDX3:
                 0.0,
                 0.0,
             ))
+            modified_vulns.add(vuln_id)
 
     def _process_package_vulnerability_relationships(self, graph: List[Dict]):
         """
@@ -476,7 +535,10 @@ class FastSPDX3:
         if relationship_type == 'doesNotAffect':
             assessment.set_status('not_affected')
         elif relationship_type == 'affects':
-            assessment.set_status('affected')
+            # Yocto cve-check uses "affects" for Unpatched CVEs which are
+            # not yet triaged — map to under_investigation ("Pending
+            # Assessment") rather than "affected" ("Exploitable").
+            assessment.set_status('under_investigation')
         elif relationship_type == "fixedIn":
             assessment.set_status('fixed')
 

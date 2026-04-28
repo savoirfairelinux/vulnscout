@@ -23,10 +23,9 @@ from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
-from ..models.sbom_package import SBOMPackage as SBOMPkg
-from ..models.sbom_document import SBOMDocument as SBOMDoc
 from ..helpers.verbose import verbose
-
+from ._scan_queries import _packages_by_scan_ids
+from ._scan_cache import recompute_variant_cache
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
@@ -118,12 +117,9 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
                 scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
                     else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
                 if scan:
-                    package_ids_in_scan = list(db.session.execute(
-                        db.select(SBOMPkg.package_id)
-                        .join(SBOMDoc, SBOMPkg.sbom_document_id == SBOMDoc.id)
-                        .where(SBOMDoc.scan_id == scan.id)
-                        .distinct()
-                    ).scalars().all())
+                    package_ids_in_scan = list(
+                        _packages_by_scan_ids([scan.id]).get(scan.id, set())
+                    )
 
                     encountered_vuln_ids = list(vulnCtrl._encountered_this_run)
 
@@ -161,6 +157,12 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
                 post_treatment(controllers)
             except Exception as e:
                 verbose(f"settings/upload: EPSS enrichment failed: {e}")
+
+            # Recompute scan-history cache for the affected variant.
+            try:
+                recompute_variant_cache(variant_id)
+            except Exception as e:
+                verbose(f"settings/upload: Cache recompute failed: {e}")
 
             _upload_status[upload_id] = {
                 "status": "done",
@@ -447,7 +449,7 @@ def init_app(app):
             return jsonify({"error": "No valid SBOM files provided."}), 400
 
         # All files validated — now create the scan and register documents
-        scan = ScanController.create("", variant.id)
+        scan = ScanController.create("empty description", variant.id)
         tmp_paths: list[str] = []
 
         for tmp_path, filename, fmt in validated_files:

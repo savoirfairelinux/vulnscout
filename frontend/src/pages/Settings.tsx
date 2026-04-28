@@ -253,9 +253,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       const uploadId = result.upload_id;
       const poll = async () => {
         for (let i = 0; i < 600; i++) {
-          if (unmountedRef.current) return;
+          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
           await new Promise((r) => setTimeout(r, 1000));
-          if (unmountedRef.current) return;
+          if (unmountedRef.current) { onLoadingMessage?.(null); return; }
           const status = await Variants.getUploadStatus(uploadId);
           if (status.status === "done") {
             setImportFiles([]);

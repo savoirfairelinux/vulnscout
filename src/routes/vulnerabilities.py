@@ -12,45 +12,21 @@ from ..models.finding import Finding
 from ..models.observation import Observation
 from ..models.package import Package
 from ..models.scan import Scan
+from ..helpers.datetime_utils import ensure_utc_iso
 from ..models.variant import Variant
 from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 from ..helpers.verbose import verbose
+from ..helpers.active_scans import (
+    active_scan_ids_for_variant,
+    active_scan_ids_for_project,
+    active_package_ids_for_scans,
+)
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
-
-
-def _latest_scan_id_for_variant(variant_uuid):
-    """Return the ID of the most recent Scan for the given variant, or None."""
-    return db.session.execute(
-        db.select(Scan.id)
-        .where(Scan.variant_id == variant_uuid)
-        .order_by(Scan.timestamp.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _latest_scan_ids_for_project(project_uuid):
-    """Return a list of Scan IDs – the latest scan for each variant in the project."""
-    latest_ts_sub = (
-        db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-        .join(Variant, Scan.variant_id == Variant.id)
-        .where(Variant.project_id == project_uuid)
-        .group_by(Scan.variant_id)
-        .subquery()
-    )
-    return list(db.session.execute(
-        db.select(Scan.id)
-        .join(
-            latest_ts_sub,
-            (Scan.variant_id == latest_ts_sub.c.variant_id)
-            & (Scan.timestamp == latest_ts_sub.c.max_ts),
-        )
-    ).scalars().all())
 
 
 def _parse_effort_hours(value) -> int:
@@ -74,81 +50,95 @@ _FORMAT_TO_FOUND_BY: dict[str, str] = {
     "yocto_cve_check": "yocto",
 }
 
+# Mapping from Scan.scan_source to the found_by string for tool scans
+_TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
+    "nvd": "nvd_cpe",
+    "osv": "osv",
+}
+
 
 def _populate_found_by(
     records: list,
     variant_uuid=None,
     project_uuid=None,
+    active_scan_ids: list | None = None,
 ) -> None:
-    """Populate the transient found_by list on each record from SBOMDocument.format.
+    """Populate the transient found_by list on each record.
 
-    Walks the Finding -> SBOMPackage -> SBOMDocument chain to discover which
-    SBOM document formats are linked to each vulnerability's affected packages,
-    then maps them to the legacy found_by strings consumed by the frontend chart.
-
-    Attribution logic to avoid false-positives from package-list SBOM files:
-    - ``grype`` and ``yocto_cve_check`` are dedicated scanners: they only list
-      packages that are affected by a vulnerability, so their presence is always
-      authoritative.
-    - ``spdx``, ``cdx``, ``openvex`` are dual-purpose (package list OR security
-      file): they are only attributed as a source for a given
-      (vulnerability, package) pair when NO dedicated scanner document also
-      contains that same package.  This prevents a plain SPDX package BOM from
-      being incorrectly credited as a vulnerability discovery source.
-
-    When variant_uuid or project_uuid is provided, only SBOM documents
-    belonging to that variant or project are considered.
+    For each vulnerability, find the **earliest** scan that first observed
+    it and attribute it to that scan's source (SBOMDocument format or
+    tool scan_source).  The first scan that introduced a CVE gets credit.
     """
     if not records:
         return
 
     vuln_ids = [r.id for r in records]
 
-    # Build the base query explicitly from Finding so that SBOMDocument does not
-    # end up in the implicit FROM clause (which would happen if we referenced
-    # SBOMDocument.format without select_from(), causing a cartesian product or
-    # a silent no-op when the second .join(SBOMDocument) is evaluated).
-    base_query = (
-        db.select(Finding.vulnerability_id, Finding.package_id, SBOMDocument.format)
+    # For every vuln, get the scan that first observed it (min timestamp).
+    first_scan_subq = (
+        db.select(
+            Finding.vulnerability_id,
+            func.min(Scan.timestamp).label("min_ts"),
+        )
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(Finding.vulnerability_id.in_(vuln_ids))
+        .group_by(Finding.vulnerability_id)
+    ).subquery()
+
+    # Now join back to get the scan details for that earliest observation.
+    rows = db.session.execute(
+        db.select(
+            Finding.vulnerability_id,
+            Scan.scan_type,
+            Scan.scan_source,
+            SBOMDocument.format.label("doc_format"),
+        )
         .select_from(Finding)
-        .join(SBOMPackage, SBOMPackage.package_id == Finding.package_id)
-        .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
-        .where(SBOMDocument.format.isnot(None))
-    )
-
-    if variant_uuid is not None:
-        base_query = (
-            base_query
-            .join(Scan, Scan.id == SBOMDocument.scan_id)
-            .where(Scan.variant_id == variant_uuid)
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .join(
+            first_scan_subq,
+            db.and_(
+                first_scan_subq.c.vulnerability_id == Finding.vulnerability_id,
+                first_scan_subq.c.min_ts == Scan.timestamp,
+            ),
         )
-    elif project_uuid is not None:
-        base_query = (
-            base_query
-            .join(Scan, Scan.id == SBOMDocument.scan_id)
-            .join(Variant, Variant.id == Scan.variant_id)
-            .where(Variant.project_id == project_uuid)
+        .outerjoin(
+            SBOMDocument,
+            db.and_(
+                SBOMDocument.scan_id == Scan.id,
+                SBOMDocument.format.isnot(None),
+            ),
         )
-    else:
-        base_query = base_query.where(Finding.vulnerability_id.in_(vuln_ids))  # no need for full query on all variants
+        .distinct()
+    ).all()
 
-    rows = db.session.execute(base_query.distinct()).all()
+    # When a scan has multiple SBOMDocuments (e.g. spdx + grype in same
+    # merge), collect all formats and prefer non-dedicated scanner formats
+    # (spdx, cdx) over dedicated ones (grype) for attribution.
+    vuln_formats: dict[str, dict] = {}
+    for vuln_id, scan_type, scan_source, doc_format in rows:
+        entry = vuln_formats.setdefault(vuln_id, {
+            "doc_formats": set(),
+            "scan_type": scan_type,
+            "scan_source": scan_source,
+        })
+        if doc_format is not None:
+            entry["doc_formats"].add(doc_format)
 
-    # Group collected formats by (vuln_id, package_id)
-    # pkg_formats: {(vuln_id, package_id): set of formats}
-    pkg_formats: dict[tuple, set[str]] = {}
-    for vuln_id, pkg_id, fmt in rows:
-        key = (vuln_id, str(pkg_id))
-        pkg_formats.setdefault(key, set()).add(fmt)
-
-    # Determine the sources to attribute for each vulnerability
     found_by_map: dict[str, set[str]] = {}
-    for (vuln_id, _pkg_id), formats in pkg_formats.items():
-        dedicated = formats & _DEDICATED_SCANNER_FORMATS
-        # Only use dedicated scanners when present; fall back to all formats otherwise
-        sources = dedicated if dedicated else formats
-        for fmt in sources:
-            mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+    for vuln_id, entry in vuln_formats.items():
+        doc_formats = entry["doc_formats"]
+        if doc_formats:
+            # Prefer non-dedicated (spdx, cdx, openvex) over dedicated (grype, yocto)
+            non_dedicated = doc_formats - _DEDICATED_SCANNER_FORMATS
+            chosen = non_dedicated if non_dedicated else doc_formats
+            for fmt in chosen:
+                mapped = _FORMAT_TO_FOUND_BY.get(fmt, fmt)
+                found_by_map.setdefault(vuln_id, set()).add(mapped)
+        elif entry["scan_source"] is not None:
+            mapped = _TOOL_SOURCE_TO_FOUND_BY.get(entry["scan_source"], entry["scan_source"])
             found_by_map.setdefault(vuln_id, set()).add(mapped)
 
     for record in records:
@@ -173,9 +163,9 @@ def init_app(app):
                 compare_uuid = uuid.UUID(compare_variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id or compare_variant_id"}, 400
-            base_latest_id = _latest_scan_id_for_variant(base_uuid)
-            compare_latest_id = _latest_scan_id_for_variant(compare_uuid)
-            current_scan_ids = [compare_latest_id] if compare_latest_id else []
+            base_latest_ids = active_scan_ids_for_variant(base_uuid)
+            compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
+            current_scan_ids = compare_latest_ids
             _scope_variant = compare_uuid
             _scope_project = None
             opts = (
@@ -183,28 +173,36 @@ def init_app(app):
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
                 selectinload(Vulnerability.metrics),
             )
-            if base_latest_id is None:
-                base_ids = set()
-            else:
-                base_ids = set(db.session.execute(
+
+            def _vuln_ids_for_scans(scan_ids):
+                """Vuln IDs from *scan_ids*, filtering tool scans to active packages."""
+                if not scan_ids:
+                    return set()
+                _pkg_ids = active_package_ids_for_scans(scan_ids)
+                q = (
                     db.select(Vulnerability.id)
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id == base_latest_id)
-                    .distinct()
-                ).scalars().all())
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Observation.scan_id.in_(scan_ids))
+                )
+                if _pkg_ids:
+                    q = q.where(
+                        db.or_(
+                            Scan.scan_type.is_(None),
+                            Scan.scan_type == "sbom",
+                            Finding.package_id.in_(_pkg_ids),
+                        )
+                    )
+                return set(db.session.execute(q.distinct()).scalars().all())
+
+            base_ids = _vuln_ids_for_scans(base_latest_ids)
             operation = request.args.get('operation', 'difference')
             if operation == 'intersection':
-                if compare_latest_id is None:
+                if not compare_latest_ids:
                     records = []
                 else:
-                    compare_ids = set(db.session.execute(
-                        db.select(Vulnerability.id)
-                        .join(Finding, Vulnerability.id == Finding.vulnerability_id)
-                        .join(Observation, Finding.id == Observation.finding_id)
-                        .where(Observation.scan_id == compare_latest_id)
-                        .distinct()
-                    ).scalars().all())
+                    compare_ids = _vuln_ids_for_scans(compare_latest_ids)
                     intersection_ids = list(base_ids & compare_ids)
                     records = list(db.session.execute(
                         db.select(Vulnerability)
@@ -213,18 +211,27 @@ def init_app(app):
                         .order_by(Vulnerability.id)
                     ).scalars().all()) if intersection_ids else []
             else:  # difference (default): vulns in compare but NOT in base
-                if compare_latest_id is None:
+                if not compare_latest_ids:
                     records = []
                 else:
+                    compare_pkg_ids = active_package_ids_for_scans(compare_latest_ids)
                     query = (
                         db.select(Vulnerability)
                         .options(*opts)
                         .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                         .join(Observation, Finding.id == Observation.finding_id)
-                        .where(Observation.scan_id == compare_latest_id)
-                        .distinct()
-                        .order_by(Vulnerability.id)
+                        .join(Scan, Observation.scan_id == Scan.id)
+                        .where(Observation.scan_id.in_(compare_latest_ids))
                     )
+                    if compare_pkg_ids:
+                        query = query.where(
+                            db.or_(
+                                Scan.scan_type.is_(None),
+                                Scan.scan_type == "sbom",
+                                Finding.package_id.in_(compare_pkg_ids),
+                            )
+                        )
+                    query = query.distinct().order_by(Vulnerability.id)
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
@@ -235,12 +242,16 @@ def init_app(app):
                 return {"error": "Invalid variant_id"}, 400
             _scope_variant = variant_uuid
             _scope_project = None
-            latest_id = _latest_scan_id_for_variant(variant_uuid)
-            current_scan_ids = [latest_id] if latest_id else []
-            if latest_id is None:
+            latest_ids = active_scan_ids_for_variant(variant_uuid)
+            current_scan_ids = latest_ids
+            if not latest_ids:
                 records = []
             else:
-                records = list(db.session.execute(
+                # Filter tool-scan findings to only include packages
+                # present in the active SBOM, preventing stale/cross-variant
+                # vulns from appearing in the Vulnerability tab.
+                _pkg_ids = active_package_ids_for_scans(latest_ids)
+                query = (
                     db.select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
@@ -249,9 +260,19 @@ def init_app(app):
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
-                    .where(Observation.scan_id == latest_id)
-                    .distinct()
-                    .order_by(Vulnerability.id)
+                    .join(Scan, Observation.scan_id == Scan.id)
+                    .where(Observation.scan_id.in_(latest_ids))
+                )
+                if _pkg_ids:
+                    query = query.where(
+                        db.or_(
+                            Scan.scan_type.is_(None),
+                            Scan.scan_type == "sbom",
+                            Finding.package_id.in_(_pkg_ids),
+                        )
+                    )
+                records = list(db.session.execute(
+                    query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
         elif project_id:
             try:
@@ -260,22 +281,33 @@ def init_app(app):
                 return {"error": "Invalid project_id"}, 400
             _scope_variant = None
             _scope_project = project_uuid
-            latest_ids = _latest_scan_ids_for_project(project_uuid)
+            latest_ids = active_scan_ids_for_project(project_uuid)
             current_scan_ids = latest_ids
             if not latest_ids:
                 records = []
             else:
                 from ..models.time_estimate import TimeEstimate
 
+                # Filter tool-scan findings by active SBOM packages
+                _pkg_ids = active_package_ids_for_scans(latest_ids)
+
                 # Subquery for vulnerability IDs visible in these scans,
                 # used to avoid huge literal IN-lists in secondary queries.
-                vuln_ids_subq = (
+                vuln_ids_base = (
                     db.select(Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
                     .where(Observation.scan_id.in_(latest_ids))
-                    .distinct()
-                    .scalar_subquery()
                 )
+                if _pkg_ids:
+                    vuln_ids_base = vuln_ids_base.where(
+                        db.or_(
+                            Scan.scan_type.is_(None),
+                            Scan.scan_type == "sbom",
+                            Finding.package_id.in_(_pkg_ids),
+                        )
+                    )
+                vuln_ids_subq = vuln_ids_base.distinct().scalar_subquery()
 
                 records = list(db.session.execute(
                     db.select(Vulnerability)
@@ -344,7 +376,8 @@ def init_app(app):
             records = Vulnerability.get_all()
             _scope_variant = None
             _scope_project = None
-        _populate_found_by(records, _scope_variant, _scope_project)
+        _populate_found_by(records, _scope_variant, _scope_project,
+                           active_scan_ids=current_scan_ids or None)
         vulns = [r.to_dict() for r in records]
 
         vuln_ids = [v["id"] for v in vulns]
@@ -368,48 +401,41 @@ def init_app(app):
                 for v in vulns:
                     v["packages_current"] = list(v["packages"])
 
-            # Enrich each vuln dict with sorted variant names, restricted to latest scans
-            # and scoped to the current project/variant to avoid cross-project leaks.
-            latest_ts_base = (
-                db.select(Scan.variant_id, func.max(Scan.timestamp).label("max_ts"))
-            )
-            if _scope_variant is not None:
-                _v = db.session.get(Variant, _scope_variant)
-                if _v and _v.project_id:
-                    latest_ts_base = (
-                        latest_ts_base
-                        .join(Variant, Scan.variant_id == Variant.id)
-                        .where(Variant.project_id == _v.project_id)
-                    )
+            # Enrich each vuln dict with sorted variant names, restricted to
+            # the active scans (latest SBOM + latest per-source tool scans)
+            # so that the result is consistent with the vulnerabilities shown.
+            if current_scan_ids:
+                # Re-use the same scan IDs that were used to load vulns
+                active_scan_ids = current_scan_ids
+            else:
+                # Fallback (no variant/project scope): compute active scans
+                # for every variant using the same multi-source logic.
+                if _scope_variant is not None:
+                    active_scan_ids = active_scan_ids_for_variant(_scope_variant)
+                elif _scope_project is not None:
+                    active_scan_ids = active_scan_ids_for_project(_scope_project)
                 else:
-                    latest_ts_base = latest_ts_base.where(
-                        Scan.variant_id == _scope_variant
-                    )
-            elif _scope_project is not None:
-                latest_ts_base = (
-                    latest_ts_base
+                    # All variants across all projects
+                    all_variant_ids = [
+                        vid for (vid,) in db.session.execute(
+                            db.select(Variant.id)
+                        ).all()
+                    ]
+                    active_scan_ids = []
+                    for vid in all_variant_ids:
+                        active_scan_ids.extend(active_scan_ids_for_variant(vid))
+            if active_scan_ids:
+                rows = db.session.execute(
+                    db.select(Finding.vulnerability_id, Variant.name)
+                    .join(Observation, Finding.id == Observation.finding_id)
+                    .join(Scan, Observation.scan_id == Scan.id)
                     .join(Variant, Scan.variant_id == Variant.id)
-                    .where(Variant.project_id == _scope_project)
-                )
-            latest_ts_sub = latest_ts_base.group_by(Scan.variant_id).subquery()
-            latest_scan_sub = (
-                db.select(Scan.id)
-                .join(
-                    latest_ts_sub,
-                    (Scan.variant_id == latest_ts_sub.c.variant_id)
-                    & (Scan.timestamp == latest_ts_sub.c.max_ts),
-                )
-                .subquery()
-            )
-            rows = db.session.execute(
-                db.select(Finding.vulnerability_id, Variant.name)
-                .join(Observation, Finding.id == Observation.finding_id)
-                .join(Scan, Observation.scan_id == Scan.id)
-                .join(Variant, Scan.variant_id == Variant.id)
-                .where(Finding.vulnerability_id.in_(vuln_ids))
-                .where(Observation.scan_id.in_(db.select(latest_scan_sub.c.id)))
-                .distinct()
-            ).all()
+                    .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .where(Observation.scan_id.in_(active_scan_ids))
+                    .distinct()
+                ).all()
+            else:
+                rows = []
             variant_names_by_vuln: dict = {}
             for vuln_id, variant_name in rows:
                 variant_names_by_vuln.setdefault(str(vuln_id), []).append(variant_name)
@@ -426,7 +452,7 @@ def init_app(app):
             ).all()
             first_scan_by_vuln: dict = {}
             for vuln_id, min_ts in first_scan_rows:
-                first_scan_by_vuln[str(vuln_id)] = min_ts.isoformat() if min_ts else None
+                first_scan_by_vuln[str(vuln_id)] = ensure_utc_iso(min_ts)
             for v in vulns:
                 v["first_scan_date"] = first_scan_by_vuln.get(v["id"])
 

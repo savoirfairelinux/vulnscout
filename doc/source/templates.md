@@ -46,6 +46,10 @@ All templates can also be run on-demand from the web interface using the export 
 | `unfiltered_vulnerabilities` | dict | All vulnerabilities, bypassing any active export filter. Use `\| as_list` to get a list. Always the full dataset. |
 | `unfiltered_assessments` | dict | All assessments, bypassing any active export filter. Keyed by assessment ID. |
 | `failed_vulns` | list[string] | List of vulnerability IDs that triggered the `--match-condition` expression. Empty when no condition was set or no vulnerability matched. Use `unfiltered_vulnerabilities[vuln_id]` to get the full object. |
+| `projects` | dict | All projects, keyed by UUID. Use `projects \| as_list` to get a list. Each value has the fields described in the Project Object section below. |
+| `variants` | dict | All variants, keyed by UUID. Use `variants \| as_list` to get a list. Each value has the fields described in the Variant Object section below. |
+| `scans` | dict | All scans, keyed by UUID. Use `scans \| as_list` to get a list. Each value has the fields described in the Scan Object section below. |
+| `sbom_documents` | dict | All SBOM documents, keyed by UUID. Use `sbom_documents \| as_list` to get a list. Each value has the fields described in the SBOM Document Object section below. |
 
 ---
 
@@ -93,6 +97,8 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `simplified_status` | string | Simplified status: `pending`, `affected`, `fixed`, or `ignored`. |
 | `last_assessment` | Assessment | Most recent assessment object (shorthand for `assessments[0]`). |
 | `assessments` | list[Assessment] | All assessments, sorted most recent first. |
+| `variant_ids` | list[string] | UUIDs of every variant in which this vulnerability has at least one assessment. |
+| `assessments_by_variant` | dict[string, list[Assessment]] | Assessments grouped by variant ID. Key is the variant UUID, value is the list of assessments for that variant. |
 
 ---
 
@@ -104,6 +110,9 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `version` | string | Version of the package. |
 | `cpe` | list[string] | List of CPE identifiers. |
 | `purl` | list[string] | List of PURL identifiers. |
+| `sbom_documents` | dict[string, SBOM Document] | SBOM documents that list this package, keyed by UUID. |
+| `variants` | list[string] | UUIDs of variants in which this package appears (derived from its SBOM documents). |
+| `vulnerabilities` | dict[string, Vulnerability] | Vulnerabilities affecting this package, keyed by vulnerability ID. |
 
 ---
 
@@ -125,6 +134,60 @@ When exporting, users can add filters to export only some vulnerabilities. To by
 | `workaround` | string | Workaround description. |
 | `workaround_timestamp` | string | Datetime of this workaround in ISO 8601 format. |
 | `variant_id` | string | UUID of the variant this assessment belongs to, or empty. |
+
+---
+
+### Project Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Project ID (UUID). |
+| `name` | string | Name of the project. |
+
+---
+
+### Variant Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Variant ID (UUID). |
+| `name` | string | Name of the variant (e.g. build configuration). |
+| `project_id` | string | UUID of the project this variant belongs to. |
+| `scans` | dict[string, Scan] | All scans belonging to this variant, keyed by UUID. |
+| `sbom_documents` | dict[string, SBOM Document] | All SBOM documents belonging to this variant (across all its scans), keyed by UUID. |
+| `packages` | dict[string, Package] | All packages found in this variant, keyed by `name@version`. |
+| `assessments` | list[Assessment] | All assessments scoped to this variant. |
+| `vulnerabilities` | dict[string, Vulnerability] | All vulnerabilities that have at least one assessment in this variant, keyed by vulnerability ID. |
+
+---
+
+### Scan Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Scan ID (UUID). |
+| `description` | string | Description of the scan (may be empty). |
+| `timestamp` | string | Scan datetime in ISO 8601 format. |
+| `variant_id` | string | UUID of the variant this scan belongs to. |
+| `variant` | Variant | The variant object this scan belongs to. |
+| `sbom_documents` | dict[string, SBOM Document] | All SBOM documents produced by this scan, keyed by UUID. |
+| `packages` | dict[string, Package] | All packages found across this scan's SBOM documents, keyed by `name@version`. |
+
+---
+
+### SBOM Document Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | SBOM document ID (UUID). |
+| `path` | string | File path of the SBOM document. |
+| `source_name` | string | Name of the source that produced this document. |
+| `format` | string | Format of the document (e.g. `spdx`, `cdx`, `openvex`, `yocto_cve_check`). |
+| `scan_id` | string | UUID of the scan this document belongs to. |
+| `variant_id` | string | UUID of the variant this document belongs to (derived from its scan). |
+| `scan` | Scan | The scan object this document belongs to. |
+| `packages` | dict[string, Package] | All packages listed in this document, keyed by `name@version`. |
+| `vulnerabilities` | dict[string, Vulnerability] | All vulnerabilities affecting any package in this document, keyed by vulnerability ID. |
 
 #### Possible values for `status`
 
@@ -220,6 +283,14 @@ Both `last_assessment_date` and `filter_by_publish_date` accept date expressions
 | `sort_by_epss` | Sort vulnerabilities by EPSS score, highest first. |
 | `sort_by_effort` | Sort vulnerabilities by effort (`effort.likely`), most effort first. |
 | `sort_by_last_modified` | Sort vulnerabilities by latest assessment date, most recent first. |
+| `sort_by_scan_date` | Sort scans by timestamp, most recent first. Accepts a dict (keyed by ID) or a list. |
+
+### Relational Filtering
+
+| Filter | Description |
+|--------|-------------|
+| `filter_by_variant(variant_id)` | Keep only items that belong to the given variant. Works on assessments, scans, and vulnerabilities (matches against `variant_ids`). Accepts a dict or a list. |
+| `filter_by_project(project_id)` | Keep only items whose `project_id` matches. Works on variants. Accepts a dict or a list. |
 
 ---
 
@@ -261,5 +332,103 @@ Both `last_assessment_date` and `filter_by_publish_date` accept date expressions
 ```
 Product: {{ env("PRODUCT_NAME", "unknown") }}
 Version: {{ env("PRODUCT_VERSION", "unknown") }}
+```
+
+**List all projects and their variants:**
+```
+{% for project in projects | as_list %}
+Project: {{ project.name }}
+  {% for variant in variants | filter_by_project(project.id) %}
+  - Variant: {{ variant.name }}
+  {% endfor %}
+{% endfor %}
+```
+
+**List most recent scans for a variant:**
+```
+{% for scan in scans | filter_by_variant(variant_id) | sort_by_scan_date | limit(5) %}
+- {{ scan.timestamp | print_iso8601 }}: {{ scan.description }}
+{% endfor %}
+```
+
+**List SBOM documents:**
+```
+{% for doc in sbom_documents | as_list %}
+- {{ doc.source_name }} ({{ doc.format }}): {{ doc.path }}
+{% endfor %}
+```
+
+---
+
+## Traversing the data models
+
+Every entity exposes its related entities as embedded fields, so you can traverse the data model in any direction.
+
+The relationships are:
+
+```
+Project
+  └─ Variant  (.scans, .sbom_documents, .packages, .vulnerabilities, .assessments)
+       └─ Scan  (.sbom_documents, .packages, .variant)
+            └─ SBOM Document  (.packages, .vulnerabilities, .scan)
+                 └─ Package  (.sbom_documents, .variants, .vulnerabilities)
+                      └─ Vulnerability  (.variant_ids, .assessments_by_variant)
+```
+
+**Loop over vulnerabilities per variant:**
+```
+{% for variant in variants | as_list %}
+{{ variant.name }}
+  {% for vuln in variant.vulnerabilities.values() | sort_by_epss %}
+  - {{ vuln.id }} (EPSS: {{ vuln.epss.score }})
+  {% endfor %}
+{% endfor %}
+```
+
+**Loop over packages per SBOM document:**
+```
+{% for doc in sbom_documents | as_list %}
+{{ doc.source_name }} — {{ doc.path }}
+  {% for pkg_id, pkg in doc.packages.items() %}
+  - {{ pkg.name }} {{ pkg.version }}
+  {% endfor %}
+{% endfor %}
+```
+
+**Full traversal:**
+```
+{% for project in projects | as_list %}
+  {% for variant in variants | filter_by_project(project.id) %}
+    {% for doc in variant.sbom_documents.values() %}
+      {% for vuln in doc.vulnerabilities.values() | status_active | sort_by_epss %}
+        {{ vuln.id }} in {{ doc.path }}
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+{% endfor %}
+```
+
+**Per-variant assessment breakdown for a single vulnerability:**
+```
+{% for variant_id, assessments in vuln.assessments_by_variant.items() %}
+  Variant {{ variant_id }}: {{ assessments | first | attr('status') }}
+{% endfor %}
+```
+
+**Packages that appear in multiple variants:**
+```
+{% for pkg_id, pkg in packages.items() %}
+  {% if pkg.variants | length > 1 %}
+  {{ pkg.name }} {{ pkg.version }} appears in {{ pkg.variants | length }} variants
+  {% endif %}
+{% endfor %}
+```
+
+**Most recent scan for a variant (using embedded `.scans`):**
+```
+{% for variant in variants | as_list %}
+  {% set latest = variant.scans | sort_by_scan_date | first %}
+  {{ variant.name }}: last scanned {{ latest.timestamp | print_iso8601 }}
+{% endfor %}
 ```
 

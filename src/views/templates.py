@@ -11,13 +11,27 @@ import string
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
 from ..models.iso8601_duration import Iso8601Duration
+from ..models.sbom_package import SBOMPackage
+from ..controllers import (
+    PackagesController,
+    VulnerabilitiesController,
+    AssessmentsController,
+    ProjectController,
+    VariantController,
+    ScanController,
+    SBOMDocumentController,
+)
 
 
 class Templates:
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
+        self.projectsCtrl: ProjectController = controllers.get("projects")
+        self.variantsCtrl: VariantController = controllers.get("variants")
+        self.scansCtrl: ScanController = controllers.get("scans")
+        self.sbomDocumentsCtrl: SBOMDocumentController = controllers.get("sbom_documents")
 
         template_dir = os.path.join(os.path.dirname(__file__), "templates")
         self.internal_loader = FileSystemLoader([
@@ -48,6 +62,25 @@ class Templates:
         kwargs["vulnerabilities"] = {}
         kwargs["unfiltered_assessments"] = self.assessmentsCtrl.to_dict()
         kwargs["assessments"] = {}
+
+        if self.projectsCtrl is not None:
+            kwargs["projects"] = {p["id"]: p for p in self.projectsCtrl.serialize_list(self.projectsCtrl.get_all())}
+        else:
+            kwargs["projects"] = {}
+        if self.variantsCtrl is not None:
+            kwargs["variants"] = {v["id"]: v for v in self.variantsCtrl.serialize_list(self.variantsCtrl.get_all())}
+        else:
+            kwargs["variants"] = {}
+        if self.scansCtrl is not None:
+            kwargs["scans"] = {s["id"]: s for s in self.scansCtrl.serialize_list(self.scansCtrl.get_all())}
+        else:
+            kwargs["scans"] = {}
+        if self.sbomDocumentsCtrl is not None:
+            all_docs = self.sbomDocumentsCtrl.serialize_list(self.sbomDocumentsCtrl.get_all())
+            kwargs["sbom_documents"] = {d["id"]: d for d in all_docs}
+        else:
+            kwargs["sbom_documents"] = {}
+
         filter_date = None
         if "ignore_before" in kwargs and kwargs["ignore_before"] != "1970-01-01T00:00":
             filter_date = datetime.fromisoformat(kwargs["ignore_before"]).astimezone(timezone.utc)
@@ -93,6 +126,85 @@ class Templates:
                     kwargs['assessments'][assessment["id"]] = assessment
         else:
             kwargs["assessments"] = kwargs["unfiltered_assessments"]
+
+        scan_by_id = kwargs["scans"]
+        doc_by_id = kwargs["sbom_documents"]
+        variant_by_id = kwargs["variants"]
+
+        for doc in kwargs["sbom_documents"].values():
+            scan = scan_by_id.get(doc["scan_id"])
+            doc["variant_id"] = scan["variant_id"] if scan else None
+
+        for doc in kwargs["sbom_documents"].values():
+            doc["packages"] = {}
+            for sbom_pkg in SBOMPackage.get_by_document(doc["id"]):
+                pkg_id = sbom_pkg.package.string_id
+                if pkg_id in kwargs["packages"]:
+                    doc["packages"][pkg_id] = kwargs["packages"][pkg_id]
+
+        pkg_to_docs: dict = {}
+        pkg_to_variants: dict = {}
+        for doc in kwargs["sbom_documents"].values():
+            for pkg_id in doc["packages"]:
+                pkg_to_docs.setdefault(pkg_id, []).append(doc["id"])
+                if doc["variant_id"]:
+                    pkg_to_variants.setdefault(pkg_id, set()).add(doc["variant_id"])
+
+        for pkg_id, pkg in kwargs["packages"].items():
+            pkg["sbom_documents"] = {d: doc_by_id[d] for d in pkg_to_docs.get(pkg_id, []) if d in doc_by_id}
+            pkg["variants"] = list(pkg_to_variants.get(pkg_id, set()))
+            pkg["vulnerabilities"] = {}
+
+        for vuln in kwargs["vulnerabilities"].values():
+            by_variant: dict = {}
+            for assessment in vuln.get("assessments", []):
+                vid = assessment.get("variant_id")
+                if vid:
+                    by_variant.setdefault(vid, []).append(assessment)
+            vuln["assessments_by_variant"] = by_variant
+            vuln["variant_ids"] = list(by_variant.keys())
+
+        vuln_by_pkg: dict = {}
+        for vuln_id, vuln in kwargs["vulnerabilities"].items():
+            for pkg_id in vuln.get("packages", []):
+                vuln_by_pkg.setdefault(pkg_id, {})[vuln_id] = vuln
+
+        for doc in kwargs["sbom_documents"].values():
+            doc["vulnerabilities"] = {}
+            for pkg_id in doc["packages"]:
+                doc["vulnerabilities"].update(vuln_by_pkg.get(pkg_id, {}))
+
+        for pkg_id, pkg in kwargs["packages"].items():
+            pkg["vulnerabilities"] = vuln_by_pkg.get(pkg_id, {})
+
+        for scan in kwargs["scans"].values():
+            scan["variant"] = variant_by_id.get(scan["variant_id"])
+            scan["sbom_documents"] = {
+                d_id: d for d_id, d in kwargs["sbom_documents"].items()
+                if d["scan_id"] == scan["id"]
+            }
+            scan["packages"] = {}
+            for doc in scan["sbom_documents"].values():
+                scan["packages"].update(doc["packages"])
+
+        for variant in kwargs["variants"].values():
+            vid = variant["id"]
+            variant["scans"] = {s_id: s for s_id, s in kwargs["scans"].items() if s["variant_id"] == vid}
+            variant["sbom_documents"] = {
+                d_id: d for d_id, d in kwargs["sbom_documents"].items()
+                if d.get("variant_id") == vid
+            }
+            variant["packages"] = {}
+            for doc in variant["sbom_documents"].values():
+                variant["packages"].update(doc["packages"])
+            variant["assessments"] = [
+                a for a in kwargs["assessments"].values() if a.get("variant_id") == vid
+            ]
+            variant["vulnerabilities"] = {
+                vuln_id: v
+                for vuln_id, v in kwargs["vulnerabilities"].items()
+                if vid in v.get("variant_ids", [])
+            }
 
         return template.render(**kwargs)
 
@@ -193,6 +305,9 @@ class TemplatesExtensions:
         jinjaEnv.filters["sort_by_last_modified"] = TemplatesExtensions.sort_by_last_modified
         jinjaEnv.filters["last_assessment_date"] = TemplatesExtensions.filter_last_assessment_date
         jinjaEnv.filters["filter_by_publish_date"] = TemplatesExtensions.filter_publish_date
+        jinjaEnv.filters["filter_by_variant"] = TemplatesExtensions.filter_by_variant
+        jinjaEnv.filters["filter_by_project"] = TemplatesExtensions.filter_by_project
+        jinjaEnv.filters["sort_by_scan_date"] = TemplatesExtensions.sort_by_scan_date
 
     @staticmethod
     def get_env_var(key: str, default: str = "") -> str:
@@ -466,3 +581,18 @@ class TemplatesExtensions:
             return include_unknown and not v.get("published")
 
         return TemplatesExtensions._filter_by_date(vals, date_filter, get_date, include_no_date)
+
+    @staticmethod
+    def filter_by_variant(value: dict[str, dict] | list[dict], variant_id: str) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return [v for v in vals if v.get("variant_id") == variant_id or variant_id in v.get("variant_ids", [])]
+
+    @staticmethod
+    def filter_by_project(value: dict[str, dict] | list[dict], project_id: str) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return [v for v in vals if v.get("project_id") == project_id]
+
+    @staticmethod
+    def sort_by_scan_date(value: dict[str, dict] | list[dict]) -> list[dict]:
+        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        return sorted(vals, key=lambda x: x.get("timestamp") or "", reverse=True)
