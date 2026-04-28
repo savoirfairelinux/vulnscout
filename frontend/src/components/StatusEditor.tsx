@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import MessageBanner from './MessageBanner';
 import type { Variant } from '../handlers/variant';
 
@@ -26,6 +26,10 @@ type Props = {
 }
 
 function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages}: Readonly<Props>) {
+    const initialPackages = useMemo(() =>
+        (defaultSelectedPackages && defaultSelectedPackages.length > 0) ? defaultSelectedPackages : (availablePackages ?? [])
+    , [defaultSelectedPackages, availablePackages]);
+
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
@@ -34,9 +38,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
         variants?.length === 1 ? [variants[0].id] : []
     );
-    const [selectedPackages, setSelectedPackages] = useState<string[]>(
-        (defaultSelectedPackages && defaultSelectedPackages.length > 0) ? defaultSelectedPackages : (availablePackages ?? [])
-    );
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(initialPackages);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -53,10 +55,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
     // Reset selected packages when the available list changes (e.g. navigating to a different vuln)
     useEffect(() => {
-        setSelectedPackages(
-            (defaultSelectedPackages && defaultSelectedPackages.length > 0) ? defaultSelectedPackages : (availablePackages ?? [])
-        );
-    }, [availablePackages, defaultSelectedPackages]);
+        setSelectedPackages(initialPackages);
+    }, [initialPackages]);
 
     // Auto-select single variant when variants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -133,10 +133,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setWorkaround("");
         setImpact("");
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
-        setSelectedPackages(
-            (defaultSelectedPackages && defaultSelectedPackages.length > 0) ? defaultSelectedPackages : (availablePackages ?? [])
-        );
-    }, [defaultStatus, availablePackages, defaultSelectedPackages, variants]);
+        setSelectedPackages(initialPackages);
+    }, [defaultStatus, initialPackages, variants]);
 
     useEffect(() => {
         if (shouldClearFields) {
