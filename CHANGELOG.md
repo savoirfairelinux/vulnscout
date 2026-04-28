@@ -10,6 +10,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.0] - 2026-04-28
+
+### Added
+- Scan: multi-source support (Grype, OSV, NVD), scan routes, diff engine, delete, queue system, and scan history with variant display.
+- Scan: CPE generation, Grype artifact builder, and `--perform-nvd-scan` / `--perform-osv-scan` CLI commands.
+- Scan: scan history diffs cached in `scan_diff_cache` table; tool-scan findings on removed packages.
+- SBOM: add CPE/PURL columns to packages table.
+- Review: implement assessment edit / delete features.
+- Templates: add missing controllers, new data models graph, and new fields after DB migration.
+
+### Changed
+- Scan: redesigned start button, log windows per variant, and active vulnerability pool.
+- Refactor: split `scans.py` into modules; refactor template kwargs; remove unused popup component.
+
+### Fixed
+- Scan diffs: unified diff logic for list & detail views, SBOM baseline at scan time, stable historical counts after new SBOM import, active view includes latest tool scan per source.
+- Scan execution: Grype performs only on active SBOM elements, OSV queries all PURLs correctly, NVD queries all package CPEs, queue system for Grype scans.
+- Active-scan logic: unified active-scan logic, scoped `found_by` attribution to active scans, linked each CVE to introducing scan, variant enrichment uses correct scan IDs.
+- Packages: route uses only SBOM scan for package list, resolved active packages, removed SBOM-package filtering system, avoid code duplication for pkg init, empty packages block creation.
+- Assessments: scope variant tags to assessment group date, pre-check only active packages on new assessment.
+- Frontend: uncheck CPE & PURL by default, remove "+" sign for detected elements, fix array column size, remove unknown URL.
+- Templates: filters handle dict input; remove unnecessary conversion explanation.
+- Timestamps: include UTC offset in serialized timestamps.
+- SPDX3/Yocto: CVSS persistence and description parsing.
+
+### Documentation
+- Add details on threat model, impact, assessment workflow, and terminology.
+- Update interactive mode documentation.
+
+---
+
 ## [0.12.1] - 2026-04-17
 
 ### Added
@@ -97,7 +128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ### Changed
 - Search: use FuseJS query syntax with `-` as negation prefix, handle exclude patterns, remove unwanted fuse keys.
 - `cve_check`: transition from existing status to fixed.
-- `vulnscout.sh`: use functions instead of env variables; arguments validity check & cleanup; 
+- `vulnscout.sh`: use functions instead of env variables; arguments validity check & cleanup;
 - Change variable names for containers.
 - Capitalize description title text in modal; reorganize example files.
 - Updated `.gitignore` to include VulnScout files and exclude specific directories.
