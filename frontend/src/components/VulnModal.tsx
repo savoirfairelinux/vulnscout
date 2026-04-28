@@ -921,6 +921,7 @@ type AssessmentGroup = {
                                             defaultStatus={defaultStatus}
                                             variants={availableVariants}
                                             availablePackages={vuln.packages}
+                                            defaultSelectedPackages={vuln.packages_current}
                                         />
                                     </li>
                                 )}
