@@ -22,9 +22,10 @@ type Props = {
     defaultStatus?: string;
     variants?: Variant[];
     availablePackages?: string[];
+    defaultSelectedPackages?: string[];
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages}: Readonly<Props>) {
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
     const [statusNotes, setStatusNotes] = useState("");
@@ -33,7 +34,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
         variants?.length === 1 ? [variants[0].id] : []
     );
-    const [selectedPackages, setSelectedPackages] = useState<string[]>(availablePackages ?? []);
+    const [selectedPackages, setSelectedPackages] = useState<string[]>(defaultSelectedPackages ?? availablePackages ?? []);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -50,8 +51,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
     // Reset selected packages when the available list changes (e.g. navigating to a different vuln)
     useEffect(() => {
-        setSelectedPackages(availablePackages ?? []);
-    }, [availablePackages]);
+        setSelectedPackages(defaultSelectedPackages ?? availablePackages ?? []);
+    }, [availablePackages, defaultSelectedPackages]);
 
     // Auto-select single variant when variants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -128,8 +129,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setWorkaround("");
         setImpact("");
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
-        setSelectedPackages(availablePackages ?? []);
-    }, [defaultStatus, availablePackages, variants]);
+        setSelectedPackages(defaultSelectedPackages ?? availablePackages ?? []);
+    }, [defaultStatus, availablePackages, defaultSelectedPackages, variants]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -207,7 +208,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             <div className="mt-2 mb-2 ml-1">
                 <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    {availablePackages.map(pkg => (
+                    {availablePackages.map(pkg => {
+                        const isActive = !defaultSelectedPackages || defaultSelectedPackages.includes(pkg);
+                        return (
                         <label key={pkg} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
                             <input
                                 type="checkbox"
@@ -221,9 +224,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                                 }}
                                 className="accent-blue-400"
                             />
-                            <span className="font-mono text-gray-200">{pkg}</span>
+                            <span className={`font-mono ${isActive ? 'text-gray-200' : 'text-gray-500 italic'}`}
+                                  title={isActive ? undefined : 'Not in active SBOM'}>{pkg}</span>
                         </label>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
         )}
