@@ -945,16 +945,18 @@ type AssessmentGroup = {
                                                 ))}
                                             </div>
                                             {(() => {
-                                                // Build the same content fingerprint used by groupAssessments,
-                                                // then find ALL matching records (across all variants) in the
+                                                // Build the same group key (date + content fingerprint) used by
+                                                // groupAssessments, then find ALL matching records in the
                                                 // unfiltered allVulnAssessments so we can show every variant tag
                                                 // even when the explorer is filtered to a single variant.
+                                                const groupDateKey = new Date(group.timestamp).toDateString();
                                                 const fp = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
                                                 const allVariantIds = [...new Set(
                                                     allVulnAssessments
                                                         .filter(a => {
+                                                            const aDateKey = new Date(a.timestamp).toDateString();
                                                             const afp = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
-                                                            return afp === fp && !!a.variant_id;
+                                                            return aDateKey === groupDateKey && afp === fp && !!a.variant_id;
                                                         })
                                                         .map(a => a.variant_id as string)
                                                 )];
