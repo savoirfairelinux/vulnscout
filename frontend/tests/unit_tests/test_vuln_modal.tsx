@@ -1982,4 +1982,110 @@ describe('Vulnerability Modal', () => {
         await screen.findByText('Production');
         expect(screen.getByText('Staging')).toBeInTheDocument();
     });
+
+    test('projectId prop filters variants to only show those from the current project', async () => {
+        fetchMock.resetMocks();
+        // Variants endpoint returns variants from two different projects
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
+            { id: 'v2', name: 'Variant B', project_id: 'proj-alpha' },
+            { id: 'v3', name: 'Variant Other', project_id: 'proj-beta' }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+
+        render(<VulnModal
+            vuln={{...vulnerability, assessments: []}}
+            isEditing={true}
+            onClose={() => {}}
+            appendAssessment={() => {}}
+            appendCVSS={() => null}
+            patchVuln={() => {}}
+            projectId="proj-alpha"
+        />);
+
+        // Wait for variants to load
+        await screen.findByText('Variant A');
+        expect(screen.getByText('Variant B')).toBeInTheDocument();
+        // Variant from the other project should NOT be shown
+        expect(screen.queryByText('Variant Other')).not.toBeInTheDocument();
+    });
+
+    test('without projectId prop all variants are shown', async () => {
+        fetchMock.resetMocks();
+        // Variants endpoint returns variants from two different projects
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
+            { id: 'v2', name: 'Variant Other', project_id: 'proj-beta' }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+
+        render(<VulnModal
+            vuln={{...vulnerability, assessments: []}}
+            isEditing={true}
+            onClose={() => {}}
+            appendAssessment={() => {}}
+            appendCVSS={() => null}
+            patchVuln={() => {}}
+        />);
+
+        // Wait for variants to load — both should be shown without projectId filter
+        await screen.findByText('Variant A');
+        expect(screen.getByText('Variant Other')).toBeInTheDocument();
+    });
+
+    test('packages_current scopes available packages to current project', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+
+        // vuln.packages has all packages (cross-project), packages_current has only project-scoped
+        const vulnMultiProject = {
+            ...vulnerability,
+            packages: ['pkg-alpha@1.0.0', 'pkg-beta@2.0.0', 'pkg-gamma@3.0.0'],
+            packages_current: ['pkg-alpha@1.0.0'],
+            assessments: []
+        };
+
+        render(<VulnModal
+            vuln={vulnMultiProject}
+            isEditing={true}
+            onClose={() => {}}
+            appendAssessment={() => {}}
+            appendCVSS={() => null}
+            patchVuln={() => {}}
+            projectId="proj-alpha"
+        />);
+
+        // Only the project-scoped package (from packages_current) should appear as checkbox
+        await screen.findByText('pkg-alpha@1.0.0');
+        expect(screen.queryByText('pkg-beta@2.0.0')).not.toBeInTheDocument();
+        expect(screen.queryByText('pkg-gamma@3.0.0')).not.toBeInTheDocument();
+    });
+
+    test('falls back to all packages when packages_current is empty', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+
+        const vulnEmptyCurrent = {
+            ...vulnerability,
+            packages: ['pkg-x@1.0.0', 'pkg-y@2.0.0'],
+            packages_current: [],
+            assessments: []
+        };
+
+        render(<VulnModal
+            vuln={vulnEmptyCurrent}
+            isEditing={true}
+            onClose={() => {}}
+            appendAssessment={() => {}}
+            appendCVSS={() => null}
+            patchVuln={() => {}}
+            projectId="proj-1"
+        />);
+
+        // Both packages should appear since packages_current is empty (fallback)
+        await screen.findByText('pkg-x@1.0.0');
+        expect(screen.getByText('pkg-y@2.0.0')).toBeInTheDocument();
+    });
 });
