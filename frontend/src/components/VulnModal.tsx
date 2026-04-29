@@ -35,6 +35,7 @@ type Props = {
     currentIndex?: number;
     onNavigate?: (index: number) => void;
     variantId?: string;
+    projectId?: string;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -54,7 +55,7 @@ type AssessmentGroup = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId } = props;
+    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
@@ -72,11 +73,22 @@ type AssessmentGroup = {
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
-    // Fetch variants that have a finding for this specific vulnerability
+    // Project-scoped package list: prefer packages_current (scoped to
+    // the active scan context) and fall back to the full list.
+    const projectPackages = (vuln.packages_current?.length > 0) ? vuln.packages_current : vuln.packages;
+
+    // Fetch variants that have a finding for this specific vulnerability,
+    // filtered to the current project when a projectId is provided.
     useEffect(() => {
         setAvailableVariants([]);
-        Variants.listByVuln(vuln.id).then(setAvailableVariants).catch(() => {});
-    }, [vuln.id]);
+        Variants.listByVuln(vuln.id).then(variants => {
+            if (projectId) {
+                setAvailableVariants(variants.filter(v => v.project_id === projectId));
+            } else {
+                setAvailableVariants(variants);
+            }
+        }).catch(() => {});
+    }, [vuln.id, projectId]);
 
     // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
     // complete even when a variant filter is active in the explorer.
@@ -509,9 +521,9 @@ type AssessmentGroup = {
 
     const addAssessment = async (content: PostAssessment) => {
         content.vuln_id = vuln.id;
-        // packages come from StatusEditor selection; fall back to all vuln packages
+        // packages come from StatusEditor selection; fall back to project-scoped packages
         if (!content.packages || content.packages.length === 0) {
-            content.packages = vuln.packages;
+            content.packages = projectPackages;
         }
 
         // Determine which variants to post to. If none selected, post once without a variant_id.
@@ -920,7 +932,7 @@ type AssessmentGroup = {
                                             triggerBanner={showMessage}
                                             defaultStatus={defaultStatus}
                                             variants={availableVariants}
-                                            availablePackages={vuln.packages}
+                                            availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
                                         />
                                     </li>
@@ -1019,7 +1031,7 @@ type AssessmentGroup = {
                                                                 .map(a => a.variant_id)
                                                                 .filter((v): v is string => !!v)
                                                         )]}
-                                                        availablePackages={vuln.packages}
+                                                        availablePackages={projectPackages}
                                                         defaultSelectedPackages={group.packages}
                                                     />
                                                 </div>
