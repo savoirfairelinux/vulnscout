@@ -4,7 +4,7 @@
     "serialNumber": "urn:uuid:b9d5bcbc-aac7-485b-be27-96f06fae246d",
     "version": 1,
     "metadata": {
-      "timestamp": "2024-05-07T16:05:22.201979",
+      "timestamp": "2024-05-07T16:05:22.201979Z",
       "tools": [
         {
           "name": "yocto"
