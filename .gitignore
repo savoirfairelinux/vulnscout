@@ -3,6 +3,7 @@
 /outputs
 /inputs
 htmldocs/
+node_modules/
 src/static/*
 !src/static/.gitkeep
 *.pdf
