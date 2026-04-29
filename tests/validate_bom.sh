@@ -5,6 +5,22 @@
 # Tools used:
 #   - ajv-cli + ajv-formats: for CycloneDX (1.4, 1.5 and 1.6) and SPDX (2.2, 2.3, 3.0.1)
 #   - vexctl: for OpenVEX
+#
+# Sceham files were sourced from:
+#
+# CycloneDX (from CycloneDX/specification repo):
+# bom-1.4.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.4.schema.json
+# bom-1.5.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.5.schema.json
+# bom-1.6.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.6.schema.json
+# spdx.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/spdx.schema.json
+# jsf-0.82.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/jsf-0.82.schema.json
+#
+# SPDX 2.x (from spdx/spdx-spec repo):
+# spdx-schema-2.2.json = https://raw.githubusercontent.com/spdx/spdx-spec/development/v2.2.2/schemas/spdx-schema.json
+# spdx-schema-2.3.json = https://raw.githubusercontent.com/spdx/spdx-spec/support/2.3/schemas/spdx-schema.json
+#
+# SPDX 3.x:
+# spdx-json-schema-3.0.1.json = https://spdx.org/schema/3.0.1/spdx-json-schema.json
 
 set -euo pipefail
 
