@@ -343,21 +343,36 @@ class TestAssessmentFromVulnAssessment:
         assert a.status == "under_investigation"
 
     def test_from_vuln_assessment_update(self, app, finding):
-        """from_vuln_assessment with an existing record should update it."""
+        """from_vuln_assessment with the same DTO UUID should update it."""
         from src.models.assessment import Assessment
         # create first
-        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va1.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va1, finding_id=finding.id)
-        # update
-        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va2.set_status("not_affected")
-        va2.set_justification("vulnerable_code_not_present")
-        va2.responses = ["no action needed"]
-        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id)
+        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va, finding_id=finding.id)
+        # update same DTO (same UUID)
+        va.set_status("not_affected")
+        va.set_justification("vulnerable_code_not_present")
+        va.responses = ["no action needed"]
+        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id)
         assert a2.status == "not_affected"
         assert a2.justification == "vulnerable_code_not_present"
         assert a2.responses == ["no action needed"]
+
+    def test_from_vuln_assessment_new_scan_creates_new_record(self, app, finding):
+        """A new DTO (different UUID) for the same finding creates a separate record."""
+        from src.models.assessment import Assessment
+        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va1.set_status("fixed")
+        va1.set_not_affected_reason("Yocto reported vulnerability as Patched")
+        a1 = Assessment.from_vuln_assessment(va1, finding_id=finding.id)
+
+        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va2.set_status("under_investigation")
+        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id)
+
+        assert a1.id != a2.id
+        assert a1.status == "fixed"
+        assert a2.status == "under_investigation"
 
     def test_assessment_full_update(self, app, finding, variant):
         """update() should handle every optional kwarg."""
@@ -386,13 +401,12 @@ class TestAssessmentFromVulnAssessment:
     def test_from_vuln_assessment_update_sets_simplified_status(self, app, finding):
         """from_vuln_assessment update path should refresh simplified_status when status changes."""
         from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
-        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va1.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va1, finding_id=finding.id)
+        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va, finding_id=finding.id)
 
-        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va2.set_status("fixed")
-        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id)
+        va.set_status("fixed")
+        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id)
         assert a2.simplified_status == STATUS_TO_SIMPLIFIED["fixed"]
 
     def test_from_vuln_assessment_create_with_variant_id(self, app, finding, variant):
@@ -406,13 +420,12 @@ class TestAssessmentFromVulnAssessment:
     def test_from_vuln_assessment_update_sets_variant_id_if_none(self, app, finding, variant):
         """from_vuln_assessment update path should set variant_id when the existing record has none."""
         from src.models.assessment import Assessment
-        va1 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va1.set_status("under_investigation")
-        Assessment.from_vuln_assessment(va1, finding_id=finding.id)  # no variant_id
+        va = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
+        va.set_status("under_investigation")
+        Assessment.from_vuln_assessment(va, finding_id=finding.id)  # no variant_id
 
-        va2 = Assessment.new_dto("CVE-2025-9999", ["libcov@3.0.0"])
-        va2.set_status("fixed")
-        a2 = Assessment.from_vuln_assessment(va2, finding_id=finding.id, variant_id=variant.id)
+        va.set_status("fixed")
+        a2 = Assessment.from_vuln_assessment(va, finding_id=finding.id, variant_id=variant.id)
         assert a2.variant_id == variant.id
 
     def test_from_vuln_assessment_separate_record_per_variant(self, app, finding, variant, project):
