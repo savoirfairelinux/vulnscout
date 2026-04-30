@@ -84,61 +84,29 @@ detect_format() {
     local file="$1"
 
     # Check for CycloneDX (has "specVersion" and "bomFormat": "CycloneDX")
-    if python3 -c "
-import json, sys
-d = json.load(open('$file'))
-if d.get('bomFormat') == 'CycloneDX' and 'specVersion' in d:
-    sys.exit(0)
-sys.exit(1)
-" > /dev/null 2>&1; then
+    if jq -e 'select(.bomFormat == "CycloneDX" and .specVersion != null)' "$file" > /dev/null 2>&1; then
         FORMAT="cyclonedx"
-        VERSION=$(python3 -c "import json; print(json.load(open('$file'))['specVersion'])")
+        VERSION=$(jq -r '.specVersion' "$file")
         return 0
     fi
 
     # Check for SPDX 2.x (has "spdxVersion")
-    if python3 -c "
-import json, sys
-d = json.load(open('$file'))
-if 'spdxVersion' in d:
-    sys.exit(0)
-sys.exit(1)
-" > /dev/null 2>&1; then
+    if jq -e 'has("spdxVersion")' "$file" > /dev/null 2>&1; then
         FORMAT="spdx2"
-        VERSION=$(python3 -c "import json; print(json.load(open('$file'))['spdxVersion'])")
+        VERSION=$(jq -r '.spdxVersion' "$file")
         return 0
     fi
 
     # Check for SPDX 3.x (has "@context" containing "spdx.org")
-    if python3 -c "
-import json, sys
-d = json.load(open('$file'))
-ctx = d.get('@context', '')
-if 'spdx.org' in str(ctx):
-    sys.exit(0)
-sys.exit(1)
-" > /dev/null 2>&1; then
+    if jq -e '."@context" | tostring | test("spdx\\.org")' "$file" > /dev/null 2>&1; then
         FORMAT="spdx3"
         # Extract version from @context URL
-        VERSION=$(python3 -c "
-import json, re
-d = json.load(open('$file'))
-ctx = str(d.get('@context', ''))
-m = re.search(r'spdx.org/rdf/(\d+\.\d+\.\d+)', ctx)
-print(m.group(1) if m else '3.0.1')
-")
+        VERSION=$(jq -r '(."@context" | tostring | capture("spdx\\.org/rdf/(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)").v) // "3.0.1"' "$file")
         return 0
     fi
 
     # Check for OpenVEX (has "@context" containing "openvex")
-    if python3 -c "
-import json, sys
-d = json.load(open('$file'))
-ctx = d.get('@context', '')
-if 'openvex' in str(ctx).lower():
-    sys.exit(0)
-sys.exit(1)
-" > /dev/null 2>&1; then
+    if jq -e '."@context" | tostring | ascii_downcase | test("openvex")' "$file" > /dev/null 2>&1; then
         FORMAT="openvex"
         VERSION=""
         return 0
