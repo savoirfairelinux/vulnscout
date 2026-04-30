@@ -7,7 +7,6 @@
 Computation helpers live in sibling modules:
 - ``_scan_queries``  — low-level DB batch queries
 - ``_scan_diff``     — diff algorithms & list-view serialisation
-- ``_scan_cache``    — scan_diff_cache read/write/invalidate
 """
 
 import uuid as uuid_module
@@ -28,19 +27,16 @@ from ._scan_queries import (
     _load_scan_with_findings,
     _obs_to_dict,
     _origin_for_scan,
+    _assessments_detail_for_scan,
 )
 from ._scan_diff import (
     _classify_package_changes,
     _contributing_scans_at,
     _contributing_scans_before,
     _global_result_id_sets,
+    _global_assessment_ids_for,
     _global_result_full,
     _serialize_list_with_diff,
-)
-from ._scan_cache import (
-    _read_cache,
-    _store_cache,
-    recompute_variant_cache,
 )
 
 
@@ -60,9 +56,6 @@ from ._scan_diff import (  # noqa: F401  — re-exports
     _classify_finding_changes,
     _prev_scan_map,
 )
-from ._scan_cache import (  # noqa: F401  — re-exports
-    invalidate_variant_cache,
-)
 
 
 def init_app(app):
@@ -70,11 +63,7 @@ def init_app(app):
     @app.route('/api/scans')
     def list_all_scans():
         scans = ScanController.get_all()
-        cached = _read_cache(scans)
-        if cached is not None:
-            return jsonify(cached)
         result = _serialize_list_with_diff(scans)
-        _store_cache(result)
         return jsonify(result)
 
     @app.route('/api/projects/<project_id>/scans')
@@ -83,11 +72,7 @@ def init_app(app):
         if project is None:
             return jsonify({"error": "Project not found"}), 404
         scans = ScanController.get_by_project(project_id)
-        cached = _read_cache(scans)
-        if cached is not None:
-            return jsonify(cached)
         result = _serialize_list_with_diff(scans)
-        _store_cache(result)
         return jsonify(result)
 
     @app.route('/api/variants/<variant_id>/scans')
@@ -96,11 +81,7 @@ def init_app(app):
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
         scans = ScanController.get_by_variant(variant_id)
-        cached = _read_cache(scans)
-        if cached is not None:
-            return jsonify(cached)
         result = _serialize_list_with_diff(scans)
-        _store_cache(result)
         return jsonify(result)
 
     @app.route('/api/scans/<scan_id>', methods=['PATCH'])
@@ -138,9 +119,6 @@ def init_app(app):
         if scan is None:
             return jsonify({"error": "Scan not found"}), 404
 
-        # Remember variant so we can recompute cache after deletion.
-        variant_id = scan.variant_id
-
         # Collect finding IDs referenced by this scan's observations
         # *before* the cascade delete removes them.
         finding_ids = {obs.finding_id for obs in (scan.observations or [])}
@@ -164,9 +142,6 @@ def init_app(app):
                         orphaned_count += 1
             if orphaned_count:
                 db.session.commit()
-
-        # Recompute scan-history cache for the affected variant.
-        recompute_variant_cache(variant_id)
 
         return jsonify({
             "deleted": True,
@@ -443,6 +418,7 @@ def init_app(app):
         newly_detected_vulns_count = None
         newly_detected_findings_list = None
         newly_detected_vulns_list = None
+        newly_detected_assessments_list = None
 
         if is_tool_scan:
             # Use the filtered global sets so that
@@ -458,6 +434,40 @@ def init_app(app):
             ]
             newly_detected_findings_count = len(newly_detected_findings_list)
 
+            # Newly detected assessments: diff global assessment sets
+            _before_assess_ids = _global_assessment_ids_for(sbom_before, tools_before)
+            _after_assess_ids = _global_assessment_ids_for(sbom_after, tools_after)
+            _new_assess_ids = _after_assess_ids - _before_assess_ids
+            if _new_assess_ids:
+                from ..models.assessment import Assessment
+                _assess_rows = db.session.execute(
+                    db.select(
+                        Assessment.id,
+                        Finding.vulnerability_id,
+                        Assessment.status,
+                        Assessment.simplified_status,
+                        Assessment.justification,
+                        Assessment.impact_statement,
+                        Assessment.status_notes,
+                    )
+                    .join(Finding, Finding.id == Assessment.finding_id)
+                    .where(Assessment.id.in_(_new_assess_ids))
+                ).all()
+                newly_detected_assessments_list = [
+                    {
+                        "vulnerability_id": vid,
+                        "status": status or "under_investigation",
+                        "simplified_status": simp or "Pending Assessment",
+                        "justification": just or "",
+                        "impact_statement": impact or "",
+                        "status_notes": notes or "",
+                    }
+                    for _aid, vid, status, simp, just, impact, notes in _assess_rows
+                ]
+                newly_detected_assessments_list.sort(key=lambda a: a["vulnerability_id"])
+            else:
+                newly_detected_assessments_list = []
+
         # For tool scans, provide flat lists of ALL findings/vulns from this scan
         all_findings_list = None
         all_vulns_list = None
@@ -467,6 +477,21 @@ def init_app(app):
                 for obs in scan.observations
             ]
             all_vulns_list = sorted(curr_vulns)
+
+        # --- Assessment counts + detail (single shared query) ---
+        # Determine next scan timestamp for same variant to bound the window
+        _next_scan_ts = None
+        for s in all_variant_scans:
+            if s.timestamp > scan.timestamp:
+                if _next_scan_ts is None or s.timestamp < _next_scan_ts:
+                    _next_scan_ts = s.timestamp
+        # Locate previous scan object for removed-assessment computation
+        _prev_scan = None
+        if prev_scan_id:
+            _prev_scan = _load_scan_with_findings(prev_scan_id)
+        assess_detail = _assessments_detail_for_scan(
+            scan, next_scan_ts=_next_scan_ts, prev_scan=_prev_scan
+        )
 
         return jsonify({
             "scan_id": str(scan.id),
@@ -487,10 +512,15 @@ def init_app(app):
             "vulns_added": vulns_added,
             "vulns_removed": vulns_removed,
             "vulns_unchanged": vulns_unchanged,
+            "assessment_count": assess_detail["total"],
+            "assessments_added": assess_detail["added"],
+            "assessments_removed": assess_detail["removed"],
+            "assessments_unchanged": assess_detail["unchanged_list"],
             "newly_detected_findings": newly_detected_findings_count,
             "newly_detected_vulns": newly_detected_vulns_count,
             "newly_detected_findings_list": newly_detected_findings_list,
             "newly_detected_vulns_list": newly_detected_vulns_list,
+            "newly_detected_assessments_list": newly_detected_assessments_list,
             "all_findings": all_findings_list,
             "all_vulns": all_vulns_list,
         })

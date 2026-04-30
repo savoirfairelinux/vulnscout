@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ### Added
 - Scan: multi-source support (Grype, OSV, NVD), scan routes, diff engine, delete, queue system, and scan history with variant display.
 - Scan: CPE generation, Grype artifact builder, and `--perform-nvd-scan` / `--perform-osv-scan` CLI commands.
-- Scan: scan history diffs cached in `scan_diff_cache` table; tool-scan findings on removed packages.
+- Scan: scan history diffs with tool-scan findings on removed packages.
 - SBOM: add CPE/PURL columns to packages table.
 - Review: implement assessment edit / delete features.
 - Templates: add missing controllers, new data models graph, and new fields after DB migration.
