@@ -58,17 +58,6 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         </button>
       </li>
 
-      {/* === Patch-Finder === */}
-      {/* <li className={[bgHoverColor, tab == 'patch-finder' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('patch-finder')}
-          className="flex items-center h-full px-4 py-2"
-        >
-          <FontAwesomeIcon icon={faBugSlash} className="mr-1" />
-          Patch-Finder
-        </button>
-      </li> */}
-
       {/* === Scans === */}
       <li className={[bgHoverColor, tab == 'scans' && bgActiveColor].join(' ')}>
         <button

@@ -195,36 +195,6 @@ def test_patch_vulnerability_invalids(client):
     })
     assert response.status_code == 400
 
-@pytest.mark.skip(reason="patch-finder feature on standby")
-def test_post_scan_patch_finder(client, app):
-    from src.models.vulnerability import Vulnerability
-    with app.app_context():
-        Vulnerability.create_record(
-            id="CVE-2021-37322",
-            description="CVE-2021-37322 test fixture",
-            status="medium",
-            versions_data={
-                "binutils (nvd-cpe-match)": {"fix": [">=? 2.32"], "affected": ["< 2.32"]},
-                "gcc (nvd-cpe-match)": {"fix": [">=? 10.1"], "affected": ["< 10.1"]},
-            },
-        )
-
-    response = client.post("/api/patch-finder/scan", json=[
-        "CVE-2021-37322",
-        "CVE-0000-00000"
-    ])
-    assert response.status_code == 200
-
-    data = json.loads(response.data)
-    assert "binutils" in data
-    assert "CVE-2021-37322 (nvd-cpe-match)" in data["binutils"]
-    assert "gcc" in data
-    assert "CVE-2021-37322 (nvd-cpe-match)" in data["gcc"]
-    fixs_binutils = data["binutils"]["CVE-2021-37322 (nvd-cpe-match)"]["fix"]
-    affected_gcc = data["gcc"]["CVE-2021-37322 (nvd-cpe-match)"]["affected"]
-    assert fixs_binutils == [">=? 2.32"]
-    assert affected_gcc == ["< 10.1"]
-
 
 def test_update_assessment(client):
     # First create an assessment

@@ -5,15 +5,10 @@ import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
-import type { PackageVulnerabilities } from "../handlers/patch_finder";
-import type { NVDProgress } from "../handlers/nvd_progress";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
-import PatchFinderLogic from "../handlers/patch_finder";
-import NVDProgressHandler from "../handlers/nvd_progress";
 import TablePackages from "./TablePackages";
 import TableVulnerabilities from "./TableVulnerabilities";
-import PatchFinder from "./PatchFinder";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
@@ -33,9 +28,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
-    const [patchInfo, setPatchInfo] = useState<PackageVulnerabilities>({});
-    const [patchDbReady, setPatchDbReady] = useState<boolean>(false);
-    const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
@@ -58,40 +50,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const closeBanner = () => {
         setBannerVisible(false);
     };
-
-    const loadPatchData = useCallback((vulns_list: Vulnerability[]) => {
-        const active_status = ['Exploitable', 'Pending Assessment'];
-        PatchFinderLogic
-        .scan(vulns_list.filter(el => active_status.includes(el.simplified_status)).map(el => el.id))
-        .then((patchData) => {
-            setPatchInfo(patchData);
-        })
-        .catch((_err) => {
-            // patch-finder feature may be disabled — fail silently
-        });
-    }, []);
-
-    const checkPatchReady = useCallback((vulns_list: Vulnerability[]) => {
-        // Check both patch status and NVD progress
-        Promise.all([
-            PatchFinderLogic.status(),
-            NVDProgressHandler.getProgress()
-        ])
-        .then(([patchData, progress]) => {
-            setNvdProgress(progress);
-
-            if (patchData.db_ready) {
-                setPatchDbReady(true);
-                loadPatchData(vulns_list);
-            } else {
-                setTimeout(() => checkPatchReady(vulns_list), progress.in_progress ? 3000 : 15000);
-                setPatchDbReady(false);
-            }
-        })
-        .catch((_err) => {
-            // patch-finder feature may be disabled — fail silently
-        })
-    }, [loadPatchData]);
 
     const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string) => {
         setIsLoadingData(true);
@@ -119,9 +77,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
-            setTimeout(() => checkPatchReady(enriched_vulns), 100);
         });
-    }, [checkPatchReady]);
+    }, []);
 
     // On mount: fetch default project/variant from config, then load data
     useEffect(() => {
@@ -163,11 +120,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
         // Update packages with the new vulnerability data
         setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-
-        // Update patch data if db is ready (status changes might affect patch relevance)
-        if (patchDbReady) {
-            loadPatchData(updatedVulns);
-        }
     }
 
     function appendCVSS(vulnId: string, vector: string) {
@@ -194,11 +146,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
         // Update packages with the new vulnerability data
         setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
-
-        // Update patch data if db is ready (status changes might affect patch relevance)
-        if (patchDbReady) {
-            loadPatchData(updatedVulns);
-        }
     }
 
     // Update vulns state in-place after a Review tab edit or delete
@@ -308,7 +255,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                 />}
-                {tab === 'patch-finder' && <PatchFinder vulnerabilities={vulns} packages={pkgs} patchData={patchInfo} db_ready={patchDbReady} nvdProgress={nvdProgress} />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports />}
