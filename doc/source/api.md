@@ -788,49 +788,6 @@ Status values: `"processing"`, `"done"`, `"error"`.
 
 ---
 
-## Patch Finder
-
-### Check Status
-
-```
-GET /api/patch-finder/status
-```
-
-**Response:**
-```json
-{
-  "db_ready": true,
-  "vulns_count": 1234
-}
-```
-
-### Scan for Patches
-
-```
-POST /api/patch-finder/scan
-```
-
-Query fix/affected versions for a list of CVEs.
-
-**Request body:**
-```json
-["CVE-2024-1234", "CVE-2024-5678"]
-```
-
-**Response:** Dictionary keyed by package name:
-```json
-{
-  "package-name": {
-    "CVE-2024-1234 grype": {
-      "fix": ["1.2.4", "1.3.0"],
-      "affected": ["1.2.0", "1.2.1", "1.2.3"]
-    }
-  }
-}
-```
-
----
-
 ## Progress
 
 ### NVD Progress
