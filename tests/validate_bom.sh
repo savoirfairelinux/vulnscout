@@ -226,19 +226,6 @@ validate_expect_pass() {
     fi
 }
 
-# Validate a single file, expecting it to fail.
-validate_expect_fail() {
-    local file="$1"
-    local label="$2"
-    local rel_path="${file#"${REPO_ROOT}/"}"
-
-    if validate_with_ajv "${file}" "${label}" "" > /dev/null 2>&1; then
-        print_fail "${rel_path} (expected validation to fail, but it passed)"
-    else
-        print_pass "${rel_path} (correctly rejected)"
-    fi
-}
-
 # Negative test: validate an invalid file against a specific schema directly.
 validate_invalid_cdx() {
     local file="$1"
