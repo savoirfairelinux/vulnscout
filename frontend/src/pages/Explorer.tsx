@@ -292,6 +292,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     patchVuln={patchVuln}
                     setTab={setTab}
                     appendCVSS={appendCVSS}
+                    projectId={currentProjectId}
                 />}
                 {tab === 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
                 {tab === 'vulnerabilities' &&
@@ -303,6 +304,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     filterLabel={filterLabel}
                     filterValue={filterValue}
                     variantId={currentVariantId}
+                    projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                 />}

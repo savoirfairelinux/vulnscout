@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
             patchVuln: (vulnId: string, data: any) => void;
             setTab: (tab: string) => void;
             appendCVSS: (vulnId: string, vector: string) => CVSS | null;
+            projectId?: string;
         };
 
         const pieOptions = {
@@ -114,7 +115,7 @@ import { useMemo, useState } from "react";
 
 
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [timeScale, setTimeScale] = useState<string>("6_months")
@@ -712,6 +713,7 @@ const packageColumns = [
             vulnerabilities={TopVulns.map(item => item.original)}
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
+            projectId={projectId}
           />
         )}
         </div>

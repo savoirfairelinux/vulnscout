@@ -30,6 +30,7 @@ type Props = {
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
     variantId?: string;
+    projectId?: string;
     /** Origin variant when compare mode is active */
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
@@ -271,7 +272,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -1361,6 +1362,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
             variantId={variantId}
+            projectId={projectId}
         ></VulnModal>}
     </>)
 }

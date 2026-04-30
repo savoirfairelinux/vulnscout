@@ -360,6 +360,14 @@ describe('StatusEditor', () => {
         );
     });
 
+    test('should render package section even with a single package', () => {
+        const packages = ['only-pkg@1.0.0'];
+        render(<StatusEditor {...defaultProps} availablePackages={packages} />);
+
+        expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
+        expect(screen.getByText('only-pkg@1.0.0')).toBeInTheDocument();
+    });
+
     test('should render package checkboxes when more than one package is available', () => {
         const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);

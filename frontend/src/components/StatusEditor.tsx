@@ -208,7 +208,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {availablePackages && availablePackages.length > 1 && (
+        {availablePackages && availablePackages.length >= 1 && (
             <div className="mt-2 mb-2 ml-1">
                 <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
