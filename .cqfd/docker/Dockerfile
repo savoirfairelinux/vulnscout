@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	asciidoc \
 	curl \
 	git \
+	jq \
 	ruby \
 	wget \
 	xz-utils \
@@ -19,6 +20,12 @@ RUN pip install --no-cache-dir -r /tmp/dev.txt \
     && rm -rf /tmp/dev.txt
 
 COPY --from=koalaman/shellcheck:v0.11.0 /bin/shellcheck /bin/shellcheck
+
+# Install vexctl for OpenVEX validation
+RUN GOARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://github.com/openvex/vexctl/releases/download/v0.3.0/vexctl-linux-${GOARCH}" \
+        -o /usr/local/bin/vexctl && \
+    chmod +x /usr/local/bin/vexctl
 
 # Install Docker CLI only (no daemon)
 RUN apt-get update && \
