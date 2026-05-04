@@ -602,6 +602,24 @@ class Assessment(Base):
             return existing
 
         new_status = assess.status or "under_investigation"
+
+        # Guard: never create a new "pending" assessment if one already
+        # exists for the same (finding, variant).  This prevents SBOM
+        # re-imports from regressing a resolved assessment back to
+        # "under_investigation" by blindly inserting a duplicate row.
+        if new_status == "under_investigation" and finding_id and variant_id:
+            has_existing = db.session.execute(
+                db.select(Assessment.id).where(
+                    Assessment.finding_id == finding_id,
+                    Assessment.variant_id == variant_id,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if has_existing is not None:
+                # Return the existing record as-is (no downgrade).
+                existing_rec = db.session.get(Assessment, has_existing)
+                if existing_rec is not None:
+                    return existing_rec
+
         record = Assessment.create(
             assessment_id=assess_id,
             status=new_status,
