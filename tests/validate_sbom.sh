@@ -280,7 +280,7 @@ cd "${REPO_ROOT}"
 flask --app "${FLASK_APP}" db upgrade
 
 flask --app "${FLASK_APP}" merge \
-    --project validate_bom \
+    --project validate_sbom \
     --variant default \
     --spdx "${REPO_ROOT}/tests/docker/spdx/valid_v2_2.spdx.json" \
     --cdx "${REPO_ROOT}/tests/docker/cdx/valid_v1_4.cdx.json" \
