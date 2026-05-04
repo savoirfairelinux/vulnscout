@@ -8,8 +8,8 @@ set -m # enable job control to allow `fg` command
 
 CONFIG_FILE="${VULNSCOUT_CONFIG:-/etc/vulnscout/config.env}"
 INPUTS_DIR="/scan/inputs"
-VARIANT_NAME="default"
 PROJECT_NAME="default"
+VARIANT_NAME=""
 
 readonly BASE_DIR="/scan"
 INTERACTIVE_MODE="${INTERACTIVE_MODE:-false}"
@@ -242,10 +242,16 @@ cmd_scan() {
 
     # All input files belong to a single variant set for this invocation
     PROJECT_NAME=${PROJECT_NAME:-"$PRODUCT_NAME"}
-    VARIANT_NAME=${VARIANT_NAME:-"default"}
-    INIT_APP_ARGS=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+    INIT_APP_ARGS=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        INIT_APP_ARGS+=(--variant "$VARIANT_NAME")
+    fi
+    local has_inputs=false
+
     if [[ -d "$INPUTS_DIR/spdx" ]]; then
-        for f in "$INPUTS_DIR/spdx"/*.spdx.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f"); done
+        for f in "$INPUTS_DIR/spdx"/*.spdx.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--spdx "$f") && has_inputs=true
+        done
         # Warn about files that don't match the SPDX naming convention
         for f in "$INPUTS_DIR/spdx"/*; do
             [[ -f "$f" ]] || continue
@@ -257,10 +263,14 @@ cmd_scan() {
         done
     fi
     if [[ -d "$INPUTS_DIR/cdx" ]]; then
-        for f in "$INPUTS_DIR/cdx"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--cdx "$f"); done
+        for f in "$INPUTS_DIR/cdx"/*.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--cdx "$f") && has_inputs=true
+        done
     fi
     if [[ -d "$INPUTS_DIR/openvex" ]]; then
-        for f in "$INPUTS_DIR/openvex"/*openvex*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--openvex "$f"); done
+        for f in "$INPUTS_DIR/openvex"/*openvex*.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--openvex "$f") && has_inputs=true
+        done
         # Warn about files that don't match the OpenVEX naming convention
         for f in "$INPUTS_DIR/openvex"/*; do
             [[ -f "$f" ]] || continue
@@ -271,10 +281,14 @@ cmd_scan() {
         done
     fi
     if [[ -d "$INPUTS_DIR/yocto_cve_check" ]]; then
-        for f in "$INPUTS_DIR/yocto_cve_check"/*.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f"); done
+        for f in "$INPUTS_DIR/yocto_cve_check"/*.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f") && has_inputs=true
+        done
     fi
     if [[ -d "$INPUTS_DIR/grype" ]]; then
-        for f in "$INPUTS_DIR/grype"/*.grype.json; do [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f"); done
+        for f in "$INPUTS_DIR/grype"/*.grype.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f") && has_inputs=true
+        done
         # Warn about files that don't match the Grype naming convention
         for f in "$INPUTS_DIR/grype"/*; do
             [[ -f "$f" ]] || continue
@@ -286,12 +300,8 @@ cmd_scan() {
     fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade)
 
-    # INIT_APP_ARGS always starts with --project <name> --variant <name> (4 elements).
-    # Has new input files when length > 4.
-    local has_inputs=false
     local has_condition=false
     local _cmd_scan_exit=0
-    [[ ${#INIT_APP_ARGS[@]} -gt 4 ]]     && has_inputs=true
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
     if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
