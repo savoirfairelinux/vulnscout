@@ -4,8 +4,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
+import typing
+
+from sqlalchemy.orm import Mapped, relationship
+
 from ..extensions import db, Base
+
+if typing.TYPE_CHECKING:
+    from .scan import Scan
+    from .finding import Finding
 
 
 class Observation(Base):
@@ -13,12 +20,12 @@ class Observation(Base):
 
     __tablename__ = "observations"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False, index=True)
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    finding_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False, index=True)
+    scan_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
 
-    scan = db.relationship("Scan", back_populates="observations")
-    finding = db.relationship("Finding", back_populates="observations")
+    scan: Mapped["Scan"] = relationship("Scan", back_populates="observations")
+    finding: Mapped["Finding"] = relationship("Finding", back_populates="observations")
 
     def __repr__(self) -> str:
         return f"<Observation id={self.id} finding_id={self.finding_id} scan_id={self.scan_id}>"
@@ -51,7 +58,7 @@ class Observation(Base):
         return observation
 
     @staticmethod
-    def get_by_id(observation_id: uuid.UUID | str) -> Optional["Observation"]:
+    def get_by_id(observation_id: uuid.UUID | str) -> "Observation | None":
         """Return the observation matching *observation_id*, or ``None`` if not found."""
         if isinstance(observation_id, str):
             observation_id = uuid.UUID(observation_id)

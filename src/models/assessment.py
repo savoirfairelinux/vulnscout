@@ -121,7 +121,7 @@ class Assessment(Base):
     justification = db.Column(db.Text, nullable=True)
     impact_statement = db.Column(db.Text, nullable=True)
     workaround = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(
+    timestamp: Mapped[datetime] = db.Column(
         db.DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),

@@ -8,6 +8,7 @@ import time
 import os
 import json
 import urllib.request
+import urllib.error
 from typing import Optional
 
 from ..models.vulnerability import Vulnerability
@@ -75,6 +76,7 @@ def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[dat
         return True
     if delay is _NEVER:
         return False
+    assert delay
     return (datetime.datetime.utcnow() - fetched_at) >= delay
 
 

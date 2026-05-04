@@ -433,7 +433,7 @@ def init_app(app):
                 }, 400
 
             try:
-                data = json.load(uploaded)
+                data = json.load(uploaded.stream)
             except Exception:
                 return {"error": "Invalid JSON file"}, 400
 
@@ -510,6 +510,7 @@ def init_app(app):
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
             return assessment, status
+        assert isinstance(assessment, DBAssessment)
 
         # Resolve variant_id once — same for all packages in this request
         variant_id_raw = payload_data.get('variant_id') or None
@@ -585,8 +586,10 @@ def init_app(app):
 
                 assessment, status = payload_to_assessment(item)
                 if status != 200:
+                    assert isinstance(assessment, dict)
                     errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
                     continue
+                assert isinstance(assessment, DBAssessment)
 
                 vuln_id = assessment.vuln_id
                 # Parse optional variant_id from the raw item
