@@ -26,8 +26,8 @@ test_ci:
 	cd $(CI_DIR) && \
 	bash ./vulnscout_CI_test.sh
 
-validate_bom:
-	bash $(MAKEFILE_DIR)/validate_bom.sh
+validate_sbom:
+	bash $(MAKEFILE_DIR)/validate_sbom.sh
 
 docker_build:
 	@if [ -z "${BUILD_TAG}" ]; then echo "BUILD_TAG is not set"; exit 1; fi
