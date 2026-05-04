@@ -272,13 +272,22 @@ The `--export-custom-assessments` flag produces a `.tar.gz` archive containing o
 ./vulnscout --project demo --export-custom-assessments
 ```
 
+You can also use the `--variant` flag to select from which variant to export an OpenVEX file. In this case, the exported file is a simple `.json` file:
+
+```bash
+./vulnscout --project demo --variant x86 --export-custom-assessments
+```
+
 ### Importing Custom Assessments
 
-The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and replays the assessment statements into the database:
+The `--import-custom-assessments` flag reads a `.json` or `.tar.gz` file and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
 
 ```bash
 # Import from a single OpenVEX JSON file
-./vulnscout --project demo --import-custom-assessments /path/to/assessments.json
+./vulnscout --project demo --variant x86 --import-custom-assessments /path/to/assessments.json
+
+# Import from a single OpenVEX JSON file without specifying the variant
+./vulnscout --project demo --import-custom-assessments /path/to/assessments/x86.json
 
 # Import from a tar.gz archive previously exported
 ./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
@@ -403,4 +412,3 @@ Once migration is complete, start VulnScout normally:
 ```bash
 ./vulnscout --serve
 ```
-
