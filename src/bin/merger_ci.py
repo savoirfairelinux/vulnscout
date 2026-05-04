@@ -557,10 +557,13 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
 
 @click.command("export-custom-assessments")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
-              help="Directory where the exported tar.gz is written.")
+              help="Directory where the exported file is written.")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name. If empty, all variants will be exported in an archive.")
 @with_appcontext
-def export_custom_assessments_command(output_dir: str) -> None:
-    """Export handmade (custom) assessments as a tar.gz of OpenVEX files."""
+def export_custom_assessments_command(output_dir: str, project: str, variant: str | None) -> None:
+    """Export handmade (custom) assessments as an (archive of) OpenVEX file(s)."""
     import io
     import tarfile
     import uuid as _uuid
@@ -573,17 +576,23 @@ def export_custom_assessments_command(output_dir: str) -> None:
     from ..models.variant import Variant as DBVariant
     from ..models.vulnerability import Vulnerability as DBVuln
 
-    handmade = DBAssessment.get_handmade()
-    if not handmade:
-        click.echo("No custom assessments to export.", err=True)
-        raise SystemExit(1)
-
     author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
     now_iso = _dt.now(_tz.utc).isoformat()
 
-    variant_names: dict[str, str] = {}
-    for v in DBVariant.get_all():
-        variant_names[str(v.id)] = v.name
+    project_obj = ProjectController.get_by_name(project)
+    if not project_obj:
+        click.echo(f"Error: project not found: {project}")
+        raise SystemExit(1)
+
+    variants: list[DBVariant]
+    if variant:
+        variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+        if not variant_obj:
+            click.echo(f"Error: variant not found: {variant}")
+            raise SystemExit(1)
+        variants = [variant_obj]
+    else:
+        variants = DBVariant.get_by_project(project_obj.id)
 
     vuln_cache: dict[str, DBVuln | None] = {}
 
@@ -592,116 +601,136 @@ def export_custom_assessments_command(output_dir: str) -> None:
             vuln_cache[vuln_id] = DBVuln.get_by_id(vuln_id)
         return vuln_cache[vuln_id]
 
-    by_variant: dict[str | None, list] = defaultdict(list)
-    for assess in handmade:
-        vid = str(assess.variant_id) if assess.variant_id else None
-        by_variant[vid].append(assess)
+    handmade = DBAssessment.get_handmade([variant_obj.id for variant_obj in variants])
+    if not handmade:
+        click.echo("No custom assessments to export.", err=True)
+        raise SystemExit(1)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-        for vid, assessments in by_variant.items():
-            filename = (
-                variant_names.get(vid, "unassigned")
-                if vid else "unassigned"
-            ) + ".json"
-            filename = filename.replace("/", "_").replace("\\", "_")
+    def generate_doc(assessments: list[DBAssessment]) -> dict:
+        statements = []
+        for assess in assessments:
+            stmt = assess.to_openvex_dict()
+            if stmt is None:
+                continue
 
-            statements = []
-            for assess in assessments:
-                stmt = assess.to_openvex_dict()
-                if stmt is None:
-                    continue
-
-                vuln_obj = (
-                    _get_vuln(assess.vuln_id)
-                    if assess.vuln_id else None
+            vuln_obj = (
+                _get_vuln(assess.vuln_id)
+                if assess.vuln_id else None
+            )
+            description = ""
+            aliases: list[str] = []
+            vuln_url = ""
+            if vuln_obj:
+                desc = vuln_obj.texts.get("description", "")
+                yocto_desc = vuln_obj.texts.get(
+                    "yocto description", ""
                 )
-                description = ""
-                aliases: list[str] = []
-                vuln_url = ""
-                if vuln_obj:
-                    desc = vuln_obj.texts.get("description", "")
-                    yocto_desc = vuln_obj.texts.get(
-                        "yocto description", ""
+                description = desc or yocto_desc or ""
+                aliases = list(vuln_obj.aliases or [])
+                urls = (
+                    list(vuln_obj.urls) if vuln_obj.urls
+                    else list(vuln_obj.links or [])
+                )
+                vuln_url = urls[0] if urls else ""
+                if (
+                    not vuln_url
+                    and assess.vuln_id.startswith("CVE-")
+                ):
+                    vuln_url = (
+                        "https://nvd.nist.gov/vuln/detail/"
+                        + assess.vuln_id
                     )
-                    description = desc or yocto_desc or ""
-                    aliases = list(vuln_obj.aliases or [])
-                    urls = (
-                        list(vuln_obj.urls) if vuln_obj.urls
-                        else list(vuln_obj.links or [])
+                elif (
+                    not vuln_url
+                    and assess.vuln_id.startswith("GHSA-")
+                ):
+                    vuln_url = (
+                        "https://github.com/advisories/"
+                        + assess.vuln_id
                     )
-                    vuln_url = urls[0] if urls else ""
-                    if (
-                        not vuln_url
-                        and assess.vuln_id.startswith("CVE-")
-                    ):
-                        vuln_url = (
-                            "https://nvd.nist.gov/vuln/detail/"
-                            + assess.vuln_id
-                        )
-                    elif (
-                        not vuln_url
-                        and assess.vuln_id.startswith("GHSA-")
-                    ):
-                        vuln_url = (
-                            "https://github.com/advisories/"
-                            + assess.vuln_id
-                        )
 
-                stmt["vulnerability"] = {
-                    "name": assess.vuln_id,
-                    "description": description,
-                    "aliases": aliases,
-                    "@id": vuln_url,
-                }
-
-                products = []
-                for pkg_str in assess.packages:
-                    if "@" in pkg_str:
-                        name, version = pkg_str.rsplit("@", 1)
-                    else:
-                        name, version = pkg_str, ""
-                    products.append({
-                        "@id": pkg_str,
-                        "identifiers": {
-                            "cpe23": (
-                                "cpe:2.3:*:*:"
-                                f"{name}:{version}"
-                                ":*:*:*:*:*:*:*"
-                            ),
-                            "purl": f"pkg:generic/{name}@{version}",
-                        }
-                    })
-                stmt["products"] = products
-                stmt.setdefault("action_statement_timestamp", "")
-                stmt["scanners"] = list({
-                    assess.source or "local_user_data",
-                    assess.origin or "local_user_data",
-                })
-                statements.append(stmt)
-
-            doc = {
-                "@context": "https://openvex.dev/ns/v0.2.0",
-                "@id": (
-                    "https://savoirfairelinux.com/sbom/openvex/"
-                    + str(_uuid.uuid4())
-                ),
-                "author": author,
-                "timestamp": now_iso,
-                "version": 1,
-                "statements": statements,
+            stmt["vulnerability"] = {
+                "name": assess.vuln_id,
+                "description": description,
+                "aliases": aliases,
+                "@id": vuln_url,
             }
 
-            json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
-            info = tarfile.TarInfo(name=filename)
-            info.size = len(json_bytes)
-            tar.addfile(info, io.BytesIO(json_bytes))
+            products = []
+            for pkg_str in assess.packages:
+                if "@" in pkg_str:
+                    name, version = pkg_str.rsplit("@", 1)
+                else:
+                    name, version = pkg_str, ""
+                products.append({
+                    "@id": pkg_str,
+                    "identifiers": {
+                        "cpe23": (
+                            "cpe:2.3:*:*:"
+                            f"{name}:{version}"
+                            ":*:*:*:*:*:*:*"
+                        ),
+                        "purl": f"pkg:generic/{name}@{version}",
+                    }
+                })
+            stmt["products"] = products
+            stmt.setdefault("action_statement_timestamp", "")
+            stmt["scanners"] = list({
+                assess.source or "local_user_data",
+                assess.origin or "local_user_data",
+            })
+            statements.append(stmt)
 
-    out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
-    with open(out_path, "wb") as fh:
-        fh.write(buf.getvalue())
+        doc = {
+            "@context": "https://openvex.dev/ns/v0.2.0",
+            "@id": (
+                "https://savoirfairelinux.com/sbom/openvex/"
+                + str(_uuid.uuid4())
+            ),
+            "author": author,
+            "timestamp": now_iso,
+            "version": 1,
+            "statements": statements,
+        }
+        return doc
+
+    if variant is None:
+        # export all variants from project as archive
+        by_variant: dict[uuid.UUID, list[DBAssessment]] = defaultdict(list)
+        for assess in handmade:
+            by_variant[assess.variant_id].append(assess)
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+            for vid, assessments in by_variant.items():
+                variant_obj = DBVariant.get_by_id(vid)
+                assert variant_obj  # Variant cannot be null since we filtrered by variant before
+                filename = variant_obj.name + ".json"
+                filename = filename.replace("/", "_").replace("\\", "_")
+
+                doc = generate_doc(assessments)
+                json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
+                info = tarfile.TarInfo(name=filename)
+                info.size = len(json_bytes)
+                tar.addfile(info, io.BytesIO(json_bytes))
+
+        out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
+        with open(out_path, "wb") as fh:
+            fh.write(buf.getvalue())
+    else:
+        assert variant_obj
+        # Declared above, assert here so type checker no longer
+        # considers it possibly Unbound
+        filename = variant_obj.name + ".json"
+        filename = filename.replace("/", "_").replace("\\", "_")
+
+        doc = generate_doc(handmade)
+        out_path = os.path.join(output_dir, filename)
+        with open(out_path, "w") as file:
+            _json.dump(doc, file)
+
     click.echo(f"Custom assessments exported: {out_path}")
 
 

@@ -440,6 +440,7 @@ def test_export_custom_assessments_no_data(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "export-custom-assessments",
+            "--project", _PROJECT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 1
@@ -453,6 +454,7 @@ def test_export_custom_assessments_success(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "export-custom-assessments",
+            "--project", _PROJECT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 0, result.output
@@ -468,6 +470,22 @@ def test_export_custom_assessments_success(app, tmp_path):
         doc = json.loads(f.read())
         assert "openvex" in doc["@context"]
         assert len(doc["statements"]) >= 1
+
+
+def test_export_custom_assessments_success_variant(app, tmp_path):
+    """Export creates variant.json OpenVEX."""
+    _create_custom_assessment(app)
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export-custom-assessments",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+            "--output-dir", str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+    out_file = tmp_path / f"{_VARIANT_NAME}.json"
+    assert out_file.exists()
 
 
 def test_import_custom_assessments_file_not_found(app, tmp_path):
@@ -665,6 +683,7 @@ def test_export_import_roundtrip(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "export-custom-assessments",
+            "--project", _PROJECT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 0, result.output
@@ -696,6 +715,7 @@ def test_import_custom_assessments_skips_duplicates(app, tmp_path):
         runner = app.test_cli_runner()
         runner.invoke(args=[
             "export-custom-assessments",
+            "--project", _PROJECT_NAME,
             "--output-dir", str(tmp_path),
         ])
 

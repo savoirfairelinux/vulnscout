@@ -414,10 +414,17 @@ cmd_export() {
 }
 
 cmd_export_custom_assessments() {
+    export_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        export_args+=(--variant "$VARIANT_NAME")
+    fi
+
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    export_args+=(--output-dir "$output_dir")
+
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp export-custom-assessments --output-dir "$output_dir"
+    flask --app src.bin.webapp export-custom-assessments "${export_args[@]}"
     setup_user
 }
 
