@@ -22,6 +22,7 @@ from .cmd_process import (
     process_command,
     _run_main,
     post_treatment,       # re-exported: used by webapp.py
+    populate_observations,
     evaluate_condition,
     read_inputs,
     DEFAULT_VARIANT_NAME,

@@ -236,6 +236,73 @@ def process_command() -> None:
     _run_main()
 
 
+def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None:
+    """Link findings discovered in *scan* to that scan's observations row.
+
+    Only findings whose package appears in one of *scan*'s SBOM documents are
+    eligible — linking ALL global findings would break variant-scoped filtering
+    when multiple scans/variants exist in the DB.
+
+    *vulnCtrl* is used to retrieve the set of vulnerability IDs encountered in
+    the current ingestion run (``vulnCtrl._encountered_this_run``).
+    """
+    verbose(f"{log_prefix}: Populating observations table")
+    try:
+        from ..models.sbom_package import SBOMPackage as SBOMPkg
+        from ..models.sbom_document import SBOMDocument as SBOMDoc
+
+        if not scan:
+            print("Warning: no scan provided — skipping observation creation.")
+            return
+
+        # 1. Collect package_ids referenced by this scan's SBOM documents
+        package_ids_in_scan = list(_db.session.execute(
+            _db.select(SBOMPkg.package_id)
+            .join(SBOMDoc, SBOMPkg.sbom_document_id == SBOMDoc.id)
+            .where(SBOMDoc.scan_id == scan.id)
+            .distinct()
+        ).scalars().all())
+
+        # 2. Collect vuln IDs encountered in this run
+        encountered_vuln_ids = list(vulnCtrl._encountered_this_run)
+
+        if not package_ids_in_scan or not encountered_vuln_ids:
+            verbose(
+                f"{log_prefix}: No packages or no vulnerabilities encountered"
+                " — skipping observation creation."
+            )
+            return
+
+        # 3. Find findings for (packages in scan) × (vulns in this run)
+        #    that are not yet observed in this scan.
+        new_finding_ids = list(_db.session.execute(
+            _db.select(FindingModel.id)
+            .where(FindingModel.package_id.in_(package_ids_in_scan))
+            .where(FindingModel.vulnerability_id.in_(encountered_vuln_ids))
+            .where(
+                ~exists(
+                    _db.select(1).select_from(Observation).where(
+                        and_(
+                            Observation.finding_id == FindingModel.id,
+                            Observation.scan_id == scan.id
+                        )
+                    )
+                )
+            )
+        ).scalars().all())
+
+        if new_finding_ids:
+            new_observations = [
+                Observation(finding_id=fid, scan_id=scan.id)
+                for fid in new_finding_ids
+            ]
+            with batch_session():
+                _db.session.bulk_save_objects(new_observations)
+            verbose(f"{log_prefix}: Observations created for scan {scan.id} ({len(new_observations)} new)")
+    except Exception as e:
+        print(f"Warning: could not populate observations table: {e}")
+
+
 def _run_main() -> dict:
     """Core processing logic (usable both from the CLI command and directly)."""
     pkgCtrl = PackagesController()
@@ -296,65 +363,8 @@ def _run_main() -> dict:
     verbose("merger_ci: Start exporting results")
     verbose("merger_ci: Finished exporting results")
 
-    # Populate the observations table: link findings to the scan they were
-    # discovered in.  Only findings whose package appears in one of this scan's
-    # SBOM documents are eligible — linking ALL global findings would break
-    # variant-scoped filtering when multiple scans/variants exist in the DB.
-    verbose("merger_ci: Populating observations table")
-    try:
-        from ..models.sbom_package import SBOMPackage as SBOMPkg
-        from ..models.sbom_document import SBOMDocument as SBOMDoc
-
-        latest_scan = ScanModel.get_latest()
-        if latest_scan:
-            # 1. Collect package_ids referenced by this scan's SBOM documents
-            package_ids_in_scan = list(_db.session.execute(
-                _db.select(SBOMPkg.package_id)
-                .join(SBOMDoc, SBOMPkg.sbom_document_id == SBOMDoc.id)
-                .where(SBOMDoc.scan_id == latest_scan.id)
-                .distinct()
-            ).scalars().all())
-
-            # 2. Collect vuln IDs that were actually encountered in this run's
-            #    input files (populated by VulnerabilitiesController.add()).
-            encountered_vuln_ids = list(vulnCtrl._encountered_this_run)
-
-            if package_ids_in_scan and encountered_vuln_ids:
-                # 3. Find findings for (packages in scan) × (vulns in this run)
-                #    that are not yet observed in this scan.
-                new_finding_ids = list(_db.session.execute(
-                    _db.select(FindingModel.id)
-                    .where(FindingModel.package_id.in_(package_ids_in_scan))
-                    .where(FindingModel.vulnerability_id.in_(encountered_vuln_ids))
-                    .where(
-                        ~exists(
-                            _db.select(1).select_from(Observation).where(
-                                and_(
-                                    Observation.finding_id == FindingModel.id,
-                                    Observation.scan_id == latest_scan.id
-                                )
-                            )
-                        )
-                    )
-                ).scalars().all())
-
-                if new_finding_ids:
-                    new_observations = [
-                        Observation(finding_id=fid, scan_id=latest_scan.id)
-                        for fid in new_finding_ids
-                    ]
-                    with batch_session():
-                        _db.session.bulk_save_objects(new_observations)
-                    verbose(f"merger_ci: Observations created for scan {latest_scan.id} ({len(new_observations)} new)")
-            else:
-                verbose(
-                    "merger_ci: No packages or no vulnerabilities encountered this run"
-                    " — skipping observation creation."
-                )
-        else:
-            print("Warning: no scan found in DB — skipping observation creation.")
-    except Exception as e:
-        print(f"Warning: could not populate observations table: {e}")
+    latest_scan = ScanModel.get_latest()
+    populate_observations(latest_scan, vulnCtrl)
 
     verbose("merger_ci: Processing complete")
 

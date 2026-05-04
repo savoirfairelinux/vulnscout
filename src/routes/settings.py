@@ -21,10 +21,7 @@ from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
 from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
-from ..models.finding import Finding as FindingModel
-from ..models.observation import Observation
 from ..helpers.verbose import verbose
-from ._scan_queries import _packages_by_scan_ids
 from ._scan_cache import recompute_variant_cache
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
@@ -91,8 +88,7 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
         try:
             _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file(s)..."}
 
-            from ..bin.merger_ci import read_inputs, post_treatment
-            from sqlalchemy import and_, exists
+            from ..bin.cmd_process import read_inputs, post_treatment, populate_observations
 
             pkgCtrl = PackagesController()
             vulnCtrl = VulnerabilitiesController(pkgCtrl)
@@ -113,43 +109,9 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
             verbose("settings/upload: DB commit done")
 
             # Populate observations table
-            try:
-                scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
-                    else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
-                if scan:
-                    package_ids_in_scan = list(
-                        _packages_by_scan_ids([scan.id]).get(scan.id, set())
-                    )
-
-                    encountered_vuln_ids = list(vulnCtrl._encountered_this_run)
-
-                    if package_ids_in_scan and encountered_vuln_ids:
-                        new_finding_ids = list(db.session.execute(
-                            db.select(FindingModel.id)
-                            .where(FindingModel.package_id.in_(package_ids_in_scan))
-                            .where(FindingModel.vulnerability_id.in_(encountered_vuln_ids))
-                            .where(
-                                ~exists(
-                                    db.select(1).select_from(Observation).where(
-                                        and_(
-                                            Observation.finding_id == FindingModel.id,
-                                            Observation.scan_id == scan.id,
-                                        )
-                                    )
-                                )
-                            )
-                        ).scalars().all())
-
-                        if new_finding_ids:
-                            new_observations = [
-                                Observation(finding_id=fid, scan_id=scan.id)
-                                for fid in new_finding_ids
-                            ]
-                            with batch_session():
-                                db.session.bulk_save_objects(new_observations)
-                            verbose(f"settings/upload: Observations created ({len(new_observations)} new)")
-            except Exception as e:
-                verbose(f"settings/upload: Could not populate observations: {e}")
+            scan = ScanModel.get_by_id(scan_id) if isinstance(scan_id, uuid.UUID) \
+                else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
+            populate_observations(scan, vulnCtrl, log_prefix="settings/upload")
 
             # Run EPSS enrichment
             try:
