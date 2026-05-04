@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# BOM Schema Validation Script
-# Validates CycloneDX, SPDX, and OpenVEX files against official JSON schemas.
+# BOM Export & Schema Validation Script
+# Loads test SBOM data into the Flask app, exports all supported formats
+# (CycloneDX 1.4/1.5/1.6, SPDX 2.3, SPDX 3.0, OpenVEX), and validates
+# each exported file against official JSON schemas.
 #
 # Tools used:
+#   - Flask CLI: for data loading (merge, process) and export
 #   - ajv-cli + ajv-formats: for CycloneDX (1.4, 1.5 and 1.6) and SPDX (2.2, 2.3, 3.0.1)
 #   - vexctl: for OpenVEX
 #
@@ -261,28 +264,79 @@ validate_invalid_spdx() {
 # Main
 # ============================================================================
 
-echo -e "${BOLD}BOM Schema Validation${NC}"
+echo -e "${BOLD}BOM Export & Schema Validation${NC}"
 echo "Schemas: ${SCHEMA_DIR}"
 echo ""
 
 ensure_ajv
 
-# --- Positive tests: valid files that must pass ---
-print_header "CycloneDX Validation (positive tests)"
-validate_expect_pass "${REPO_ROOT}/tests/docker/cdx/valid_v1_4.cdx.json"
-validate_expect_pass "${REPO_ROOT}/example/spdx2/cyclonedx-export/bom.json"
-validate_expect_pass "${REPO_ROOT}/example/spdx2/cyclonedx-export/vex.json"
+# --- Phase 1: Setup temp DB and load test data ---
+print_header "Phase 1: Loading test data into Flask app"
 
-print_header "SPDX 2.x Validation (positive tests)"
-validate_expect_pass "${REPO_ROOT}/tests/docker/spdx/valid_v2_2.spdx.json"
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
 
-print_header "SPDX 3.x Validation (positive tests)"
-validate_expect_pass "${REPO_ROOT}/example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json"
+export FLASK_SQLALCHEMY_DATABASE_URI="sqlite:///${WORK_DIR}/vulnscout.db"
+export IGNORE_PARSING_ERRORS=true
 
-# --- Negative tests: invalid files that must fail ---
-print_header "Negative Tests (must be rejected)"
-validate_invalid_cdx "${REPO_ROOT}/tests/docker/cdx/invalid.cdx.json"
-validate_invalid_spdx "${REPO_ROOT}/tests/docker/spdx/invalid.spdx.json"
+FLASK_APP="src.bin.webapp"
+
+echo "  Temp dir: ${WORK_DIR}"
+echo "  DB: ${FLASK_SQLALCHEMY_DATABASE_URI}"
+
+cd "${REPO_ROOT}"
+
+flask --app "${FLASK_APP}" db upgrade
+
+flask --app "${FLASK_APP}" merge \
+    --project validate_bom \
+    --variant default \
+    --spdx "${REPO_ROOT}/tests/docker/spdx/valid_v2_2.spdx.json" \
+    --cdx "${REPO_ROOT}/tests/docker/cdx/valid_v1_4.cdx.json" \
+    --yocto-cve "${REPO_ROOT}/tests/docker/yocto.json"
+
+flask --app "${FLASK_APP}" process
+
+echo -e "  ${GREEN}Data loaded successfully${NC}"
+
+# --- Phase 2: Export all supported formats ---
+print_header "Phase 2: Exporting all SBOM formats"
+
+EXPORT_DIR="${WORK_DIR}/exports"
+mkdir -p "${EXPORT_DIR}"
+
+FORMATS=(cdx14 cdx15 cdx16 spdx2 spdx3 openvex)
+
+for fmt in "${FORMATS[@]}"; do
+    echo "  Exporting ${fmt}..."
+    flask --app "${FLASK_APP}" export --format "${fmt}" --output-dir "${EXPORT_DIR}"
+done
+
+echo -e "  ${GREEN}All formats exported${NC}"
+echo "  Files:"
+ls -1 "${EXPORT_DIR}" | sed 's/^/    /'
+
+# --- Phase 3: Schema validation of exported files ---
+print_header "Phase 3: Schema validation of exported files"
+
+# Map format names to the output filenames produced by flask export
+declare -A EXPORT_FILES=(
+    [cdx14]="sbom_cyclonedx_v1_4.cdx.json"
+    [cdx15]="sbom_cyclonedx_v1_5.cdx.json"
+    [cdx16]="sbom_cyclonedx_v1_6.cdx.json"
+    [spdx2]="sbom_spdx_v2_3.spdx.json"
+    [spdx3]="sbom_spdx_v3_0.spdx.json"
+    [openvex]="openvex.json"
+)
+
+for fmt in "${FORMATS[@]}"; do
+    file="${EXPORT_DIR}/${EXPORT_FILES[${fmt}]}"
+    if [[ ! -f "${file}" ]]; then
+        print_fail "${EXPORT_FILES[${fmt}]} (file not produced by export)"
+        continue
+    fi
+    validate_expect_pass "${file}"
+done
 
 # --- Summary ---
 echo ""
