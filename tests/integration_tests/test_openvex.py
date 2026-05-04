@@ -276,8 +276,8 @@ def test_encode_detailled_assessment(openvex_parser, assesment_123):
         "status_notes": "This vulnerability is mitigated by the use of a color filter in image-pipeline.c",
         "justification": "inline_mitigations_already_exist",
         "impact_statement": "Color red was removed from image before being sent to cairo",
-        "action_statement": "Use product version 7.10+",
     }.items() <= statement.items()
+    assert "action_statement" not in statement
 
 
 def test_load_from_dict_pkg_none_is_skipped(openvex_parser):
