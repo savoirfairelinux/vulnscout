@@ -408,19 +408,25 @@ class Assessment(Base):
         if self.justification in VALID_JUSTIFICATION_CDX_VEX and not self.impact_statement:
             openvex_impact = self.justification
 
-        ts = ensure_utc_iso(self.timestamp)
+        ts = ensure_utc_iso(self.timestamp) or ensure_utc_iso(datetime.now(timezone.utc))
 
-        return {
+        stmt: dict = {
             "vulnerability": {"name": self.vuln_id},
             "products": [{"@id": p} for p in self.packages],
             "timestamp": ts,
-            "last_updated": ts or "",
+            "last_updated": ts,
             "status": openvex_status,
-            "status_notes": self.status_notes or "",
-            "justification": openvex_justif,
-            "impact_statement": openvex_impact,
-            "action_statement": self.workaround or "",
         }
+        if self.status_notes:
+            stmt["status_notes"] = self.status_notes
+        if openvex_status == "not_affected":
+            if openvex_justif in VALID_JUSTIFICATION_OPENVEX:
+                stmt["justification"] = openvex_justif
+            if openvex_impact:
+                stmt["impact_statement"] = openvex_impact
+        if openvex_status == "affected" and self.workaround:
+            stmt["action_statement"] = self.workaround
+        return stmt
 
     def to_cdx_vex_dict(self) -> Optional[dict]:
         """Return a CycloneDX VEX analysis dict, or ``None`` if the status is invalid."""

@@ -6,10 +6,9 @@
 #
 # Tools used:
 #   - Flask CLI: for data loading (merge, process) and export
-#   - ajv-cli + ajv-formats: for CycloneDX (1.4, 1.5 and 1.6) and SPDX (2.2, 2.3, 3.0.1)
-#   - vexctl: for OpenVEX
+#   - ajv-cli + ajv-formats: for CycloneDX (1.4, 1.5 and 1.6), SPDX (2.2, 2.3, 3.0.1), and OpenVEX
 #
-# Sceham files were sourced from:
+# Schema files were sourced from:
 #
 # CycloneDX (from CycloneDX/specification repo):
 # bom-1.4.schema.json = https://raw.githubusercontent.com/CycloneDX/specification/master/schema/bom-1.4.schema.json
@@ -24,6 +23,9 @@
 #
 # SPDX 3.x:
 # spdx-json-schema-3.0.1.json = https://spdx.org/schema/3.0.1/spdx-json-schema.json
+#
+# OpenVEX (from openvex/spec repo):
+# openvex_json_schema.json = https://raw.githubusercontent.com/openvex/spec/main/openvex_json_schema.json
 
 set -euo pipefail
 
@@ -32,6 +34,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCHEMA_DIR="${SCRIPT_DIR}/schemas"
 CDX_SCHEMA_DIR="${SCHEMA_DIR}/cyclonedx"
 SPDX_SCHEMA_DIR="${SCHEMA_DIR}/spdx"
+OPENVEX_SCHEMA_DIR="${SCHEMA_DIR}/openvex"
 NPM_PREFIX="${SCHEMA_DIR}/.npm"
 
 PASS_COUNT=0
@@ -147,6 +150,9 @@ select_schema() {
                 *)     echo ""; return 1 ;;
             esac
             ;;
+        openvex)
+            echo "${OPENVEX_SCHEMA_DIR}/openvex_json_schema.json"
+            ;;
         *)
             echo ""; return 1
             ;;
@@ -184,17 +190,15 @@ validate_with_ajv() {
             ajv_args+=(--spec=draft2020)
             ajv_args+=(-s "${schema}")
             ;;
+        openvex)
+            ajv_args+=(--spec=draft2020)
+            ajv_args+=(-s "${schema}")
+            ;;
     esac
 
     ajv_args+=(-d "${file}")
 
     "${NPM_PREFIX}/node_modules/.bin/ajv" "${ajv_args[@]}" 2>&1
-}
-
-# Validate a file with vexctl.
-validate_with_vexctl() {
-    local file="$1"
-    vexctl validate "${file}" 2>&1
 }
 
 # Validate a single file, expecting it to pass.
@@ -204,19 +208,6 @@ validate_expect_pass() {
 
     if ! detect_format "${file}"; then
         print_fail "${rel_path} (could not detect format)"
-        return
-    fi
-
-    if [[ "${FORMAT}" == "openvex" ]]; then
-        if ! command -v vexctl &> /dev/null; then
-            print_skip "${rel_path} (vexctl not installed)"
-            return
-        fi
-        if validate_with_vexctl "${file}" > /dev/null 2>&1; then
-            print_pass "${rel_path} (OpenVEX)"
-        else
-            print_fail "${rel_path} (OpenVEX validation failed)"
-        fi
         return
     fi
 

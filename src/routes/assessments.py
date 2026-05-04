@@ -332,10 +332,6 @@ def init_app(app):
                                 DBAssessment.finding_id == finding.id,
                                 DBAssessment.variant_id == variant_id,
                                 DBAssessment.status == status,
-                                DBAssessment.justification == justification,
-                                DBAssessment.impact_statement == impact_statement,
-                                DBAssessment.status_notes == status_notes,
-                                DBAssessment.workaround == workaround,
                             )
                         ).scalar_one_or_none()
                         if existing is not None:
