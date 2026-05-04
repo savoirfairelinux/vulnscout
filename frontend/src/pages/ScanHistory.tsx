@@ -1427,11 +1427,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     if (loading) {
         return (
-            <div className="w-full px-6 py-6">
-                {menuBar}
-                {progressPanels}
-                <div className="flex items-center justify-center h-32 text-gray-400">
-                    Loading scan history…
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="flex flex-col items-center gap-3 text-white">
+                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm font-semibold">Loading scan history…</span>
                 </div>
             </div>
         );
