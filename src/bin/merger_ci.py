@@ -561,17 +561,9 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
 @with_appcontext
 def export_custom_assessments_command(output_dir: str) -> None:
     """Export handmade (custom) assessments as a tar.gz of OpenVEX files."""
-    import io
-    import tarfile
-    import uuid as _uuid
-    import json as _json
-    from datetime import datetime as _dt, timezone as _tz
-    from collections import defaultdict
-    from ..models.assessment import (
-        Assessment as DBAssessment,
-    )
+    from ..helpers.openvex_assessments import build_openvex_archive
+    from ..models.assessment import Assessment as DBAssessment
     from ..models.variant import Variant as DBVariant
-    from ..models.vulnerability import Vulnerability as DBVuln
 
     handmade = DBAssessment.get_handmade()
     if not handmade:
@@ -579,129 +571,13 @@ def export_custom_assessments_command(output_dir: str) -> None:
         raise SystemExit(1)
 
     author = os.getenv("AUTHOR_NAME", "Savoir-faire Linux")
-    now_iso = _dt.now(_tz.utc).isoformat()
+    variant_names = {str(v.id): v.name for v in DBVariant.get_all()}
 
-    variant_names: dict[str, str] = {}
-    for v in DBVariant.get_all():
-        variant_names[str(v.id)] = v.name
-
-    vuln_cache: dict[str, DBVuln | None] = {}
-
-    def _get_vuln(vuln_id: str):
-        if vuln_id not in vuln_cache:
-            vuln_cache[vuln_id] = DBVuln.get_by_id(vuln_id)
-        return vuln_cache[vuln_id]
-
-    by_variant: dict[str | None, list] = defaultdict(list)
-    for assess in handmade:
-        vid = str(assess.variant_id) if assess.variant_id else None
-        by_variant[vid].append(assess)
-
+    archive_bytes = build_openvex_archive(handmade, variant_names, author)
     os.makedirs(output_dir, exist_ok=True)
-
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-        for vid, assessments in by_variant.items():
-            filename = (
-                variant_names.get(vid, "unassigned")
-                if vid else "unassigned"
-            ) + ".json"
-            filename = filename.replace("/", "_").replace("\\", "_")
-
-            statements = []
-            for assess in assessments:
-                stmt = assess.to_openvex_dict()
-                if stmt is None:
-                    continue
-
-                vuln_obj = (
-                    _get_vuln(assess.vuln_id)
-                    if assess.vuln_id else None
-                )
-                description = ""
-                aliases: list[str] = []
-                vuln_url = ""
-                if vuln_obj:
-                    desc = vuln_obj.texts.get("description", "")
-                    yocto_desc = vuln_obj.texts.get(
-                        "yocto description", ""
-                    )
-                    description = desc or yocto_desc or ""
-                    aliases = list(vuln_obj.aliases or [])
-                    urls = (
-                        list(vuln_obj.urls) if vuln_obj.urls
-                        else list(vuln_obj.links or [])
-                    )
-                    vuln_url = urls[0] if urls else ""
-                    if (
-                        not vuln_url
-                        and assess.vuln_id.startswith("CVE-")
-                    ):
-                        vuln_url = (
-                            "https://nvd.nist.gov/vuln/detail/"
-                            + assess.vuln_id
-                        )
-                    elif (
-                        not vuln_url
-                        and assess.vuln_id.startswith("GHSA-")
-                    ):
-                        vuln_url = (
-                            "https://github.com/advisories/"
-                            + assess.vuln_id
-                        )
-
-                stmt["vulnerability"] = {
-                    "name": assess.vuln_id,
-                    "description": description,
-                    "aliases": aliases,
-                    "@id": vuln_url,
-                }
-
-                products = []
-                for pkg_str in assess.packages:
-                    if "@" in pkg_str:
-                        name, version = pkg_str.rsplit("@", 1)
-                    else:
-                        name, version = pkg_str, ""
-                    products.append({
-                        "@id": pkg_str,
-                        "identifiers": {
-                            "cpe23": (
-                                "cpe:2.3:*:*:"
-                                f"{name}:{version}"
-                                ":*:*:*:*:*:*:*"
-                            ),
-                            "purl": f"pkg:generic/{name}@{version}",
-                        }
-                    })
-                stmt["products"] = products
-                stmt.setdefault("action_statement_timestamp", "")
-                stmt["scanners"] = list({
-                    assess.source or "local_user_data",
-                    assess.origin or "local_user_data",
-                })
-                statements.append(stmt)
-
-            doc = {
-                "@context": "https://openvex.dev/ns/v0.2.0",
-                "@id": (
-                    "https://savoirfairelinux.com/sbom/openvex/"
-                    + str(_uuid.uuid4())
-                ),
-                "author": author,
-                "timestamp": now_iso,
-                "version": 1,
-                "statements": statements,
-            }
-
-            json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
-            info = tarfile.TarInfo(name=filename)
-            info.size = len(json_bytes)
-            tar.addfile(info, io.BytesIO(json_bytes))
-
     out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
     with open(out_path, "wb") as fh:
-        fh.write(buf.getvalue())
+        fh.write(archive_bytes)
     click.echo(f"Custom assessments exported: {out_path}")
 
 
@@ -710,17 +586,13 @@ def export_custom_assessments_command(output_dir: str) -> None:
 @with_appcontext
 def import_custom_assessments_command(file_path: str) -> None:
     """Import custom assessments from a .json or .tar.gz OpenVEX file."""
-    import tarfile
     import json as _json
-    from ..extensions import db as _db
-    from ..models.assessment import (
-        Assessment as DBAssessment,
-        STATUS_TO_SIMPLIFIED,
+    from ..helpers.openvex_assessments import (
+        is_openvex_doc,
+        import_statements as _import_openvex_statements,
+        build_variant_by_name_map,
+        import_archive_bytes,
     )
-    from ..models.variant import Variant as DBVariant
-    from ..models.vulnerability import Vulnerability as DBVuln
-    from ..models.package import Package
-    from ..models.finding import Finding
 
     if not os.path.isfile(file_path):
         click.echo(f"Error: file not found: {file_path}", err=True)
@@ -837,6 +709,7 @@ def import_custom_assessments_command(file_path: str) -> None:
                     })
         return created, errors, skipped
 
+    variant_by_name = build_variant_by_name_map()
     basename = os.path.basename(file_path)
     total_created: list[dict] = []
     total_errors: list[dict] = []
@@ -844,62 +717,16 @@ def import_custom_assessments_command(file_path: str) -> None:
 
     if file_path.endswith(".tar.gz") or file_path.endswith(".tgz"):
         try:
-            tar = tarfile.open(file_path, mode='r:gz')
-        except Exception:
-            click.echo(
-                "Error: unable to open tar.gz archive.", err=True
+            with open(file_path, "rb") as fh:
+                archive_bytes = fh.read()
+            total_created, total_errors, total_skipped, found = import_archive_bytes(
+                archive_bytes, variant_by_name
             )
+        except ValueError:
+            click.echo("Error: unable to open tar.gz archive.", err=True)
             raise SystemExit(1)
 
-        variant_files_found = 0
-        for member in tar.getmembers():
-            if not member.isfile() or not member.name.endswith(
-                ".json"
-            ):
-                continue
-            base = os.path.basename(member.name)
-            variant_name = base[:-len(".json")]
-            variant = variant_by_name.get(variant_name)
-            if variant is None:
-                total_errors.append({
-                    "file": member.name,
-                    "error": (
-                        f"No variant found matching name "
-                        f"'{variant_name}'"
-                    ),
-                })
-                continue
-
-            f = tar.extractfile(member)
-            if f is None:
-                continue
-            try:
-                doc = _json.load(f)
-            except Exception:
-                total_errors.append({
-                    "file": member.name,
-                    "error": "Invalid JSON",
-                })
-                continue
-
-            if not _is_openvex(doc):
-                total_errors.append({
-                    "file": member.name,
-                    "error": "Not a valid OpenVEX document",
-                })
-                continue
-
-            variant_files_found += 1
-            c, e, s = _import_statements(
-                doc["statements"], variant.id
-            )
-            total_created.extend(c)
-            total_errors.extend(e)
-            total_skipped += s
-
-        tar.close()
-
-        if variant_files_found == 0 and not total_created:
+        if found == 0 and not total_created:
             click.echo(
                 "Error: no valid OpenVEX files matching known "
                 "variants found in archive.", err=True
@@ -909,7 +736,7 @@ def import_custom_assessments_command(file_path: str) -> None:
             raise SystemExit(1)
 
     elif file_path.endswith(".json"):
-        variant_name = basename[:-len(".json")]
+        variant_name = basename[: -len(".json")]
         variant = variant_by_name.get(variant_name)
         if variant is None:
             click.echo(
@@ -927,18 +754,13 @@ def import_custom_assessments_command(file_path: str) -> None:
             click.echo("Error: invalid JSON file.", err=True)
             raise SystemExit(1)
 
-        if not _is_openvex(data):
-            click.echo(
-                "Error: not a valid OpenVEX document.", err=True
-            )
+        if not is_openvex_doc(data):
+            click.echo("Error: not a valid OpenVEX document.", err=True)
             raise SystemExit(1)
 
-        c, e, s = _import_statements(
+        total_created, total_errors, total_skipped = _import_openvex_statements(
             data["statements"], variant.id
         )
-        total_created.extend(c)
-        total_errors.extend(e)
-        total_skipped += s
     else:
         click.echo(
             "Error: unsupported file type. "
