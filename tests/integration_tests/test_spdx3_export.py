@@ -117,7 +117,7 @@ class TestSPDX3JSONExport:
         # Check external identifiers
         ext_ids = curl_pkg["externalIdentifier"]
         cpe_ids = [eid for eid in ext_ids if eid["externalIdentifierType"] == "cpe23"]
-        purl_ids = [eid for eid in ext_ids if eid["externalIdentifierType"] == "purl"]
+        purl_ids = [eid for eid in ext_ids if eid["externalIdentifierType"] == "packageUrl"]
         assert len(cpe_ids) == 1
         assert len(purl_ids) == 1
         assert cpe_ids[0]["identifier"] == "cpe:2.3:a:haxx:curl:7.88.1:*:*:*:*:*:*:*"
@@ -224,7 +224,7 @@ class TestSPDX3ElementGeneration:
         assert cve_id["identifier"] == "CVE-2024-9999"
         
         # Check for URL if present
-        url_ids = [eid for eid in ext_ids if eid["externalIdentifierType"] == "securityAdvisory"]
+        url_ids = [eid for eid in ext_ids if eid["externalIdentifierType"] == "securityOther"]
         if url_ids:
             assert url_ids[0]["identifier"] == "https://example.com/vuln"
     

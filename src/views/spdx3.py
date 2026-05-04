@@ -36,9 +36,19 @@ class SPDX3:
             mapping[obj_id] = self._next_spdx_ref()
         return mapping[obj_id]
 
+    # Map short names to SPDX 3.0.1 ExternalIdentifierType enum values
+    _EXT_ID_TYPE_MAP = {
+        "purl": "packageUrl",
+        "securityAdvisory": "securityOther",
+    }
+
     def _make_external_identifiers(self, pairs: List[tuple[str, Any]]) -> List[Dict[str, str]]:
         return [
-            {"type": "ExternalIdentifier", "externalIdentifierType": t, "identifier": v}
+            {
+                "type": "ExternalIdentifier",
+                "externalIdentifierType": self._EXT_ID_TYPE_MAP.get(t, t),
+                "identifier": v,
+            }
             for t, v in pairs if v
         ]
 
@@ -120,7 +130,8 @@ class SPDX3:
         element = {
             "type": "security_Vulnerability",
             "spdxId": spdx_id,
-            "externalIdentifier": external_identifiers
+            "externalIdentifier": external_identifiers,
+            "creationInfo": "_:creationInfo_0"
         }
 
         return element
@@ -136,7 +147,8 @@ class SPDX3:
             "spdxId": relationship_id,
             "from": from_ref,
             "relationshipType": relationship_type,
-            "to": to_refs
+            "to": to_refs,
+            "creationInfo": "_:creationInfo_0"
         }
 
     def output_as_json(self, author: str = "Savoir-faire Linux") -> str:
