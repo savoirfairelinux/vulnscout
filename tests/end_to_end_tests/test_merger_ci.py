@@ -23,6 +23,10 @@ from src.bin.merger_ci import _run_main, _ts_key, post_treatment, main
 from . import write_demo_files
 
 
+_PROJECT_NAME = "TestProject"
+_VARIANT_NAME = "TestVariant"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -59,8 +63,8 @@ def app(init_files, monkeypatch):
         runner = application.test_cli_runner()
         result = runner.invoke(args=[
             "merge",
-            "--project", "TestProject",
-            "--variant", "TestVariant",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             "--cdx", str(init_files["CDX_PATH"]),
             "--spdx", str(init_files["SPDX_PATH"]),
             "--grype", str(init_files["GRYPE_CDX_PATH"]),
@@ -472,6 +476,7 @@ def test_import_custom_assessments_file_not_found(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "import-custom-assessments",
+            "--project", _PROJECT_NAME,
             str(tmp_path / "nonexistent.tar.gz"),
         ])
     assert result.exit_code == 1
@@ -485,7 +490,9 @@ def test_import_custom_assessments_unsupported_type(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(bad_file),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(bad_file),
         ])
     assert result.exit_code == 1
     assert "unsupported file type" in result.output.lower()
@@ -498,7 +505,9 @@ def test_import_custom_assessments_invalid_targz(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(bad_archive),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(bad_archive),
         ])
     assert result.exit_code == 1
     assert "unable to open" in result.output.lower()
@@ -515,7 +524,9 @@ def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(json_file),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(json_file),
         ])
     assert result.exit_code == 1
     assert "no variant found" in result.output.lower()
@@ -523,12 +534,14 @@ def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
 
 def test_import_custom_assessments_json_invalid_json(app, tmp_path):
     """Import a .json with invalid JSON exits with error code 1."""
-    json_file = tmp_path / "TestVariant.json"
+    json_file = tmp_path / f"{_VARIANT_NAME}.json"
     json_file.write_text("{invalid json")
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(json_file),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(json_file),
         ])
     assert result.exit_code == 1
     assert "invalid json" in result.output.lower()
@@ -536,12 +549,14 @@ def test_import_custom_assessments_json_invalid_json(app, tmp_path):
 
 def test_import_custom_assessments_json_not_openvex(app, tmp_path):
     """Import a .json that is not OpenVEX exits with error code 1."""
-    json_file = tmp_path / "TestVariant.json"
+    json_file = tmp_path / f"{_VARIANT_NAME}.json"
     json_file.write_text(json.dumps({"hello": "world"}))
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(json_file),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(json_file),
         ])
     assert result.exit_code == 1
     assert "not a valid openvex" in result.output.lower()
@@ -558,12 +573,39 @@ def test_import_custom_assessments_json_success(app, tmp_path):
             "status_notes": "imported via CLI",
         }],
     }
-    json_file = tmp_path / "TestVariant.json"
+    json_file = tmp_path / f"{_VARIANT_NAME}.json"
     json_file.write_text(json.dumps(doc))
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(json_file),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(json_file),
+        ])
+    assert result.exit_code == 0, result.output
+    assert "Imported 1 assessments" in result.output
+
+
+def test_import_custom_assessments_json_success_variant_flag(app, tmp_path):
+    """Import a .json with a filename that doesn't match any variant."""
+    doc = {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "statements": [{
+            "vulnerability": {"name": "CVE-2020-35492"},
+            "status": "affected",
+            "products": [{"@id": "cairo@1.16.0"}],
+            "status_notes": "imported via CLI",
+        }],
+    }
+    json_file = tmp_path / "nonexistent_variant.json"
+    json_file.write_text(json.dumps(doc))
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+            str(json_file),
         ])
     assert result.exit_code == 0, result.output
     assert "Imported 1 assessments" in result.output
@@ -589,10 +631,29 @@ def test_import_custom_assessments_targz_no_matching(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(archive),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(archive),
         ])
     assert result.exit_code == 1
     assert "no valid openvex" in result.output.lower()
+
+
+def test_import_custom_assessments_targz_variant_flag(app, tmp_path):
+    """Import a tar.gz with --variant fails."""
+    archive = tmp_path / "assessments.tar.gz"
+    archive.touch()
+
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+            str(archive),
+        ])
+    assert result.exit_code == 1
+    assert "cannot use the --variant" in result.output.lower()
 
 
 def test_export_import_roundtrip(app, tmp_path):
@@ -619,6 +680,7 @@ def test_export_import_roundtrip(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "import-custom-assessments",
+            "--project", _PROJECT_NAME,
             str(tmp_path / "custom_assessments.tar.gz"),
         ])
     assert result.exit_code == 0, result.output
@@ -642,6 +704,7 @@ def test_import_custom_assessments_skips_duplicates(app, tmp_path):
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "import-custom-assessments",
+            "--project", _PROJECT_NAME,
             str(tmp_path / "custom_assessments.tar.gz"),
         ])
     assert result.exit_code == 0, result.output
@@ -657,7 +720,7 @@ def test_import_custom_assessments_targz_invalid_json_inside(
     buf = io.BytesIO()
     with _tf.open(fileobj=buf, mode='w:gz') as tar:
         content = b"{"
-        info = _tf.TarInfo(name="TestVariant.json")
+        info = _tf.TarInfo(name=f"{_VARIANT_NAME}.json")
         info.size = len(content)
         tar.addfile(info, io.BytesIO(content))
 
@@ -667,7 +730,9 @@ def test_import_custom_assessments_targz_invalid_json_inside(
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(archive),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(archive),
         ])
     assert result.exit_code == 1
 
@@ -681,7 +746,7 @@ def test_import_custom_assessments_targz_not_openvex_inside(
     buf = io.BytesIO()
     with _tf.open(fileobj=buf, mode='w:gz') as tar:
         content = json.dumps({"hello": "world"}).encode()
-        info = _tf.TarInfo(name="TestVariant.json")
+        info = _tf.TarInfo(name=f"{_VARIANT_NAME}.json")
         info.size = len(content)
         tar.addfile(info, io.BytesIO(content))
 
@@ -691,7 +756,9 @@ def test_import_custom_assessments_targz_not_openvex_inside(
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments", str(archive),
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(archive),
         ])
     assert result.exit_code == 1
 
@@ -702,8 +769,8 @@ def test_list_projects(cli_runner):
     ])
 
     assert out.exit_code == 0
-    assert "TestProject" in out.stdout
-    assert "TestVariant" in out.stdout
+    assert _PROJECT_NAME in out.stdout
+    assert _VARIANT_NAME in out.stdout
 
 
 def test_list_projects_json(cli_runner):
@@ -720,14 +787,14 @@ def test_list_projects_json(cli_runner):
 
     project = data[0]
     assert isinstance(project, dict)
-    assert project["name"] == "TestProject"
+    assert project["name"] == _PROJECT_NAME
 
     variants = project["variants"]
     assert isinstance(variants, list)
     assert len(variants) == 1
 
     variant = variants[0]
-    assert variant["name"] == "TestVariant"
+    assert variant["name"] == _VARIANT_NAME
 
 
 def test_list_scans(cli_runner):
@@ -736,8 +803,8 @@ def test_list_scans(cli_runner):
     ])
 
     assert out.exit_code == 0
-    assert "TestProject" in out.stdout
-    assert "TestVariant" in out.stdout
+    assert _PROJECT_NAME in out.stdout
+    assert _VARIANT_NAME in out.stdout
 
 
 def test_list_scans_json(cli_runner):
@@ -762,11 +829,11 @@ def test_list_scans_json(cli_runner):
 
     variant = scan["variant"]
     assert isinstance(variant, dict)
-    assert variant["name"] == "TestVariant"
+    assert variant["name"] == _VARIANT_NAME
 
     project = variant["project"]
     assert isinstance(project, dict)
-    assert project["name"] == "TestProject"
+    assert project["name"] == _PROJECT_NAME
 
 
 def test_delete_scan(cli_runner):

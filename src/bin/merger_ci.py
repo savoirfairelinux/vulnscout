@@ -707,8 +707,10 @@ def export_custom_assessments_command(output_dir: str) -> None:
 
 @click.command("import-custom-assessments")
 @click.argument("file_path")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", default=None, help="Variant name. Defaults to the file name.")
 @with_appcontext
-def import_custom_assessments_command(file_path: str) -> None:
+def import_custom_assessments_command(file_path: str, project: str, variant: str | None) -> None:
     """Import custom assessments from a .json or .tar.gz OpenVEX file."""
     import tarfile
     import json as _json
@@ -726,12 +728,23 @@ def import_custom_assessments_command(file_path: str) -> None:
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
 
-    all_variants = DBVariant.get_all()
-    variant_by_name: dict[str, "DBVariant"] = {}
-    for v in all_variants:
-        sanitised = v.name.replace("/", "_").replace("\\", "_")
-        variant_by_name[sanitised] = v
-        variant_by_name[v.name] = v
+    project_obj = ProjectController.get_by_name(project)
+    if not project_obj:
+        click.echo(f"Error: project not found: {project}")
+        raise SystemExit(1)
+
+    if variant:
+        variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+        if not variant_obj:
+            click.echo(f"Error: variant not found: {variant}")
+            raise SystemExit(1)
+    else:
+        all_variants = DBVariant.get_by_project(project_obj.id)
+        variant_by_name: dict[str, "DBVariant"] = {}
+        for v in all_variants:
+            sanitised = v.name.replace("/", "_").replace("\\", "_")
+            variant_by_name[sanitised] = v
+            variant_by_name[v.name] = v
 
     def _is_openvex(doc: dict) -> bool:
         ctx = doc.get("@context", "")
@@ -843,6 +856,10 @@ def import_custom_assessments_command(file_path: str) -> None:
     total_skipped = 0
 
     if file_path.endswith(".tar.gz") or file_path.endswith(".tgz"):
+        if variant:
+            click.echo("Error: cannot use the --variant argument with an archive of custom assessments.")
+            raise SystemExit(1)
+
         try:
             tar = tarfile.open(file_path, mode='r:gz')
         except Exception:
@@ -859,8 +876,8 @@ def import_custom_assessments_command(file_path: str) -> None:
                 continue
             base = os.path.basename(member.name)
             variant_name = base[:-len(".json")]
-            variant = variant_by_name.get(variant_name)
-            if variant is None:
+            variant_obj = variant_by_name.get(variant_name)
+            if variant_obj is None:
                 total_errors.append({
                     "file": member.name,
                     "error": (
@@ -891,7 +908,7 @@ def import_custom_assessments_command(file_path: str) -> None:
 
             variant_files_found += 1
             c, e, s = _import_statements(
-                doc["statements"], variant.id
+                doc["statements"], variant_obj.id
             )
             total_created.extend(c)
             total_errors.extend(e)
@@ -909,16 +926,22 @@ def import_custom_assessments_command(file_path: str) -> None:
             raise SystemExit(1)
 
     elif file_path.endswith(".json"):
-        variant_name = basename[:-len(".json")]
-        variant = variant_by_name.get(variant_name)
-        if variant is None:
-            click.echo(
-                f"Error: no variant found matching filename "
-                f"'{variant_name}'. The JSON filename must "
-                f"correspond to an existing variant name.",
-                err=True,
-            )
-            raise SystemExit(1)
+        if variant:
+            assert variant_obj
+            # Declared above, assert here so type checker no longer
+            # considers it possibly Unbound
+        else:
+            variant_name = variant if variant else basename[:-len(".json")]
+            variant_obj = variant_by_name.get(variant_name)
+            if variant_obj is None:
+                click.echo(
+                    f"Error: no variant found matching filename "
+                    f"'{variant_name}'. The JSON filename must "
+                    f"correspond to an existing variant name. "
+                    "Hint: use --variant to specify another name.",
+                    err=True,
+                )
+                raise SystemExit(1)
 
         try:
             with open(file_path) as fh:
@@ -934,7 +957,7 @@ def import_custom_assessments_command(file_path: str) -> None:
             raise SystemExit(1)
 
         c, e, s = _import_statements(
-            data["statements"], variant.id
+            data["statements"], variant_obj.id
         )
         total_created.extend(c)
         total_errors.extend(e)

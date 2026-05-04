@@ -61,6 +61,13 @@ class Project(Base):
         return db.session.get(Project, project_id)
 
     @staticmethod
+    def get_by_name(name: str) -> "Project | None":
+        """Return the project matching *name*, or ``None`` if not found."""
+        return db.session.execute(
+            db.select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+
+    @staticmethod
     def get_all() -> list["Project"]:
         """Return all projects ordered by name."""
         return list(db.session.execute(

@@ -46,6 +46,19 @@ class ProjectController:
         return Project.get_by_id(project_id)
 
     @staticmethod
+    def get_by_name(name: str) -> Project | None:
+        """
+        Return an existing project whose name matches *name* (case-sensitive),
+        or None if no project with the name exists.
+
+        :raises ValueError: if *name* is empty or blank.
+        """
+        name = name.strip()
+        if not name:
+            raise ValueError("Project name must not be empty.")
+        return Project.get_by_name(name)
+
+    @staticmethod
     def get_all() -> list[Project]:
         """Return all projects ordered by name."""
         return Project.get_all()
