@@ -163,6 +163,37 @@ describe('Packages', () => {
         expect(enrichedPackages[1].maxSeverity["Exploitable"].label).toEqual('low');
         expect(enrichedPackages[1].source).toEqual(['cve-finder']);
     });
+
+    test('asPackage parses supplier field', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([{
+                    name: 'foo',
+                    version: '1.0',
+                    supplier: 'Organization: Acme Corp (x@a.com)',
+                    cpe: [],
+                    purl: [],
+                }])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].supplier).toBe('Organization: Acme Corp (x@a.com)');
+    });
+
+    test('asPackage defaults supplier to empty string when absent', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([{
+                    name: 'foo',
+                    version: '1.0',
+                    cpe: [],
+                    purl: [],
+                }])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].supplier).toBe('');
+    });
 });
 
 
