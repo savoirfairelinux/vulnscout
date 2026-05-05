@@ -4,21 +4,35 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
+import typing
+
+from sqlalchemy.orm import Mapped, relationship, mapped_column
+from sqlalchemy import UniqueConstraint, ForeignKey, select
+
 from ..extensions import db, Base
+
+if typing.TYPE_CHECKING:
+    from .scan import Scan
+    from .finding import Finding
 
 
 class Observation(Base):
     """Represents an observation linking a finding to a scan."""
 
     __tablename__ = "observations"
+    __table_args__ = (
+        UniqueConstraint("finding_id", "scan_id"),
+    )
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=False, index=True)
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    yocto_description: Mapped[str | None] = mapped_column(default=None)
+    grype_description: Mapped[str | None] = mapped_column(default=None)
 
-    scan = db.relationship("Scan", back_populates="observations")
-    finding = db.relationship("Finding", back_populates="observations")
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id"), nullable=False, index=True)
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scans.id"), nullable=False, index=True)
+
+    scan: Mapped["Scan"] = relationship("Scan", back_populates="observations")
+    finding: Mapped["Finding"] = relationship("Finding", back_populates="observations")
 
     def __repr__(self) -> str:
         return f"<Observation id={self.id} finding_id={self.finding_id} scan_id={self.scan_id}>"
@@ -31,6 +45,8 @@ class Observation(Base):
     def create(
         finding_id: uuid.UUID | str,
         scan_id: uuid.UUID | str,
+        yocto_description: str | None = None,
+        grype_description: str | None = None,
         commit: bool = True,
     ) -> "Observation":
         """Create a new observation, persist it and return it.
@@ -42,7 +58,12 @@ class Observation(Base):
             finding_id = uuid.UUID(finding_id)
         if isinstance(scan_id, str):
             scan_id = uuid.UUID(scan_id)
-        observation = Observation(finding_id=finding_id, scan_id=scan_id)
+        observation = Observation(
+            finding_id=finding_id,
+            scan_id=scan_id,
+            yocto_description=yocto_description,
+            grype_description=grype_description,
+        )
         db.session.add(observation)
         if commit:
             db.session.commit()
@@ -51,7 +72,19 @@ class Observation(Base):
         return observation
 
     @staticmethod
-    def get_by_id(observation_id: uuid.UUID | str) -> Optional["Observation"]:
+    def get(
+        finding_id: uuid.UUID,
+        scan_id: uuid.UUID,
+    ) -> "Observation | None":
+        query = (
+            select(Observation)
+            .where(Observation.scan_id == scan_id)
+            .where(Observation.finding_id == finding_id)
+        )
+        return db.session.execute(query).scalar_one_or_none()
+
+    @staticmethod
+    def get_by_id(observation_id: uuid.UUID | str) -> "Observation | None":
         """Return the observation matching *observation_id*, or ``None`` if not found."""
         if isinstance(observation_id, str):
             observation_id = uuid.UUID(observation_id)

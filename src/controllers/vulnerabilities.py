@@ -8,6 +8,7 @@ import time
 import os
 import json
 import urllib.request
+import urllib.error
 from typing import Optional
 
 from ..models.vulnerability import Vulnerability
@@ -75,6 +76,7 @@ def _should_refetch(fetched_at: Optional[datetime.datetime], delay: Optional[dat
         return True
     if delay is _NEVER:
         return False
+    assert delay
     return (datetime.datetime.utcnow() - fetched_at) >= delay
 
 
@@ -221,7 +223,7 @@ class VulnerabilitiesController:
             verbose(f"[VulnerabilitiesController.get {vuln_id!r}] {e}")
         return None
 
-    def add(self, vulnerability: Vulnerability) -> Optional[Vulnerability]:
+    def add(self, vulnerability: Vulnerability) -> Vulnerability:
         """
         Add a vulnerability to the list, merging it with an existing one if present.
         Return the vulnerability as is if added, or the merged vulnerability if already existing.
@@ -230,8 +232,7 @@ class VulnerabilitiesController:
         and have not gained new packages in this call — avoiding redundant
         get_by_id SELECTs and update_record commits on every re-encounter.
         """
-        if vulnerability is None:
-            return
+        assert vulnerability is not None
         _caches = dict(
             pkg_id_cache=self.packagesCtrl._db_id_cache,
             finding_cache=self.packagesCtrl._finding_cache,
@@ -715,7 +716,6 @@ class VulnerabilitiesController:
         return {
             "id": record.id,
             "description": record.description,
-            "yocto_description": record.yocto_description,
             "status": record.status,
             "publish_date": record.publish_date.isoformat() if record.publish_date else None,
             "attack_vector": record.attack_vector,
@@ -742,7 +742,6 @@ class VulnerabilitiesController:
     def create_db(
         vuln_id: str,
         description: Optional[str] = None,
-        yocto_description: Optional[str] = None,
         status: Optional[str] = None,
         publish_date: Optional[datetime.date | str] = None,
         attack_vector: Optional[str] = None,
@@ -762,7 +761,6 @@ class VulnerabilitiesController:
         return Vulnerability.create_record(
             id=vuln_id,
             description=description,
-            yocto_description=yocto_description,
             status=status,
             publish_date=safe_date,
             attack_vector=attack_vector,

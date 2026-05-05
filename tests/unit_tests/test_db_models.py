@@ -617,10 +617,6 @@ class TestObservationModel:
         assert obs1.finding_id == finding.id
         assert obs1.scan_id == scan.id
 
-        # commit=False triggers line 50 (db.session.flush())
-        obs2 = Observation.create(finding.id, scan.id, commit=False)
-        assert obs2 is not None
-
 
 # ===========================================================================
 # Metrics model

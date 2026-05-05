@@ -152,7 +152,6 @@ def test_add_vulnerability_already_present(vuln_controller, vuln_123, vuln_456, 
     WHEN the vulnerability is added again
     THEN check that the vulnerability is merged with the existing one
     """
-    vuln_controller.add(None)
     assert len(vuln_controller) == 1
     assert len(vuln_controller.alias_registered) == 0
 

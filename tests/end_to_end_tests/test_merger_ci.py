@@ -222,6 +222,47 @@ def test_expiration_vulnerabilities(app, init_files):
     assert found_expiration
 
 
+def test_yocto_description(app, init_files):
+    init_files['YOCTO_CVE_CHECKER'].write_text("""{
+    "version": "1",
+    "package": [
+      {
+        "name": "c-ares",
+        "layer": "meta-oe",
+        "version": "1.18.1",
+        "products": [
+          {
+            "product": "c-ares",
+            "cvesInRecord": "Yes"
+          }
+        ],
+        "issue": [
+          {
+            "id": "CVE-2007-3152",
+            "summary": "c-ares before 1.4.0 blah blah blah",
+            "description": "Yocto-specfic description",
+            "scorev2": "7.5",
+            "scorev3": "0.0",
+            "vector": "NETWORK",
+            "status": "Patched",
+            "link": "https://nvd.nist.gov/vuln/detail/CVE-2007-3152"
+          }
+        ]
+      }
+    ]
+    }""")
+
+    from src.models import Observation, Finding
+
+    _run_main()
+
+    finding = Finding.get_by_package_and_vulnerability("c-ares@1.18.1", "CVE-2007-3152")
+    assert finding is not None
+    observations = Observation.get_by_finding(finding.id)
+    assert len(observations) == 1
+    assert observations[0].yocto_description == "Yocto-specfic description"
+
+
 # ---------------------------------------------------------------------------
 # _ts_key() — all branches
 # ---------------------------------------------------------------------------

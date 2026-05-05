@@ -3,21 +3,24 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models.package import Package
-from ..models.vulnerability import Vulnerability
-from ..models.assessment import Assessment
-from ..models.cvss import CVSS
+from datetime import datetime, timezone
+import logging
+
+from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..models import Package, Vulnerability, Assessment, CVSS, Finding, Observation
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
-from datetime import datetime, timezone
+
+
+_logger = logging.getLogger(__name__)
 
 
 class YoctoVulns:
     """GrypeVulns class to handle grype vulnerabilities and parse it"""
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
     def get_last_assessment(self, assessments):
         if not assessments:
@@ -76,8 +79,6 @@ class YoctoVulns:
                         vuln.add_url(issue.get("link"))
                     if "summary" in issue:
                         vuln.add_text(issue.get("summary"), "description")
-                    if "description" in issue:
-                        vuln.add_text(issue.get("description"), "yocto description")
 
                     vector_string = issue.get("vectorString", "")
 
@@ -178,3 +179,17 @@ class YoctoVulns:
                         assessment.set_status("under_investigation")
 
                     self.assessmentsCtrl.add(assessment)
+
+                    if "description" in issue:
+                        # Need the SBOM Document to know in which scan to make the observation
+                        if self.packagesCtrl.current_sbom_document is None:
+                            _logger.warning("Cannot add Yocto-specific observation if no scan is ongoing")
+                        else:
+                            finding = Finding.get_by_package_and_vulnerability(package.string_id, vuln.id)
+                            assert finding is not None
+
+                            Observation.create(
+                                finding.id,
+                                self.packagesCtrl.current_sbom_document.scan_id,
+                                yocto_description=issue.get("description"),
+                            )

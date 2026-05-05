@@ -3,12 +3,16 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
+import typing
 import uuid
-from ..extensions import db, Base
 
-from .scan import Scan
-from .variant import Variant
+from sqlalchemy.orm import Mapped, relationship
+
+from ..extensions import db, Base
+from . import Variant, Scan
+
+if typing.TYPE_CHECKING:
+    from . import SBOMPackage
 
 
 class SBOMDocument(Base):
@@ -16,14 +20,18 @@ class SBOMDocument(Base):
 
     __tablename__ = "sbom_documents"
 
-    id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
-    path = db.Column(db.Text, nullable=False)
-    source_name = db.Column(db.String, nullable=False)
-    format = db.Column(db.String, nullable=True)  # e.g. 'spdx', 'cdx', 'openvex', 'yocto_cve_check'
-    scan_id = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
+    path: Mapped[str] = db.Column(db.Text, nullable=False)
+    source_name: Mapped[str] = db.Column(db.String, nullable=False)
+    format: Mapped[str | None] = db.Column(db.String, nullable=True)  # e.g. 'spdx', 'cdx', 'openvex', 'yocto_cve_check'
+    scan_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("scans.id"), nullable=False, index=True)
 
-    scan = db.relationship("Scan", back_populates="sbom_documents")
-    sbom_packages = db.relationship("SBOMPackage", back_populates="sbom_document", cascade="all, delete-orphan")
+    scan: Mapped["Scan"] = relationship("Scan", back_populates="sbom_documents")
+    sbom_packages: Mapped[list["SBOMPackage"]] = relationship(
+        "SBOMPackage",
+        back_populates="sbom_document",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<SBOMDocument id={self.id} source_name={self.source_name!r} format={self.format!r}>"
@@ -33,7 +41,7 @@ class SBOMDocument(Base):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create(path: str, source_name: str, scan_id: uuid.UUID, format: Optional[str] = None) -> "SBOMDocument":
+    def create(path: str, source_name: str, scan_id: uuid.UUID, format: str | None = None) -> "SBOMDocument":
         """Create a new SBOM document with the given path, source_name and optional format
         under scan_id, persist it and return it.
         """
@@ -43,12 +51,12 @@ class SBOMDocument(Base):
         return sbomdocument
 
     @staticmethod
-    def get_by_id(document_id: uuid.UUID) -> Optional["SBOMDocument"]:
+    def get_by_id(document_id: uuid.UUID) -> "SBOMDocument | None":
         """Return the SBOM document matching *document_id*, or ``None`` if not found."""
         return db.session.get(SBOMDocument, document_id)
 
     @staticmethod
-    def get_by_path(path: str) -> Optional["SBOMDocument"]:
+    def get_by_path(path: str) -> "SBOMDocument | None":
         """Return the most-recently-created SBOM document matching *path*, or ``None``."""
         results = list(db.session.execute(
             db.select(SBOMDocument).where(SBOMDocument.path == path)
@@ -92,7 +100,7 @@ class SBOMDocument(Base):
             .order_by(SBOMDocument.path)
         ).scalars().all())
 
-    def update(self, path: str, source_name: str, format: Optional[str] = None) -> "SBOMDocument":
+    def update(self, path: str, source_name: str, format: str | None = None) -> "SBOMDocument":
         """Update path, source_name and optional format in place, persist the change and return ``self``."""
         self.path = path
         self.source_name = source_name
