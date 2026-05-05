@@ -214,3 +214,49 @@ def test_lt_fallback_same_name_invalid_versions():
     assert not b < a
     assert b > a
     assert not a > b
+
+
+# --- Supplier tests ---
+
+def test_supplier_in_string_id():
+    pkg = Package("foo", "1.0", supplier="Organization: Acme Corp (x@a.com)")
+    assert pkg.string_id == "foo@1.0::Organization: Acme Corp (x@a.com)"
+
+
+def test_no_supplier_string_id():
+    pkg = Package("foo", "1.0")
+    assert pkg.string_id == "foo@1.0"
+
+
+def test_packages_same_name_version_different_supplier_not_equal():
+    pkg_a = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    pkg_b = Package("foo", "1.0", supplier="Organization: Bar Inc")
+    assert pkg_a != pkg_b
+    assert hash(pkg_a) != hash(pkg_b)
+
+
+def test_packages_same_name_version_same_supplier_equal():
+    pkg_a = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    pkg_b = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    assert pkg_a == pkg_b
+    assert hash(pkg_a) == hash(pkg_b)
+
+
+def test_supplier_in_to_dict_from_dict():
+    pkg = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    data = pkg.to_dict()
+    assert data["supplier"] == "Organization: Acme Corp"
+    restored = Package.from_dict(data)
+    assert restored.supplier == "Organization: Acme Corp"
+    assert restored.string_id == "foo@1.0::Organization: Acme Corp"
+
+
+def test_sort_packages_mixed_suppliers():
+    pkg_acme = Package("foo", "1.0", supplier="Organization: Acme Corp")
+    pkg_bar  = Package("foo", "1.0", supplier="Organization: Bar Inc")
+    pkg_none = Package("foo", "1.0")
+    result = sorted([pkg_bar, pkg_none, pkg_acme])
+    # No-supplier (empty string) sorts before any named supplier
+    assert result[0].supplier == ""
+    # Remaining two are deterministic (alphabetical)
+    assert result[1].supplier < result[2].supplier
