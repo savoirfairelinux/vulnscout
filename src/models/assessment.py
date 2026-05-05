@@ -127,11 +127,11 @@ class Assessment(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     responses = db.Column(db.JSON, nullable=True)
-    finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+    finding_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
+    variant_id: Mapped[uuid.UUID | None] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
 
-    finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
-    variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
+    finding: Mapped["Finding | None"] = relationship("Finding", back_populates="assessments")
+    variant: Mapped["Variant | None"] = relationship("Variant", back_populates="assessments")
 
     # ------------------------------------------------------------------
     # Transient attributes (initialised by _init_transient)

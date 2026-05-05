@@ -3,10 +3,8 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models.package import Package
-from ..models.vulnerability import Vulnerability
-from ..models.assessment import Assessment
-from ..models.cvss import CVSS
+from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..models import Package, Vulnerability, Assessment, CVSS
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
 from datetime import datetime, timezone
@@ -15,9 +13,9 @@ from datetime import datetime, timezone
 class YoctoVulns:
     """GrypeVulns class to handle grype vulnerabilities and parse it"""
     def __init__(self, controllers):
-        self.packagesCtrl = controllers["packages"]
-        self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
-        self.assessmentsCtrl = controllers["assessments"]
+        self.packagesCtrl: PackagesController = controllers["packages"]
+        self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
+        self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
     def get_last_assessment(self, assessments):
         if not assessments:

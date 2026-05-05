@@ -14,3 +14,4 @@ from .assessment import Assessment  # noqa: F401
 from .time_estimate import TimeEstimate  # noqa: F401
 from .metrics import Metrics  # noqa: F401
 from .scan_diff_cache import ScanDiffCache  # noqa: F401
+from .cvss import CVSS

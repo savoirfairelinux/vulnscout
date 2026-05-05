@@ -3,11 +3,9 @@
 # Copyright (C) 2024 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from ..models.package import Package
+from ..models import Package, Finding, SBOMDocument, SBOMPackage
 from ..helpers.verbose import verbose
-from ..models.finding import Finding
 from ..extensions import db
-from ..models.sbom_package import SBOMPackage
 
 
 class PackagesController:
@@ -22,7 +20,7 @@ class PackagesController:
 
     def __init__(self):
         self._cache: dict[str, Package] = {}
-        self._current_sbom_document_id = None
+        self._current_sbom_document: SBOMDocument | None = None
         # Fast PK lookup: string_id → DB UUID.  Avoids SELECT in
         # get_by_string_id for packages we already persisted.
         self._db_id_cache: dict = {}
@@ -56,9 +54,15 @@ class PackagesController:
         except Exception as e:
             verbose(f"[PackagesController._preload_cache findings] {e}")
 
-    def set_sbom_document(self, doc_id) -> None:
+    @property
+    def current_sbom_document(self) -> SBOMDocument | None:
+        return self._current_sbom_document
+
+    @current_sbom_document.setter
+    def current_sbom_document(self, doc: SBOMDocument | None) -> None:
         """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""
-        self._current_sbom_document_id = doc_id
+        self._current_sbom_document = doc
+        verbose(f"[PackagesController] Now handling SBOM document {repr(doc)}")
 
     # ------------------------------------------------------------------
     # Fast accessors for other controllers
@@ -102,10 +106,10 @@ class PackagesController:
                 # Package already in DB — skip the expensive find_or_create
                 # SELECT.  Dirty-tracking will flush in-memory CPE/PURL
                 # changes automatically.  Only handle the SBOMPackage link.
-                if self._current_sbom_document_id is not None:
+                if self._current_sbom_document is not None:
                     with db.session.begin_nested():
                         SBOMPackage.get_or_create(
-                            self._current_sbom_document_id,
+                            self._current_sbom_document.id,
                             self._db_id_cache[string_id],
                         )
             else:
@@ -121,8 +125,8 @@ class PackagesController:
                     self._cache[string_id] = db_pkg
                     self._db_id_cache[string_id] = db_pkg.id
                     # Link to the current SBOM document if one is active
-                    if self._current_sbom_document_id is not None:
-                        SBOMPackage.get_or_create(self._current_sbom_document_id, db_pkg.id)
+                    if self._current_sbom_document is not None:
+                        SBOMPackage.get_or_create(self._current_sbom_document.id, db_pkg.id)
         except Exception as e:
             verbose(f"[PackagesController.add {package.string_id!r}] {e}")
 

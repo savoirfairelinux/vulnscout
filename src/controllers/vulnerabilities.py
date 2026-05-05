@@ -223,7 +223,7 @@ class VulnerabilitiesController:
             verbose(f"[VulnerabilitiesController.get {vuln_id!r}] {e}")
         return None
 
-    def add(self, vulnerability: Vulnerability) -> Optional[Vulnerability]:
+    def add(self, vulnerability: Vulnerability) -> Vulnerability:
         """
         Add a vulnerability to the list, merging it with an existing one if present.
         Return the vulnerability as is if added, or the merged vulnerability if already existing.
@@ -232,8 +232,7 @@ class VulnerabilitiesController:
         and have not gained new packages in this call — avoiding redundant
         get_by_id SELECTs and update_record commits on every re-encounter.
         """
-        if vulnerability is None:
-            return
+        assert vulnerability is not None
         _caches = dict(
             pkg_id_cache=self.packagesCtrl._db_id_cache,
             finding_cache=self.packagesCtrl._finding_cache,
