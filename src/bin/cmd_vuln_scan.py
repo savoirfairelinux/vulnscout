@@ -4,10 +4,18 @@
 
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
+from ..controllers.nvd_db import NVD_DB
+from ..controllers.osv_client import OSVClient
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
+from ..models.vulnerability import Vulnerability as VulnModel
+from ..models.metrics import Metrics as MetricsModel
+from ..models.cvss import CVSS
+from ..models.assessment import Assessment
+from ..models.package import Package
 from ..extensions import db as _db
+from ..routes._scan_queries import _packages_by_scan_ids
 from .cmd_process import DEFAULT_VARIANT_NAME
 import click
 import os
@@ -25,13 +33,6 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     Queries the NVD API for every CPE found in the variant's active packages
     and creates findings/observations in a new tool scan.
     """
-    from ..controllers.nvd_db import NVD_DB
-    from ..models.vulnerability import Vulnerability as VulnModel
-    from ..models.metrics import Metrics as MetricsModel
-    from ..models.cvss import CVSS
-    from ..models.assessment import Assessment
-    from ..models.package import Package
-
     variant_name = variant or DEFAULT_VARIANT_NAME
     project_obj = ProjectController.get_or_create(project)
     variant_obj = VariantController.get_or_create(variant_name, project_obj.id)
@@ -60,7 +61,6 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
 
-    from ..routes._scan_queries import _packages_by_scan_ids
     pkg_sets = _packages_by_scan_ids(latest_ids)
     all_pkg_ids: set = set()
     for s in pkg_sets.values():
@@ -256,10 +256,6 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     Queries the OSV.dev API for every PURL found in the variant's active
     packages and creates findings/observations in a new tool scan.
     """
-    from ..controllers.osv_client import OSVClient
-    from ..models.vulnerability import Vulnerability as VulnModel
-    from ..models.assessment import Assessment
-    from ..models.package import Package
 
     variant_name = variant or DEFAULT_VARIANT_NAME
     project_obj = ProjectController.get_or_create(project)
@@ -288,7 +284,6 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     if not latest_ids:
         raise click.ClickException("No scans found for variant")
 
-    from ..routes._scan_queries import _packages_by_scan_ids
     pkg_sets = _packages_by_scan_ids(latest_ids)
     all_pkg_ids: set = set()
     for s in pkg_sets.values():

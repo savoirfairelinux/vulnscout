@@ -4,8 +4,18 @@
 ``flask export-custom-assessments`` and ``flask import-custom-assessments``."""
 
 import click
+import json
 import os
 from flask.cli import with_appcontext
+from ..helpers.assessment_io import (
+    build_openvex_archive,
+    is_openvex_doc,
+    import_statements as _import_openvex_statements,
+    build_variant_by_name_map,
+    import_archive_bytes,
+)
+from ..models.assessment import Assessment as DBAssessment
+from ..models.variant import Variant as DBVariant
 
 
 @click.command("export-custom-assessments")
@@ -14,9 +24,6 @@ from flask.cli import with_appcontext
 @with_appcontext
 def export_custom_assessments_command(output_dir: str) -> None:
     """Export handmade (custom) assessments as a tar.gz of OpenVEX files."""
-    from ..helpers.assessment_io import build_openvex_archive
-    from ..models.assessment import Assessment as DBAssessment
-    from ..models.variant import Variant as DBVariant
 
     handmade = DBAssessment.get_handmade()
     if not handmade:
@@ -39,14 +46,6 @@ def export_custom_assessments_command(output_dir: str) -> None:
 @with_appcontext
 def import_custom_assessments_command(file_path: str) -> None:
     """Import custom assessments from a .json or .tar.gz OpenVEX file."""
-    import json as _json
-    from ..helpers.assessment_io import (
-        is_openvex_doc,
-        import_statements as _import_openvex_statements,
-        build_variant_by_name_map,
-        import_archive_bytes,
-    )
-
     if not os.path.isfile(file_path):
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
@@ -91,7 +90,7 @@ def import_custom_assessments_command(file_path: str) -> None:
 
         try:
             with open(file_path) as fh:
-                data = _json.load(fh)
+                data = json.load(fh)
         except Exception:
             click.echo("Error: invalid JSON file.", err=True)
             raise SystemExit(1)

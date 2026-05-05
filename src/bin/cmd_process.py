@@ -19,6 +19,7 @@ from ..controllers.variants import VariantController
 from ..controllers.scans import ScanController
 from ..controllers.sbom_documents import SBOMDocumentController
 from ..models.sbom_document import SBOMDocument
+from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
@@ -248,9 +249,6 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
     """
     verbose(f"{log_prefix}: Populating observations table")
     try:
-        from ..models.sbom_package import SBOMPackage as SBOMPkg
-        from ..models.sbom_document import SBOMDocument as SBOMDoc
-
         if not scan:
             print("Warning: no scan provided — skipping observation creation.")
             return
@@ -258,8 +256,8 @@ def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None
         # 1. Collect package_ids referenced by this scan's SBOM documents
         package_ids_in_scan = list(_db.session.execute(
             _db.select(SBOMPkg.package_id)
-            .join(SBOMDoc, SBOMPkg.sbom_document_id == SBOMDoc.id)
-            .where(SBOMDoc.scan_id == scan.id)
+            .join(SBOMDocument, SBOMPkg.sbom_document_id == SBOMDocument.id)
+            .where(SBOMDocument.scan_id == scan.id)
             .distinct()
         ).scalars().all())
 
