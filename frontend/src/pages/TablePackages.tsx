@@ -158,6 +158,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         'version': 'Version',
         'cpe': 'CPE',
         'purl': 'PURL',
+        'supplier': 'Supplier',
         'vulnerabilities': 'Vulnerabilities',
         'variants': 'Variants',
         'remainingPendingVulns': 'Remaining Pending Vulnerabilities',
@@ -218,6 +219,22 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 },
                 enableSorting: false,
                 size: 200
+            }),
+            columnHelper.accessor('supplier', {
+                id: 'supplier',
+                header: () => <div className="flex items-center justify-center">Supplier</div>,
+                cell: info => {
+                    const supplier = info.getValue();
+                    if (!supplier) return (
+                        <div className="flex items-center justify-center h-full text-neutral-500">—</div>
+                    );
+                    return (
+                        <div className="flex items-center justify-center h-full text-center text-sm" title={supplier}>
+                            {supplier}
+                        </div>
+                    );
+                },
+                size: 200,
             }),
             columnHelper.accessor(
             row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
@@ -379,6 +396,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     'Version',
                     'CPE',
                     'PURL',
+                    'Supplier',
                     'Vulnerabilities',
                     'Variants',
                     'Remaining Pending Vulnerabilities',

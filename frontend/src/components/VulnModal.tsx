@@ -47,6 +47,17 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
 
+function splitPkgId(id: string): { nameVersion: string; supplier: string } {
+    const sepIdx = id.indexOf('::');
+    if (sepIdx === -1) return { nameVersion: id, supplier: '' };
+    return { nameVersion: id.slice(0, sepIdx), supplier: id.slice(sepIdx + 2) };
+}
+
+function formatPkgId(id: string): string {
+    const { nameVersion, supplier } = splitPkgId(id);
+    return supplier ? `${nameVersion} (${supplier})` : nameVersion;
+}
+
 type AssessmentGroup = {
     key: string;
     assessments: Assessment[];
@@ -823,7 +834,7 @@ type AssessmentGroup = {
                                 </li>
                                 <li key="packages">
                                     <span className="font-bold mr-1">Affects:</span>
-                                    <code>{vuln.packages.join(', ')}</code>
+                                    <code>{vuln.packages.map(formatPkgId).join(', ')}</code>
                                 </li>
                                 <li key="aliases">
                                     <span className="font-bold mr-1">Aliases:</span>
@@ -949,12 +960,15 @@ type AssessmentGroup = {
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
                                             <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.packages.map(pkg => (
-                                                    <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
-                                                        <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                        {pkg}
-                                                    </span>
-                                                ))}
+                                                {group.packages.map(pkg => {
+                                                    const { nameVersion, supplier } = splitPkgId(pkg);
+                                                    return (
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={supplier ? `Supplier: ${supplier}` : undefined}>
+                                                            <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                            {nameVersion}{supplier && <span className="ml-1 opacity-70 text-xs">({supplier})</span>}
+                                                        </span>
+                                                    );
+                                                })}
                                             </div>
                                             {(() => {
                                                 // Build the same group key (date + content fingerprint) used by

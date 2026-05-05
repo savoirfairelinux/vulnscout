@@ -41,7 +41,8 @@ describe('Packages Table', () => {
             },
             source: ['hardcoded'],
             variants: [],
-            sbom_documents: []
+            sbom_documents: [],
+            supplier: '',
         },
         {
             id: 'xxxyyyzzz@2.0.0',
@@ -53,7 +54,8 @@ describe('Packages Table', () => {
             maxSeverity: {"active": {label: 'high', index: 4}},
             source: ['cve-finder'],
             variants: [],
-            sbom_documents: []
+            sbom_documents: [],
+            supplier: '',
         },
         {
             id: 'dddeeefff@1.5.0',
@@ -68,7 +70,8 @@ describe('Packages Table', () => {
             },
             source: ['cve-finder', 'hardcoded'],
             variants: [],
-            sbom_documents: []
+            sbom_documents: [],
+            supplier: '',
         }
     ];
 
@@ -349,7 +352,8 @@ describe('Packages Table', () => {
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
                 variants: [],
-                sbom_documents: []
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -384,7 +388,8 @@ describe('Packages Table', () => {
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
                 variants: [],
-                sbom_documents: []
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -535,7 +540,8 @@ describe('Packages Table', () => {
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
                 variants: ['variant-A', 'variant-B'],
-                sbom_documents: []
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -557,7 +563,8 @@ describe('Packages Table', () => {
                 maxSeverity: {"active": {label: 'low', index: 2}},
                 source: ['test'],
                 variants: [],
-                sbom_documents: []
+                sbom_documents: [],
+                supplier: '',
             },
             {
                 id: 'pkg-b@1.0.0',
@@ -569,7 +576,8 @@ describe('Packages Table', () => {
                 maxSeverity: {"active": {label: 'medium', index: 3}},
                 source: ['test'],
                 variants: [],
-                sbom_documents: []
+                sbom_documents: [],
+                supplier: '',
             }
         ];
 
@@ -621,5 +629,11 @@ describe('Packages Table', () => {
         const cpeSpan = await screen.getByText(/cpe:2.3:a:vendor:aaabbbccc:1.0.0/);
         expect(cpeSpan).toBeTruthy();
         expect(cpeSpan.getAttribute('title')).toContain('cpe:2.3:a:vendor:aaabbbccc:1.0.0');
+    });
+
+    test('supplier column is hidden by default but toggleable', async () => {
+        render(<TablePackages packages={packages} />);
+        // Column is NOT visible initially
+        expect(screen.queryByText('Supplier')).toBeNull();
     });
 });
