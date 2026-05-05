@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 from .assessments import AssessmentsController
 from .findings import FindingController

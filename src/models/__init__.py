@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
+# SPDX-License-Identifier: GPL-3.0-only
 
 from ..extensions import db  # noqa: F401
 from .project import Project  # noqa: F401

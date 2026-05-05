@@ -1,13 +1,11 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 #
 # This python job aggregates packages, vulnerabilities and assessments from
 # source files, enriches them with VEX info and persists everything to the
 # database.  Output SBOM files are still generated for downstream consumption
 # but packages / vulnerabilities / assessments are no longer written to
 # intermediate JSON files — the DB is the single source of truth.
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..views.cyclonedx import CycloneDx
