@@ -29,7 +29,7 @@ class Package(Base):
     supplier = db.Column(db.String, nullable=True, default="")
 
     __table_args__ = (
-        db.Index('ix_packages_name_version', 'name', 'version'),
+        db.Index('ix_packages_name_version_supplier', 'name', 'version', 'supplier'),
     )
 
     sbom_packages = db.relationship("SBOMPackage", back_populates="package", cascade="all, delete-orphan")
