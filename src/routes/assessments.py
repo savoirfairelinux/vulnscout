@@ -178,9 +178,7 @@ def init_app(app):
                     aliases: list[str] = []
                     vuln_url = ""
                     if vuln_obj:
-                        desc = vuln_obj.texts.get("description", "")
-                        yocto_desc = vuln_obj.texts.get("yocto description", "")
-                        description = desc or yocto_desc or ""
+                        description = vuln_obj.texts.get("description", "")
                         aliases = list(vuln_obj.aliases or [])
                         urls = list(vuln_obj.urls) if vuln_obj.urls else list(vuln_obj.links or [])
                         vuln_url = urls[0] if urls else ""

@@ -817,13 +817,6 @@ class TestPackageModelExtra:
 class TestVulnerabilityModelExtra:
     """Cover Vulnerability model paths not elsewhere tested."""
 
-    def test_update_record_yocto_description(self, app, vuln):
-        """update_record() with yocto_description kwarg (line 542)."""
-        from src.models.vulnerability import Vulnerability
-        v = Vulnerability.get_by_id(vuln.id)
-        v.update_record(yocto_description="Yocto notes")
-        assert v.yocto_description == "Yocto notes"
-
     def test_persist_from_transient_bad_publish_date(self, app):
         """persist_from_transient() with an unparseable published date falls back
         gracefully (lines 610-611)."""

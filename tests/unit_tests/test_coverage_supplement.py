@@ -98,25 +98,6 @@ class TestFindingStringResolution:
 
 
 # ===========================================================================
-# Vulnerability DB model — yocto_description path (line 93)
-# ===========================================================================
-
-class TestVulnerabilityYoctoDescription:
-    def test_yocto_description_populates_texts(self, app):
-        """Create a Vulnerability with yocto_description; line 93 ('yocto description' key)."""
-        from src.models.vulnerability import Vulnerability
-        v = Vulnerability.create_record(
-            id="CVE-2099-YOCTO",
-            description="Normal description",
-            yocto_description="Yocto-specific details",
-        )
-        # _init_transient is called on creation and should populate both keys
-        assert "description" in v.texts
-        assert "yocto description" in v.texts
-        assert v.texts["yocto description"] == "Yocto-specific details"
-
-
-# ===========================================================================
 # Vulnerability DB model — persist_from_transient update path (lines 568-569)
 # ===========================================================================
 

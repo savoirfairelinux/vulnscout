@@ -4,11 +4,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+import logging
+import json
+
 from src.views.yocto_vulns import YoctoVulns
 from src.controllers.packages import PackagesController
 from src.controllers.vulnerabilities import VulnerabilitiesController
 from src.controllers.assessments import AssessmentsController
-import json
 
 
 @pytest.fixture
@@ -382,8 +384,8 @@ def test_get_last_assessment_naive_datetime(yocto_parser):
     assert result is a2
 
 
-def test_load_from_dict_issue_with_description(yocto_parser):
-    """load_from_dict adds 'description' text when present in issue (line 75)."""
+def test_load_from_dict_issue_with_description_no_scan(yocto_parser, caplog):
+    """load_from_dict fails to create an observation Yocto text when description present in issue."""
     data = {
         "version": "1",
         "package": [{
@@ -392,16 +394,19 @@ def test_load_from_dict_issue_with_description(yocto_parser):
             "issue": [{
                 "id": "CVE-DESC-1",
                 "status": "Unpatched",
-                "description": "This is a detailed description.",
+                "description": "some Yocto-specific description.",
                 "summary": "A short summary."
             }]
         }]
     }
-    yocto_parser.load_from_dict(data)
+
+    with caplog.at_level(logging.WARNING):
+        yocto_parser.load_from_dict(data)
+
     vuln = yocto_parser.vulnerabilitiesCtrl.get("CVE-DESC-1")
     assert vuln is not None
-    # description text should have been added
-    assert any("detailed description" in (t or "") for t in vuln.texts.values())
+
+    assert "Cannot add Yocto" in caplog.text
 
 
 def test_load_from_dict_issue_without_status(yocto_parser):

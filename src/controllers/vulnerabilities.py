@@ -716,7 +716,6 @@ class VulnerabilitiesController:
         return {
             "id": record.id,
             "description": record.description,
-            "yocto_description": record.yocto_description,
             "status": record.status,
             "publish_date": record.publish_date.isoformat() if record.publish_date else None,
             "attack_vector": record.attack_vector,
@@ -743,7 +742,6 @@ class VulnerabilitiesController:
     def create_db(
         vuln_id: str,
         description: Optional[str] = None,
-        yocto_description: Optional[str] = None,
         status: Optional[str] = None,
         publish_date: Optional[datetime.date | str] = None,
         attack_vector: Optional[str] = None,
@@ -763,7 +761,6 @@ class VulnerabilitiesController:
         return Vulnerability.create_record(
             id=vuln_id,
             description=description,
-            yocto_description=yocto_description,
             status=status,
             publish_date=safe_date,
             attack_vector=attack_vector,
