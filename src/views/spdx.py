@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..models.package import Package
+from ..helpers.verbose import verbose
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
@@ -23,6 +24,13 @@ from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
 from os import getenv
+
+
+_ACTOR_TYPE_LABELS = {
+    ActorType.ORGANIZATION: "Organization",
+    ActorType.PERSON: "Person",
+    ActorType.TOOL: "Tool",
+}
 
 
 class SPDX:
@@ -57,7 +65,18 @@ class SPDX:
         Merge components from SBOM into controller.
         """
         for package in self.sbom.packages:
-            pkg = Package(package.name, package.version or "", [], [], "")
+            supplier = ""
+            try:
+                if package.supplier is not None and not isinstance(package.supplier, SpdxNoAssertion):
+                    actor = package.supplier
+                    actor_label = _ACTOR_TYPE_LABELS.get(actor.actor_type, actor.actor_type.name.capitalize())
+                    supplier = f"{actor_label}: {actor.name}"
+                    if actor.email:
+                        supplier += f" ({actor.email})"
+            except Exception:
+                verbose(f"[SPDX.merge_components] failed to read supplier for {package.name!r}")
+
+            pkg = Package(package.name, package.version or "", [], [], "", supplier=supplier)
             cpe_type = "a"
 
             if package.primary_package_purpose == PackagePurpose.OPERATING_SYSTEM:

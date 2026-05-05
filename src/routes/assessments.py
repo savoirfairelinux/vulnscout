@@ -199,10 +199,12 @@ def init_app(app):
                     # Enrich products with identifiers
                     products = []
                     for pkg_str in assess.packages:
-                        if "@" in pkg_str:
-                            name, version = pkg_str.rsplit("@", 1)
+                        _parts = pkg_str.split("::", 1)
+                        _base = _parts[0]
+                        if "@" in _base:
+                            name, version = _base.rsplit("@", 1)
                         else:
-                            name, version = pkg_str, ""
+                            name, version = _base, ""
                         purl = f"pkg:generic/{name}@{version}"
                         products.append({
                             "@id": purl,
@@ -320,9 +322,12 @@ def init_app(app):
 
                 for pkg_string_id in pkg_ids:
                     try:
-                        name, version = (pkg_string_id.rsplit("@", 1)
-                                         if "@" in pkg_string_id else (pkg_string_id, ""))
-                        db_pkg = Package.find_or_create(name, version)
+                        _parts = pkg_string_id.split("::", 1)
+                        _base = _parts[0]
+                        _supplier = _parts[1] if len(_parts) > 1 else ""
+                        name, version = (_base.rsplit("@", 1)
+                                         if "@" in _base else (_base, ""))
+                        db_pkg = Package.find_or_create(name, version, supplier=_supplier)
                         DBVuln.get_or_create(vuln_name)
                         finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
@@ -528,8 +533,11 @@ def init_app(app):
             with batch_session():
                 for pkg_string_id in (assessment.packages or []):
                     # find_or_create handles both lookup and creation in one query
-                    name, version = pkg_string_id.rsplit("@", 1) if "@" in pkg_string_id else (pkg_string_id, "")
-                    db_pkg = Package.find_or_create(name, version)
+                    _parts = pkg_string_id.split("::", 1)
+                    _base = _parts[0]
+                    _supplier = _parts[1] if len(_parts) > 1 else ""
+                    name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
+                    db_pkg = Package.find_or_create(name, version, supplier=_supplier)
                     # Ensure vulnerability record exists before creating Finding (FK constraint)
                     DBVuln.get_or_create(vuln_id)
                     finding = Finding.get_or_create(db_pkg.id, vuln_id)
@@ -604,10 +612,13 @@ def init_app(app):
                         # Resolve package from cache first, then DB
                         db_pkg = pkg_cache.get(pkg_string_id)
                         if db_pkg is None:
-                            name, version = (pkg_string_id.rsplit("@", 1)
-                                             if "@" in pkg_string_id
-                                             else (pkg_string_id, ""))
-                            db_pkg = Package.find_or_create(name, version)
+                            _parts = pkg_string_id.split("::", 1)
+                            _base = _parts[0]
+                            _supplier = _parts[1] if len(_parts) > 1 else ""
+                            name, version = (_base.rsplit("@", 1)
+                                             if "@" in _base
+                                             else (_base, ""))
+                            db_pkg = Package.find_or_create(name, version, supplier=_supplier)
                             pkg_cache[pkg_string_id] = db_pkg
                         # Ensure vulnerability record exists before creating Finding (FK constraint)
                         DBVuln.get_or_create(vuln_id)

@@ -26,9 +26,10 @@ class Package(Base):
     cpe = db.Column(db.JSON, nullable=True)
     purl = db.Column(db.JSON, nullable=True)
     licences = db.Column(db.String, nullable=True)
+    supplier = db.Column(db.String, nullable=True, default="")
 
     __table_args__ = (
-        db.Index('ix_packages_name_version', 'name', 'version'),
+        db.Index('ix_packages_name_version_supplier', 'name', 'version', 'supplier'),
     )
 
     sbom_packages = db.relationship("SBOMPackage", back_populates="package", cascade="all, delete-orphan")
@@ -46,6 +47,7 @@ class Package(Base):
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
+        supplier: str = "",
         **kwargs,
     ):
         version = str(version).strip().split("+git")[0]
@@ -65,6 +67,7 @@ class Package(Base):
         self.cpe = []
         self.purl = []
         self.licences = licences or ""
+        self.supplier = supplier or ""
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -76,7 +79,9 @@ class Package(Base):
 
     @property
     def string_id(self) -> str:
-        """Return the human-readable ``'name@version'`` identifier."""
+        """Return the human-readable identifier, including supplier when present."""
+        if self.supplier:
+            return f"{self.name}@{self.version}::{self.supplier}"
         return f"{self.name}@{self.version}"
 
     # TODO: Remove in-memory logic in parsers to use DB directly. The following are concerned
@@ -132,12 +137,16 @@ class Package(Base):
         if not isinstance(other, Package):
             return NotImplemented
         try:
-            return self.name == other.name and self._parse_version() == other._parse_version()
+            return (self.name == other.name
+                    and self._parse_version() == other._parse_version()
+                    and (self.supplier or "") == (other.supplier or ""))
         except Exception:
-            return self.name == other.name and self.version == other.version
+            return (self.name == other.name
+                    and self.version == other.version
+                    and (self.supplier or "") == (other.supplier or ""))
 
     def __hash__(self) -> int:
-        return hash((self.name, self.version))
+        return hash((self.name, self.version, self.supplier or ""))
 
     def __str__(self) -> str:
         return self.string_id
@@ -149,17 +158,23 @@ class Package(Base):
         if self.name != other.name:
             return self.name < other.name
         try:
-            return self._parse_version() < other._parse_version()
+            if self._parse_version() != other._parse_version():
+                return self._parse_version() < other._parse_version()
         except Exception:
-            return self.version < other.version
+            if self.version != other.version:
+                return self.version < other.version
+        return (self.supplier or "") < (other.supplier or "")
 
     def __gt__(self, other) -> bool:
         if self.name != other.name:
             return self.name > other.name
         try:
-            return self._parse_version() > other._parse_version()
+            if self._parse_version() != other._parse_version():
+                return self._parse_version() > other._parse_version()
         except Exception:
-            return self.version > other.version
+            if self.version != other.version:
+                return self.version > other.version
+        return (self.supplier or "") > (other.supplier or "")
 
     def __le__(self, other) -> bool:
         return self < other or self == other
@@ -193,6 +208,7 @@ class Package(Base):
             "cpe": list(self.cpe or []),
             "purl": list(self.purl or []),
             "licences": self.licences or "",
+            "supplier": self.supplier or "",
         }
 
     @staticmethod
@@ -203,6 +219,7 @@ class Package(Base):
             cpe=data.get("cpe", []),
             purl=data.get("purl", []),
             licences=data.get("licences", ""),
+            supplier=data.get("supplier", ""),
         )
 
     # ------------------------------------------------------------------
@@ -230,14 +247,23 @@ class Package(Base):
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
+        supplier: str = "",
     ) -> "Package":
-        """Return an existing Package for (name, version) or create a new one, merging identifiers."""
+        """Return an existing Package for (name, version, supplier) or create a new one."""
         existing = db.session.execute(
-            db.select(Package).where(Package.name == name, Package.version == version)
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == (supplier or ""),
+            )
         ).scalar_one_or_none()
 
         if existing is None:
-            existing = Package(name=name, version=version, cpe=cpe or [], purl=purl or [], licences=licences)
+            existing = Package(
+                name=name, version=version,
+                cpe=cpe or [], purl=purl or [],
+                licences=licences, supplier=supplier or "",
+            )
             db.session.add(existing)
             db.session.flush()
         else:
@@ -262,35 +288,31 @@ class Package(Base):
         """Resolve many packages in two queries instead of N.
 
         *items* is a list of dicts with keys ``name``, ``version`` and
-        optionally ``cpe``, ``purl``, ``licences``.
+        optionally ``cpe``, ``purl``, ``licences``, ``supplier``.
 
         Returns a ``{string_id: Package}`` mapping.
-
-        1. One SELECT fetches all existing rows matching the requested
-           ``(name, version)`` pairs.
-        2. Missing packages are bulk-inserted in a single flush.
-        3. CPE/PURL identifiers are merged into existing records.
         """
         from sqlalchemy import tuple_
 
         if not items:
             return {}
 
-        pairs = [(d["name"], d["version"]) for d in items]
+        triples = [(d["name"], d["version"], d.get("supplier", "")) for d in items]
 
-        # Single SELECT for all requested packages
         existing_rows = list(
             db.session.execute(
                 db.select(Package).where(
-                    tuple_(Package.name, Package.version).in_(pairs)
+                    tuple_(Package.name, Package.version, Package.supplier).in_(triples)
                 )
             ).scalars().all()
         )
-        by_key: dict[tuple, Package] = {(p.name, p.version): p for p in existing_rows}
+        by_key: dict[tuple, Package] = {
+            (p.name, p.version, p.supplier or ""): p for p in existing_rows
+        }
 
         result: dict[str, Package] = {}
         for d in items:
-            key = (d["name"], d["version"])
+            key = (d["name"], d["version"], d.get("supplier", ""))
             pkg = by_key.get(key)
             if pkg is None:
                 pkg = Package(
@@ -299,11 +321,11 @@ class Package(Base):
                     cpe=d.get("cpe", []),
                     purl=d.get("purl", []),
                     licences=d.get("licences", ""),
+                    supplier=d.get("supplier", ""),
                 )
                 db.session.add(pkg)
                 by_key[key] = pkg
             else:
-                # Merge identifiers
                 for c in (d.get("cpe") or []):
                     if c not in (pkg.cpe or []):
                         pkg.add_cpe(c)
@@ -316,22 +338,31 @@ class Package(Base):
         return result
 
     @staticmethod
-    def exists(name: str, version: str) -> bool:
-        """Check whether a package with (name, version) exists — lightweight, no full row load."""
+    def exists(name: str, version: str, supplier: str = "") -> bool:
+        """Check whether a package with (name, version, supplier) exists."""
         return db.session.query(
             db.session.query(Package).filter(
-                Package.name == name, Package.version == version
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == (supplier or ""),
             ).exists()
         ).scalar()
 
     @staticmethod
     def get_by_string_id(string_id: str) -> Optional["Package"]:
-        """Return a package by ``'name@version'`` string id, or ``None``."""
+        """Return a package by string_id (``'name@version'`` or ``'name@version::supplier'``)."""
         if "@" not in string_id:
             return None
+        supplier = ""
+        if "::" in string_id:
+            string_id, supplier = string_id.split("::", 1)
         name, version = string_id.split("@", 1)
         return db.session.execute(
-            db.select(Package).where(Package.name == name, Package.version == version)
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == supplier,
+            )
         ).scalar_one_or_none()
 
     @staticmethod
