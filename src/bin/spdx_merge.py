@@ -1,10 +1,8 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 #
 # This python job is to read a bunch of SPDX files and merge them in one
 # Outputs files will be used by merger_ci.py later. (see scan.sh)
-#
-# Copyright (C) 2024 Savoir-faire Linux, Inc.
+# Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
 from ..views.spdx import SPDX
