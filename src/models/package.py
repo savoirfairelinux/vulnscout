@@ -247,14 +247,23 @@ class Package(Base):
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
+        supplier: str = "",
     ) -> "Package":
-        """Return an existing Package for (name, version) or create a new one, merging identifiers."""
+        """Return an existing Package for (name, version, supplier) or create a new one."""
         existing = db.session.execute(
-            db.select(Package).where(Package.name == name, Package.version == version)
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == (supplier or ""),
+            )
         ).scalar_one_or_none()
 
         if existing is None:
-            existing = Package(name=name, version=version, cpe=cpe or [], purl=purl or [], licences=licences)
+            existing = Package(
+                name=name, version=version,
+                cpe=cpe or [], purl=purl or [],
+                licences=licences, supplier=supplier or "",
+            )
             db.session.add(existing)
             db.session.flush()
         else:
@@ -279,35 +288,31 @@ class Package(Base):
         """Resolve many packages in two queries instead of N.
 
         *items* is a list of dicts with keys ``name``, ``version`` and
-        optionally ``cpe``, ``purl``, ``licences``.
+        optionally ``cpe``, ``purl``, ``licences``, ``supplier``.
 
         Returns a ``{string_id: Package}`` mapping.
-
-        1. One SELECT fetches all existing rows matching the requested
-           ``(name, version)`` pairs.
-        2. Missing packages are bulk-inserted in a single flush.
-        3. CPE/PURL identifiers are merged into existing records.
         """
         from sqlalchemy import tuple_
 
         if not items:
             return {}
 
-        pairs = [(d["name"], d["version"]) for d in items]
+        triples = [(d["name"], d["version"], d.get("supplier", "")) for d in items]
 
-        # Single SELECT for all requested packages
         existing_rows = list(
             db.session.execute(
                 db.select(Package).where(
-                    tuple_(Package.name, Package.version).in_(pairs)
+                    tuple_(Package.name, Package.version, Package.supplier).in_(triples)
                 )
             ).scalars().all()
         )
-        by_key: dict[tuple, Package] = {(p.name, p.version): p for p in existing_rows}
+        by_key: dict[tuple, Package] = {
+            (p.name, p.version, p.supplier or ""): p for p in existing_rows
+        }
 
         result: dict[str, Package] = {}
         for d in items:
-            key = (d["name"], d["version"])
+            key = (d["name"], d["version"], d.get("supplier", ""))
             pkg = by_key.get(key)
             if pkg is None:
                 pkg = Package(
@@ -316,11 +321,11 @@ class Package(Base):
                     cpe=d.get("cpe", []),
                     purl=d.get("purl", []),
                     licences=d.get("licences", ""),
+                    supplier=d.get("supplier", ""),
                 )
                 db.session.add(pkg)
                 by_key[key] = pkg
             else:
-                # Merge identifiers
                 for c in (d.get("cpe") or []):
                     if c not in (pkg.cpe or []):
                         pkg.add_cpe(c)
@@ -333,22 +338,31 @@ class Package(Base):
         return result
 
     @staticmethod
-    def exists(name: str, version: str) -> bool:
-        """Check whether a package with (name, version) exists — lightweight, no full row load."""
+    def exists(name: str, version: str, supplier: str = "") -> bool:
+        """Check whether a package with (name, version, supplier) exists."""
         return db.session.query(
             db.session.query(Package).filter(
-                Package.name == name, Package.version == version
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == (supplier or ""),
             ).exists()
         ).scalar()
 
     @staticmethod
     def get_by_string_id(string_id: str) -> Optional["Package"]:
-        """Return a package by ``'name@version'`` string id, or ``None``."""
+        """Return a package by string_id (``'name@version'`` or ``'name@version::supplier'``)."""
         if "@" not in string_id:
             return None
+        supplier = ""
+        if "::" in string_id:
+            string_id, supplier = string_id.split("::", 1)
         name, version = string_id.split("@", 1)
         return db.session.execute(
-            db.select(Package).where(Package.name == name, Package.version == version)
+            db.select(Package).where(
+                Package.name == name,
+                Package.version == version,
+                Package.supplier == supplier,
+            )
         ).scalar_one_or_none()
 
     @staticmethod
