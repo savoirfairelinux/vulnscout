@@ -17,11 +17,11 @@
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
 
-from .cmd_process import (
+from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     create_project_context,
     process_command,
     _run_main,
-    post_treatment,       # re-exported: used by webapp.py
+    post_treatment,
     populate_observations,
     evaluate_condition,
     read_inputs,

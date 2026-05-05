@@ -21,7 +21,6 @@ from ..helpers.assessment_io import (
     build_variant_by_name_map,
     import_archive_bytes,
 )
-from ..models.vulnerability import Vulnerability as DBVuln
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 

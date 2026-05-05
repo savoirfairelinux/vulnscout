@@ -20,7 +20,7 @@ from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models.variant import Variant as _Variant
+    from ..models.variant import Variant as _Variant  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

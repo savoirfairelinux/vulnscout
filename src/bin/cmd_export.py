@@ -9,7 +9,6 @@ from ..controllers.sbom_documents import SBOMDocumentController
 from .cmd_process import evaluate_condition
 import click
 import json
-import os
 from flask.cli import with_appcontext
 
 
