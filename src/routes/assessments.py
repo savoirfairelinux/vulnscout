@@ -14,6 +14,7 @@ from ..controllers.assessments import AssessmentsController
 from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
+from ..models.variant import Variant as DBVariant
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
