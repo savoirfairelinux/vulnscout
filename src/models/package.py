@@ -26,6 +26,7 @@ class Package(Base):
     cpe = db.Column(db.JSON, nullable=True)
     purl = db.Column(db.JSON, nullable=True)
     licences = db.Column(db.String, nullable=True)
+    supplier = db.Column(db.String, nullable=True, default="")
 
     __table_args__ = (
         db.Index('ix_packages_name_version', 'name', 'version'),
@@ -46,6 +47,7 @@ class Package(Base):
         cpe: Optional[list] = None,
         purl: Optional[list] = None,
         licences: str = "",
+        supplier: str = "",
         **kwargs,
     ):
         version = str(version).strip().split("+git")[0]
@@ -65,6 +67,7 @@ class Package(Base):
         self.cpe = []
         self.purl = []
         self.licences = licences or ""
+        self.supplier = supplier or ""
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -76,7 +79,9 @@ class Package(Base):
 
     @property
     def string_id(self) -> str:
-        """Return the human-readable ``'name@version'`` identifier."""
+        """Return the human-readable identifier, including supplier when present."""
+        if self.supplier:
+            return f"{self.name}@{self.version}::{self.supplier}"
         return f"{self.name}@{self.version}"
 
     # TODO: Remove in-memory logic in parsers to use DB directly. The following are concerned
@@ -132,12 +137,16 @@ class Package(Base):
         if not isinstance(other, Package):
             return NotImplemented
         try:
-            return self.name == other.name and self._parse_version() == other._parse_version()
+            return (self.name == other.name
+                    and self._parse_version() == other._parse_version()
+                    and (self.supplier or "") == (other.supplier or ""))
         except Exception:
-            return self.name == other.name and self.version == other.version
+            return (self.name == other.name
+                    and self.version == other.version
+                    and (self.supplier or "") == (other.supplier or ""))
 
     def __hash__(self) -> int:
-        return hash((self.name, self.version))
+        return hash((self.name, self.version, self.supplier or ""))
 
     def __str__(self) -> str:
         return self.string_id
@@ -149,17 +158,23 @@ class Package(Base):
         if self.name != other.name:
             return self.name < other.name
         try:
-            return self._parse_version() < other._parse_version()
+            if self._parse_version() != other._parse_version():
+                return self._parse_version() < other._parse_version()
         except Exception:
-            return self.version < other.version
+            if self.version != other.version:
+                return self.version < other.version
+        return (self.supplier or "") < (other.supplier or "")
 
     def __gt__(self, other) -> bool:
         if self.name != other.name:
             return self.name > other.name
         try:
-            return self._parse_version() > other._parse_version()
+            if self._parse_version() != other._parse_version():
+                return self._parse_version() > other._parse_version()
         except Exception:
-            return self.version > other.version
+            if self.version != other.version:
+                return self.version > other.version
+        return (self.supplier or "") > (other.supplier or "")
 
     def __le__(self, other) -> bool:
         return self < other or self == other
@@ -193,6 +208,7 @@ class Package(Base):
             "cpe": list(self.cpe or []),
             "purl": list(self.purl or []),
             "licences": self.licences or "",
+            "supplier": self.supplier or "",
         }
 
     @staticmethod
@@ -203,6 +219,7 @@ class Package(Base):
             cpe=data.get("cpe", []),
             purl=data.get("purl", []),
             licences=data.get("licences", ""),
+            supplier=data.get("supplier", ""),
         )
 
     # ------------------------------------------------------------------
