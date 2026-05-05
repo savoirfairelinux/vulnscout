@@ -11,6 +11,7 @@ type Package = {
     source: string[];
     variants: string[];
     sbom_documents: string[];
+    supplier: string;
 };
 
 export type { Package, VulnCounts, Severities };
@@ -32,6 +33,7 @@ const asPackage = (data: any): Package | [] => {
         source: [],
         variants: [],
         sbom_documents: [],
+        supplier: "",
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -43,6 +45,7 @@ const asPackage = (data: any): Package | [] => {
     if (Array.isArray(data?.variants)) {
         for (const v of data.variants) if (typeof v === "string") pkg.variants.push(v);
     }
+    if (typeof data?.supplier === "string") pkg.supplier = data.supplier;
     if (Array.isArray(data?.sources)) {
         for (const s of data.sources) if (typeof s === "string") pkg.source.push(s);
     }
