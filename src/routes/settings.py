@@ -25,7 +25,7 @@ from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.verbose import verbose
 from ._scan_queries import _packages_by_scan_ids
-from ._scan_cache import recompute_variant_cache
+
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
@@ -157,12 +157,6 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
                 post_treatment(controllers)
             except Exception as e:
                 verbose(f"settings/upload: EPSS enrichment failed: {e}")
-
-            # Recompute scan-history cache for the affected variant.
-            try:
-                recompute_variant_cache(variant_id)
-            except Exception as e:
-                verbose(f"settings/upload: Cache recompute failed: {e}")
 
             _upload_status[upload_id] = {
                 "status": "done",

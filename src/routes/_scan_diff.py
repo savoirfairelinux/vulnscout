@@ -25,6 +25,7 @@ from ._scan_queries import (
     _package_rows,
     _variant_info,
     _load_scan_with_findings,
+    _assessments_by_scan,
     _TOOL_SOURCE_LABELS,
 )
 
@@ -322,6 +323,60 @@ def _global_result_counts(
     return len(fids), len(vids), len(pkg_ids)
 
 
+def _global_assessment_ids_for(
+    sbom_scan,
+    latest_tool: dict,
+) -> set:
+    """Return the set of unique Assessment IDs visible in the global result.
+
+    Applies the same SBOM-package filter as ``_global_result_id_sets``:
+    tool-scan assessments are only included if their finding's package
+    is present in the active SBOM.
+    """
+    from ..models.assessment import Assessment
+
+    contributing_ids = [sbom_scan.id] if sbom_scan else []
+    contributing_ids += [s.id for s in latest_tool.values()]
+    contributing_ids = list(dict.fromkeys(contributing_ids))
+    if not contributing_ids:
+        return set()
+
+    tool_scan_ids: set = {s.id for s in latest_tool.values()}
+    sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
+        sbom_scan.id, set()
+    ) if sbom_scan else set()
+
+    rows = db.session.execute(
+        db.select(Assessment.id, Observation.scan_id, Finding.package_id)
+        .select_from(Observation)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(
+            Observation.scan_id.in_(contributing_ids),
+            Assessment.variant_id == Scan.variant_id,
+            Assessment.origin != "custom",
+        )
+    ).all()
+
+    result: set = set()
+    for aid, sid, pkg_id in rows:
+        # Skip tool-scan assessments whose finding's package is not in the SBOM
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
+        result.add(aid)
+    return result
+
+
+def _global_assessment_count(
+    scan: Scan,
+    all_variant_scans: list[Scan],
+) -> int:
+    """Count unique assessments visible in the global result at *scan*."""
+    sbom_scan, latest_tool = _contributing_scans_at(scan, all_variant_scans)
+    return len(_global_assessment_ids_for(sbom_scan, latest_tool))
+
+
 def _contributing_scans_before(
     scan: Scan,
     all_variant_scans: list[Scan],
@@ -376,8 +431,8 @@ def _global_result_full(
         return {
             "scan_id": str(scan.id),
             "scan_type": scan.scan_type or "sbom",
-            "packages": [], "findings": [], "vulnerabilities": [],
-            "package_count": 0, "finding_count": 0, "vuln_count": 0,
+            "packages": [], "findings": [], "vulnerabilities": [], "assessments": [],
+            "package_count": 0, "finding_count": 0, "vuln_count": 0, "assessment_count": 0,
         }
 
     contributing_ids = [sbom_scan.id] + [
@@ -481,15 +536,64 @@ def _global_result_full(
         for vid, srcs in sorted(vuln_set.items())
     ]
 
+    # --- Assessments for active findings in this variant ---
+    # Use the same proven JOIN pattern as _assessment_rows_for_scans
+    # (Observation → Finding → Assessment + Scan for variant match).
+    from ..models.assessment import Assessment
+
+    assessments: list = []
+    assess_rows = db.session.execute(
+        db.select(
+            Assessment.id,
+            Finding.vulnerability_id,
+            Assessment.status,
+            Assessment.simplified_status,
+            Assessment.justification,
+            Assessment.impact_statement,
+            Assessment.status_notes,
+            Observation.scan_id,
+            Finding.package_id,
+        )
+        .select_from(Observation)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(
+            Observation.scan_id.in_(contributing_ids),
+            Assessment.variant_id == Scan.variant_id,
+            Assessment.origin != "custom",
+        )
+    ).all()
+
+    seen_assess: set = set()
+    for aid, vid, status, simp_status, justification, impact, notes, sid, pkg_id in assess_rows:
+        # Skip tool-scan assessments whose finding's package is not in SBOM
+        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+            continue
+        if aid in seen_assess:
+            continue
+        seen_assess.add(aid)
+        assessments.append({
+            "vulnerability_id": vid,
+            "status": status or "under_investigation",
+            "simplified_status": simp_status or "Pending Assessment",
+            "justification": justification or "",
+            "impact_statement": impact or "",
+            "status_notes": notes or "",
+        })
+    assessments.sort(key=lambda a: a["vulnerability_id"])
+
     return {
         "scan_id": str(scan.id),
         "scan_type": scan.scan_type or "sbom",
         "packages": packages,
         "findings": findings,
         "vulnerabilities": vulnerabilities,
+        "assessments": assessments,
         "package_count": len(packages),
         "finding_count": len(findings),
         "vuln_count": len(vulnerabilities),
+        "assessment_count": len(assessments),
     }
 
 
@@ -507,6 +611,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     vulns_map = _vulns_by_scan_ids(scan_ids)
     prev_map = _prev_scan_map(scans)
     variant_map = _variant_info(list({s.variant_id for s in scans}))
+    assessments_map = _assessments_by_scan(scans)
 
     # For tool scans: determine the SBOM baseline that was active at the
     # time of each tool scan.  This ensures that historical tool scan
@@ -623,6 +728,13 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         base["package_count"] = len(entry["curr_p"])
         base["vuln_count"] = len(curr_v)
 
+        # Assessment counts
+        assess_info = assessments_map.get(scan.id, {"total": 0, "added": 0, "unchanged": 0, "removed": 0})
+        base["assessment_count"] = assess_info["total"]
+        base["assessments_added"] = assess_info["added"]
+        base["assessments_unchanged"] = assess_info["unchanged"]
+        base["assessments_removed"] = assess_info["removed"]
+
         is_tool_scan = (scan.scan_type or "sbom") == "tool"
 
         if is_tool_scan:
@@ -663,6 +775,11 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["newly_detected_vulns"] = len(after_vids - before_vids)
             base["newly_detected_findings"] = len(after_fids - before_fids)
 
+            # Assessments: before/after global sets
+            before_assess = _global_assessment_ids_for(sbom_before, tools_before)
+            after_assess = _global_assessment_ids_for(sbom_after, tools_after)
+            base["newly_detected_assessments"] = len(after_assess - before_assess)
+
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
                 sbom_after, {scan.scan_source or "": scan},
@@ -675,6 +792,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["global_finding_count"] = len(after_fids)
             base["global_vuln_count"] = len(after_vids)
             base["global_package_count"] = len(after_pkg_ids)
+            base["global_assessment_count"] = _global_assessment_count(scan, variant_scans)
 
             base["formats"] = []
         elif prev is None:
@@ -761,6 +879,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         if not is_tool_scan:
             base["newly_detected_findings"] = None
             base["newly_detected_vulns"] = None
+            base["newly_detected_assessments"] = None
             base["branch_finding_count"] = None
             base["branch_vuln_count"] = None
             base["branch_package_count"] = None
@@ -775,10 +894,17 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                 base["global_finding_count"] = g_f
                 base["global_vuln_count"] = g_v
                 base["global_package_count"] = g_p
+                global_assess = _global_assessment_count(scan, variant_scans)
+                base["global_assessment_count"] = global_assess
+                # Tool-scan contributions that already existed are added to
+                # "unchanged" only — "detected" stays at what the SBOM found.
+                if global_assess > base["assessment_count"]:
+                    base["assessments_unchanged"] += global_assess - base["assessment_count"]
             else:
                 base["global_finding_count"] = None
                 base["global_vuln_count"] = None
                 base["global_package_count"] = None
+                base["global_assessment_count"] = None
 
             doc_formats = set()
             for doc in (scan.sbom_documents or []):

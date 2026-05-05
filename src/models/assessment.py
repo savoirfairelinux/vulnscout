@@ -580,23 +580,21 @@ class Assessment(Base):
 
         Does not commit — callers are expected to be inside batch_session()
         or to commit themselves after calling this.
+
+        Lookup is done by the DTO's own UUID so that re-persisting the same
+        assessment (e.g. after an in-memory merge) updates the existing row,
+        while a genuinely new assessment (new UUID from new_dto()) always
+        creates a new historical record — even for the same (finding, variant).
         """
+        # Look up by the DTO's own id to support idempotent re-persist
         existing = None
-        if finding_id is not None:
-            if variant_id is not None:
-                # assessment is linked to (finding, variant)
-                existing = db.session.execute(
-                    db.select(Assessment).where(
-                        Assessment.finding_id == finding_id,
-                        Assessment.variant_id == variant_id,
-                    )
-                ).scalar_one_or_none()
-            else:
-                existing = db.session.execute(
-                    db.select(Assessment).where(Assessment.finding_id == finding_id)
-                ).scalar_one_or_none()
+        assess_id = getattr(assess, "id", None)
+        if assess_id is not None:
+            existing = db.session.get(Assessment, assess_id)
 
         if existing is not None:
+            existing.finding_id = finding_id or existing.finding_id
+            existing.variant_id = variant_id or existing.variant_id
             existing.status = assess.status or existing.status
             existing.simplified_status = STATUS_TO_SIMPLIFIED.get(existing.status, existing.simplified_status)
             existing.status_notes = assess.status_notes or existing.status_notes
@@ -610,8 +608,26 @@ class Assessment(Base):
             return existing
 
         new_status = assess.status or "under_investigation"
+
+        # Guard: never create a new "pending" assessment if one already
+        # exists for the same (finding, variant).  This prevents SBOM
+        # re-imports from regressing a resolved assessment back to
+        # "under_investigation" by blindly inserting a duplicate row.
+        if new_status == "under_investigation" and finding_id and variant_id:
+            has_existing = db.session.execute(
+                db.select(Assessment.id).where(
+                    Assessment.finding_id == finding_id,
+                    Assessment.variant_id == variant_id,
+                ).limit(1)
+            ).scalar_one_or_none()
+            if has_existing is not None:
+                # Return the existing record as-is (no downgrade).
+                existing_rec = db.session.get(Assessment, has_existing)
+                if existing_rec is not None:
+                    return existing_rec
+
         record = Assessment.create(
-            assessment_id=getattr(assess, "id", None),
+            assessment_id=assess_id,
             status=new_status,
             simplified_status=STATUS_TO_SIMPLIFIED.get(new_status, "Pending Assessment"),
             variant_id=variant_id,

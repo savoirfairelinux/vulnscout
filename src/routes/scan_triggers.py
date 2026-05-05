@@ -30,7 +30,6 @@ from ._scan_helpers import (
     resolve_active_packages,
     create_observation_and_assessment,
 )
-from ._scan_cache import invalidate_variant_cache, recompute_variant_cache
 
 
 def init_app(app):
@@ -199,13 +198,6 @@ def init_app(app):
                         timeout=300,
                     )
                     _grype_scans_in_progress[vid_str]["done_count"] = 4
-
-                    # Invalidate scan-history cache
-                    try:
-                        with app.app_context():
-                            invalidate_variant_cache(variant_uuid)
-                    except Exception:
-                        pass
 
                     done_logs = _grype_scans_in_progress[vid_str].get("logs", [])
                     done_logs.append("✓ Grype scan complete")
@@ -444,11 +436,6 @@ def init_app(app):
 
                 db.session.commit()
 
-                try:
-                    recompute_variant_cache(variant_uuid)
-                except Exception:
-                    pass
-
                 done_logs = _nvd_scans_in_progress[vid_str].get("logs", [])
                 done_logs.append(
                     f"✓ Scan complete — found {len(cves_found)} "
@@ -645,11 +632,6 @@ def init_app(app):
                                 )
 
                 db.session.commit()
-
-                try:
-                    recompute_variant_cache(variant_uuid)
-                except Exception:
-                    pass
 
                 done_logs = _osv_scans_in_progress[vid_str].get("logs", [])
                 done_logs.append(

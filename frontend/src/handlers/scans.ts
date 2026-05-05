@@ -22,14 +22,20 @@ type Scan = {
     vulns_unchanged: number | null;
     findings_unchanged: number | null;
     packages_unchanged: number | null;
+    assessment_count: number | null;
+    assessments_added: number | null;
+    assessments_removed: number | null;
+    assessments_unchanged: number | null;
     newly_detected_findings: number | null;
     newly_detected_vulns: number | null;
+    newly_detected_assessments: number | null;
     branch_finding_count: number | null;
     branch_vuln_count: number | null;
     branch_package_count: number | null;
     global_finding_count: number | null;
     global_vuln_count: number | null;
     global_package_count: number | null;
+    global_assessment_count: number | null;
     formats: string[];
 };
 
@@ -64,6 +70,15 @@ type FindingUpgradeEntry = {
     origin?: string;
 };
 
+type AssessmentDiffEntry = {
+    vulnerability_id: string;
+    status: string;
+    simplified_status: string;
+    justification: string;
+    impact_statement: string;
+    status_notes: string;
+};
+
 type ScanDiff = {
     scan_id: string;
     scan_type: string;
@@ -83,10 +98,15 @@ type ScanDiff = {
     vulns_added: string[];
     vulns_removed: string[];
     vulns_unchanged: string[];
+    assessment_count: number;
+    assessments_added: AssessmentDiffEntry[];
+    assessments_removed: AssessmentDiffEntry[];
+    assessments_unchanged: AssessmentDiffEntry[];
     newly_detected_findings: number | null;
     newly_detected_vulns: number | null;
     newly_detected_findings_list: FindingDiffEntry[] | null;
     newly_detected_vulns_list: string[] | null;
+    newly_detected_assessments_list: AssessmentDiffEntry[] | null;
     all_findings: FindingDiffEntry[] | null;
     all_vulns: string[] | null;
 };
@@ -112,18 +132,29 @@ type GlobalResultVuln = {
     sources: string[];
 };
 
+type GlobalResultAssessment = {
+    vulnerability_id: string;
+    status: string;
+    simplified_status: string;
+    justification: string;
+    impact_statement: string;
+    status_notes: string;
+};
+
 type GlobalResult = {
     scan_id: string;
     scan_type: string;
     packages: GlobalResultPackage[];
     findings: GlobalResultFinding[];
     vulnerabilities: GlobalResultVuln[];
+    assessments: GlobalResultAssessment[];
     package_count: number;
     finding_count: number;
     vuln_count: number;
+    assessment_count: number;
 };
 
-export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln };
+export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln, GlobalResultAssessment };
 
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
