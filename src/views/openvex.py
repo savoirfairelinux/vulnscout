@@ -10,7 +10,18 @@ from ..helpers.verbose import verbose
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
+import hashlib
 from typing import Optional
+
+
+def _supplier_at_id(pkg) -> str:
+    """Return a supplier-qualified product @id unique to *pkg*'s supplier string."""
+    name_part = re.sub(r'^[^:]+:\s*', '', pkg.supplier)   # strip "Organization: "
+    name_part = re.sub(r'\s*\(.*\)$', '', name_part).strip()  # strip email
+    slug = re.sub(r'[^\w]+', '-', name_part).strip('-').lower()
+    if not slug:
+        slug = "supplier-" + hashlib.sha1(pkg.supplier.encode()).hexdigest()[:8]
+    return f"pkg:generic/{slug}/{pkg.name}@{pkg.version}"
 
 
 class OpenVex:
@@ -146,8 +157,9 @@ class OpenVex:
                         pkg.generate_generic_cpe()
                     if len(pkg.purl) < 1:
                         pkg.generate_generic_purl()
+                    at_id = _supplier_at_id(pkg) if pkg.supplier else pkg.purl[0]
                     product = {
-                        "@id": pkg.purl[0],
+                        "@id": at_id,
                         "identifiers": {
                             "cpe23": pkg.cpe[0],
                             "purl": pkg.purl[0]
