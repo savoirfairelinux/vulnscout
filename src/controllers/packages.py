@@ -114,6 +114,7 @@ class PackagesController:
                         list(package.cpe or []),
                         list(package.purl or []),
                         package.licences or "",
+                        supplier=package.supplier or "",
                     )
                     # Keep caches in sync with DB object
                     self._cache[string_id] = db_pkg
@@ -179,6 +180,7 @@ class PackagesController:
                 v.get("cpe", []),
                 v.get("purl", []),
                 v.get("licences", ""),
+                supplier=v.get("supplier", ""),
             )
             ctrl.add(pkg)
         return ctrl
