@@ -5,13 +5,16 @@ FROM node:20 AS buildfront
 
 RUN mkdir -p /frontend /src/static
 WORKDIR /frontend
-COPY frontend .
+
+# First install packages so the layer can be reused when code changes
+COPY frontend/package.json frontend/package-lock.json .
+RUN npm ci
 
 # Create build .env with API_URL set as blank. This way, fetch call are made to '/api/...' on same origin.
 RUN echo "VITE_API_URL=\"\"" > .env
 
-RUN npm ci && \
-    npm run build
+COPY frontend .
+RUN npm run build
 
 
 FROM alpine:3.20

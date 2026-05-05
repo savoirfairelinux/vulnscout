@@ -93,16 +93,14 @@ def init_app(app):
                 vid = _uuid.UUID(variant_id)
             except ValueError:
                 return {"error": "Invalid variant_id"}, 400
-            assessments = [a.to_dict() for a in DBAssessment.get_handmade(vid)]
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade([vid])]
         elif project_id:
             try:
                 pid = _uuid.UUID(project_id)
             except ValueError:
                 return {"error": "Invalid project_id"}, 400
-            variants = DBVariant.get_by_project(pid)
-            assessments = []
-            for v in variants:
-                assessments.extend(a.to_dict() for a in DBAssessment.get_handmade(v.id))
+            variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
+            assessments = [a.to_dict() for a in DBAssessment.get_handmade(variant_ids)]
         else:
             assessments = [a.to_dict() for a in DBAssessment.get_handmade()]
 

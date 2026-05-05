@@ -81,6 +81,13 @@ class Variant(Base):
         ).scalars().all())
 
     @staticmethod
+    def get_by_name_and_project(name: str, project_id: uuid.UUID) -> "Variant | None":
+        """Return an existing variant by *name* under *project_id*, or None if it does not exist."""
+        return db.session.execute(
+            db.select(Variant).where(Variant.name == name, Variant.project_id == project_id)
+        ).scalar_one_or_none()
+
+    @staticmethod
     def get_or_create(name: str, project_id: uuid.UUID) -> "Variant":
         """Return an existing variant by *name* under *project_id*, or create and persist a new one."""
 

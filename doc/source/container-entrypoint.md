@@ -33,8 +33,8 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 
 | Flag | Description |
 |------|-------------|
-| `--project <name>` | Project name for subsequent input commands (default: `default`) |
-| `--variant <name>` | Variant name for subsequent input commands (default: `default`) |
+| `--project <name>` | Project name for subsequent commands (default: `default`) |
+| `--variant <name>` | Variant name for subsequent commands (default: `default`) |
 
 ### Input Commands
 
@@ -57,7 +57,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-spdx` | Export project as SPDX 3.0 SBOM to `/scan/outputs/` |
 | `--export-cdx` | Export project as CycloneDX 1.6 SBOM to `/scan/outputs/` |
 | `--export-openvex` | Export project as OpenVEX document to `/scan/outputs/` |
-| `--export-custom-assessments` | Export custom (review) assessments as `.tar.gz` to `/scan/outputs/` |
+| `--export-custom-assessments` | Export custom (review) assessments of the project as `.tar.gz` (or `.json` if `--variant` is specified) to `/scan/outputs/` |
 | `--import-custom-assessments <path>` | Import custom assessments from `.json` or `.tar.gz` |
 | `--match-condition <expr>` | Exit with code 2 if expression matches any vulnerability. Incompatible with `--serve` |
 | `--delete-scan <id>` | Delete a past scan by its ID |

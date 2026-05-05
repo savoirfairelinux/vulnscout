@@ -31,8 +31,8 @@ call_container_engine() {
     $CONTAINER_ENGINE "$@"
 }
 
-VARIANT="default"
 PROJECT="default"
+VARIANT=""
 MATCH_CONDITION=""
 PENDING_ARGS=()
 DEV_MODE=false

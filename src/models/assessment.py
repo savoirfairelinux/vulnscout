@@ -128,7 +128,7 @@ class Assessment(Base):
     )
     responses = db.Column(db.JSON, nullable=True)
     finding_id = db.Column(db.Uuid, db.ForeignKey("findings.id"), nullable=True, index=True)
-    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
+    variant_id: Mapped[uuid.UUID] = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
 
     finding: Mapped["Finding"] = relationship("Finding", back_populates="assessments")
     variant: Mapped["Variant"] = relationship("Variant", back_populates="assessments")
@@ -717,18 +717,16 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_handmade(variant_id: Optional["uuid.UUID | str"] = None) -> list["Assessment"]:
+    def get_handmade(variant_ids: list[uuid.UUID] | None = None) -> list["Assessment"]:
         """Return assessments created/edited via the web UI (``origin='custom'``)."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
         query = (
             db.select(Assessment)
             .where(Assessment.origin == "custom")
             .options(joinedload(Assessment.finding).joinedload(Finding.package))
             .order_by(Assessment.timestamp.desc())
         )
-        if variant_id is not None:
-            query = query.where(Assessment.variant_id == variant_id)
+        if variant_ids:
+            query = query.where(Assessment.variant_id.in_(variant_ids))
         return list(db.session.execute(query).scalars().unique().all())
 
     def update(
