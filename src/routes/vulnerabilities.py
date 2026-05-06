@@ -5,7 +5,7 @@ import uuid
 
 from flask import request
 from sqlalchemy import func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 from ..models.vulnerability import Vulnerability
 from ..models.finding import Finding
 from ..models.observation import Observation
@@ -17,6 +17,7 @@ from ..models.metrics import Metrics
 from ..models.cvss import CVSS
 from ..models.iso8601_duration import Iso8601Duration
 from ..models.sbom_document import SBOMDocument
+from ..models.sbom_package import SBOMPackage
 from ..extensions import db
 from ..helpers.verbose import verbose
 from ..helpers.active_scans import (
@@ -273,6 +274,29 @@ def init_app(app):
                 records = list(db.session.execute(
                     query.distinct().order_by(Vulnerability.id)
                 ).scalars().all())
+                # Bulk-load packages expanded to all same-name+version supplier variants.
+                # to_dict() falls back to findings, but those only contain the directly-linked
+                # package (no supplier from Grype). Pre-populate r.packages instead.
+                if records:
+                    _PkgVariant = aliased(Package)
+                    _pkg_var_rows = db.session.execute(
+                        db.select(
+                            Finding.vulnerability_id, _PkgVariant.name,
+                            _PkgVariant.version, _PkgVariant.supplier
+                        )
+                        .join(Package, Finding.package_id == Package.id)
+                        .join(_PkgVariant, (
+                            (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version)
+                        ))
+                        .where(Finding.vulnerability_id.in_([r.id for r in records]))
+                        .distinct()
+                    ).all()
+                    _pkgs_by_vuln_var: dict[str, list[str]] = {}
+                    for _vid, _pname, _pver, _psup in _pkg_var_rows:
+                        _sid = f"{_pname}@{_pver}::{_psup}" if _psup else f"{_pname}@{_pver}"
+                        _pkgs_by_vuln_var.setdefault(str(_vid), []).append(_sid)
+                    for r in records:
+                        r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
         elif project_id:
             try:
                 project_uuid = uuid.UUID(project_id)
@@ -323,16 +347,21 @@ def init_app(app):
                 for m in metric_rows:
                     metrics_by_vuln.setdefault(m.vulnerability_id, []).append(m)
 
-                # Bulk-load packages per vulnerability
+                # Bulk-load packages per vulnerability, expanding to all same-name+version
+                # supplier variants so that Grype-linked packages (no supplier) also surface
+                # SBOM packages that carry supplier information.
+                _PkgVariant = aliased(Package)
                 pkg_rows = db.session.execute(
-                    db.select(Finding.vulnerability_id, Package.name, Package.version)
+                    db.select(Finding.vulnerability_id, _PkgVariant.name, _PkgVariant.version, _PkgVariant.supplier)
                     .join(Package, Finding.package_id == Package.id)
+                    .join(_PkgVariant, (_PkgVariant.name == Package.name) & (_PkgVariant.version == Package.version))
                     .where(Finding.vulnerability_id.in_(vuln_ids_subq))
                     .distinct()
                 ).all()
                 pkgs_by_vuln: dict[str, list[str]] = {}
-                for vid, pname, pver in pkg_rows:
-                    pkgs_by_vuln.setdefault(vid, []).append(f"{pname}@{pver}")
+                for vid, pname, pver, psup in pkg_rows:
+                    sid = f"{pname}@{pver}::{psup}" if psup else f"{pname}@{pver}"
+                    pkgs_by_vuln.setdefault(vid, []).append(sid)
 
                 # Bulk-load effort (time estimates) per vulnerability
                 te_rows = db.session.execute(
@@ -381,19 +410,30 @@ def init_app(app):
 
         vuln_ids = [v["id"] for v in vulns]
         if vuln_ids:
-            # packages_current: packages from the specific scan(s) used for this query
+            # packages_current: packages from the specific scan(s), expanded to include all
+            # same-name+version supplier variants present in the active SBOM scans.
+            # This ensures that Grype-linked packages (no supplier) also surface SBOM packages.
             if current_scan_ids:
+                _PkgVariant2 = aliased(Package)
                 pkg_rows = db.session.execute(
-                    db.select(Finding.vulnerability_id, Package.name, Package.version)
+                    db.select(Finding.vulnerability_id, _PkgVariant2.name, _PkgVariant2.version, _PkgVariant2.supplier)
                     .join(Observation, Finding.id == Observation.finding_id)
                     .join(Package, Finding.package_id == Package.id)
+                    .join(_PkgVariant2, (_PkgVariant2.name == Package.name) & (_PkgVariant2.version == Package.version))
+                    .outerjoin(SBOMPackage, SBOMPackage.package_id == _PkgVariant2.id)
+                    .outerjoin(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
                     .where(Observation.scan_id.in_(current_scan_ids))
                     .where(Finding.vulnerability_id.in_(vuln_ids))
+                    .where(db.or_(
+                        SBOMDocument.scan_id.in_(current_scan_ids),
+                        _PkgVariant2.id == Package.id,
+                    ))
                     .distinct()
                 ).all()
                 pkgs_current_by_vuln: dict = {}
-                for vuln_id, pkg_name, pkg_version in pkg_rows:
-                    pkgs_current_by_vuln.setdefault(str(vuln_id), []).append(f"{pkg_name}@{pkg_version}")
+                for vuln_id, pkg_name, pkg_version, pkg_sup in pkg_rows:
+                    sid = f"{pkg_name}@{pkg_version}::{pkg_sup}" if pkg_sup else f"{pkg_name}@{pkg_version}"
+                    pkgs_current_by_vuln.setdefault(str(vuln_id), []).append(sid)
                 for v in vulns:
                     v["packages_current"] = sorted(pkgs_current_by_vuln.get(v["id"], []))
             else:
