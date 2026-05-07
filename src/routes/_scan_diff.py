@@ -392,7 +392,7 @@ def _global_result_full(
     # --- Packages (from SBOM only) ---
     pkg_rows = db.session.execute(
         db.select(
-            Package.id, Package.name, Package.version,
+            Package.id, Package.name, Package.version, Package.supplier,
             SBOMDocument.source_name, SBOMDocument.format,
         )
         .join(SBOMPackage, SBOMPackage.package_id == Package.id)
@@ -401,7 +401,7 @@ def _global_result_full(
     ).all()
     pkg_map: dict = {}
     sbom_pkg_ids: set = set()
-    for pid, pname, pversion, src_name, src_fmt in pkg_rows:
+    for pid, pname, pversion, psupplier, src_name, src_fmt in pkg_rows:
         sbom_pkg_ids.add(pid)
         source_label = f"{src_name} ({src_fmt})" if src_fmt else src_name
         if pid not in pkg_map:
@@ -409,6 +409,7 @@ def _global_result_full(
                 "package_id": str(pid),
                 "package_name": pname or "unknown",
                 "package_version": pversion or "",
+                "package_supplier": psupplier or "",
                 "sources": [source_label],
             }
         else:
@@ -443,7 +444,7 @@ def _global_result_full(
         db.select(
             Observation.scan_id, Observation.finding_id,
             Finding.package_id, Finding.vulnerability_id,
-            Package.name, Package.version,
+            Package.name, Package.version, Package.supplier,
         )
         .join(Finding, Finding.id == Observation.finding_id)
         .join(Package, Package.id == Finding.package_id)
@@ -452,7 +453,7 @@ def _global_result_full(
 
     finding_map: dict = {}
     vuln_set: dict = {}
-    for sid, fid, pkg_id, vid, pname, pversion in obs_rows:
+    for sid, fid, pkg_id, vid, pname, pversion, psupplier in obs_rows:
         # Skip tool-scan findings whose package is not in the SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
             continue
@@ -462,6 +463,7 @@ def _global_result_full(
                 "finding_id": str(fid),
                 "package_name": pname or "unknown",
                 "package_version": pversion or "",
+                "package_supplier": psupplier or "",
                 "package_id": str(pkg_id),
                 "vulnerability_id": vid,
                 "sources": [source_label],

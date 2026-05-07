@@ -298,6 +298,7 @@ def init_app(app):
                     "new_version": (new_pkg.version or ""),
                     "old_package_id": str(old_pkg.id),
                     "new_package_id": str(new_pkg.id),
+                    "package_supplier": (old_pkg.supplier or ""),
                 }
                 for old_pkg, new_pkg in upgraded_pairs
             ]
@@ -383,6 +384,7 @@ def init_app(app):
                             "package_name": old_pkg.name or "unknown",
                             "old_version": old_pkg.version or "",
                             "new_version": new_pkg.version or "",
+                            "package_supplier": old_pkg.supplier or "",
                             "origin": obs_dict.get("origin", scan_origin),
                         })
 

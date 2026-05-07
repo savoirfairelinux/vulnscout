@@ -421,6 +421,7 @@ class TestGetScanDiff:
             assert "package_id" in p
             assert "package_name" in p
             assert "package_version" in p
+            assert "package_supplier" in p
 
     def test_diff_count_fields(self, client, ids):
         """Diff response includes finding_count, package_count, vuln_count."""
@@ -574,6 +575,7 @@ class TestHelperFunctions:
             assert "finding_id" in d
             assert "package_name" in d
             assert "package_version" in d
+            assert "package_supplier" in d
             assert "package_id" in d
             assert "vulnerability_id" in d
 
@@ -587,6 +589,7 @@ class TestHelperFunctions:
             assert d["package_name"] == "testpkg"
             assert d["package_version"] == "9.9.9"
             assert "package_id" in d
+            assert "package_supplier" in d
 
 
 # ---------------------------------------------------------------------------

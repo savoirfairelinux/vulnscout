@@ -19,6 +19,7 @@ import {
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
+import { extractSupplierName } from "../helpers/pkgId";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
@@ -60,7 +61,8 @@ function FindingDiffTable({ entries, label, colorClass }: {
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.package_version.toLowerCase().includes(filter.toLowerCase()) ||
             e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
-            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -87,6 +89,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                                 <th className="px-3 py-2">Vulnerability</th>
                                 {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
@@ -96,6 +99,7 @@ function FindingDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                     {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
@@ -121,7 +125,8 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
             e.vulnerability_id.toLowerCase().includes(filter.toLowerCase()) ||
             e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
             e.new_version.toLowerCase().includes(filter.toLowerCase()) ||
-            (e.origin || '').toLowerCase().includes(filter.toLowerCase())
+            (e.origin || '').toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -149,6 +154,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Old Version</th>
                                 <th className="px-3 py-2">New Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                                 <th className="px-3 py-2">Vulnerability</th>
                                 {hasOrigin && <th className="px-3 py-2">Origin</th>}
                             </tr>
@@ -159,6 +165,7 @@ function FindingUpgradeDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
                                     <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                     <td className="px-3 py-1.5 font-mono">{e.vulnerability_id}</td>
                                     {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{e.origin ?? ''}</td>}
                                 </tr>
@@ -180,7 +187,8 @@ function PackageDiffTable({ entries, label, colorClass }: {
     const filtered = filter
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
-            e.package_version.toLowerCase().includes(filter.toLowerCase())
+            e.package_version.toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -209,6 +217,7 @@ function PackageDiffTable({ entries, label, colorClass }: {
                             <tr>
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -216,6 +225,7 @@ function PackageDiffTable({ entries, label, colorClass }: {
                                 <tr key={e.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-gray-400">{e.package_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -236,7 +246,8 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
         ? entries.filter(e =>
             e.package_name.toLowerCase().includes(filter.toLowerCase()) ||
             e.old_version.toLowerCase().includes(filter.toLowerCase()) ||
-            e.new_version.toLowerCase().includes(filter.toLowerCase())
+            e.new_version.toLowerCase().includes(filter.toLowerCase()) ||
+            extractSupplierName(e.package_supplier || '').toLowerCase().includes(filter.toLowerCase())
         )
         : entries;
 
@@ -266,6 +277,7 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
                                 <th className="px-3 py-2">Package</th>
                                 <th className="px-3 py-2">Old Version</th>
                                 <th className="px-3 py-2">New Version</th>
+                                <th className="px-3 py-2">Supplier</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -274,6 +286,7 @@ function PackageUpgradeDiffTable({ entries, label, colorClass }: {
                                     <td className="px-3 py-1.5 font-mono">{e.package_name}</td>
                                     <td className="px-3 py-1.5 font-mono text-red-400">{e.old_version}</td>
                                     <td className="px-3 py-1.5 font-mono text-green-400">{e.new_version}</td>
+                                    <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(e.package_supplier || '') || '—'}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -380,8 +393,8 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
         ].join(' ');
 
     const lc = filter.toLowerCase();
-    const filteredPkgs = data ? (lc ? data.packages.filter(p => p.package_name.toLowerCase().includes(lc) || p.package_version.toLowerCase().includes(lc) || p.sources.some(s => s.toLowerCase().includes(lc))) : data.packages) : [];
-    const filteredFindings = data ? (lc ? data.findings.filter(f => f.package_name.toLowerCase().includes(lc) || f.vulnerability_id.toLowerCase().includes(lc) || f.sources.some(s => s.toLowerCase().includes(lc))) : data.findings) : [];
+    const filteredPkgs = data ? (lc ? data.packages.filter(p => p.package_name.toLowerCase().includes(lc) || p.package_version.toLowerCase().includes(lc) || p.sources.some(s => s.toLowerCase().includes(lc)) || extractSupplierName(p.package_supplier || '').toLowerCase().includes(lc)) : data.packages) : [];
+    const filteredFindings = data ? (lc ? data.findings.filter(f => f.package_name.toLowerCase().includes(lc) || f.vulnerability_id.toLowerCase().includes(lc) || f.sources.some(s => s.toLowerCase().includes(lc)) || extractSupplierName(f.package_supplier || '').toLowerCase().includes(lc)) : data.findings) : [];
     const filteredVulns = data ? (lc ? data.vulnerabilities.filter(v => v.vulnerability_id.toLowerCase().includes(lc) || v.sources.some(s => s.toLowerCase().includes(lc))) : data.vulnerabilities) : [];
 
     return (
@@ -451,6 +464,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                         <tr>
                                             <th className="px-3 py-2">Package</th>
                                             <th className="px-3 py-2">Version</th>
+                                            <th className="px-3 py-2">Supplier</th>
                                             <th className="px-3 py-2">Source</th>
                                         </tr>
                                     </thead>
@@ -459,6 +473,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                             <tr key={p.package_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                                 <td className="px-3 py-1.5 font-mono">{p.package_name}</td>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{p.package_version}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(p.package_supplier || '') || '—'}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{p.sources.join(', ')}</td>
                                             </tr>
                                         ))}
@@ -474,6 +489,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                         <tr>
                                             <th className="px-3 py-2">Package</th>
                                             <th className="px-3 py-2">Version</th>
+                                            <th className="px-3 py-2">Supplier</th>
                                             <th className="px-3 py-2">Vulnerability</th>
                                             <th className="px-3 py-2">Source</th>
                                         </tr>
@@ -483,6 +499,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                             <tr key={f.finding_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                                 <td className="px-3 py-1.5 font-mono">{f.package_name}</td>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{f.package_version}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(f.package_supplier || '') || '—'}</td>
                                                 <td className="px-3 py-1.5 font-mono">{f.vulnerability_id}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{f.sources.join(', ')}</td>
                                             </tr>

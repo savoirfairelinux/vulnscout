@@ -37,6 +37,7 @@ type FindingDiffEntry = {
     finding_id: string;
     package_name: string;
     package_version: string;
+    package_supplier?: string;
     package_id: string;
     vulnerability_id: string;
     origin?: string;
@@ -46,6 +47,7 @@ type PackageDiffEntry = {
     package_id: string;
     package_name: string;
     package_version: string;
+    package_supplier?: string;
 };
 
 type PackageUpgradeEntry = {
@@ -54,6 +56,7 @@ type PackageUpgradeEntry = {
     new_version: string;
     old_package_id: string;
     new_package_id: string;
+    package_supplier?: string;
 };
 
 type FindingUpgradeEntry = {
@@ -61,6 +64,7 @@ type FindingUpgradeEntry = {
     package_name: string;
     old_version: string;
     new_version: string;
+    package_supplier?: string;
     origin?: string;
 };
 
@@ -95,6 +99,7 @@ type GlobalResultFinding = {
     finding_id: string;
     package_name: string;
     package_version: string;
+    package_supplier?: string;
     package_id: string;
     vulnerability_id: string;
     sources: string[];
@@ -104,6 +109,7 @@ type GlobalResultPackage = {
     package_id: string;
     package_name: string;
     package_version: string;
+    package_supplier?: string;
     sources: string[];
 };
 

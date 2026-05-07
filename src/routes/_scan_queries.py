@@ -93,6 +93,7 @@ def _pkg_to_dict(pkg: Package) -> dict:
         "package_id": str(pkg.id),
         "package_name": pkg.name or "unknown",
         "package_version": pkg.version or "",
+        "package_supplier": pkg.supplier or "",
     }
 
 
@@ -146,6 +147,7 @@ def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> dict:
         "finding_id": str(f.id),
         "package_name": pkg.name if pkg else "unknown",
         "package_version": pkg.version if pkg else "",
+        "package_supplier": pkg.supplier if pkg else "",
         "package_id": str(f.package_id),
         "vulnerability_id": f.vulnerability_id,
         "origin": origin,
