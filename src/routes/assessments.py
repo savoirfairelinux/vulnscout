@@ -25,6 +25,15 @@ from ..helpers.assessment_io import (
 OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 
+def _resolve_package(pkg_string_id: str) -> "Package":
+    """Parse 'name@version::supplier' and look up or create the Package record."""
+    _parts = pkg_string_id.split("::", 1)
+    _base = _parts[0]
+    _supplier = _parts[1] if len(_parts) > 1 else ""
+    name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
+    return Package.find_or_create(name, version, supplier=_supplier)
+
+
 def init_app(app):
 
     if "OPENVEX_FILE" not in app.config:
@@ -221,12 +230,7 @@ def init_app(app):
 
                 for pkg_string_id in pkg_ids:
                     try:
-                        _parts = pkg_string_id.split("::", 1)
-                        _base = _parts[0]
-                        _supplier = _parts[1] if len(_parts) > 1 else ""
-                        name, version = (_base.rsplit("@", 1)
-                                         if "@" in _base else (_base, ""))
-                        db_pkg = Package.find_or_create(name, version, supplier=_supplier)
+                        db_pkg = _resolve_package(pkg_string_id)
                         DBVuln.get_or_create(vuln_name)
                         finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
@@ -396,11 +400,7 @@ def init_app(app):
             with batch_session():
                 for pkg_string_id in (assessment.packages or []):
                     # find_or_create handles both lookup and creation in one query
-                    _parts = pkg_string_id.split("::", 1)
-                    _base = _parts[0]
-                    _supplier = _parts[1] if len(_parts) > 1 else ""
-                    name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
-                    db_pkg = Package.find_or_create(name, version, supplier=_supplier)
+                    db_pkg = _resolve_package(pkg_string_id)
                     # Ensure vulnerability record exists before creating Finding (FK constraint)
                     DBVuln.get_or_create(vuln_id)
                     finding = Finding.get_or_create(db_pkg.id, vuln_id)
@@ -475,13 +475,7 @@ def init_app(app):
                         # Resolve package from cache first, then DB
                         db_pkg = pkg_cache.get(pkg_string_id)
                         if db_pkg is None:
-                            _parts = pkg_string_id.split("::", 1)
-                            _base = _parts[0]
-                            _supplier = _parts[1] if len(_parts) > 1 else ""
-                            name, version = (_base.rsplit("@", 1)
-                                             if "@" in _base
-                                             else (_base, ""))
-                            db_pkg = Package.find_or_create(name, version, supplier=_supplier)
+                            db_pkg = _resolve_package(pkg_string_id)
                             pkg_cache[pkg_string_id] = db_pkg
                         # Ensure vulnerability record exists before creating Finding (FK constraint)
                         DBVuln.get_or_create(vuln_id)
