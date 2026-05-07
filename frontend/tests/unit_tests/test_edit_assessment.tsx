@@ -746,8 +746,8 @@ describe('EditAssessment Component', () => {
         );
 
         expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
-        expect(screen.getByText('pkg1@1.0.0')).toBeInTheDocument();
-        expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
+        expect(screen.getByText('pkg1@1.0.0 (unknown supplier)')).toBeInTheDocument();
+        expect(screen.getByText('pkg2@2.0.0 (unknown supplier)')).toBeInTheDocument();
     });
 
     test('shows external error when no package selected', async () => {

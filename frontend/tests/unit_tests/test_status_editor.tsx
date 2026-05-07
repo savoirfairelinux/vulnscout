@@ -365,7 +365,7 @@ describe('StatusEditor', () => {
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);
 
         expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
-        expect(screen.getByText('only-pkg@1.0.0')).toBeInTheDocument();
+        expect(screen.getByText('only-pkg@1.0.0 (unknown supplier)')).toBeInTheDocument();
     });
 
     test('should render package checkboxes when more than one package is available', () => {
@@ -373,8 +373,8 @@ describe('StatusEditor', () => {
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);
 
         expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
-        expect(screen.getByText('pkg1@1.0.0')).toBeInTheDocument();
-        expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
+        expect(screen.getByText('pkg1@1.0.0 (unknown supplier)')).toBeInTheDocument();
+        expect(screen.getByText('pkg2@2.0.0 (unknown supplier)')).toBeInTheDocument();
     });
 
     test('should show external error when no package selected', async () => {

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { Assessment } from "../handlers/assessments";
 import type { Variant } from '../handlers/variant';
 import MessageBanner from './MessageBanner';
+import { formatPkgId } from '../helpers/pkgId';
 
 type EditAssessmentData = {
     id: string;
@@ -235,7 +236,7 @@ function EditAssessment({
                                     }}
                                     className="accent-blue-400"
                                 />
-                                <span className="font-mono text-gray-200">{pkg}</span>
+                                <span className="font-mono text-gray-200">{formatPkgId(pkg)}</span>
                             </label>
                         ))}
                     </div>

@@ -2057,9 +2057,9 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Only the project-scoped package (from packages_current) should appear as checkbox
-        await screen.findByText('pkg-alpha@1.0.0');
-        expect(screen.queryByText('pkg-beta@2.0.0')).not.toBeInTheDocument();
-        expect(screen.queryByText('pkg-gamma@3.0.0')).not.toBeInTheDocument();
+        await screen.findByText('pkg-alpha@1.0.0 (unknown supplier)');
+        expect(screen.queryByText('pkg-beta@2.0.0 (unknown supplier)')).not.toBeInTheDocument();
+        expect(screen.queryByText('pkg-gamma@3.0.0 (unknown supplier)')).not.toBeInTheDocument();
     });
 
     test('falls back to all packages when packages_current is empty', async () => {
@@ -2085,7 +2085,7 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Both packages should appear since packages_current is empty (fallback)
-        await screen.findByText('pkg-x@1.0.0');
-        expect(screen.getByText('pkg-y@2.0.0')).toBeInTheDocument();
+        await screen.findByText('pkg-x@1.0.0 (unknown supplier)');
+        expect(screen.getByText('pkg-y@2.0.0 (unknown supplier)')).toBeInTheDocument();
     });
 });
