@@ -134,7 +134,14 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc;
     }, []), [packages])
 
-    const defaultVisibleColumns = ['Name', 'Version', 'Vulnerabilities', 'Variants', 'Sources'];
+    const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
+
+    const defaultVisibleColumns = useMemo(() => {
+        const cols = ['Name', 'Version', 'Vulnerabilities', 'Variants', 'Sources'];
+        if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
+        return cols;
+    }, [hasSupplierInfo]);
+
     const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
 
     const sbom_docs_list = useMemo(() => packages.reduce((acc: string[], pkg) => {

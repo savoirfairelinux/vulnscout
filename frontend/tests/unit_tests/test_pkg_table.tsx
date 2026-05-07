@@ -631,9 +631,20 @@ describe('Packages Table', () => {
         expect(cpeSpan.getAttribute('title')).toContain('cpe:2.3:a:vendor:aaabbbccc:1.0.0');
     });
 
-    test('supplier column is hidden by default but toggleable', async () => {
+    test('supplier column is hidden by default when no package has supplier info', async () => {
         render(<TablePackages packages={packages} />);
-        // Column is NOT visible initially
-        expect(screen.queryByText('Supplier')).toBeNull();
+        // All packages have empty supplier, so the column should NOT be visible initially
+        expect(screen.queryByRole('columnheader', { name: /^supplier$/i })).toBeNull();
+    });
+
+    test('supplier column is shown by default when at least one package has supplier info', async () => {
+        const packagesWithSupplier: Package[] = [
+            { ...packages[0], supplier: 'Acme Corp' },
+            ...packages.slice(1),
+        ];
+        render(<TablePackages packages={packagesWithSupplier} />);
+        // At least one package has a supplier, so the column should be visible by default
+        const supplierHeader = await screen.findByRole('columnheader', { name: /^supplier$/i });
+        expect(supplierHeader).toBeTruthy();
     });
 });
