@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+import re
+import hashlib
 import semver
 from typing import Optional
 from ..extensions import db, Base
@@ -110,7 +112,15 @@ class Package(Base):
 
     def generate_generic_purl(self) -> str:
         """Build a generic purl string for the package, add it to the purl list and return it."""
-        item = f"pkg:generic/{self.name}@{self.version}"
+        if self.supplier:
+            name_part = re.sub(r'^[^:]+:\s*', '', self.supplier)   # strip "Organization: "
+            name_part = re.sub(r'\s*\(.*\)$', '', name_part).strip()  # strip email
+            slug = re.sub(r'[^\w]+', '-', name_part).strip('-').lower()
+            if not slug:
+                slug = "supplier-" + hashlib.sha1(self.supplier.encode()).hexdigest()[:8]
+            item = f"pkg:generic/{slug}/{self.name}@{self.version}"
+        else:
+            item = f"pkg:generic/{self.name}@{self.version}"
         self.add_purl(item)
         return item
 
