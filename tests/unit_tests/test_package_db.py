@@ -5,7 +5,6 @@
 
 """DB-backed tests for Package supplier identity."""
 
-import os
 import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
@@ -13,19 +12,15 @@ from src.models.package import Package
 
 
 @pytest.fixture()
-def app():
-    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-    os.environ["SCAN_FILE"] = "/dev/null"
-    try:
-        application = create_app()
-        application.config.update({"TESTING": True})
-        with application.app_context():
-            _db.create_all()
-            yield application
-            _db.drop_all()
-    finally:
-        os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
-        os.environ.pop("SCAN_FILE", None)
+def app(monkeypatch):
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    monkeypatch.setenv("SCAN_FILE", "/dev/null")
+    application = create_app()
+    application.config.update({"TESTING": True})
+    with application.app_context():
+        _db.create_all()
+        yield application
+        _db.drop_all()
 
 
 def test_find_or_create_different_supplier_creates_new_row(app):
