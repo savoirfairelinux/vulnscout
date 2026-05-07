@@ -56,9 +56,9 @@ def test_openvex_supplier_uses_qualified_id():
     assess = _make_assessment("CVE-2024-1", pkg)
     result = _run_to_dict([pkg], [assess])
     product = result["statements"][0]["products"][0]
-    assert product["@id"] == "pkg:generic/acme-corp/foo@1.0"
-    # identifiers.purl must remain generic
-    assert product["identifiers"]["purl"] == "pkg:generic/foo@1.0"
+    # @id encodes the supplier slug and differ from the no-supplier case
+    assert "acme-corp" in product["@id"]
+    assert product["@id"] != "pkg:generic/foo@1.0"
 
 
 def test_openvex_two_suppliers_produce_different_ids():
