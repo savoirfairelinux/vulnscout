@@ -15,6 +15,13 @@ type Props = {
     onShowVulns?: (packageId: string) => void;
 };
 
+function extractSupplierName(supplier: string): string {
+    // Strip type prefix like "Organization: " or "Person: "
+    const withoutType = supplier.replace(/^\w[\w\s]*:\s*/, '');
+    // Strip optional email in parentheses at the end
+    return withoutType.replace(/\s*\(.*\)\s*$/, '').trim();
+}
+
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
     return Object.keys(counts).reduce((acc, key) => {
         if (!ignore.includes(key)) {
@@ -158,7 +165,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         'version': 'Version',
         'cpe': 'CPE',
         'purl': 'PURL',
-        'supplier': 'Supplier',
         'vulnerabilities': 'Vulnerabilities',
         'variants': 'Variants',
         'remainingPendingVulns': 'Remaining Pending Vulnerabilities',
@@ -172,7 +178,13 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             columnHelper.accessor('name', {
                 id: 'name',
                 header: () => <div className="flex items-center justify-center">Name</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                cell: info => {
+                    const name = info.getValue();
+                    const supplier = info.row.original.supplier;
+                    const supplierName = supplier ? extractSupplierName(supplier) : '';
+                    const display = supplierName ? `${supplierName} / ${name}` : name;
+                    return <div className="flex items-center justify-center h-full text-center" title={supplier || undefined}>{display}</div>;
+                },
                 footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
@@ -219,22 +231,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 },
                 enableSorting: false,
                 size: 200
-            }),
-            columnHelper.accessor('supplier', {
-                id: 'supplier',
-                header: () => <div className="flex items-center justify-center">Supplier</div>,
-                cell: info => {
-                    const supplier = info.getValue();
-                    if (!supplier) return (
-                        <div className="flex items-center justify-center h-full text-neutral-500">—</div>
-                    );
-                    return (
-                        <div className="flex items-center justify-center h-full text-center text-sm" title={supplier}>
-                            {supplier}
-                        </div>
-                    );
-                },
-                size: 200,
             }),
             columnHelper.accessor(
             row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
@@ -396,7 +392,6 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     'Version',
                     'CPE',
                     'PURL',
-                    'Supplier',
                     'Vulnerabilities',
                     'Variants',
                     'Remaining Pending Vulnerabilities',
