@@ -24,7 +24,7 @@ class Package(Base):
     cpe = db.Column(db.JSON, nullable=True)
     purl = db.Column(db.JSON, nullable=True)
     licences = db.Column(db.String, nullable=True)
-    supplier = db.Column(db.String, nullable=True, default="")
+    supplier = db.Column(db.String, nullable=False, default="")
 
     __table_args__ = (
         db.Index('ix_packages_name_version_supplier', 'name', 'version', 'supplier'),
@@ -65,7 +65,7 @@ class Package(Base):
         self.cpe = []
         self.purl = []
         self.licences = licences or ""
-        self.supplier = supplier or ""
+        self.supplier = supplier
         for c in cpes:
             self.add_cpe(c)
         for p in purls:
@@ -137,14 +137,14 @@ class Package(Base):
         try:
             return (self.name == other.name
                     and self._parse_version() == other._parse_version()
-                    and (self.supplier or "") == (other.supplier or ""))
+                    and (self.supplier) == (other.supplier))
         except Exception:
             return (self.name == other.name
                     and self.version == other.version
-                    and (self.supplier or "") == (other.supplier or ""))
+                    and (self.supplier) == (other.supplier))
 
     def __hash__(self) -> int:
-        return hash((self.name, self.version, self.supplier or ""))
+        return hash((self.name, self.version, self.supplier))
 
     def __str__(self) -> str:
         return self.string_id
@@ -161,7 +161,7 @@ class Package(Base):
         except Exception:
             if self.version != other.version:
                 return self.version < other.version
-        return (self.supplier or "") < (other.supplier or "")
+        return self.supplier < other.supplier
 
     def __gt__(self, other) -> bool:
         if self.name != other.name:
@@ -172,7 +172,7 @@ class Package(Base):
         except Exception:
             if self.version != other.version:
                 return self.version > other.version
-        return (self.supplier or "") > (other.supplier or "")
+        return self.supplier > other.supplier
 
     def __le__(self, other) -> bool:
         return self < other or self == other
@@ -206,7 +206,7 @@ class Package(Base):
             "cpe": list(self.cpe or []),
             "purl": list(self.purl or []),
             "licences": self.licences or "",
-            "supplier": self.supplier or "",
+            "supplier": self.supplier,
         }
 
     @staticmethod
@@ -305,7 +305,7 @@ class Package(Base):
             ).scalars().all()
         )
         by_key: dict[tuple, Package] = {
-            (p.name, p.version, p.supplier or ""): p for p in existing_rows
+            (p.name, p.version, p.supplier): p for p in existing_rows
         }
 
         result: dict[str, Package] = {}
