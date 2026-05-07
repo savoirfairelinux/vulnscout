@@ -9,6 +9,7 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
+import { extractSupplierName } from '../helpers/pkgId';
 
 type Props = {
     packages: Package[];
@@ -237,7 +238,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     );
                     return (
                         <div className="flex items-center justify-center h-full text-center text-sm" title={supplier}>
-                            {supplier}
+                            {extractSupplierName(supplier)}
                         </div>
                     );
                 },

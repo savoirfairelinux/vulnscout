@@ -14,6 +14,7 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
 import { useDocUrl } from "../helpers/useDocUrl";
+import { formatPkgId } from "../helpers/pkgId";
 
 import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
@@ -592,7 +593,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columnHelper.accessor('packages_current', {
             id: 'packages',
             header: () => <div className="flex items-center justify-center">SBOM Affected</div>,
-            cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => p.split('+git')[0]).join(', ')}</div>,
+            cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().map(p => formatPkgId(p.split('+git')[0])).join(', ')}</div>,
             enableSorting: false,
             size: 255
             }),

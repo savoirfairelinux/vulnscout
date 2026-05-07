@@ -20,7 +20,7 @@ import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
-import { splitPkgId, formatPkgId } from '../helpers/pkgId';
+import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
 
@@ -954,9 +954,9 @@ type AssessmentGroup = {
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
                                                     return (
-                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={`Supplier: ${supplier || 'unknown supplier'}`}>
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={`Supplier: ${extractSupplierName(supplier) || 'unknown supplier'}`}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                            {nameVersion}<span className="ml-1 opacity-70 text-xs">({supplier || 'unknown supplier'})</span>
+                                                            {nameVersion}<span className="ml-1 opacity-70 text-xs">({extractSupplierName(supplier) || 'unknown supplier'})</span>
                                                         </span>
                                                     );
                                                 })}

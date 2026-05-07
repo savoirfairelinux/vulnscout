@@ -9,9 +9,18 @@ export function splitPkgId(id: string): { nameVersion: string; supplier: string 
 }
 
 /**
- * Format a package ID for display, always showing supplier (falling back to 'unknown supplier').
+ * Extract the display name from a supplier string, stripping the SPDX-style
+ * "Organization: " / "Person: " prefix and any trailing parenthetical (e.g. email).
+ */
+export function extractSupplierName(supplier: string): string {
+    return supplier.replace(/^[^:]+:\s*/, '').replace(/\s*\([^)]*\)$/, '');
+}
+
+/**
+ * Format a package ID for display, always showing supplier name (falling back to 'unknown supplier').
  */
 export function formatPkgId(id: string): string {
     const { nameVersion, supplier } = splitPkgId(id);
-    return `${nameVersion} (${supplier || 'unknown supplier'})`;
+    const supplierName = supplier ? extractSupplierName(supplier) : '';
+    return `${nameVersion} (${supplierName || 'unknown supplier'})`;
 }
