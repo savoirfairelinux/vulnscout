@@ -16,7 +16,7 @@ type Props = {
 
 function FilterOption({ label, options, selected, setSelected, parentRef, CustomFilterComponent, customFilterName = 'custom', showCustomFilterComponent, setShowCustomFilterComponent }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
-    const [maxHeight, setMaxHeight] = useState<string>('2500px'); 
+    const [maxHeight, setMaxHeight] = useState<string>('500px'); 
     const dropdownRef = useRef<HTMLDivElement>(null);
     const isActive = selected.length > 0 || showCustomFilterComponent;
 
