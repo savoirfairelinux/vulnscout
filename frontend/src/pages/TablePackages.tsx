@@ -50,6 +50,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
+    const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
@@ -153,10 +154,18 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc.sort();
     }, []), [packages])
 
+    const suppliers_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
+        const name = extractSupplierName(pkg.supplier);
+        if (name !== '' && !acc.includes(name))
+            acc.push(name);
+        return acc.sort();
+    }, []), [packages])
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
+        setSelectedSuppliers([]);
         setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
@@ -359,9 +368,12 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             if (selectedSbomDocs.length && !selectedSbomDocs.some(doc => el.sbom_documents.includes(doc))) {
                 return false;
             }
+            if (selectedSuppliers.length && !selectedSuppliers.includes(extractSupplierName(el.supplier))) {
+                return false;
+            }
             return true;
         });
-    }, [packages, selectedSources, selectedSbomDocs]);
+    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers]);
 
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -413,6 +425,15 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 selected={visibleColumns}
                 setSelected={setVisibleColumns}
             />
+
+            {hasSupplierInfo && (
+                <FilterOption
+                    label="Supplier"
+                    options={suppliers_list}
+                    selected={selectedSuppliers}
+                    setSelected={setSelectedSuppliers}
+                />
+            )}
 
             <FilterOption
                 label="Source"

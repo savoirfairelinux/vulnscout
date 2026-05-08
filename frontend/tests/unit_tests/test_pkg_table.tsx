@@ -75,6 +75,48 @@ describe('Packages Table', () => {
         }
     ];
 
+    const packagesWithSuppliers: Package[] = [
+        {
+            id: 'pkg-acme@1.0.0',
+            name: 'pkg-acme',
+            version: '1.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Acme Corp',
+        },
+        {
+            id: 'pkg-globex@1.0.0',
+            name: 'pkg-globex',
+            version: '1.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Globex',
+        },
+        {
+            id: 'pkg-acme2@2.0.0',
+            name: 'pkg-acme2',
+            version: '2.0.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: ['test'],
+            variants: [],
+            sbom_documents: [],
+            supplier: 'Organization: Acme Corp',
+        },
+    ];
+
     Element.prototype.getBoundingClientRect = function () {
         return getDOMRect(500, 500)
     }
@@ -646,5 +688,32 @@ describe('Packages Table', () => {
         // At least one package has a supplier, so the column should be visible by default
         const supplierHeader = await screen.findByRole('columnheader', { name: /^supplier$/i });
         expect(supplierHeader).toBeTruthy();
+    });
+
+    test('filter by supplier', async () => {
+        render(<TablePackages packages={packagesWithSuppliers} />);
+        const user = userEvent.setup();
+
+        // ACT: open the Supplier filter dropdown and select "Acme Corp"
+        const supplierBtn = await screen.getByRole('button', { name: /^supplier$/i });
+        await user.click(supplierBtn);
+
+        const acmeCheckbox = await screen.getByRole('checkbox', { name: /acme corp/i });
+        await user.click(acmeCheckbox);
+
+        // ASSERT: only Acme Corp packages are shown, Globex is hidden
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).toContain('pkg-acme');
+            expect(html).toContain('pkg-acme2');
+            expect(html).not.toContain('pkg-globex');
+        }, { timeout: 2000 });
+
+        // REVERT: uncheck "Acme Corp" — all packages should reappear
+        await user.click(acmeCheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /pkg-globex/ }).length).toBeGreaterThan(0);
+        });
     });
 });
