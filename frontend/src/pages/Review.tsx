@@ -18,6 +18,7 @@ import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
 import { useDocUrl } from '../helpers/useDocUrl';
+import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -38,6 +39,8 @@ type ReviewRow = Assessment & {
     _allIds: string[];
     /** All variant IDs merged into this group. */
     _variantIds: string[];
+    /** Unique supplier display names extracted from packages (for search). */
+    extractedSuppliers: string[];
 };
 
 const columnHelper = createColumnHelper<ReviewRow>();
@@ -107,6 +110,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [search, setSearch] = useState<string>('');
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
+    const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -251,10 +255,24 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return [...set].sort();
     }, [assessments]);
 
+    const supplierList = useMemo(() => {
+        const set = new Set<string>();
+        for (const a of assessments) {
+            for (const pkg of a.packages) {
+                const name = extractSupplierName(splitPkgId(pkg).supplier);
+                if (name) set.add(name);
+            }
+        }
+        return [...set].sort();
+    }, [assessments]);
+
+    const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
+        setSelectedSuppliers([]);
     };
 
     const handleExportReview = useCallback(() => {
@@ -421,12 +439,34 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <div className="flex flex-wrap gap-1 items-center justify-center h-full">
                         {pkgs.map(p => (
                             <span key={p} className="bg-gray-600 text-gray-200 text-xs px-1.5 py-0.5 rounded font-mono">
-                                {p}
+                                {splitPkgId(p).nameVersion}
                             </span>
                         ))}
                     </div>
                 );
             },
+        }),
+        columnHelper.display({
+            id: 'supplier',
+            header: () => <div className="flex items-center justify-center">Supplier</div>,
+            size: 160,
+            cell: info => {
+                const pkgs = info.row.original.packages;
+                const suppliers = [...new Set(
+                    pkgs.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+                )];
+                if (suppliers.length === 0) return <div className="flex items-center justify-center h-full text-neutral-500">—</div>;
+                return (
+                    <div className="flex flex-wrap gap-1 items-center justify-center h-full">
+                        {suppliers.map(s => (
+                            <span key={s} className="bg-gray-600 text-gray-200 text-xs px-1.5 py-0.5 rounded">
+                                {s}
+                            </span>
+                        ))}
+                    </div>
+                );
+            },
+            enableSorting: false,
         }),
         columnHelper.accessor("variant_id", {
             header: () => <div className="flex items-center justify-center">Variants</div>,
@@ -592,6 +632,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (selectedJustifications.length && !(a.justification && selectedJustifications.includes(a.justification.replace(/_/g, " ")))) {
             return false;
         }
+        if (selectedSuppliers.length) {
+            const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
+            if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
+        }
         return true;
     });
 
@@ -643,6 +687,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     selected={selectedJustifications}
                     setSelected={setSelectedJustifications}
                 />
+
+                {hasSupplierInfo && (
+                    <FilterOption
+                        label="Supplier"
+                        options={supplierList}
+                        selected={selectedSuppliers}
+                        setSelected={setSelectedSuppliers}
+                    />
+                )}
 
                 <div className="ml-auto flex items-center gap-2 relative">
                     <button
@@ -750,9 +803,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     texts: vulnDescriptions[a.vuln_id] ?? [],
                     _allIds: (a as any)._allIds ?? [a.id],
                     _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                    extractedSuppliers: [...new Set(
+                        a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+                    )],
                 }))}
                 search={search}
-                fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround"]}
+                fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
                 estimateRowHeight={50}
                 hasPagination={true}
                 hoverField="texts"
