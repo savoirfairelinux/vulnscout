@@ -4,6 +4,7 @@
 from ..models.package import Package
 from ..helpers.verbose import verbose
 from spdx_tools.spdx.parser.parse_anything import parse_file
+from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
@@ -22,6 +23,22 @@ from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
 from os import getenv
+import json
+import re
+
+
+def _normalize_spdx_dict(doc_dict: dict) -> None:
+    """Normalize an SPDX JSON dict to fix known spdx_tools parser compat issues.
+
+    The spdx_tools Version class only accepts "X.Y" format, but real-world SPDX
+    files may use three-part semver for licenseListVersion (e.g. "3.28.0").
+    This trims such values to "X.Y" so the parser does not reject the document.
+    """
+    creation_info = doc_dict.get("creationInfo") or {}
+    license_list_version = creation_info.get("licenseListVersion", "")
+    if re.match(r"^\d+\.\d+\.\d", license_list_version):
+        major, minor = license_list_version.split(".")[:2]
+        creation_info["licenseListVersion"] = f"{major}.{minor}"
 
 
 _ACTOR_TYPE_LABELS = {
@@ -50,8 +67,18 @@ class SPDX:
         self.sbom = parser.parse(spdx)
 
     def load_from_file(self, spdx_file: str):
-        """Read data from SPDX file, detecting format automaticaly."""
-        try_reading = parse_file(spdx_file)
+        """Read data from SPDX file, detecting format automatically."""
+        try:
+            try_reading = parse_file(spdx_file)
+        except SPDXParsingError as original_err:
+            # Fallback: pre-process JSON to fix known compat issues (e.g. 3-part licenseListVersion)
+            try:
+                with open(spdx_file) as f:
+                    doc_dict = json.load(f)
+                _normalize_spdx_dict(doc_dict)
+                try_reading = JsonLikeDictParser().parse(doc_dict)
+            except Exception:
+                raise original_err
         if try_reading:
             self.sbom = try_reading
         else:

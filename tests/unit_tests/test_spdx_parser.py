@@ -8,7 +8,7 @@
 from unittest.mock import MagicMock
 from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
-from src.views.spdx import SPDX
+from src.views.spdx import SPDX, _normalize_spdx_dict
 from src.controllers.packages import PackagesController
 
 
@@ -102,3 +102,46 @@ def test_two_packages_distinct_suppliers_both_stored():
     assert ctrl["packages"].get(key_acme) is not None
     assert ctrl["packages"].get(key_bar) is not None
     assert ctrl["packages"].get(key_acme) is not ctrl["packages"].get(key_bar)
+
+
+def test_normalize_spdx_dict_trims_three_part_license_list_version():
+    """licenseListVersion with X.Y.Z is trimmed to X.Y for spdx_tools compatibility."""
+    doc = {"creationInfo": {"licenseListVersion": "3.28.0"}}
+    _normalize_spdx_dict(doc)
+    assert doc["creationInfo"]["licenseListVersion"] == "3.28"
+
+
+def test_normalize_spdx_dict_leaves_two_part_version_unchanged():
+    doc = {"creationInfo": {"licenseListVersion": "3.28"}}
+    _normalize_spdx_dict(doc)
+    assert doc["creationInfo"]["licenseListVersion"] == "3.28"
+
+
+def test_normalize_spdx_dict_handles_missing_license_list_version():
+    doc = {"creationInfo": {}}
+    _normalize_spdx_dict(doc)  # should not raise
+
+
+def test_load_from_file_accepts_three_part_license_list_version(tmp_path):
+    """load_from_file succeeds on a JSON SPDX file with licenseListVersion X.Y.Z."""
+    import json
+    spdx_doc = {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "spdxVersion": "SPDX-2.3",
+        "creationInfo": {
+            "creators": ["Tool: test"],
+            "created": "2024-01-01T00:00:00Z",
+            "licenseListVersion": "3.28.0",
+        },
+        "name": "test-doc",
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [],
+        "relationships": [],
+    }
+    spdx_file = tmp_path / "test.spdx.json"
+    spdx_file.write_text(json.dumps(spdx_doc))
+
+    view, _ = _make_view()
+    view.load_from_file(str(spdx_file))
+    assert view.sbom is not None
