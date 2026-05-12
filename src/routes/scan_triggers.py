@@ -10,7 +10,7 @@ endpoint for polling progress.
 import os
 import threading
 
-from flask import jsonify
+from flask import jsonify, request
 
 from ..models.scan import Scan
 from ..models.finding import Finding
@@ -29,6 +29,7 @@ from ._scan_helpers import (
     resolve_active_packages,
     create_observation_and_assessment,
 )
+from ..controllers.nvd_refresh import run_nvd_refresh
 
 
 def init_app(app):
@@ -667,3 +668,54 @@ def init_app(app):
     def osv_scan_status(variant_id):
         """Check the status of a running OSV scan for the given variant."""
         return scan_status_response(variant_id, _osv_scans_in_progress)
+
+    # ------------------------------------------------------------------
+    # NVD CVE Refresh (bulk, variant-scoped)
+    # ------------------------------------------------------------------
+
+    _nvd_refresh_in_progress: dict = {}
+
+    @app.route('/api/variants/<variant_id>/nvd-refresh', methods=['POST'])
+    def trigger_nvd_refresh(variant_id):
+        """Trigger an NVD metadata refresh for CVEs in the given variant.
+
+        Refreshes existing CVE records only — does not create new findings.
+        Body (optional): {"cve_ids": ["CVE-...", ...]}
+        Omit cve_ids to refresh all Pending Assessment CVEs for the variant.
+        """
+        variant_uuid, variant, err = validate_trigger(
+            variant_id, _nvd_refresh_in_progress, "NVD refresh"
+        )
+        if err is not None:
+            return err
+
+        vid_str = str(variant_uuid)
+        body = request.get_json(silent=True) or {}
+        requested_cve_ids = body.get("cve_ids") or None  # None = default scope
+
+        init_progress(_nvd_refresh_in_progress, vid_str)
+
+        def _run():
+            with app.app_context():
+                try:
+                    run_nvd_refresh(
+                        variant_uuid=variant_uuid,
+                        project_uuid=None,
+                        requested_cve_ids=requested_cve_ids,
+                        progress=_nvd_refresh_in_progress[vid_str],
+                    )
+                except Exception as e:
+                    set_error(_nvd_refresh_in_progress, vid_str, str(e)[:500])
+
+        threading.Thread(
+            target=_run,
+            name=f"nvd-refresh-{vid_str}",
+            daemon=True,
+        ).start()
+
+        return jsonify({"status": "started", "variant_id": vid_str}), 202
+
+    @app.route('/api/variants/<variant_id>/nvd-refresh/status')
+    def nvd_refresh_status(variant_id):
+        """Poll progress of a running NVD refresh for the given variant."""
+        return scan_status_response(variant_id, _nvd_refresh_in_progress)
