@@ -26,6 +26,8 @@ type Vulnerability = {
     variants: string[];
     urls: string[];
     published?: string;
+    nvd_fetched_at?: string;
+    nvd_data_updated_at?: string;
     first_scan_date?: string;
     texts: {
         title: string;
@@ -141,6 +143,8 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.effort?.pessimistic === "string") vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic)
     if (typeof data?.fix?.state === "string") vuln.fix.state = data.fix.state
     if (typeof data?.published === "string") vuln.published = data.published
+    if (typeof data?.nvd_fetched_at === "string") vuln.nvd_fetched_at = data.nvd_fetched_at
+    if (typeof data?.nvd_data_updated_at === "string") vuln.nvd_data_updated_at = data.nvd_data_updated_at
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
     return vuln
 }
