@@ -318,6 +318,11 @@ class TemplatesExtensions:
         return []
 
     @staticmethod
+    def _to_list(value: dict | list) -> list:
+        """Normalise *value* to a plain list (dict values or list copy)."""
+        return list(value.values()) if isinstance(value, dict) else list(value)
+
+    @staticmethod
     def filter_as_list(value: dict) -> list:
         return list(value.values())
 
@@ -327,11 +332,7 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_epss(value: dict[str, dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, Any]]:
-        vals: List[dict[str, Any]]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
+        vals = TemplatesExtensions._to_list(value)
         return sorted(
             vals,
             key=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0),
@@ -341,11 +342,7 @@ class TemplatesExtensions:
     @staticmethod
     def filter_epss_score(value: dict[str, dict[str, Any]] | list[dict[str, Any]], minimum: float
                           ) -> list[dict[str, Any]]:
-        vals: List[dict[str, Any]]
-        if isinstance(value, dict):
-            vals = list(value.values())
-        else:
-            vals = list(value)
+        vals = TemplatesExtensions._to_list(value)
         result: List[dict[str, Any]] = []
         for v in vals:
             score = 0.0
@@ -360,10 +357,9 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_effort(value: dict[str, dict] | list[dict]) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
+        vals = TemplatesExtensions._to_list(value)
         return sorted(
-            value,  # type: ignore
+            vals,
             key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds,
             reverse=True
         )
@@ -378,9 +374,8 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:
-        if type(value) is dict:
-            value = list(value.values())
-        return sorted(value, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)  # type: ignore
+        vals = TemplatesExtensions._to_list(value)
+        return sorted(vals, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)
 
     @staticmethod
     def _filter_by_date(
@@ -522,7 +517,7 @@ class TemplatesExtensions:
         Returns:
             List of filtered vulnerabilities
         """
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
 
         def get_date(v: dict) -> Optional[str]:
             la = v.get("last_assessment")
@@ -556,7 +551,7 @@ class TemplatesExtensions:
         Returns:
             List of filtered vulnerabilities
         """
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
 
         def get_date(v: dict) -> Optional[str]:
             return v.get("published") or None
@@ -568,15 +563,15 @@ class TemplatesExtensions:
 
     @staticmethod
     def filter_by_variant(value: dict[str, dict] | list[dict], variant_id: str) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
         return [v for v in vals if v.get("variant_id") == variant_id or variant_id in v.get("variant_ids", [])]
 
     @staticmethod
     def filter_by_project(value: dict[str, dict] | list[dict], project_id: str) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
         return [v for v in vals if v.get("project_id") == project_id]
 
     @staticmethod
     def sort_by_scan_date(value: dict[str, dict] | list[dict]) -> list[dict]:
-        vals: List[dict] = list(value.values()) if isinstance(value, dict) else list(value)
+        vals = TemplatesExtensions._to_list(value)
         return sorted(vals, key=lambda x: x.get("timestamp") or "", reverse=True)
