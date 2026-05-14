@@ -3,12 +3,12 @@
 
 import datetime
 import uuid
-from unittest.mock import MagicMock, patch, call
-import pytest
+from unittest.mock import MagicMock
 
 from src.controllers.nvd_refresh import (
     build_cpe_map,
     apply_nvd_update,
+    collect_target_cve_ids,
 )
 
 
@@ -146,3 +146,45 @@ def test_apply_nvd_update_handles_none_details_fields_gracefully():
     changed = apply_nvd_update(vuln, details, now)
     assert changed is False
     vuln.update_record.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# build_cpe_map — line 32: continue when vuln_id not in target set
+# ---------------------------------------------------------------------------
+
+def test_build_cpe_map_skips_finding_not_in_target():
+    """Findings whose CVE is not in target_cve_ids are excluded (line 32 continue)."""
+    pkg = MagicMock(id=uuid.uuid4(), cpe=["cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"])
+    finding_in = MagicMock(vulnerability_id="CVE-2024-0001", package_id=pkg.id)
+    finding_out = MagicMock(vulnerability_id="CVE-2024-9999", package_id=pkg.id)
+    result = build_cpe_map(
+        {"CVE-2024-0001"},   # only this CVE is targeted
+        [finding_in, finding_out],
+        {pkg.id: pkg},
+    )
+    assert "cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*" in result
+    assert "CVE-2024-0001" in result["cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"]
+    # CVE-2024-9999 was skipped — not in target_cve_ids
+    assert "CVE-2024-9999" not in result["cpe:2.3:a:vendor:lib:1.0:*:*:*:*:*:*:*"]
+
+
+# ---------------------------------------------------------------------------
+# collect_target_cve_ids — explicit list path (no DB needed, lines 89-90)
+# ---------------------------------------------------------------------------
+
+def test_collect_target_cve_ids_explicit_list_uppercases_and_filters():
+    """Explicit list: empty strings are removed, IDs are uppercased."""
+    result = collect_target_cve_ids(None, None, ["cve-2024-0001", "", "cve-2024-0002"])
+    assert result == ["CVE-2024-0001", "CVE-2024-0002"]
+
+
+def test_collect_target_cve_ids_explicit_empty_list():
+    """Explicit empty list returns []."""
+    result = collect_target_cve_ids(None, None, [])
+    assert result == []
+
+
+def test_collect_target_cve_ids_explicit_list_already_uppercase():
+    """Already-uppercased IDs pass through unchanged."""
+    result = collect_target_cve_ids(None, None, ["CVE-2024-1234"])
+    assert result == ["CVE-2024-1234"]
