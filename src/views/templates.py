@@ -331,12 +331,14 @@ class TemplatesExtensions:
         return value[:limit]
 
     @staticmethod
+    def _generic_sort(value: dict | list, key_getter, reverse: bool = True) -> list[dict]:
+        """Normalise *value* to a list and sort by *key_getter*."""
+        return sorted(TemplatesExtensions._to_list(value), key=key_getter, reverse=reverse)
+
+    @staticmethod
     def sort_by_epss(value: dict[str, dict[str, Any]] | list[dict[str, Any]]) -> list[dict[str, Any]]:
-        vals = TemplatesExtensions._to_list(value)
-        return sorted(
-            vals,
-            key=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0),
-            reverse=True
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: float(((x.get("epss") or {}).get("score")) or 0.0)
         )
 
     @staticmethod
@@ -357,11 +359,8 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_effort(value: dict[str, dict] | list[dict]) -> list[dict]:
-        vals = TemplatesExtensions._to_list(value)
-        return sorted(
-            vals,
-            key=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds,
-            reverse=True
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: Iso8601Duration(x["effort"]["likely"] or "P0D").total_seconds
         )
 
     @staticmethod
@@ -374,8 +373,9 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_last_modified(value: dict[str, dict] | list[dict]) -> list[dict]:
-        vals = TemplatesExtensions._to_list(value)
-        return sorted(vals, key=lambda x: x["last_assessment"]["timestamp"] or "", reverse=True)
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: x["last_assessment"]["timestamp"] or ""
+        )
 
     @staticmethod
     def _filter_by_date(
@@ -573,5 +573,6 @@ class TemplatesExtensions:
 
     @staticmethod
     def sort_by_scan_date(value: dict[str, dict] | list[dict]) -> list[dict]:
-        vals = TemplatesExtensions._to_list(value)
-        return sorted(vals, key=lambda x: x.get("timestamp") or "", reverse=True)
+        return TemplatesExtensions._generic_sort(
+            value, key_getter=lambda x: x.get("timestamp") or ""
+        )
