@@ -13,7 +13,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -23,6 +23,7 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback } from "react";
+import NvdRefreshHandler from "../handlers/nvdRefresh";
 
 type Props = {
     vuln: Vulnerability;
@@ -114,6 +115,8 @@ type AssessmentGroup = {
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("error");
     const [showBanner, setShowBanner] = useState(false);
+    const [nvdRefreshing, setNvdRefreshing] = useState(false);
+    const [nvdRefreshError, setNvdRefreshError] = useState<string | null>(null);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -148,6 +151,11 @@ type AssessmentGroup = {
         if (modalRef.current) {
             modalRef.current.scrollTop = 0;
         }
+    }, [vuln.id]);
+
+    useEffect(() => {
+        setNvdRefreshing(false);
+        setNvdRefreshError(null);
     }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -204,6 +212,23 @@ type AssessmentGroup = {
     const navigationInfo = vulnerabilities && currentIndex !== undefined
         ? `Vulnerability ${currentIndex + 1} of ${vulnerabilities.length}`
         : null;
+
+    const handleNvdRefresh = useCallback(async () => {
+        setNvdRefreshing(true);
+        setNvdRefreshError(null);
+        try {
+            const updated = await NvdRefreshHandler.triggerSingleRefresh(vuln.id);
+            if (updated === null) {
+                setNvdRefreshError("NVD API unavailable. Please try again later.");
+            } else {
+                patchVuln(vuln.id, updated);
+            }
+        } catch {
+            setNvdRefreshError("NVD API unavailable. Please try again later.");
+        } finally {
+            setNvdRefreshing(false);
+        }
+    }, [vuln.id, patchVuln]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -1075,9 +1100,40 @@ type AssessmentGroup = {
                                         {navigationInfo}
                                     </span>
                                 )}
+                                <button
+                                    onClick={handleNvdRefresh}
+                                    disabled={nvdRefreshing || readOnly}
+                                    title="Refresh from NVD"
+                                    type="button"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon
+                                        icon={faRotate}
+                                        className={nvdRefreshing ? "animate-spin" : ""}
+                                    />
+                                </button>
+                                {nvdRefreshError && (
+                                    <span className="text-xs text-red-400 ml-2">{nvdRefreshError}</span>
+                                )}
                             </div>
                         ) : (
-                            <div></div>
+                            <div>
+                                <button
+                                    onClick={handleNvdRefresh}
+                                    disabled={nvdRefreshing || readOnly}
+                                    title="Refresh from NVD"
+                                    type="button"
+                                    className="py-2.5 px-5 text-sm font-medium focus:outline-none rounded-lg border disabled:opacity-50 disabled:cursor-not-allowed border-gray-600 hover:bg-gray-700 hover:text-white focus:z-10 focus:ring-4 focus:ring-blue-500 bg-gray-800 text-gray-400"
+                                >
+                                    <FontAwesomeIcon
+                                        icon={faRotate}
+                                        className={nvdRefreshing ? "animate-spin" : ""}
+                                    />
+                                </button>
+                                {nvdRefreshError && (
+                                    <span className="text-xs text-red-400 ml-2">{nvdRefreshError}</span>
+                                )}
+                            </div>
                         )}
                         <button
                             onClick={handleClose}
