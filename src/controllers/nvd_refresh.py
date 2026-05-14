@@ -168,7 +168,7 @@ def run_nvd_refresh(
     ).scalars().all()
     package_by_id = {p.id: p for p in packages}
 
-    cpe_map = build_cpe_map(target_ids, findings, package_by_id)
+    cpe_map = build_cpe_map(target_ids, list(findings), package_by_id)
     progress["logs"].append(
         f"Built CPE map: {len(cpe_map)} unique CPE(s) covering "
         f"{sum(len(v) for v in cpe_map.values())} CVE references."
