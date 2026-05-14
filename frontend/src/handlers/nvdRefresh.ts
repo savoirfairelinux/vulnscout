@@ -7,7 +7,7 @@ import type { Vulnerability } from "./vulnerabilities";
 
 export type RefreshStatus = {
     status: string;
-    progress?: number;
+    progress?: string;
     total?: number;
     error?: string;
 };
@@ -16,7 +16,7 @@ class NvdRefreshHandler {
     static async triggerBulkRefresh(
         variantId: string,
         cveIds?: string[],
-    ): Promise<void> {
+    ): Promise<{ status: string; variant_id?: string }> {
         const url = `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/nvd-refresh`;
         const body = cveIds ? JSON.stringify({ cve_ids: cveIds }) : undefined;
         const response = await fetch(url, {
@@ -29,6 +29,7 @@ class NvdRefreshHandler {
             const errorData = await response.json().catch(() => ({ message: "Unknown error" }));
             throw new Error(errorData.message || `HTTP ${response.status}`);
         }
+        return response.json();
     }
 
     static async getBulkRefreshStatus(variantId: string): Promise<RefreshStatus> {

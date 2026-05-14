@@ -167,8 +167,9 @@ class TestSingleCveRefreshEndpoint:
             resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["id"] == existing_cve_id
-        assert "nvd_fetched_at" in data  # timestamp always stamped
+        assert "vulnerabilities" in data
+        assert data["vulnerabilities"][0]["id"] == existing_cve_id
+        assert "nvd_fetched_at" in data["vulnerabilities"][0]  # timestamp always stamped
 
     def test_single_refresh_404_unknown_cve(self, client):
         resp = client.post("/api/vulnerabilities/CVE-9999-FAKE/nvd-refresh")

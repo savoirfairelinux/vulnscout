@@ -44,8 +44,9 @@ def build_cpe_map(
 def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool:
     """Compare NVD *details* against *vuln_record* and update in place if different.
 
-    Returns True if any field changed (and update_record was called),
-    False if nothing differed.  Always sets nvd_fetched_at when a change occurs.
+    Returns True if any field changed, False if nothing differed.
+    Always sets nvd_fetched_at regardless of whether any field changed.
+    Sets nvd_data_updated_at only when at least one field changed.
     None values in *details* are treated as "no data" and never overwrite.
     """
     update_kwargs: dict = {}
@@ -65,6 +66,7 @@ def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool
             update_kwargs[model_attr] = new_val
 
     if not update_kwargs:
+        vuln_record.update_record(nvd_fetched_at=now, commit=False)
         return False
 
     update_kwargs["nvd_fetched_at"] = now
@@ -207,9 +209,6 @@ def run_nvd_refresh(
             details = NVD_DB.extract_cve_details(cve)
             if apply_nvd_update(rec, details, now):
                 changed_count += 1
-            else:
-                # Stamp fetch time even when content is unchanged
-                rec.update_record(nvd_fetched_at=now, commit=False)
 
         progress["done_count"] = idx
 

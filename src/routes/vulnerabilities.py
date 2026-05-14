@@ -669,10 +669,7 @@ def init_app(app):
         cve = data["vulnerabilities"][0]["cve"]
         details = NVD_DB.extract_cve_details(cve)
         now = datetime.datetime.now(datetime.timezone.utc)
-        changed = apply_nvd_update(rec, details, now)
-        if not changed:
-            # Stamp fetch time even when content is unchanged
-            rec.update_record(nvd_fetched_at=now, commit=False)
+        apply_nvd_update(rec, details, now)
         db.session.commit()
 
-        return jsonify(rec.to_dict()), 200
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200

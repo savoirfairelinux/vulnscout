@@ -8,15 +8,21 @@ beforeEach(() => {
 });
 
 describe("NvdRefreshHandler.triggerBulkRefresh", () => {
-    it("triggerBulkRefresh resolves on success", async () => {
-        mockFetch.mockResolvedValueOnce({ ok: true, status: 204 });
-        await expect(NvdRefreshHandler.triggerBulkRefresh("variant-uuid")).resolves.toBeUndefined();
+    it("triggerBulkRefresh resolves with status on success", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 202,
+            json: async () => ({ status: "started", variant_id: "variant-uuid" }),
+        } as Response);
+        const result = await NvdRefreshHandler.triggerBulkRefresh("variant-uuid");
+        expect(result).toEqual({ status: "started", variant_id: "variant-uuid" });
     });
 
     it("POSTs to the correct URL", async () => {
         mockFetch.mockResolvedValueOnce({
             ok: true,
-            status: 204,
+            status: 202,
+            json: async () => ({ status: "started" }),
         } as Response);
 
         await NvdRefreshHandler.triggerBulkRefresh("abc");
@@ -29,7 +35,8 @@ describe("NvdRefreshHandler.triggerBulkRefresh", () => {
     it("sends cve_ids in the body when provided", async () => {
         mockFetch.mockResolvedValueOnce({
             ok: true,
-            status: 204,
+            status: 202,
+            json: async () => ({ status: "started" }),
         } as Response);
 
         await NvdRefreshHandler.triggerBulkRefresh("abc", ["CVE-2024-0001"]);

@@ -108,7 +108,10 @@ def test_apply_nvd_update_does_not_set_nvd_data_updated_at_when_nothing_changes(
     }
     changed = apply_nvd_update(vuln, details, now)
     assert changed is False
-    vuln.update_record.assert_not_called()
+    # nvd_fetched_at must always be stamped, nvd_data_updated_at must NOT be set
+    vuln.update_record.assert_called_once_with(nvd_fetched_at=now, commit=False)
+    call_kwargs = vuln.update_record.call_args[1]
+    assert "nvd_data_updated_at" not in call_kwargs
 
 
 def test_apply_nvd_update_always_sets_nvd_fetched_at_on_change():
@@ -131,7 +134,7 @@ def test_apply_nvd_update_always_sets_nvd_fetched_at_on_change():
 
 
 def test_apply_nvd_update_handles_none_details_fields_gracefully():
-    """None values in details do not overwrite existing data."""
+    """None values in details do not overwrite existing data; nvd_fetched_at is still stamped."""
     vuln = _make_vuln(description="keep me")
     now = datetime.datetime.now(datetime.timezone.utc)
     details = {
@@ -145,7 +148,7 @@ def test_apply_nvd_update_handles_none_details_fields_gracefully():
     }
     changed = apply_nvd_update(vuln, details, now)
     assert changed is False
-    vuln.update_record.assert_not_called()
+    vuln.update_record.assert_called_once_with(nvd_fetched_at=now, commit=False)
 
 
 # ---------------------------------------------------------------------------
