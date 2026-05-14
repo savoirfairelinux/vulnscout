@@ -314,7 +314,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [showMoreFilters, setShowMoreFilters] = useState(false);
     const [refreshStatus, setRefreshStatus] = useState<{
         running: boolean;
-        progress: number | null;
+        progress: string | null;
         total: number | null;
         error: string | null;
     } | null>(null);
