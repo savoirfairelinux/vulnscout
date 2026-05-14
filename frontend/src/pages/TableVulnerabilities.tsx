@@ -20,7 +20,8 @@ import MessageBanner from "../components/MessageBanner";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook, faRotate } from '@fortawesome/free-solid-svg-icons';
+import NvdRefreshHandler from "../handlers/nvdRefresh";
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -311,6 +312,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
+    const [refreshStatus, setRefreshStatus] = useState<{
+        running: boolean;
+        progress: number | null;
+        total: number | null;
+        error: string | null;
+    } | null>(null);
+    const refreshPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const [showRefreshDropdown, setShowRefreshDropdown] = useState(false);
+    const refreshDropdownRef = useRef<HTMLDivElement>(null);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -377,6 +387,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         return () => clearInterval(interval);
     }, []);
 
+    useEffect(() => {
+        return () => {
+            if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+        };
+    }, []);
+
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
         setBannerType(type);
@@ -386,6 +402,52 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const closeBanner = () => {
         setBannerVisible(false);
     };
+
+    const startRefreshPoll = useCallback((vid: string) => {
+        if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+        refreshPollRef.current = setInterval(async () => {
+            try {
+                const status = await NvdRefreshHandler.getBulkRefreshStatus(vid);
+                setRefreshStatus({
+                    running: status.status !== 'done' && status.status !== 'error' && status.status !== 'idle',
+                    progress: status.progress ?? null,
+                    total: status.total ?? null,
+                    error: status.error ?? null,
+                });
+                if (status.status === 'done' || status.status === 'error' || status.status === 'idle') {
+                    if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+                }
+            } catch (e) {
+                if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+                setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
+            }
+        }, 3000);
+    }, []);
+
+    const handleRefreshPendingCVEs = useCallback(async () => {
+        if (!variantId) return;
+        setShowRefreshDropdown(false);
+        setRefreshStatus({ running: true, progress: null, total: null, error: null });
+        try {
+            await NvdRefreshHandler.triggerBulkRefresh(variantId);
+            startRefreshPoll(variantId);
+        } catch (e) {
+            setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
+        }
+    }, [variantId, startRefreshPoll]);
+
+    const handleRefreshFilteredCVEs = useCallback(async () => {
+        if (!variantId) return;
+        setShowRefreshDropdown(false);
+        const ids = searchFilteredData.map(v => v.id);
+        setRefreshStatus({ running: true, progress: null, total: null, error: null });
+        try {
+            await NvdRefreshHandler.triggerBulkRefresh(variantId, ids);
+            startRefreshPoll(variantId);
+        } catch (e) {
+            setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
+        }
+    }, [variantId, searchFilteredData, startRefreshPoll]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -472,6 +534,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'assessments': 'Last Updated',
         'published': 'Published Date',
         'first_scan_date': 'First Scan Date',
+        'nvd_fetched_at': 'Last NVD Check',
+        'nvd_data_updated_at': 'Last NVD Update',
         'found_by': 'Sources',
         'actions': 'Actions'
     }), []);
@@ -740,6 +804,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 return dateA - dateB;
             },
             size: 110
+            }),
+            columnHelper.accessor('nvd_fetched_at', {
+                id: 'nvd_fetched_at',
+                header: 'Last NVD Check',
+                cell: info => {
+                    const val = info.getValue();
+                    return val ? new Date(val).toLocaleString(undefined, dt_options) : '—';
+                },
+                enableSorting: true,
+                size: 120
+            }),
+            columnHelper.accessor('nvd_data_updated_at', {
+                id: 'nvd_data_updated_at',
+                header: 'Last NVD Update',
+                cell: info => {
+                    const val = info.getValue();
+                    return val ? new Date(val).toLocaleString(undefined, dt_options) : '—';
+                },
+                enableSorting: true,
+                size: 120
             }),
             columnHelper.accessor('variants', {
             id: 'variants',
@@ -1021,6 +1105,21 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         };
     }, [showMoreFilters]);
 
+    // Close "Refresh CVEs" dropdown on click outside
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (refreshDropdownRef.current && !refreshDropdownRef.current.contains(event.target as Node)) {
+                setShowRefreshDropdown(false);
+            }
+        };
+        if (showRefreshDropdown) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showRefreshDropdown]);
+
 
 
     return (<>
@@ -1080,6 +1179,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'Last Updated',
                     'Published Date',
                     'First Scan Date',
+                    'Last NVD Check',
+                    'Last NVD Update',
                     'Sources'
                 ]}
                 selected={visibleColumns}
@@ -1250,6 +1351,43 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 )}
             </div>
 
+            {variantId && (
+                <div ref={refreshDropdownRef} className="ml-1 relative inline-block text-left">
+                    <button
+                        onClick={() => setShowRefreshDropdown(!showRefreshDropdown)}
+                        disabled={refreshStatus?.running ?? false}
+                        className={`py-1 px-2 rounded flex items-center gap-1 ${
+                            showRefreshDropdown ? 'bg-sky-950' : 'bg-sky-900 hover:bg-sky-950'
+                        } text-white disabled:opacity-50`}
+                        title="Refresh CVE data from NVD"
+                    >
+                        <FontAwesomeIcon icon={faRotate} className={(refreshStatus?.running) ? 'animate-spin' : ''} />
+                        Refresh CVEs
+                        <FontAwesomeIcon icon={faCaretDown} />
+                    </button>
+
+                    {showRefreshDropdown && (
+                        <div className="absolute right-0 mt-1 w-64 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50">
+                            <div className="py-1">
+                                <button
+                                    onClick={handleRefreshPendingCVEs}
+                                    className="w-full text-left px-4 py-2 text-sm hover:bg-sky-800"
+                                >
+                                    Pending Assessment CVEs
+                                </button>
+                                <button
+                                    onClick={handleRefreshFilteredCVEs}
+                                    className="w-full text-left px-4 py-2 text-sm hover:bg-sky-800"
+                                    title="Refresh CVEs matching the current table filters"
+                                >
+                                    CVEs matching current filters
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Package indicator (no dropdown, just display) */}
             {selectedPackages.length > 0 && (
                 <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
@@ -1324,6 +1462,41 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
         />
+
+        {refreshStatus && (
+            <div className={`mx-4 mb-2 px-4 py-2 rounded text-sm ${
+                refreshStatus.error ? 'bg-red-900 text-red-200' : 'bg-sky-900 text-sky-200'
+            }`}>
+                {refreshStatus.running && (
+                    <span>
+                        <FontAwesomeIcon icon={faRotate} className="animate-spin mr-2" />
+                        Refreshing CVEs from NVD…
+                        {refreshStatus.total !== null && refreshStatus.progress !== null && (
+                            <span className="ml-2">{refreshStatus.progress}/{refreshStatus.total}</span>
+                        )}
+                    </span>
+                )}
+                {!refreshStatus.running && !refreshStatus.error && (
+                    <span>✓ NVD refresh complete</span>
+                )}
+                {refreshStatus.error && (
+                    <span>⚠ Refresh error: {refreshStatus.error}</span>
+                )}
+                <button
+                    onClick={() => {
+                        if (refreshPollRef.current) {
+                            clearInterval(refreshPollRef.current);
+                            refreshPollRef.current = null;
+                        }
+                        setRefreshStatus(null);
+                    }}
+                    className="float-right text-gray-400 hover:text-white ml-4"
+                    aria-label="Dismiss"
+                >
+                    <FontAwesomeIcon icon={faTimes} />
+                </button>
+            </div>
+        )}
 
         <TableGeneric
             fuseKeys={fuseKeys}
