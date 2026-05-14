@@ -100,7 +100,8 @@ class TestAdocToPdfErrors:
     @patch('subprocess.run')
     @patch('builtins.open', new_callable=mock_open)
     @patch('os.remove')
-    def test_adoc_to_pdf_subprocess_failure(self, mock_remove, mock_file, mock_subprocess, templates_instance):
+    @patch('os.path.exists', return_value=True)
+    def test_adoc_to_pdf_subprocess_failure(self, mock_exists, mock_remove, mock_file, mock_subprocess, templates_instance):
         """Test adoc_to_pdf when subprocess returns non-zero exit code (lines 104-110)"""
         # Mock subprocess to return non-zero exit code
         mock_result = MagicMock()
