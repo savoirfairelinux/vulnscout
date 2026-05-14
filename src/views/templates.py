@@ -206,52 +206,38 @@ class Templates:
 
         return template.render(**kwargs)
 
-    def adoc_to_pdf(self, adoc: str) -> bytes:
-        random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
-        with open(f"{random_name}.adoc", "w+") as f:
-            f.write(adoc)
-
-        execution = subprocess.run(["asciidoctor-pdf", f"{random_name}.adoc"], capture_output=True)
-        if execution.returncode != 0:
-            print(execution.stdout)
-            print(execution.stderr)
-            try:
-                os.remove(f"{random_name}.adoc")
-                os.remove(f"{random_name}.pdf")
-            finally:
-                raise RuntimeError("Error converting adoc to pdf: asciidoctor returned non-zero exit code")
-
-        with open(f"{random_name}.pdf", "rb") as f:
-            pdf = f.read()
-        os.remove(f"{random_name}.adoc")
-        os.remove(f"{random_name}.pdf")
-        return pdf
-
-    def adoc_to_html(self, adoc: str) -> bytes:
+    def _run_asciidoctor(self, adoc: str, command: list[str], output_ext: str) -> bytes:
+        """Run an asciidoctor command on *adoc* text and return the converted bytes."""
         random_name = ''.join(random.choices(string.ascii_lowercase, k=8))
         adoc_path = f"{random_name}.adoc"
-        html_path = f"{random_name}.html"
+        output_path = f"{random_name}.{output_ext}"
+
         with open(adoc_path, "w+") as f:
             f.write(adoc)
 
-        # Use asciidoctor to render HTML
-        execution = subprocess.run(["asciidoctor", adoc_path], capture_output=True)
+        execution = subprocess.run(command + [adoc_path], capture_output=True)
         if execution.returncode != 0:
             print(execution.stdout)
             print(execution.stderr)
             try:
                 if os.path.exists(adoc_path):
                     os.remove(adoc_path)
-                if os.path.exists(html_path):
-                    os.remove(html_path)
+                if os.path.exists(output_path):
+                    os.remove(output_path)
             finally:
-                raise RuntimeError("Error converting adoc to html: asciidoctor returned non-zero exit code")
+                raise RuntimeError(f"Error converting adoc to {output_ext}: asciidoctor returned non-zero exit code")
 
-        with open(html_path, "rb") as f:
-            html = f.read()
+        with open(output_path, "rb") as f:
+            result = f.read()
         os.remove(adoc_path)
-        os.remove(html_path)
-        return html
+        os.remove(output_path)
+        return result
+
+    def adoc_to_pdf(self, adoc: str) -> bytes:
+        return self._run_asciidoctor(adoc, ["asciidoctor-pdf"], "pdf")
+
+    def adoc_to_html(self, adoc: str) -> bytes:
+        return self._run_asciidoctor(adoc, ["asciidoctor"], "html")
 
     def list_documents(self):
         docs = []
