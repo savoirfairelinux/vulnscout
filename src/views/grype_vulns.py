@@ -168,14 +168,7 @@ class GrypeVulns:
                     packages.append(pkg_id)
                     if pkg_id not in seen_pkg_ids:
                         seen_pkg_ids.add(pkg_id)
-                        # Bulk-fetch all existing assessments for this package
-                        # so the in-memory index is complete before we start
-                        # checking for assessments below.
-                        _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
-                        for a in Assessment.get_by_package(pkg_id):
-                            if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
-                                self.assessmentsCtrl._index_existing(a)
-                        self.assessmentsCtrl._db_queried_pkgs.add(pkg_id)
+                        self.assessmentsCtrl.warm_packages([pkg_id])
 
             if "matchDetails" in match:
                 packages.extend(self.parse_match_details(match["matchDetails"]))

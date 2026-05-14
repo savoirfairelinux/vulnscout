@@ -474,13 +474,7 @@ class FastSPDX3:
         # Pre-warm the in-memory assessment index for all packages in this document,
         # filtered to the current variant, so that the deduplication check below is
         # variant-scoped and does not treat another variant's assessments as matches.
-        _current_vid = getattr(self.assessmentsCtrl, 'current_variant_id', None)
-        for pkg_string_id in self.uri_to_package.values():
-            if pkg_string_id not in self.assessmentsCtrl._db_queried_pkgs:
-                for a in Assessment.get_by_package(pkg_string_id):
-                    if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
-                        self.assessmentsCtrl._index_existing(a)
-                self.assessmentsCtrl._db_queried_pkgs.add(pkg_string_id)
+        self.assessmentsCtrl.warm_packages(self.uri_to_package.values())
 
         for rel in graph:
             if not isinstance(rel, dict):

@@ -198,6 +198,23 @@ class AssessmentsController:
                 # gets_by_vuln_pkg skips the redundant SELECT on the first call.
                 self._db_queried_vuln_pkg.add((vuln, pkg))
 
+    def warm_packages(self, package_ids) -> None:
+        """Pre-warm the in-memory assessment index for the given package IDs.
+
+        Bulk-fetches all existing assessments for each package from the DB
+        (filtered to the current variant when set) and registers them via
+        :meth:`_index_existing`.  After this call, :meth:`gets_by_vuln_pkg`
+        will serve results from the in-memory index without hitting the DB.
+        """
+        _current_vid = self.current_variant_id
+        for pkg_id in package_ids:
+            if pkg_id in self._db_queried_pkgs:
+                continue
+            for a in Assessment.get_by_package(pkg_id):
+                if _current_vid is None or a.variant_id is None or a.variant_id == _current_vid:
+                    self._index_existing(a)
+            self._db_queried_pkgs.add(pkg_id)
+
     def add(self, assessment: Assessment):
         """Add an assessment to the list, merging it with an existing one if present, and persist to DB."""
         if assessment is None:
