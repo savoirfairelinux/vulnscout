@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from datetime import timezone
+from datetime import datetime, timezone
 
 
 def ensure_utc_iso(dt) -> str | None:
@@ -20,3 +20,24 @@ def ensure_utc_iso(dt) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
+
+
+_DATETIME_MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def normalize_timestamp_for_sort(ts) -> datetime:
+    """Normalise a timestamp (str, datetime, or None) to a UTC datetime for sorting.
+
+    Returns ``datetime.min`` (UTC) when *ts* is ``None`` or unparseable so that
+    items without a timestamp sort to the end of a descending list.
+    """
+    if ts is None:
+        return _DATETIME_MIN_UTC
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return _DATETIME_MIN_UTC
+    if hasattr(ts, 'tzinfo') and ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts

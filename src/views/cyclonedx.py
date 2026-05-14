@@ -7,6 +7,7 @@ from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
 from ..controllers import PackagesController, VulnerabilitiesController, AssessmentsController
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from cyclonedx.model.bom import Bom
 from cyclonedx.output.json import JsonV1Dot4, JsonV1Dot5, JsonV1Dot6
 from cyclonedx.model.component import Component
@@ -369,18 +370,6 @@ class CycloneDx:
             self.register_assessment(vuln_obj)
             self.sbom.vulnerabilities.add(vuln_obj)
 
-    @staticmethod
-    def _ts_key(ts):
-        """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
-        if ts is None:
-            return ""
-        if isinstance(ts, str):
-            return ts
-        try:
-            return ts.isoformat()
-        except AttributeError:
-            return str(ts)
-
     def register_assessment(self, vuln_obj: cyclonedx.model.vulnerability.Vulnerability):
         """
         Internal method.
@@ -388,7 +377,10 @@ class CycloneDx:
         """
         last_assessment = None
         for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj.id):
-            if last_assessment is None or self._ts_key(last_assessment.timestamp) < self._ts_key(assessment.timestamp):
+            if last_assessment is None or (
+                normalize_timestamp_for_sort(last_assessment.timestamp)
+                < normalize_timestamp_for_sort(assessment.timestamp)
+            ):
                 last_assessment = assessment
 
         if last_assessment:

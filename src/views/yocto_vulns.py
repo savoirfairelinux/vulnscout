@@ -5,7 +5,7 @@ from ..controllers import PackagesController, VulnerabilitiesController, Assessm
 from ..models import Package, Vulnerability, Assessment, CVSS
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
-from datetime import datetime, timezone
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 
 
 class YoctoVulns:
@@ -18,21 +18,7 @@ class YoctoVulns:
     def get_last_assessment(self, assessments):
         if not assessments:
             return None
-
-        def _ts_key(a):
-            ts = a.timestamp
-            if ts is None:
-                return datetime.min.replace(tzinfo=timezone.utc)
-            if isinstance(ts, str):
-                try:
-                    ts = datetime.fromisoformat(ts)
-                except (ValueError, TypeError):
-                    return datetime.min.replace(tzinfo=timezone.utc)
-            if hasattr(ts, 'tzinfo') and ts.tzinfo is None:
-                return ts.replace(tzinfo=timezone.utc)
-            return ts
-
-        return max(assessments, key=_ts_key)
+        return max(assessments, key=lambda a: normalize_timestamp_for_sort(a.timestamp))
 
     def load_from_dict(self, data: dict):
         """Load the yoctoVulns object from a dictionary."""
