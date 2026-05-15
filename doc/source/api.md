@@ -740,6 +740,77 @@ GET /api/variants/<variant_id>/osv-scan/status
 
 Same response shape as Grype status. `total` is the number of unique PURLs to query.
 
+### Trigger NVD CVE Refresh (bulk)
+
+```
+POST /api/variants/<variant_id>/nvd-refresh
+```
+
+Refreshes NVD metadata (description, CVSS scores, links, weaknesses) for existing CVE records without creating new findings. The refresh uses CPE batch lookup as the primary strategy and falls back to per-CVE individual API calls for any CVEs not covered.
+
+By default, all CVEs in *Pending Assessment* status for the variant are refreshed. An explicit list can be provided to refresh only a specific subset (e.g. the CVEs currently shown in the UI after filtering).
+
+**Request body (optional):**
+```json
+{ "cve_ids": ["CVE-2024-12345", "CVE-2023-99999"] }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cve_ids` | string[] | Optional. Explicit list of CVE IDs to refresh. Must be an array. Omit to refresh all Pending Assessment CVEs. |
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "variant_id": "..." }
+```
+
+Returns `400` if `cve_ids` is provided but is not an array. Returns `409` if a refresh is already running.
+
+### Check NVD CVE Refresh Status
+
+```
+GET /api/variants/<variant_id>/nvd-refresh/status
+```
+
+**Response:**
+```json
+{
+  "status": "running",
+  "error": null,
+  "progress": "3/10 CPEs",
+  "logs": ["Collecting CVEs to refresh…", "Found 12 CVE(s) to refresh.", "..."],
+  "total": 12,
+  "done_count": 3,
+  "changed_cves": ["CVE-2024-12345"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"idle"`, `"running"`, `"done"`, or `"error"` |
+| `progress` | string | Human-readable progress label |
+| `total` | int | Total number of CVEs to refresh |
+| `done_count` | int | Number of CPE batch iterations completed |
+| `changed_cves` | string[] | CVE IDs whose NVD data was updated during this run |
+| `logs` | string[] | Detailed step log |
+
+### Refresh a Single CVE from NVD
+
+```
+POST /api/vulnerabilities/<cve_id>/nvd-refresh
+```
+
+Synchronously fetches fresh NVD data for a single CVE and updates the local record. Returns the updated vulnerability object on success.
+
+**Response:** `200 OK`
+```json
+{
+  "vulnerabilities": [{ "id": "CVE-2024-12345", "description": "...", ... }]
+}
+```
+
+Returns `404` if the CVE is not in the local database. Returns `503` if the NVD API is unavailable or returns no data for the requested CVE.
+
 ---
 
 ## SBOM Upload
