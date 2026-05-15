@@ -78,6 +78,18 @@ describe("NvdRefreshHandler.getBulkRefreshStatus", () => {
     });
 });
 
+describe("NvdRefreshHandler.triggerBulkRefresh — catch callback", () => {
+    it("falls back to 'Unknown error' when response body cannot be parsed as JSON", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 500,
+            json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
+        } as unknown as Response);
+
+        await expect(NvdRefreshHandler.triggerBulkRefresh("abc")).rejects.toThrow("Unknown error");
+    });
+});
+
 describe("NvdRefreshHandler.triggerSingleRefresh", () => {
     it("returns a Vulnerability object on 200", async () => {
         mockFetch.mockResolvedValueOnce({
@@ -114,6 +126,17 @@ describe("NvdRefreshHandler.triggerSingleRefresh", () => {
             status: 503,
             text: async () => "NVD unavailable",
         } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result).toBeNull();
+    });
+
+    it("returns null when response body cannot be parsed as JSON", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
+        } as unknown as Response);
 
         const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
         expect(result).toBeNull();

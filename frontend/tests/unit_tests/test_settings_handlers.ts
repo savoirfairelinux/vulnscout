@@ -85,6 +85,18 @@ describe('Projects.create', () => {
 
         await expect(Projects.create('Dup')).rejects.toThrow('already exists');
     });
+
+    test('throws generic message when error body is not parseable JSON', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+            } as Response)
+        );
+
+        await expect(Projects.create('X')).rejects.toThrow('Create failed (500)');
+    });
 });
 
 
@@ -122,6 +134,18 @@ describe('Projects.delete', () => {
 
         await expect(Projects.delete('missing')).rejects.toThrow('Not found');
     });
+
+    test('throws generic message when error body is not parseable JSON', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+            } as Response)
+        );
+
+        await expect(Projects.delete('p1')).rejects.toThrow('Delete failed (500)');
+    });
 });
 
 
@@ -151,6 +175,18 @@ describe('Variants.rename', () => {
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Duplicate' }), { status: 409 });
 
         await expect(Variants.rename('v1', 'Dup')).rejects.toThrow('Duplicate');
+    });
+
+    test('throws generic message when error body is not parseable JSON', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+            } as Response)
+        );
+
+        await expect(Variants.rename('v1', 'X')).rejects.toThrow('Rename failed (500)');
     });
 });
 
@@ -193,6 +229,18 @@ describe('Variants.create', () => {
 
         await expect(Variants.create('p1', 'Dup')).rejects.toThrow('exists');
     });
+
+    test('throws generic message when error body is not parseable JSON', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+            } as Response)
+        );
+
+        await expect(Variants.create('p1', 'X')).rejects.toThrow('Create failed (500)');
+    });
 });
 
 
@@ -218,6 +266,18 @@ describe('Variants.delete', () => {
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Not found' }), { status: 404 });
 
         await expect(Variants.delete('missing')).rejects.toThrow('Not found');
+    });
+
+    test('throws generic message when error body is not parseable JSON', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new SyntaxError("Unexpected end of JSON input")),
+            } as Response)
+        );
+
+        await expect(Variants.delete('v1')).rejects.toThrow('Delete failed (500)');
     });
 });
 

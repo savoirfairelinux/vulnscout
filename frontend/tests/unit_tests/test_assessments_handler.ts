@@ -1,5 +1,8 @@
 
-import { asAssessment, asStringArray } from '../../src/handlers/assessments';
+import fetchMock from 'jest-fetch-mock';
+fetchMock.enableMocks();
+
+import Assessments, { asAssessment, asStringArray } from '../../src/handlers/assessments';
 
 describe('asStringArray', () => {
   test('non array returns empty array', () => {
@@ -105,5 +108,64 @@ describe('asAssessment optional fields', () => {
     expect(assessed.workaround).toBeUndefined();
     expect(assessed.workaround_timestamp).toBeUndefined();
     expect(assessed.last_update).toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Assessments.listReview
+// ---------------------------------------------------------------------------
+
+describe('Assessments.listReview', () => {
+  const validAssessment = {
+    id: 'r1',
+    vuln_id: 'CVE-2024-1234',
+    status: 'fixed',
+    timestamp: '2024-06-01T00:00:00',
+    packages: ['pkg@1.0'],
+    responses: [],
+  };
+
+  beforeEach(() => {
+    fetchMock.resetMocks();
+  });
+
+  test('returns assessments from the review endpoint', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ json: () => Promise.resolve([validAssessment]) } as Response)
+    );
+
+    const result = await Assessments.listReview();
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('r1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/assessments/review'),
+      expect.objectContaining({ mode: 'cors' })
+    );
+  });
+
+  test('appends variant_id query param when provided', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+    );
+
+    await Assessments.listReview('var-42');
+
+    const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
+    expect(calledUrl).toContain('variant_id=var-42');
+    expect(calledUrl).not.toContain('project_id');
+  });
+
+  test('appends project_id query param when no variantId provided', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+    );
+
+    await Assessments.listReview(undefined, 'proj-7');
+
+    const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
+    expect(calledUrl).toContain('project_id=proj-7');
+    expect(calledUrl).not.toContain('variant_id');
   });
 });
