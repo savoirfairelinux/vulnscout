@@ -120,6 +120,16 @@ class TestBulkRefreshEndpoints:
         assert resp.status_code == 400
         assert b"Invalid variant id" in resp.data
 
+    def test_bulk_refresh_400_when_cve_ids_is_string(self, client, variant_id):
+        """Sending cve_ids as a bare string (not a list) returns 400 before starting."""
+        resp = client.post(
+            f"/api/variants/{variant_id}/nvd-refresh",
+            json={"cve_ids": "CVE-2024-0001"},
+        )
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert "cve_ids" in data.get("error", "").lower()
+
     def test_status_returns_idle_before_first_refresh(self, client, variant_id):
         resp = client.get(f"/api/variants/{variant_id}/nvd-refresh/status")
         assert resp.status_code == 200
@@ -449,6 +459,58 @@ class TestRunNvdRefresh:
 
         assert progress["status"] == "done"
         assert isinstance(result, dict)
+
+    def test_run_nvd_refresh_cpe_inner_exception_isolates_cve(self, app, variant_id, existing_cve_id):
+        """A DB exception inside the CPE batch inner loop marks that CVE failed without
+        aborting the overall refresh — the progress status must still reach 'done'."""
+        from src.controllers.nvd_refresh import run_nvd_refresh
+        progress = {"status": "running", "logs": [], "done_count": 0}
+
+        mock_nvd_vuln = {
+            "cve": {
+                "id": existing_cve_id,
+                "descriptions": [{"lang": "en", "value": "Updated"}],
+                "metrics": {},
+                "weaknesses": [],
+                "references": [],
+                "published": "2024-01-01T00:00:00.000",
+                "lastModified": "2025-01-01T00:00:00.000",
+            }
+        }
+
+        with app.app_context():
+            with patch("src.controllers.nvd_db.NVD_DB") as MockNVD:
+                mock_instance = MockNVD.return_value
+                mock_instance.api_get_cves_by_cpe.return_value = [mock_nvd_vuln]
+                MockNVD.extract_cve_details.return_value = {
+                    "description": "Updated",
+                    "status": "high",
+                    "links": [],
+                    "weaknesses": [],
+                    "publish_date": None,
+                    "attack_vector": "NETWORK",
+                    "nvd_last_modified": "2025-01-01T00:00:00.000",
+                    "base_score": 9.0,
+                    "cvss_version": "3.1",
+                    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                }
+                with patch(
+                    "src.controllers.nvd_refresh.update_nvd_cvss_metrics",
+                    side_effect=RuntimeError("simulated DB error"),
+                ):
+                    result = run_nvd_refresh(
+                        variant_uuid=variant_id,
+                        project_uuid=None,
+                        requested_cve_ids=[existing_cve_id],
+                        progress=progress,
+                    )
+
+        # Refresh must complete normally; the erroring CVE must be in failed
+        assert progress["status"] == "done"
+        assert result["failed"] >= 1
+        assert result["refreshed"] == 0
+        # Error must be logged
+        assert any("ERROR" in log for log in progress["logs"])
 
 
 class TestUpdateNvdCvssMetrics:

@@ -692,6 +692,8 @@ def init_app(app):
         vid_str = str(variant_uuid)
         body = request.get_json(silent=True) or {}
         requested_cve_ids = body.get("cve_ids") or None  # None = default scope
+        if requested_cve_ids is not None and not isinstance(requested_cve_ids, list):
+            return jsonify({"error": "'cve_ids' must be a list of CVE ID strings"}), 400
 
         init_progress(_nvd_refresh_in_progress, vid_str)
 

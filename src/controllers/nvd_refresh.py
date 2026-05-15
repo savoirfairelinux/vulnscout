@@ -250,15 +250,20 @@ def run_nvd_refresh(
             if cve_id not in target_ids or cve_id in resolved:
                 continue
             resolved.add(cve_id)
-            rec = Vulnerability.get_by_id(cve_id)
-            if rec is None:
-                continue
-            details = NVD_DB.extract_cve_details(cve)
-            vuln_changed = apply_nvd_update(rec, details, now)
-            cvss_changed = update_nvd_cvss_metrics(rec, details)
-            if vuln_changed or cvss_changed:
-                changed_count += 1
-                progress["changed_cves"].append(cve_id)
+            try:
+                rec = Vulnerability.get_by_id(cve_id)
+                if rec is None:
+                    continue
+                details = NVD_DB.extract_cve_details(cve)
+                vuln_changed = apply_nvd_update(rec, details, now)
+                cvss_changed = update_nvd_cvss_metrics(rec, details)
+                if vuln_changed or cvss_changed:
+                    changed_count += 1
+                    progress["changed_cves"].append(cve_id)
+            except Exception as e:
+                progress["logs"].append(f"  ERROR processing {cve_id}: {str(e)[:200]}")
+                resolved.discard(cve_id)
+                failed.add(cve_id)
 
         progress["done_count"] = idx
 
