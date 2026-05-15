@@ -37,6 +37,8 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Called when a bulk NVD refresh completes with the list of updated CVE IDs */
+    onRefreshComplete?: (changedCves: string[]) => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -274,7 +276,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -416,13 +418,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 });
                 if (status.status === 'done' || status.status === 'error' || status.status === 'idle') {
                     if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+                    if (status.status === 'done' && onRefreshComplete) {
+                        onRefreshComplete(status.changed_cves ?? []);
+                    }
                 }
             } catch (e) {
                 if (refreshPollRef.current) clearInterval(refreshPollRef.current);
                 setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
             }
         }, 3000);
-    }, []);
+    }, [onRefreshComplete]);
 
     const handleRefreshPendingCVEs = useCallback(async () => {
         if (!variantId) return;

@@ -76,6 +76,21 @@ describe("NvdRefreshHandler.getBulkRefreshStatus", () => {
         expect(status.status).toBe("error");
         expect(status.error).toContain("503");
     });
+
+    it("includes changed_cves when present in response", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+                status: "done",
+                changed_cves: ["CVE-2024-0001", "CVE-2024-0002"],
+                total: 5,
+            }),
+        } as Response);
+
+        const status = await NvdRefreshHandler.getBulkRefreshStatus("abc");
+        expect(status.status).toBe("done");
+        expect(status.changed_cves).toEqual(["CVE-2024-0001", "CVE-2024-0002"]);
+    });
 });
 
 describe("NvdRefreshHandler.triggerBulkRefresh — catch callback", () => {

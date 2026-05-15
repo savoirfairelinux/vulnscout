@@ -10,6 +10,7 @@ export type RefreshStatus = {
     progress?: string;
     total?: number;
     error?: string;
+    changed_cves?: string[];
 };
 
 class NvdRefreshHandler {

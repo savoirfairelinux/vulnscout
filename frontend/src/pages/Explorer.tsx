@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
+import RefreshToast from "../components/RefreshToast";
 import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
@@ -40,6 +41,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
+    const [refreshToast, setRefreshToast] = useState<{ changedCves: string[] } | null>(null);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -111,6 +113,11 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     const handleScanComplete = useCallback(() => {
         loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+    }, [loadData, currentVariantId, currentProjectId]);
+
+    const handleNvdRefreshComplete = useCallback((changedCves: string[]) => {
+        loadData(currentVariantId, currentVariantId ? undefined : currentProjectId);
+        setRefreshToast({ changedCves });
     }, [loadData, currentVariantId, currentProjectId]);
 
 
@@ -254,6 +261,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
+                    onRefreshComplete={handleNvdRefreshComplete}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
@@ -274,6 +282,12 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 }} />}
             </div>
             <VersionDisplay />
+            {refreshToast && (
+                <RefreshToast
+                    changedCves={refreshToast.changedCves}
+                    onClose={() => setRefreshToast(null)}
+                />
+            )}
         </div>
     )
 }

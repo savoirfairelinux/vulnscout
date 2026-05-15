@@ -117,6 +117,7 @@ type AssessmentGroup = {
     const [showBanner, setShowBanner] = useState(false);
     const [nvdRefreshing, setNvdRefreshing] = useState(false);
     const [nvdRefreshError, setNvdRefreshError] = useState<string | null>(null);
+    const [nvdRefreshSuccess, setNvdRefreshSuccess] = useState(false);
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -156,6 +157,7 @@ type AssessmentGroup = {
     useEffect(() => {
         setNvdRefreshing(false);
         setNvdRefreshError(null);
+        setNvdRefreshSuccess(false);
     }, [vuln.id]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -216,12 +218,14 @@ type AssessmentGroup = {
     const handleNvdRefresh = useCallback(async () => {
         setNvdRefreshing(true);
         setNvdRefreshError(null);
+        setNvdRefreshSuccess(false);
         try {
             const updated = await NvdRefreshHandler.triggerSingleRefresh(vuln.id);
             if (updated === null) {
                 setNvdRefreshError("NVD API unavailable. Please try again later.");
             } else {
                 patchVuln(vuln.id, updated);
+                setNvdRefreshSuccess(true);
             }
         } catch {
             setNvdRefreshError("NVD API unavailable. Please try again later.");
@@ -1115,6 +1119,9 @@ type AssessmentGroup = {
                                 {nvdRefreshError && (
                                     <span className="text-xs text-red-400 ml-2">{nvdRefreshError}</span>
                                 )}
+                                {nvdRefreshSuccess && !nvdRefreshError && (
+                                    <span className="text-xs text-green-400 ml-2">Updated ✓</span>
+                                )}
                             </div>
                         ) : (
                             <div>
@@ -1132,6 +1139,9 @@ type AssessmentGroup = {
                                 </button>
                                 {nvdRefreshError && (
                                     <span className="text-xs text-red-400 ml-2">{nvdRefreshError}</span>
+                                )}
+                                {nvdRefreshSuccess && !nvdRefreshError && (
+                                    <span className="text-xs text-green-400 ml-2">Updated ✓</span>
                                 )}
                             </div>
                         )}
