@@ -76,6 +76,52 @@ def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool
     return True
 
 
+def update_nvd_cvss_metrics(vuln_record, details: dict) -> bool:
+    """Upsert the NVD CVSS score in the ``metrics`` table for *vuln_record*.
+
+    Matches on (vulnerability_id, author='NVD', version=details['cvss_version']).
+    Creates the row if missing; updates score/vector when they differ.
+    Returns True if a change was made, False if nothing differed or no CVSS data.
+    Does NOT commit — caller owns the transaction.
+    """
+    from ..extensions import db
+    from ..models.metrics import Metrics
+
+    base_score = details.get("base_score")
+    cvss_version = details.get("cvss_version")
+    cvss_vector = details.get("cvss_vector")
+
+    if base_score is None or cvss_version is None:
+        return False
+
+    vid = str(vuln_record.id).upper()
+
+    existing = db.session.execute(
+        db.select(Metrics).where(
+            Metrics.vulnerability_id == vid,
+            Metrics.author == "NVD",
+            Metrics.version == cvss_version,
+        )
+    ).scalar_one_or_none()
+
+    if existing is None:
+        db.session.add(Metrics(
+            vulnerability_id=vid,
+            version=cvss_version,
+            score=base_score,
+            vector=cvss_vector,
+            author="NVD",
+        ))
+        return True
+
+    existing_score = float(existing.score) if existing.score is not None else None
+    changed = existing_score != float(base_score) or existing.vector != cvss_vector
+    if changed:
+        existing.score = base_score
+        existing.vector = cvss_vector
+    return changed
+
+
 def collect_target_cve_ids(
     variant_uuid,
     project_uuid,
@@ -156,6 +202,7 @@ def run_nvd_refresh(
         return {"refreshed": 0, "changed": 0, "failed": 0}
 
     progress["total"] = len(target_ids)
+    progress["changed_cves"] = []
     progress["logs"].append(f"Found {len(target_ids)} CVE(s) to refresh.")
 
     # 2. Load findings + packages for CPE map
@@ -207,8 +254,11 @@ def run_nvd_refresh(
             if rec is None:
                 continue
             details = NVD_DB.extract_cve_details(cve)
-            if apply_nvd_update(rec, details, now):
+            vuln_changed = apply_nvd_update(rec, details, now)
+            cvss_changed = update_nvd_cvss_metrics(rec, details)
+            if vuln_changed or cvss_changed:
                 changed_count += 1
+                progress["changed_cves"].append(cve_id)
 
         progress["done_count"] = idx
 
@@ -227,8 +277,11 @@ def run_nvd_refresh(
                 details = NVD_DB.extract_cve_details(cve)
                 rec = Vulnerability.get_by_id(cve_id)
                 if rec is not None:
-                    if apply_nvd_update(rec, details, now):
+                    vuln_changed = apply_nvd_update(rec, details, now)
+                    cvss_changed = update_nvd_cvss_metrics(rec, details)
+                    if vuln_changed or cvss_changed:
                         changed_count += 1
+                        progress["changed_cves"].append(cve_id)
                 resolved.add(cve_id)
             else:
                 # Update nvd_fetched_at only (not nvd_data_updated_at)

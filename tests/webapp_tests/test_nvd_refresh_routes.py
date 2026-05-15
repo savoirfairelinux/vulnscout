@@ -374,6 +374,49 @@ class TestRunNvdRefresh:
         assert progress["status"] == "done"
         assert result["failed"] >= 1
 
+    def test_run_nvd_refresh_changed_cves_tracked(self, app, variant_id, existing_cve_id):
+        """changed_cves list in progress is populated when a CVE is updated."""
+        from src.controllers.nvd_refresh import run_nvd_refresh
+        progress = {"status": "running", "logs": [], "done_count": 0}
+
+        with app.app_context():
+            with patch("src.controllers.nvd_db.NVD_DB") as MockNVD:
+                mock_instance = MockNVD.return_value
+                mock_instance.api_get_cves_by_cpe.return_value = []
+                mock_instance.api_get_cve.return_value = (200, {
+                    "vulnerabilities": [{"cve": {
+                        "id": existing_cve_id,
+                        "descriptions": [{"lang": "en", "value": "New description from NVD"}],
+                        "metrics": {},
+                        "weaknesses": [],
+                        "references": [],
+                        "published": "2024-01-01T00:00:00.000",
+                        "lastModified": "2025-06-01T00:00:00.000",
+                    }}]
+                })
+                MockNVD.extract_cve_details.return_value = {
+                    "description": "New description from NVD",
+                    "status": "high",
+                    "links": ["https://nvd.nist.gov"],
+                    "weaknesses": ["CWE-200"],
+                    "publish_date": None,
+                    "attack_vector": "NETWORK",
+                    "nvd_last_modified": "2025-06-01T00:00:00.000",
+                    "base_score": 8.5,
+                    "cvss_version": "3.1",
+                    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                }
+                result = run_nvd_refresh(
+                    variant_uuid=variant_id,
+                    project_uuid=None,
+                    requested_cve_ids=[existing_cve_id],
+                    progress=progress,
+                )
+
+        assert result["changed"] >= 1
+        assert "changed_cves" in progress
+        assert existing_cve_id in progress["changed_cves"]
+
     def test_run_nvd_refresh_cpe_match_no_db_record(self, app, variant_id):
         """CVE resolved via CPE but not found in local DB is skipped gracefully."""
         from src.controllers.nvd_refresh import run_nvd_refresh
@@ -406,3 +449,98 @@ class TestRunNvdRefresh:
 
         assert progress["status"] == "done"
         assert isinstance(result, dict)
+
+
+class TestUpdateNvdCvssMetrics:
+
+    def test_creates_new_metrics_row_when_absent(self, app, existing_cve_id):
+        """Creates a Metrics row with author='NVD' when none exists."""
+        from src.controllers.nvd_refresh import update_nvd_cvss_metrics
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            vuln = Vulnerability.get_by_id(existing_cve_id)
+            details = {
+                "base_score": 7.5,
+                "cvss_version": "3.1",
+                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            }
+            changed = update_nvd_cvss_metrics(vuln, details)
+            _db.session.commit()
+
+            assert changed is True
+            rows = Metrics.get_by_vulnerability(existing_cve_id)
+            nvd_rows = [r for r in rows if r.author == "NVD"]
+            assert len(nvd_rows) == 1
+            assert float(nvd_rows[0].score) == 7.5
+            assert nvd_rows[0].version == "3.1"
+
+    def test_updates_existing_row_when_score_differs(self, app, existing_cve_id):
+        """Updates score and vector on an existing NVD Metrics row."""
+        from src.controllers.nvd_refresh import update_nvd_cvss_metrics
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            # Seed an existing NVD row with a stale score
+            old = Metrics(
+                vulnerability_id=existing_cve_id,
+                version="3.1",
+                score=5.0,
+                vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                author="NVD",
+            )
+            _db.session.add(old)
+            _db.session.commit()
+
+            vuln = Vulnerability.get_by_id(existing_cve_id)
+            details = {
+                "base_score": 9.8,
+                "cvss_version": "3.1",
+                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            }
+            changed = update_nvd_cvss_metrics(vuln, details)
+            _db.session.commit()
+
+            assert changed is True
+            updated = _db.session.get(Metrics, old.id)
+            assert float(updated.score) == 9.8
+            assert updated.vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+    def test_returns_false_when_score_unchanged(self, app, existing_cve_id):
+        """No change when existing NVD row already has the same score and vector."""
+        from src.controllers.nvd_refresh import update_nvd_cvss_metrics
+        from src.models.metrics import Metrics
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            existing = Metrics(
+                vulnerability_id=existing_cve_id,
+                version="3.1",
+                score=7.5,
+                vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                author="NVD",
+            )
+            _db.session.add(existing)
+            _db.session.commit()
+
+            vuln = Vulnerability.get_by_id(existing_cve_id)
+            details = {
+                "base_score": 7.5,
+                "cvss_version": "3.1",
+                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            }
+            changed = update_nvd_cvss_metrics(vuln, details)
+            assert changed is False
+
+    def test_returns_false_when_no_base_score_in_details(self, app, existing_cve_id):
+        """Returns False and does nothing when details has no base_score."""
+        from src.controllers.nvd_refresh import update_nvd_cvss_metrics
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            vuln = Vulnerability.get_by_id(existing_cve_id)
+            changed = update_nvd_cvss_metrics(vuln, {"cvss_version": "3.1"})
+            assert changed is False
+

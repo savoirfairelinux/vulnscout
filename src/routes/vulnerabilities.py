@@ -22,7 +22,7 @@ from ..models import (
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
-from ..controllers.nvd_refresh import apply_nvd_update
+from ..controllers.nvd_refresh import apply_nvd_update, update_nvd_cvss_metrics
 from ..helpers.verbose import verbose
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
@@ -670,6 +670,7 @@ def init_app(app):
         details = NVD_DB.extract_cve_details(cve)
         now = datetime.datetime.now(datetime.timezone.utc)
         apply_nvd_update(rec, details, now)
+        update_nvd_cvss_metrics(rec, details)
         db.session.commit()
 
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
