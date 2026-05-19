@@ -154,16 +154,18 @@ def collect_target_cve_ids(
     if not scan_ids:
         return []
 
+    if project_uuid:
+        assessment_join = Assessment.finding_id == Finding.id
+    else:
+        assessment_join = db.and_(
+            Assessment.finding_id == Finding.id,
+            Assessment.variant_id == variant_uuid,
+        )
+
     rows = db.session.execute(
         db.select(Finding.vulnerability_id.distinct())
         .join(Observation, Observation.finding_id == Finding.id)
-        .join(
-            Assessment,
-            db.and_(
-                Assessment.finding_id == Finding.id,
-                Assessment.variant_id == variant_uuid,
-            ),
-        )
+        .join(Assessment, assessment_join)
         .where(Observation.scan_id.in_(scan_ids))
         .where(Assessment.status == "under_investigation")
     ).all()

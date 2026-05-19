@@ -29,7 +29,7 @@ def _build_nvd_refresh_db(app):
 
         project = Project.create("RefreshProject")
         variant = Variant.create("RefreshVariant", project.id)
-        Scan.create("initial scan", variant.id, scan_type="sbom")
+        scan = Scan.create("initial scan", variant.id, scan_type="sbom")
 
         pkg = Package.find_or_create(
             "openssl", "1.1.1",
@@ -49,6 +49,8 @@ def _build_nvd_refresh_db(app):
 
         return {
             "variant_id": str(variant.id),
+            "project_id": str(project.id),
+            "scan_id": str(scan.id),
             "cve_id": vuln.id,
         }
 
@@ -77,6 +79,16 @@ def client(app):
 @pytest.fixture()
 def variant_id(app):
     return app._test_ids["variant_id"]
+
+
+@pytest.fixture()
+def project_id(app):
+    return app._test_ids["project_id"]
+
+
+@pytest.fixture()
+def scan_id(app):
+    return app._test_ids["scan_id"]
 
 
 @pytest.fixture()
@@ -606,3 +618,38 @@ class TestUpdateNvdCvssMetrics:
             changed = update_nvd_cvss_metrics(vuln, {"cvss_version": "3.1"})
             assert changed is False
 
+
+
+class TestCollectTargetCveIdsProjectScope:
+    """Direct DB test for collect_target_cve_ids in project mode."""
+
+    def test_returns_under_investigation_cves_across_all_variants(self, app, variant_id, scan_id):
+        """CVEs under_investigation in any variant are returned when project_uuid is given."""
+        import uuid
+        from src.controllers.nvd_refresh import collect_target_cve_ids
+        from src.models.assessment import Assessment
+        from src.models.observation import Observation
+        from src.models.finding import Finding
+        from src.extensions import db
+
+        with app.app_context():
+            project_id = app._test_ids["project_id"]
+            finding = db.session.execute(db.select(Finding)).scalars().first()
+            v_uuid = uuid.UUID(variant_id)
+            s_uuid = uuid.UUID(scan_id)
+
+            # Wire finding → scan via Observation (required by the join in collect_target_cve_ids)
+            Observation.create(finding_id=finding.id, scan_id=s_uuid, commit=True)
+
+            # Create an assessment under_investigation for the variant
+            Assessment.create(
+                status="under_investigation",
+                simplified_status="Pending Assessment",
+                finding_id=finding.id,
+                variant_id=v_uuid,
+                origin="test",
+                commit=True,
+            )
+
+            result = collect_target_cve_ids(None, uuid.UUID(project_id), None)
+            assert "CVE-2024-0001" in result
