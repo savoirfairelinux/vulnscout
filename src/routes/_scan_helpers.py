@@ -12,6 +12,7 @@ import uuid as uuid_module
 from flask import jsonify
 
 from ..controllers.variants import VariantController
+from ..controllers.projects import ProjectController
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
 from ..models.observation import Observation
 from ..models.package import Package
@@ -62,6 +63,33 @@ def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
         )
 
     return variant_uuid, variant, None
+
+
+def validate_project_trigger(project_id: str, progress_dict: dict, scan_label: str):
+    """Common validation for project-scoped scan trigger endpoints.
+
+    Parses the project UUID, checks the project exists, and checks that no
+    scan of the same type is already running for that project.
+
+    Returns ``(project_uuid, project, error_response)`` — if
+    *error_response* is not ``None`` the caller should return it immediately.
+    """
+    project_uuid, err = parse_uuid_or_400(project_id, "project id")
+    if err is not None:
+        return None, None, err
+
+    project = ProjectController.get(project_uuid)
+    if project is None:
+        return None, None, (jsonify({"error": "Project not found"}), 404)
+
+    pid_str = str(project_uuid)
+    if pid_str in progress_dict and progress_dict[pid_str].get("status") == "running":
+        return None, None, (
+            jsonify({"error": f"A {scan_label} is already in progress for this project"}),
+            409,
+        )
+
+    return project_uuid, project, None
 
 
 def scan_status_response(variant_id: str, progress_dict: dict):

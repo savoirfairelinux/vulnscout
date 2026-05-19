@@ -653,3 +653,74 @@ class TestCollectTargetCveIdsProjectScope:
 
             result = collect_target_cve_ids(None, uuid.UUID(project_id), None)
             assert "CVE-2024-0001" in result
+
+
+class TestProjectBulkRefreshEndpoints:
+
+    def test_project_bulk_refresh_returns_202(self, client, project_id):
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            resp = client.post(f"/api/projects/{project_id}/nvd-refresh")
+        assert resp.status_code == 202
+        data = resp.get_json()
+        assert data["status"] == "started"
+        assert data["project_id"] == project_id
+
+    def test_project_bulk_refresh_with_cve_ids_body(self, client, project_id):
+        with patch("src.routes.scan_triggers.run_nvd_refresh") as mock_refresh:
+            resp = client.post(
+                f"/api/projects/{project_id}/nvd-refresh",
+                json={"cve_ids": ["CVE-2024-0001", "CVE-2024-0002"]},
+            )
+            assert resp.status_code == 202
+            time.sleep(0.1)
+        assert mock_refresh.called
+        kwargs = mock_refresh.call_args[1]
+        assert kwargs.get("requested_cve_ids") == ["CVE-2024-0001", "CVE-2024-0002"]
+        assert kwargs.get("project_uuid") is not None
+        assert kwargs.get("variant_uuid") is None
+
+    def test_project_bulk_refresh_409_when_already_running(self, client, project_id):
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/projects/{project_id}/nvd-refresh")
+            resp = client.post(f"/api/projects/{project_id}/nvd-refresh")
+        assert resp.status_code == 409
+
+    def test_project_bulk_refresh_404_unknown_project(self, client):
+        import uuid
+        resp = client.post(f"/api/projects/{uuid.uuid4()}/nvd-refresh")
+        assert resp.status_code == 404
+
+    def test_project_bulk_refresh_400_invalid_project_id(self, client):
+        resp = client.post("/api/projects/not-a-uuid/nvd-refresh")
+        assert resp.status_code == 400
+        assert b"Invalid project id" in resp.data
+
+    def test_project_bulk_refresh_400_when_cve_ids_is_string(self, client, project_id):
+        resp = client.post(
+            f"/api/projects/{project_id}/nvd-refresh",
+            json={"cve_ids": "CVE-2024-0001"},
+        )
+        assert resp.status_code == 400
+        assert "cve_ids" in resp.get_json().get("error", "").lower()
+
+    def test_project_status_returns_idle_before_first_refresh(self, client, project_id):
+        resp = client.get(f"/api/projects/{project_id}/nvd-refresh/status")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "idle"
+
+    def test_project_status_returns_progress_while_running(self, client, project_id):
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/projects/{project_id}/nvd-refresh")
+        resp = client.get(f"/api/projects/{project_id}/nvd-refresh/status")
+        data = resp.get_json()
+        assert data["status"] in ("running", "done")
+
+    def test_project_status_400_invalid_project_id(self, client):
+        resp = client.get("/api/projects/not-a-uuid/nvd-refresh/status")
+        assert resp.status_code == 400
+        assert b"Invalid project id" in resp.data
+
+    def test_project_status_404_unknown_project(self, client):
+        import uuid
+        resp = client.get(f"/api/projects/{uuid.uuid4()}/nvd-refresh/status")
+        assert resp.status_code == 404

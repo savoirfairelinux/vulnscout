@@ -23,13 +23,16 @@ from ..views.grype_vulns import GrypeVulns
 
 from ._scan_helpers import (
     validate_trigger,
+    validate_project_trigger,
     scan_status_response,
     init_progress,
     set_error,
+    parse_uuid_or_400,
     resolve_active_packages,
     create_observation_and_assessment,
 )
 from ..controllers.nvd_refresh import run_nvd_refresh
+from ..controllers.projects import ProjectController
 
 
 def init_app(app):
@@ -721,3 +724,66 @@ def init_app(app):
     def nvd_refresh_status(variant_id):
         """Poll progress of a running NVD refresh for the given variant."""
         return scan_status_response(variant_id, _nvd_refresh_in_progress)
+
+    # ------------------------------------------------------------------
+    # NVD CVE Refresh (bulk, project-scoped)
+    # ------------------------------------------------------------------
+
+    _nvd_refresh_project_in_progress: dict = {}
+
+    @app.route('/api/projects/<project_id>/nvd-refresh', methods=['POST'])
+    def trigger_project_nvd_refresh(project_id):
+        """Trigger an NVD metadata refresh for all CVEs in the project.
+
+        Refreshes existing CVE records only — does not create new findings.
+        Body (optional): {"cve_ids": ["CVE-...", ...]}
+        Omit cve_ids to refresh all Pending Assessment CVEs across the project.
+        """
+        project_uuid, project, err = validate_project_trigger(
+            project_id, _nvd_refresh_project_in_progress, "NVD refresh"
+        )
+        if err is not None:
+            return err
+
+        pid_str = str(project_uuid)
+        body = request.get_json(silent=True) or {}
+        requested_cve_ids = body.get("cve_ids") or None
+        if requested_cve_ids is not None and not isinstance(requested_cve_ids, list):
+            return jsonify({"error": "'cve_ids' must be a list of CVE ID strings"}), 400
+
+        init_progress(_nvd_refresh_project_in_progress, pid_str)
+
+        def _run():
+            with app.app_context():
+                try:
+                    run_nvd_refresh(
+                        variant_uuid=None,
+                        project_uuid=project_uuid,
+                        requested_cve_ids=requested_cve_ids,
+                        progress=_nvd_refresh_project_in_progress[pid_str],
+                    )
+                except Exception as e:
+                    set_error(_nvd_refresh_project_in_progress, pid_str, str(e)[:500])
+
+        threading.Thread(
+            target=_run,
+            name=f"nvd-refresh-project-{pid_str}",
+            daemon=True,
+        ).start()
+
+        return jsonify({"status": "started", "project_id": pid_str}), 202
+
+    @app.route('/api/projects/<project_id>/nvd-refresh/status')
+    def project_nvd_refresh_status(project_id):
+        """Poll progress of a running NVD project refresh."""
+        project_uuid, err = parse_uuid_or_400(project_id, "project id")
+        if err is not None:
+            return err
+        project = ProjectController.get(project_uuid)
+        if project is None:
+            return jsonify({"error": "Project not found"}), 404
+        pid_str = str(project_uuid)
+        info = _nvd_refresh_project_in_progress.get(pid_str)
+        if info is None:
+            return jsonify({"status": "idle"})
+        return jsonify(info)
