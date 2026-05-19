@@ -22,6 +22,7 @@ import EPSSProgressHandler from "../handlers/epss_progress";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook, faRotate } from '@fortawesome/free-solid-svg-icons';
 import NvdRefreshHandler from "../handlers/nvdRefresh";
+import type { RefreshStatus } from "../handlers/nvdRefresh";
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -405,11 +406,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setBannerVisible(false);
     };
 
-    const startRefreshPoll = useCallback((vid: string) => {
+    const startRefreshPoll = useCallback((fetchStatus: () => Promise<RefreshStatus>) => {
         if (refreshPollRef.current) clearInterval(refreshPollRef.current);
         refreshPollRef.current = setInterval(async () => {
             try {
-                const status = await NvdRefreshHandler.getBulkRefreshStatus(vid);
+                const status = await fetchStatus();
                 setRefreshStatus({
                     running: status.status !== 'done' && status.status !== 'error' && status.status !== 'idle',
                     progress: status.progress ?? null,
@@ -430,29 +431,37 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [onRefreshComplete]);
 
     const handleRefreshPendingCVEs = useCallback(async () => {
-        if (!variantId) return;
         setShowRefreshDropdown(false);
         setRefreshStatus({ running: true, progress: null, total: null, error: null });
         try {
-            await NvdRefreshHandler.triggerBulkRefresh(variantId);
-            startRefreshPoll(variantId);
+            if (variantId) {
+                await NvdRefreshHandler.triggerBulkRefresh(variantId);
+                startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatus(variantId));
+            } else if (projectId) {
+                await NvdRefreshHandler.triggerBulkRefreshForProject(projectId);
+                startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatusForProject(projectId));
+            }
         } catch (e) {
             setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
         }
-    }, [variantId, startRefreshPoll]);
+    }, [variantId, projectId, startRefreshPoll]);
 
     const handleRefreshFilteredCVEs = useCallback(async () => {
-        if (!variantId) return;
         setShowRefreshDropdown(false);
         const ids = searchFilteredData.map(v => v.id);
         setRefreshStatus({ running: true, progress: null, total: null, error: null });
         try {
-            await NvdRefreshHandler.triggerBulkRefresh(variantId, ids);
-            startRefreshPoll(variantId);
+            if (variantId) {
+                await NvdRefreshHandler.triggerBulkRefresh(variantId, ids);
+                startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatus(variantId));
+            } else if (projectId) {
+                await NvdRefreshHandler.triggerBulkRefreshForProject(projectId, ids);
+                startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatusForProject(projectId));
+            }
         } catch (e) {
             setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
         }
-    }, [variantId, searchFilteredData, startRefreshPoll]);
+    }, [variantId, projectId, searchFilteredData, startRefreshPoll]);
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.value.length < 2) {
@@ -1356,8 +1365,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 )}
             </div>
 
-            {variantId && (
-                <div ref={refreshDropdownRef} className="ml-1 relative inline-block text-left">
+            <div ref={refreshDropdownRef} className="ml-1 relative inline-block text-left">
                     <button
                         onClick={() => setShowRefreshDropdown(!showRefreshDropdown)}
                         disabled={refreshStatus?.running ?? false}
@@ -1391,7 +1399,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         </div>
                     )}
                 </div>
-            )}
 
             {/* Package indicator (no dropdown, just display) */}
             {selectedPackages.length > 0 && (
