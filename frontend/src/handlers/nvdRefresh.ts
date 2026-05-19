@@ -40,6 +40,32 @@ class NvdRefreshHandler {
         return response.json();
     }
 
+    static async triggerBulkRefreshForProject(
+        projectId: string,
+        cveIds?: string[],
+    ): Promise<{ status: string; project_id?: string }> {
+        const url = `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/nvd-refresh`;
+        const body = cveIds ? JSON.stringify({ cve_ids: cveIds }) : undefined;
+        const response = await fetch(url, {
+            method: "POST",
+            headers: body ? { "Content-Type": "application/json" } : {},
+            body,
+            mode: "cors",
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ message: "Unknown error" }));
+            throw new Error(errorData.message || `HTTP ${response.status}`);
+        }
+        return response.json();
+    }
+
+    static async getBulkRefreshStatusForProject(projectId: string): Promise<RefreshStatus> {
+        const url = `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/nvd-refresh/status`;
+        const response = await fetch(url, { mode: "cors" });
+        if (!response.ok) return { status: "error", error: `HTTP ${response.status}` };
+        return response.json();
+    }
+
     static async triggerSingleRefresh(cveId: string): Promise<Vulnerability | null> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(cveId)}/nvd-refresh`;
         const response = await fetch(url, { method: "POST", mode: "cors" });

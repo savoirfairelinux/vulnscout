@@ -157,3 +157,80 @@ describe("NvdRefreshHandler.triggerSingleRefresh", () => {
         expect(result).toBeNull();
     });
 });
+
+describe("NvdRefreshHandler.triggerBulkRefreshForProject", () => {
+    it("POSTs to the correct project URL", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 202,
+            json: async () => ({ status: "started", project_id: "proj-uuid" }),
+        } as Response);
+
+        await NvdRefreshHandler.triggerBulkRefreshForProject("proj-uuid");
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/projects/proj-uuid/nvd-refresh"),
+            expect.objectContaining({ method: "POST" }),
+        );
+    });
+
+    it("sends cve_ids in body when provided", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 202,
+            json: async () => ({ status: "started" }),
+        } as Response);
+
+        await NvdRefreshHandler.triggerBulkRefreshForProject("proj-uuid", ["CVE-2024-0001"]);
+        const [, opts] = mockFetch.mock.calls[0];
+        expect(JSON.parse(opts.body)).toEqual({ cve_ids: ["CVE-2024-0001"] });
+    });
+
+    it("sends no body when cveIds is omitted", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 202,
+            json: async () => ({ status: "started" }),
+        } as Response);
+
+        await NvdRefreshHandler.triggerBulkRefreshForProject("proj-uuid");
+        const [, opts] = mockFetch.mock.calls[0];
+        expect(opts.body).toBeUndefined();
+    });
+
+    it("throws on non-ok response", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 500,
+            json: async () => ({ message: "internal error" }),
+        } as Response);
+
+        await expect(NvdRefreshHandler.triggerBulkRefreshForProject("proj-uuid")).rejects.toThrow("internal error");
+    });
+});
+
+describe("NvdRefreshHandler.getBulkRefreshStatusForProject", () => {
+    it("GETs the correct project status URL", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ status: "running", progress: "2/5", total: 5, error: null }),
+        } as Response);
+
+        const status = await NvdRefreshHandler.getBulkRefreshStatusForProject("proj-uuid");
+        expect(status.status).toBe("running");
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/projects/proj-uuid/nvd-refresh/status"),
+            expect.objectContaining({ mode: "cors" }),
+        );
+    });
+
+    it("returns error status on non-ok response", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 503,
+        } as Response);
+
+        const status = await NvdRefreshHandler.getBulkRefreshStatusForProject("proj-uuid");
+        expect(status.status).toBe("error");
+        expect(status.error).toContain("503");
+    });
+});
