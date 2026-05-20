@@ -45,6 +45,29 @@ describe('TableVulnerabilities — Refresh CVEs button visibility', () => {
     });
 });
 
+describe('TableVulnerabilities — Refresh poll cancellation on scope change', () => {
+    it('clears the poll interval and resets status when variantId changes', async () => {
+        const { rerender } = render(<TableVulnerabilities {...minimalProps} variantId="variant-a" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalled());
+
+        // Simulate switching to a different variant
+        rerender(<TableVulnerabilities {...minimalProps} variantId="variant-b" />);
+
+        // Status bar should be gone after scope change
+        await waitFor(() => {
+            expect(screen.queryByText(/Refresh/i, { selector: '.bg-sky-900 *' })).not.toBeInTheDocument();
+        });
+        // New trigger should use the new variantId
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => {
+            expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalledWith('variant-b');
+        });
+    });
+});
+
 describe('TableVulnerabilities — Refresh CVEs handler branching', () => {
     it('calls triggerBulkRefreshForProject when no variantId', async () => {
         render(<TableVulnerabilities {...minimalProps} />);

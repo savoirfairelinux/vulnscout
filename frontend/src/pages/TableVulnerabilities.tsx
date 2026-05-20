@@ -396,6 +396,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         };
     }, []);
 
+    // Cancel stale poll and reset status when the scope (variant/project) changes
+    useEffect(() => {
+        if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+        setRefreshStatus(null);
+    }, [variantId, projectId]);
+
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
         setBannerType(type);
