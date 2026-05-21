@@ -132,6 +132,28 @@ describe('ScanHistory card — Current result section', () => {
         expect(screen.queryByText('View all')).not.toBeInTheDocument();
     });
 
+    test('shows "Details" button in Section A when Section B is hidden (first scan)', async () => {
+        const firstScan: Scan = {
+            ...baseScan,
+            is_first: true,
+            vulns_added: null,
+            findings_added: null,
+            vulns_removed: null,
+            vulns_unchanged: null,
+            findings_removed: null,
+            findings_upgraded: null,
+            findings_unchanged: null,
+            packages_added: null,
+            packages_removed: null,
+            packages_upgraded: null,
+            packages_unchanged: null,
+        };
+        renderWithScan(firstScan);
+        await waitFor(() => expect(screen.getByText('Current result')).toBeInTheDocument());
+        expect(screen.getByText('Details')).toBeInTheDocument();
+        expect(screen.queryByText('Changes since previous scan')).not.toBeInTheDocument();
+    });
+
 });
 
 describe('ScanHistory card — Changes since previous scan section', () => {
@@ -224,6 +246,30 @@ describe('ScanHistory card — Changes since previous scan section', () => {
         // Wait for the card to render before asserting absence
         await waitFor(() => expect(screen.getByText('Changes since previous scan')).toBeInTheDocument());
         expect(screen.queryByText('Packages:')).not.toBeInTheDocument();
+    });
+
+    test('shows "Changes since previous scan" for first tool scan when deltas are non-null', async () => {
+        const firstToolScan: Scan = {
+            ...baseScan,
+            scan_type: 'tool',
+            scan_source: 'grype',
+            is_first: true,
+            vulns_added: 10,
+            vulns_removed: 0,
+            vulns_unchanged: 0,
+            findings_added: 10,
+            findings_removed: 0,
+            findings_upgraded: 0,
+            findings_unchanged: 0,
+            packages_added: null,
+            packages_removed: null,
+            packages_upgraded: null,
+            packages_unchanged: null,
+        };
+        renderWithScan(firstToolScan);
+        await waitFor(() =>
+            expect(screen.getByText('Changes since previous scan')).toBeInTheDocument()
+        );
     });
 
     test('shows "No changes detected" for tool scan with all-zero deltas (packages excluded)', async () => {

@@ -1654,7 +1654,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         vulnsAdded === 0 && vulnsRemoved === 0 &&
                                         findingsAdded === 0 && findingsRemoved === 0 && findingsUpgraded === 0 &&
                                         (isTool || (pkgsAdded === 0 && pkgsRemoved === 0 && pkgsUpgraded === 0));
-                                    const dot = <span className="text-neutral-500 mx-1">·</span>;
+                                    const dot = <span className="text-neutral-500 mx-1" aria-hidden="true">·</span>;
                                     return (
                                         <div>
                                             <p className="text-sm font-bold text-gray-800 dark:text-neutral-100 mb-2">Changes since previous scan</p>
@@ -1663,7 +1663,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                                     <>
                                                         {/* Unique vulnerabilities row */}
                                                         <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                            <FontAwesomeIcon icon={faShieldHalved} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                            <FontAwesomeIcon icon={faShieldHalved} className="text-neutral-500 w-4 flex-shrink-0" aria-hidden="true" />
                                                             <span className="text-neutral-400">Unique vulnerabilities:</span>
                                                             <span className={vulnsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
                                                                 {vulnsAdded.toLocaleString()} new
@@ -1676,7 +1676,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                                         </div>
                                                         {/* Vulnerability matches row */}
                                                         <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                            <FontAwesomeIcon icon={faMagnifyingGlass} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                            <FontAwesomeIcon icon={faMagnifyingGlass} className="text-neutral-500 w-4 flex-shrink-0" aria-hidden="true" />
                                                             <span className="text-neutral-400">Vulnerability matches:</span>
                                                             <span className={findingsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
                                                                 {findingsAdded.toLocaleString()} new
@@ -1691,7 +1691,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                                         {/* Packages row — SBOM scans only */}
                                                         {!isTool && (
                                                             <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                                <FontAwesomeIcon icon={faCube} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                                <FontAwesomeIcon icon={faCube} className="text-neutral-500 w-4 flex-shrink-0" aria-hidden="true" />
                                                                 <span className="text-neutral-400">Packages:</span>
                                                                 <span className={pkgsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
                                                                     {pkgsAdded.toLocaleString()} added
