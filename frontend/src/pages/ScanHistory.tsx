@@ -21,7 +21,7 @@ import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faMagnifyingGlass, faCube, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
@@ -1587,245 +1587,137 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     }
                                 </p>
 
-                                {/* Row 2: badges + details button */}
-                                {(scan.scan_type || 'sbom') === 'tool' && (
-                                <>
-                                {/* Update Vulnerabilities row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Vulnerabilities:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                            </span>
-                                            {scan.newly_detected_vulns != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_vulns > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_vulns.toLocaleString()} new vulnerabilities discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                            </span>
-                                            {scan.newly_detected_vulns != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_vulns > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_vulns.toLocaleString()} new vulnerabilities discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-                                </div>
-                                {/* Update Findings row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Findings:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                            </span>
-                                            {scan.newly_detected_findings != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_findings > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_findings.toLocaleString()} new findings discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                            </span>
-                                            {scan.newly_detected_findings != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${scan.newly_detected_findings > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {scan.newly_detected_findings.toLocaleString()} new findings discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-
-                                </div>
-                                {/* Update Assessments row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Update Assessments:</span>
-                                    {scan.is_first ? (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                            </span>
-                                            {scan.newly_detected_assessments != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                            </span>
-                                            {scan.newly_detected_assessments != null && (
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.newly_detected_assessments ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.newly_detected_assessments ?? 0).toLocaleString()} new assessments discovered
-                                            </span>
-                                            )}
-                                        </>
-                                    )}
-                                    {/* Details button */}
-                                    <button
-                                        onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                    >
-                                        Details
-                                    </button>
-                                </div>
-                                </>
-                                )}
-                                {(scan.scan_type || 'sbom') !== 'tool' && (
-                                <>
-                                {/* Vulnerabilities row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Vulnerabilities:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.vuln_count ?? 0).toLocaleString()} vulnerabilities detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vulns_added ?? 0).toLocaleString()} new vulnerabilities
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.vulns_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.vulns_removed ?? 0).toLocaleString()} vulnerabilities removed
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.vulns_unchanged ?? 0).toLocaleString()} vulnerabilities unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Findings row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Findings:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.finding_count ?? 0).toLocaleString()} findings detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_added ?? 0).toLocaleString()} new findings
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_removed ?? 0).toLocaleString()} findings removed
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.findings_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.findings_upgraded ?? 0).toLocaleString()} findings upgraded
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.findings_unchanged ?? 0).toLocaleString()} findings unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Packages row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Packages:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.package_count ?? 0).toLocaleString()} packages detected
-                                    </span>
-                                    {!scan.is_first && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_added ?? 0).toLocaleString()} new packages
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_removed ?? 0).toLocaleString()} packages removed
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.packages_upgraded ?? 0) > 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.packages_upgraded ?? 0).toLocaleString()} packages upgraded
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.packages_unchanged ?? 0).toLocaleString()} packages unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                                {/* Assessments row */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Assessments:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.assessment_count ?? 0).toLocaleString()} assessments detected
-                                    </span>
-                                    {!scan.is_first && (scan.assessment_count ?? 0) > 0 && (
-                                        <>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_added ?? 0) > 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessments_added ?? 0).toLocaleString()} new assessments
-                                            </span>
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.assessments_removed ?? 0) > 0 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                                {(scan.assessments_removed ?? 0).toLocaleString()} assessments removed
-                                            </span>
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                                                {(scan.assessments_unchanged ?? 0).toLocaleString()} assessments unchanged
-                                            </span>
-                                        </>
-                                    )}
-                                    {/* Details button */}
-                                    <button
-                                        onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                    >
-                                        Details
-                                    </button>
-                                </div>
-
-                                {/* Scan Result row — uses global counts when tool scans exist, else SBOM-only */}
-                                <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                    <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_package_count ?? scan.package_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_package_count ?? scan.package_count ?? 0).toLocaleString()} packages
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_finding_count ?? scan.finding_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_finding_count ?? scan.finding_count ?? 0).toLocaleString()} findings
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${((scan.global_vuln_count ?? scan.vuln_count ?? 0)) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_vuln_count ?? scan.vuln_count ?? 0).toLocaleString()} vulnerabilities
-                                    </span>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? scan.assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                        {(scan.global_assessment_count ?? scan.assessment_count ?? 0).toLocaleString()} assessments
-                                    </span>
-                                    <button
-                                        onClick={() => setOpenGlobalId(scan.id)}
-                                        className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                    >
-                                        Details
-                                    </button>
-                                </div>
-                                </>
-                                )}
-
-                                {/* Scan Result (tool scans only) — SBOM ∪ all sources */}
-                                {(scan.scan_type || 'sbom') === 'tool' && scan.global_finding_count != null && (
-                                    <div className="flex items-center gap-2 flex-wrap mb-1 mt-2 pt-2 border-t border-neutral-300 dark:border-neutral-600">
-                                        <span className="text-xs font-bold text-neutral-400 dark:text-neutral-400 uppercase tracking-wide">Scan Result:</span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_package_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_package_count ?? 0).toLocaleString()} packages
+                                {/* Section A: Current result */}
+                                <div className="mb-3">
+                                    <p className="text-sm font-bold text-neutral-100 mb-2">Current result</p>
+                                    <div className="flex items-baseline gap-6 flex-wrap">
+                                        <span>
+                                            <span className="text-2xl font-bold text-cyan-400">
+                                                {(scan.global_package_count ?? scan.package_count ?? 0).toLocaleString()}
+                                            </span>{' '}
+                                            <span className="text-sm text-neutral-400">packages</span>
                                         </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_finding_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_finding_count ?? 0).toLocaleString()} findings
+                                        <span>
+                                            <span className="text-2xl font-bold text-cyan-400">
+                                                {(scan.global_vuln_count ?? scan.vuln_count ?? 0).toLocaleString()}
+                                            </span>{' '}
+                                            <span className="text-sm text-neutral-400">unique vulnerabilities</span>
                                         </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_vuln_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_vuln_count ?? 0).toLocaleString()} vulnerabilities
+                                        <span>
+                                            <span className="text-2xl font-bold text-cyan-400">
+                                                {(scan.global_finding_count ?? scan.finding_count ?? 0).toLocaleString()}
+                                            </span>{' '}
+                                            <span className="text-sm text-neutral-400">vulnerability matches</span>
                                         </span>
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${(scan.global_assessment_count ?? 0) > 0 ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400'}`}>
-                                            {(scan.global_assessment_count ?? 0).toLocaleString()} assessments
-                                        </span>
-                                        <button
-                                            onClick={() => setOpenGlobalId(scan.id)}
-                                            className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
-                                        >
-                                            Details
-                                        </button>
                                     </div>
-                                )}
+                                    <div className="flex items-center justify-between mt-2">
+                                        <span className="text-xs text-neutral-400 italic">
+                                            {(scan.vulns_added === null && scan.findings_added === null) &&
+                                                'A vulnerability match is one vulnerability affecting one package.'}
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            {(scan.vulns_added === null && scan.findings_added === null) && (
+                                                <button
+                                                    onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
+                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
+                                                >
+                                                    Details
+                                                </button>
+                                            )}
+                                            {scan.global_finding_count != null && (
+                                                <button
+                                                    onClick={() => setOpenGlobalId(scan.id)}
+                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
+                                                >
+                                                    View all
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Section B: Changes since previous scan */}
+                                {(scan.vulns_added !== null || scan.findings_added !== null) && (() => {
+                                    const vulnsAdded = scan.vulns_added ?? 0;
+                                    const vulnsRemoved = scan.vulns_removed ?? 0;
+                                    const vulnsUnchanged = scan.vulns_unchanged ?? 0;
+                                    const findingsAdded = scan.findings_added ?? 0;
+                                    const findingsRemoved = scan.findings_removed ?? 0;
+                                    const findingsUpgraded = scan.findings_upgraded ?? 0;
+                                    const findingsUnchanged = scan.findings_unchanged ?? 0;
+                                    const pkgsAdded = scan.packages_added ?? 0;
+                                    const pkgsRemoved = scan.packages_removed ?? 0;
+                                    const pkgsUpgraded = scan.packages_upgraded ?? 0;
+                                    const pkgsUnchanged = scan.packages_unchanged ?? 0;
+                                    const stillPresent = isTool ? 'previously known' : 'still present';
+                                    const noChanges =
+                                        vulnsAdded === 0 && vulnsRemoved === 0 &&
+                                        findingsAdded === 0 && findingsRemoved === 0 && findingsUpgraded === 0 &&
+                                        (isTool || (pkgsAdded === 0 && pkgsRemoved === 0 && pkgsUpgraded === 0));
+                                    const dot = <span className="text-neutral-500 mx-1">·</span>;
+                                    return (
+                                        <div>
+                                            <p className="text-sm font-bold text-neutral-100 mb-2">Changes since previous scan</p>
+                                            <div className="space-y-1 text-sm">
+                                                {/* Unique vulnerabilities row */}
+                                                <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                    <FontAwesomeIcon icon={faShieldHalved} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                    <span className="text-neutral-400">Unique vulnerabilities:</span>
+                                                    <span className={vulnsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                        {vulnsAdded.toLocaleString()} new
+                                                    </span>
+                                                    {dot}
+                                                    <span className={vulnsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                        {vulnsRemoved.toLocaleString()} no longer present
+                                                    </span>
+                                                    {vulnsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{vulnsUnchanged.toLocaleString()} {stillPresent}</span></>}
+                                                </div>
+                                                {/* Vulnerability matches row */}
+                                                <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                    <FontAwesomeIcon icon={faMagnifyingGlass} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                    <span className="text-neutral-400">Vulnerability matches:</span>
+                                                    <span className={findingsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                        {findingsAdded.toLocaleString()} new
+                                                    </span>
+                                                    {dot}
+                                                    <span className={findingsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                        {findingsRemoved.toLocaleString()} no longer present
+                                                    </span>
+                                                    {findingsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{findingsUpgraded.toLocaleString()} updated</span></>}
+                                                    {findingsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{findingsUnchanged.toLocaleString()} {stillPresent}</span></>}
+                                                </div>
+                                                {/* Packages row — SBOM scans only */}
+                                                {!isTool && (
+                                                    <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                        <FontAwesomeIcon icon={faCube} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                        <span className="text-neutral-400">Packages:</span>
+                                                        <span className={pkgsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                            {pkgsAdded.toLocaleString()} added
+                                                        </span>
+                                                        {dot}
+                                                        <span className={pkgsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                            {pkgsRemoved.toLocaleString()} removed
+                                                        </span>
+                                                        {pkgsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{pkgsUpgraded.toLocaleString()} updated</span></>}
+                                                        {pkgsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{pkgsUnchanged.toLocaleString()} unchanged</span></>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center justify-between mt-2">
+                                                {noChanges
+                                                    ? <p className="text-sm text-neutral-400 italic">No changes detected</p>
+                                                    : <span />
+                                                }
+                                                <button
+                                                    onClick={() => { setOpenDiffId(scan.id); setOpenDiffType(scan.scan_type || 'sbom'); }}
+                                                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-neutral-200 transition-colors"
+                                                >
+                                                    Details
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* Description row */}
                                 {editingDescId === scan.id ? (
