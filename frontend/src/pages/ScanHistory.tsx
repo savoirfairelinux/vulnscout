@@ -1589,7 +1589,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
                                 {/* Section A: Current result */}
                                 <div className="mb-3">
-                                    <p className="text-sm font-bold text-neutral-100 mb-2">Current result</p>
+                                    <p className="text-sm font-bold text-gray-800 dark:text-neutral-100 mb-2">Current result</p>
                                     <div className="flex items-baseline gap-6 flex-wrap">
                                         <span>
                                             <span className="text-2xl font-bold text-cyan-400">
@@ -1657,50 +1657,54 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                     const dot = <span className="text-neutral-500 mx-1">·</span>;
                                     return (
                                         <div>
-                                            <p className="text-sm font-bold text-neutral-100 mb-2">Changes since previous scan</p>
+                                            <p className="text-sm font-bold text-gray-800 dark:text-neutral-100 mb-2">Changes since previous scan</p>
                                             <div className="space-y-1 text-sm">
-                                                {/* Unique vulnerabilities row */}
-                                                <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                    <FontAwesomeIcon icon={faShieldHalved} className="text-neutral-500 w-4 flex-shrink-0" />
-                                                    <span className="text-neutral-400">Unique vulnerabilities:</span>
-                                                    <span className={vulnsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
-                                                        {vulnsAdded.toLocaleString()} new
-                                                    </span>
-                                                    {dot}
-                                                    <span className={vulnsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
-                                                        {vulnsRemoved.toLocaleString()} no longer present
-                                                    </span>
-                                                    {vulnsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{vulnsUnchanged.toLocaleString()} {stillPresent}</span></>}
-                                                </div>
-                                                {/* Vulnerability matches row */}
-                                                <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                    <FontAwesomeIcon icon={faMagnifyingGlass} className="text-neutral-500 w-4 flex-shrink-0" />
-                                                    <span className="text-neutral-400">Vulnerability matches:</span>
-                                                    <span className={findingsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
-                                                        {findingsAdded.toLocaleString()} new
-                                                    </span>
-                                                    {dot}
-                                                    <span className={findingsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
-                                                        {findingsRemoved.toLocaleString()} no longer present
-                                                    </span>
-                                                    {findingsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{findingsUpgraded.toLocaleString()} updated</span></>}
-                                                    {findingsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{findingsUnchanged.toLocaleString()} {stillPresent}</span></>}
-                                                </div>
-                                                {/* Packages row — SBOM scans only */}
-                                                {!isTool && (
-                                                    <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
-                                                        <FontAwesomeIcon icon={faCube} className="text-neutral-500 w-4 flex-shrink-0" />
-                                                        <span className="text-neutral-400">Packages:</span>
-                                                        <span className={pkgsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
-                                                            {pkgsAdded.toLocaleString()} added
-                                                        </span>
-                                                        {dot}
-                                                        <span className={pkgsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
-                                                            {pkgsRemoved.toLocaleString()} removed
-                                                        </span>
-                                                        {pkgsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{pkgsUpgraded.toLocaleString()} updated</span></>}
-                                                        {pkgsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{pkgsUnchanged.toLocaleString()} unchanged</span></>}
-                                                    </div>
+                                                {!noChanges && (
+                                                    <>
+                                                        {/* Unique vulnerabilities row */}
+                                                        <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                            <FontAwesomeIcon icon={faShieldHalved} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                            <span className="text-neutral-400">Unique vulnerabilities:</span>
+                                                            <span className={vulnsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                                {vulnsAdded.toLocaleString()} new
+                                                            </span>
+                                                            {dot}
+                                                            <span className={vulnsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                                {vulnsRemoved.toLocaleString()} no longer present
+                                                            </span>
+                                                            {vulnsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{vulnsUnchanged.toLocaleString()} {stillPresent}</span></>}
+                                                        </div>
+                                                        {/* Vulnerability matches row */}
+                                                        <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                            <FontAwesomeIcon icon={faMagnifyingGlass} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                            <span className="text-neutral-400">Vulnerability matches:</span>
+                                                            <span className={findingsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                                {findingsAdded.toLocaleString()} new
+                                                            </span>
+                                                            {dot}
+                                                            <span className={findingsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                                {findingsRemoved.toLocaleString()} no longer present
+                                                            </span>
+                                                            {findingsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{findingsUpgraded.toLocaleString()} updated</span></>}
+                                                            {findingsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{findingsUnchanged.toLocaleString()} {stillPresent}</span></>}
+                                                        </div>
+                                                        {/* Packages row — SBOM scans only */}
+                                                        {!isTool && (
+                                                            <div className="flex items-center flex-wrap gap-x-1 gap-y-0.5">
+                                                                <FontAwesomeIcon icon={faCube} className="text-neutral-500 w-4 flex-shrink-0" />
+                                                                <span className="text-neutral-400">Packages:</span>
+                                                                <span className={pkgsAdded > 0 ? 'text-green-400' : 'text-neutral-400'}>
+                                                                    {pkgsAdded.toLocaleString()} added
+                                                                </span>
+                                                                {dot}
+                                                                <span className={pkgsRemoved > 0 ? 'text-red-400' : 'text-neutral-400'}>
+                                                                    {pkgsRemoved.toLocaleString()} removed
+                                                                </span>
+                                                                {pkgsUpgraded > 0 && <>{dot}<span className="text-yellow-400">{pkgsUpgraded.toLocaleString()} updated</span></>}
+                                                                {pkgsUnchanged > 0 && <>{dot}<span className="text-neutral-400">{pkgsUnchanged.toLocaleString()} unchanged</span></>}
+                                                            </div>
+                                                        )}
+                                                    </>
                                                 )}
                                             </div>
                                             <div className="flex items-center justify-between mt-2">
