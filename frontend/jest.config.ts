@@ -190,7 +190,7 @@ const config: Config = {
       'ts-jest',
       {
         diagnostics: {
-          ignoreCodes: [1343, 6133]
+          ignoreCodes: [1343]
         },
         astTransformers: {
           before: [

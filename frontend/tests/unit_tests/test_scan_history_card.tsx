@@ -10,24 +10,27 @@ import React from 'react';
 import type { Scan } from '../../src/handlers/scans';
 import ScanHistory from '../../src/pages/ScanHistory';
 
+// Stable snapshot reference for useSyncExternalStore compatibility
+const EMPTY_SCAN_SNAPSHOT: never[] = Object.freeze([]) as never[];
+
 // Mock all scan state stores — return idle/empty by default
 jest.mock('../../src/handlers/grypeScanState', () => ({
     subscribe: jest.fn((cb: () => void) => { void cb; return () => {}; }),
-    getSnapshot: jest.fn(() => []),
+    getSnapshot: jest.fn(() => EMPTY_SCAN_SNAPSHOT),
     setOnDone: jest.fn(),
     triggerScan: jest.fn(),
     dismiss: jest.fn(),
 }));
 jest.mock('../../src/handlers/nvdScanState', () => ({
     subscribe: jest.fn((cb: () => void) => { void cb; return () => {}; }),
-    getSnapshot: jest.fn(() => []),
+    getSnapshot: jest.fn(() => EMPTY_SCAN_SNAPSHOT),
     setOnDone: jest.fn(),
     triggerScan: jest.fn(),
     dismiss: jest.fn(),
 }));
 jest.mock('../../src/handlers/osvScanState', () => ({
     subscribe: jest.fn((cb: () => void) => { void cb; return () => {}; }),
-    getSnapshot: jest.fn(() => []),
+    getSnapshot: jest.fn(() => EMPTY_SCAN_SNAPSHOT),
     setOnDone: jest.fn(),
     triggerScan: jest.fn(),
     dismiss: jest.fn(),
@@ -39,9 +42,10 @@ jest.mock('../../src/handlers/variant', () => ({
         list: jest.fn().mockResolvedValue([]),
     },
 }));
-jest.mock('../../src/helpers/useDocUrl', () => ({
-    useDocUrl: jest.fn(() => '#'),
-}));
+
+beforeEach(() => {
+    fetchMock.resetMocks();
+});
 
 // --- Shared mock scan factory ---
 
