@@ -409,10 +409,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     // correctly targets the previous scope's refresh rather than the new one.
     useEffect(() => {
         return () => {
+            const hadActiveRefresh = refreshPollRef.current !== null;
             if (refreshPollRef.current) clearInterval(refreshPollRef.current);
             if (variantId) NvdRefreshHandler.cancelBulkRefresh(variantId).catch(() => {});
             else if (projectId) NvdRefreshHandler.cancelBulkRefreshForProject(projectId).catch(() => {});
-            setRefreshStatus(null);
+            if (hadActiveRefresh) {
+                setRefreshStatus({ running: false, progress: 'Cancelled', total: null, error: null });
+            } else {
+                setRefreshStatus(null);
+            }
         };
     }, [variantId, projectId]);
 
@@ -1535,8 +1540,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                             if (scope.variantId) NvdRefreshHandler.cancelBulkRefresh(scope.variantId).catch(() => {});
                             else if (scope.projectId) NvdRefreshHandler.cancelBulkRefreshForProject(scope.projectId).catch(() => {});
                             activeRefreshScopeRef.current = null;
+                            setRefreshStatus({ running: false, progress: 'Cancelled', total: null, error: null });
+                        } else {
+                            setRefreshStatus(null);
                         }
-                        setRefreshStatus(null);
                     }}
                     className="float-right text-gray-400 hover:text-white ml-4"
                     aria-label="Dismiss"

@@ -48,7 +48,7 @@ describe('TableVulnerabilities — Refresh CVEs button visibility', () => {
 });
 
 describe('TableVulnerabilities — Refresh poll cancellation on scope change', () => {
-    it('clears the poll interval and resets status when variantId changes', async () => {
+    it('clears the poll interval and shows cancelled status when variantId changes', async () => {
         const { rerender } = render(<TableVulnerabilities {...minimalProps} variantId="variant-a" />);
         fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
         fireEvent.click(screen.getByText('Pending Assessment CVEs'));
@@ -57,16 +57,17 @@ describe('TableVulnerabilities — Refresh poll cancellation on scope change', (
         // Simulate switching to a different variant
         rerender(<TableVulnerabilities {...minimalProps} variantId="variant-b" />);
 
-        // Status bar should be gone after scope change
+       // Running spinner should be gone; cancelled message should appear
         await waitFor(() => {
-            expect(screen.queryByText(/Refresh/i, { selector: '.bg-sky-900 *' })).not.toBeInTheDocument();
-        });
-        // New trigger should use the new variantId
-        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
-        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
-        await waitFor(() => {
-            expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalledWith('variant-b');
-        });
+           expect(screen.queryByText('Refreshing CVEs from NVD…')).not.toBeInTheDocument();
+           expect(screen.getByText('✗ NVD refresh cancelled')).toBeInTheDocument();
+       });
+       // New trigger should use the new variantId
+       fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+       fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+       await waitFor(() => {
+           expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalledWith('variant-b');
+       });
     });
 
     it('cancels the backend refresh for the old variant when scope changes', async () => {
@@ -113,6 +114,42 @@ describe('TableVulnerabilities — Cancel backend refresh on dismiss', () => {
 
         await waitFor(() => {
             expect(NvdRefreshHandler.cancelBulkRefresh).toHaveBeenCalledWith('variant-uuid');
+        });
+    });
+
+    it('shows cancelled notification when dismiss is clicked during a running refresh', async () => {
+        (NvdRefreshHandler.getBulkRefreshStatus as jest.Mock).mockResolvedValue({ status: 'running', progress: '2/10 CPEs' });
+
+        render(<TableVulnerabilities {...minimalProps} variantId="variant-uuid" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => screen.findByText('Refreshing CVEs from NVD…'));
+
+        const dismissBtn = await screen.findByLabelText('Dismiss');
+        fireEvent.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(screen.getByText('✗ NVD refresh cancelled')).toBeInTheDocument();
+        });
+    });
+
+    it('hides the toast completely when dismiss is clicked on a cancelled status', async () => {
+        (NvdRefreshHandler.getBulkRefreshStatus as jest.Mock).mockResolvedValue({ status: 'running', progress: '2/10 CPEs' });
+
+        render(<TableVulnerabilities {...minimalProps} variantId="variant-uuid" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => screen.findByText('Refreshing CVEs from NVD…'));
+
+        // First dismiss: shows cancelled message
+        const dismissBtn = await screen.findByLabelText('Dismiss');
+        fireEvent.click(dismissBtn);
+        await waitFor(() => expect(screen.getByText('✗ NVD refresh cancelled')).toBeInTheDocument());
+
+        // Second dismiss: hides the toast entirely
+        fireEvent.click(screen.getByLabelText('Dismiss'));
+        await waitFor(() => {
+            expect(screen.queryByText('✗ NVD refresh cancelled')).not.toBeInTheDocument();
         });
     });
 
