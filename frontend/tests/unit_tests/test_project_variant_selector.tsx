@@ -519,4 +519,93 @@ describe('ProjectVariantSelector', () => {
             expect(screen.queryByRole('option', { name: 'ProjectAlpha' })).not.toBeInTheDocument();
         });
     });
+
+    test('renders gracefully when Variants.list rejects', async () => {
+        mockVariantsList.mockRejectedValue(new Error('Network error'));
+
+        render(
+            <ProjectVariantSelector onApply={jest.fn()} />
+        );
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        const projectSelect = screen.getAllByRole('combobox')[0];
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+
+        await waitFor(() => {
+            // Variants.list rejected, so no variant options beyond the placeholder
+            expect(screen.queryByRole('option', { name: 'default' })).not.toBeInTheDocument();
+        });
+    });
+
+    test('changing project clears the selected variant', async () => {
+        const VARIANTS_PROJ2 = [{ id: 'var-3', name: 'staging', project_id: 'proj-2' }];
+        mockVariantsList
+            .mockResolvedValueOnce(VARIANTS_PROJ1)
+            .mockResolvedValueOnce(VARIANTS_PROJ2);
+
+        render(
+            <ProjectVariantSelector onApply={jest.fn()} />
+        );
+        const button = screen.getByRole('button');
+        await act(async () => { fireEvent.click(button); });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        // Select first project and a variant
+        const projectSelect = screen.getAllByRole('combobox')[0];
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-1' } });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'default' })).toBeInTheDocument();
+        });
+
+        const variantSelect = screen.getAllByRole('combobox')[1];
+        await act(async () => {
+            fireEvent.change(variantSelect, { target: { value: 'var-1' } });
+        });
+
+        // Switch to a different project — variant should be cleared
+        await act(async () => {
+            fireEvent.change(projectSelect, { target: { value: 'proj-2' } });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'staging' })).toBeInTheDocument();
+        });
+
+        // Variant select should be reset to the placeholder ("All variants")
+        const updatedVariantSelect = screen.getAllByRole('combobox')[1] as HTMLSelectElement;
+        expect(updatedVariantSelect.value).toBe('');
+    });
+
+    test('clicking outside the panel closes it', async () => {
+        render(
+            <ProjectVariantSelector onApply={jest.fn()} />
+        );
+        const button = screen.getByRole('button');
+
+        await act(async () => { fireEvent.click(button); });
+        expect(screen.getByText('Project & Variant')).toBeInTheDocument();
+
+        // Dispatch a mousedown event on an element outside the panel and button
+        const outside = document.createElement('div');
+        document.body.appendChild(outside);
+        await act(async () => {
+            fireEvent.mouseDown(outside);
+        });
+        document.body.removeChild(outside);
+
+        expect(screen.queryByText('Project & Variant')).not.toBeInTheDocument();
+    });
 });
