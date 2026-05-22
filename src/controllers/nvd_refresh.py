@@ -232,6 +232,8 @@ def run_nvd_refresh(
 
     total_cpes = len(cpe_map)
     for idx, (cpe_name, _) in enumerate(cpe_map.items(), 1):
+        if progress.get("cancelled"):
+            break
         progress["progress"] = f"{idx}/{total_cpes} CPEs"
         progress["logs"].append(f"[{idx}/{total_cpes}] Batch query: {cpe_name}…")
         try:
@@ -276,6 +278,8 @@ def run_nvd_refresh(
             f"Straggler pass: {len(stragglers)} CVE(s) not found via CPE batch."
         )
     for idx2, cve_id in enumerate(sorted(stragglers), 1):
+        if progress.get("cancelled"):
+            break
         progress["logs"].append(f"  [{idx2}/{len(stragglers)}] Individual fetch: {cve_id}…")
         try:
             status, data = nvd.api_get_cve(cve_id)
@@ -299,6 +303,13 @@ def run_nvd_refresh(
         except Exception as e:
             progress["logs"].append(f"    ERROR: {str(e)[:200]}")
             failed.add(cve_id)
+
+    if progress.get("cancelled"):
+        db.session.rollback()
+        progress["status"] = "cancelled"
+        progress["progress"] = "Cancelled"
+        progress["logs"].append("✗ Refresh cancelled.")
+        return {"refreshed": 0, "changed": 0, "failed": 0}
 
     db.session.commit()
 

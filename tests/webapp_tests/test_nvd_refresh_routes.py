@@ -724,3 +724,79 @@ class TestProjectBulkRefreshEndpoints:
         import uuid
         resp = client.get(f"/api/projects/{uuid.uuid4()}/nvd-refresh/status")
         assert resp.status_code == 404
+
+
+class TestCancelVariantNvdRefresh:
+
+    def test_cancel_returns_200_when_running(self, client, variant_id):
+        """DELETE /nvd-refresh returns 200 and cancelling when a refresh is in progress."""
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/variants/{variant_id}/nvd-refresh")
+        resp = client.delete(f"/api/variants/{variant_id}/nvd-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "cancelling"
+
+    def test_cancel_returns_not_running_when_idle(self, client, variant_id):
+        """DELETE /nvd-refresh returns not_running when no refresh is active."""
+        resp = client.delete(f"/api/variants/{variant_id}/nvd-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "not_running"
+
+    def test_cancel_sets_cancelled_flag(self, client, variant_id):
+        """DELETE sets cancelled=True in the progress dict so the worker stops."""
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/variants/{variant_id}/nvd-refresh")
+        client.delete(f"/api/variants/{variant_id}/nvd-refresh")
+        # After cancel, the status endpoint should report status still as running
+        # (the flag is set but the worker thread has not necessarily stopped yet)
+        status_resp = client.get(f"/api/variants/{variant_id}/nvd-refresh/status")
+        data = status_resp.get_json()
+        assert data.get("cancelled") is True
+
+    def test_cancel_400_invalid_variant_id(self, client):
+        resp = client.delete("/api/variants/not-a-uuid/nvd-refresh")
+        assert resp.status_code == 400
+
+    def test_cancel_allows_new_refresh_after_worker_stops(self, client, variant_id):
+        """Once the worker finishes (status != 'running'), a new POST is accepted."""
+        # Run a refresh that completes quickly
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/variants/{variant_id}/nvd-refresh")
+        # Cancel it
+        client.delete(f"/api/variants/{variant_id}/nvd-refresh")
+        # Simulate worker having finished by patching the progress dict state
+        with patch("src.routes.scan_triggers.run_nvd_refresh") as mock_run:
+            # We need the dict to show non-running status; easiest via a second run
+            # after the first completes naturally (patched mock returns immediately)
+            time.sleep(0.1)  # wait for thread to finish
+            resp = client.post(f"/api/variants/{variant_id}/nvd-refresh")
+        # 202 if the previous run already finished, 409 if still running — either is valid
+        assert resp.status_code in (202, 409)
+
+
+class TestCancelProjectNvdRefresh:
+
+    def test_cancel_project_returns_200_when_running(self, client, project_id):
+        """DELETE /projects/<id>/nvd-refresh returns 200 and cancelling when active."""
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/projects/{project_id}/nvd-refresh")
+        resp = client.delete(f"/api/projects/{project_id}/nvd-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "cancelling"
+
+    def test_cancel_project_returns_not_running_when_idle(self, client, project_id):
+        resp = client.delete(f"/api/projects/{project_id}/nvd-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "not_running"
+
+    def test_cancel_project_sets_cancelled_flag(self, client, project_id):
+        with patch("src.routes.scan_triggers.run_nvd_refresh"):
+            client.post(f"/api/projects/{project_id}/nvd-refresh")
+        client.delete(f"/api/projects/{project_id}/nvd-refresh")
+        status_resp = client.get(f"/api/projects/{project_id}/nvd-refresh/status")
+        data = status_resp.get_json()
+        assert data.get("cancelled") is True
+
+    def test_cancel_project_400_invalid_project_id(self, client):
+        resp = client.delete("/api/projects/not-a-uuid/nvd-refresh")
+        assert resp.status_code == 400

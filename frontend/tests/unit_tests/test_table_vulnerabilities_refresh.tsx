@@ -13,6 +13,8 @@ jest.mock('../../src/handlers/nvdRefresh', () => ({
         getBulkRefreshStatus: jest.fn().mockResolvedValue({ status: 'idle' }),
         getBulkRefreshStatusForProject: jest.fn().mockResolvedValue({ status: 'idle' }),
         triggerSingleRefresh: jest.fn().mockResolvedValue(null),
+        cancelBulkRefresh: jest.fn().mockResolvedValue(undefined),
+        cancelBulkRefreshForProject: jest.fn().mockResolvedValue(undefined),
     },
 }));
 
@@ -64,6 +66,69 @@ describe('TableVulnerabilities — Refresh poll cancellation on scope change', (
         fireEvent.click(screen.getByText('Pending Assessment CVEs'));
         await waitFor(() => {
             expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalledWith('variant-b');
+        });
+    });
+
+    it('cancels the backend refresh for the old variant when scope changes', async () => {
+        const { rerender } = render(<TableVulnerabilities {...minimalProps} variantId="variant-a" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalled());
+
+        rerender(<TableVulnerabilities {...minimalProps} variantId="variant-b" />);
+
+        await waitFor(() => {
+            expect(NvdRefreshHandler.cancelBulkRefresh).toHaveBeenCalledWith('variant-a');
+        });
+        expect(NvdRefreshHandler.cancelBulkRefreshForProject).not.toHaveBeenCalled();
+    });
+
+    it('cancels the backend refresh for the old project when scope changes', async () => {
+        const { rerender } = render(<TableVulnerabilities {...minimalProps} projectId="project-a" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => expect(NvdRefreshHandler.triggerBulkRefreshForProject).toHaveBeenCalled());
+
+        rerender(<TableVulnerabilities {...minimalProps} projectId="project-b" />);
+
+        await waitFor(() => {
+            expect(NvdRefreshHandler.cancelBulkRefreshForProject).toHaveBeenCalledWith('project-a');
+        });
+        expect(NvdRefreshHandler.cancelBulkRefresh).not.toHaveBeenCalled();
+    });
+});
+
+describe('TableVulnerabilities — Cancel backend refresh on dismiss', () => {
+    it('calls cancelBulkRefresh when the dismiss button is clicked during an active variant refresh', async () => {
+        // Keep the refresh running so the dismiss button can cancel it
+        (NvdRefreshHandler.getBulkRefreshStatus as jest.Mock).mockResolvedValue({ status: 'running', progress: '1/5 CPEs' });
+
+        render(<TableVulnerabilities {...minimalProps} variantId="variant-uuid" />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => expect(NvdRefreshHandler.triggerBulkRefresh).toHaveBeenCalled());
+
+        const dismissBtn = await screen.findByLabelText('Dismiss');
+        fireEvent.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(NvdRefreshHandler.cancelBulkRefresh).toHaveBeenCalledWith('variant-uuid');
+        });
+    });
+
+    it('calls cancelBulkRefreshForProject when the dismiss button is clicked during an active project refresh', async () => {
+        (NvdRefreshHandler.getBulkRefreshStatusForProject as jest.Mock).mockResolvedValue({ status: 'running', progress: '1/5 CPEs' });
+
+        render(<TableVulnerabilities {...minimalProps} />);
+        fireEvent.click(screen.getByTitle('Refresh CVE data from NVD'));
+        fireEvent.click(screen.getByText('Pending Assessment CVEs'));
+        await waitFor(() => expect(NvdRefreshHandler.triggerBulkRefreshForProject).toHaveBeenCalled());
+
+        const dismissBtn = await screen.findByLabelText('Dismiss');
+        fireEvent.click(dismissBtn);
+
+        await waitFor(() => {
+            expect(NvdRefreshHandler.cancelBulkRefreshForProject).toHaveBeenCalledWith('test-project-id');
         });
     });
 });

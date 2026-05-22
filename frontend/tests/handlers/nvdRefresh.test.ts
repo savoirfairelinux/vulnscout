@@ -234,3 +234,29 @@ describe("NvdRefreshHandler.getBulkRefreshStatusForProject", () => {
         expect(status.error).toContain("503");
     });
 });
+
+describe("NvdRefreshHandler.cancelBulkRefresh", () => {
+    it("sends DELETE to the variant refresh URL", async () => {
+        mockFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+        await NvdRefreshHandler.cancelBulkRefresh("variant-abc");
+
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/variants/variant-abc/nvd-refresh"),
+            expect.objectContaining({ method: "DELETE", mode: "cors" }),
+        );
+    });
+});
+
+describe("NvdRefreshHandler.cancelBulkRefreshForProject", () => {
+    it("sends DELETE to the project refresh URL", async () => {
+        mockFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+        await NvdRefreshHandler.cancelBulkRefreshForProject("proj-abc");
+
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/projects/proj-abc/nvd-refresh"),
+            expect.objectContaining({ method: "DELETE", mode: "cors" }),
+        );
+    });
+});

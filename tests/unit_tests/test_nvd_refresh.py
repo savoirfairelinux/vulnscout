@@ -9,6 +9,7 @@ from src.controllers.nvd_refresh import (
     build_cpe_map,
     apply_nvd_update,
     collect_target_cve_ids,
+    run_nvd_refresh,
 )
 
 
@@ -191,3 +192,76 @@ def test_collect_target_cve_ids_explicit_list_already_uppercase():
     """Already-uppercased IDs pass through unchanged."""
     result = collect_target_cve_ids(None, None, ["CVE-2024-1234"])
     assert result == ["CVE-2024-1234"]
+
+
+# ---------------------------------------------------------------------------
+# run_nvd_refresh — cancellation
+# ---------------------------------------------------------------------------
+
+def test_run_nvd_refresh_cancels_during_cpe_loop():
+    """If cancelled=True is set before the CPE loop, the function exits early
+    without committing and sets status='cancelled'."""
+    from unittest.mock import patch, MagicMock
+
+    progress = {
+        "status": "running",
+        "progress": "starting",
+        "logs": [],
+        "total": 0,
+        "done_count": 0,
+        "changed_cves": [],
+        "cancelled": True,   # pre-set so the loop breaks on first iteration
+    }
+
+    mock_db = MagicMock()
+    mock_db.select.return_value = MagicMock()
+    mock_db.session.execute.return_value.scalars.return_value.all.return_value = []
+
+    with patch("src.controllers.nvd_db.NVD_DB") as mock_nvd_cls, \
+         patch("src.controllers.nvd_refresh.collect_target_cve_ids", return_value=["CVE-2024-0001"]), \
+         patch("src.controllers.nvd_refresh.build_cpe_map", return_value={"cpe:2.3:a:vendor:lib:1.0": set()}):
+        # Patch the lazy-imported modules by replacing them in the module's import namespace
+        import src.controllers.nvd_refresh as _mod
+        original_db = None
+        import importlib
+        with patch.dict("sys.modules", {}):
+            # Patch via the extensions and models modules that get imported inside the function
+            with patch("src.extensions.db", mock_db), \
+                 patch("src.models.vulnerability.Vulnerability", MagicMock()), \
+                 patch("src.models.finding.Finding", MagicMock()), \
+                 patch("src.models.package.Package", MagicMock()):
+                result = run_nvd_refresh(
+                    variant_uuid="variant-123",
+                    project_uuid=None,
+                    requested_cve_ids=["CVE-2024-0001"],
+                    progress=progress,
+                )
+
+    assert progress["status"] == "cancelled"
+    assert progress["progress"] == "Cancelled"
+    mock_db.session.commit.assert_not_called()
+    mock_db.session.rollback.assert_called_once()
+    assert result == {"refreshed": 0, "changed": 0, "failed": 0}
+
+
+def test_run_nvd_refresh_cancel_does_not_affect_completed_run():
+    """If cancelled=False, the run completes normally and sets status='done'."""
+    from unittest.mock import patch, MagicMock
+
+    progress = {
+        "status": "running",
+        "progress": "starting",
+        "logs": [],
+        "cancelled": False,
+    }
+
+    with patch("src.controllers.nvd_refresh.collect_target_cve_ids", return_value=[]):
+        result = run_nvd_refresh(
+            variant_uuid="variant-123",
+            project_uuid=None,
+            requested_cve_ids=[],
+            progress=progress,
+        )
+
+    assert progress["status"] == "done"
+    assert result == {"refreshed": 0, "changed": 0, "failed": 0}

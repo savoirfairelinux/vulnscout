@@ -66,6 +66,16 @@ class NvdRefreshHandler {
         return response.json();
     }
 
+    static async cancelBulkRefresh(variantId: string): Promise<void> {
+        const url = `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/nvd-refresh`;
+        await fetch(url, { method: "DELETE", mode: "cors" });
+    }
+
+    static async cancelBulkRefreshForProject(projectId: string): Promise<void> {
+        const url = `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/nvd-refresh`;
+        await fetch(url, { method: "DELETE", mode: "cors" });
+    }
+
     static async triggerSingleRefresh(cveId: string): Promise<Vulnerability | null> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(cveId)}/nvd-refresh`;
         const response = await fetch(url, { method: "POST", mode: "cors" });

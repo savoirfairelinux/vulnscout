@@ -27,6 +27,7 @@ from ._scan_helpers import (
     scan_status_response,
     init_progress,
     set_error,
+    cancel_progress,
     parse_uuid_or_400,
     resolve_active_packages,
     create_observation_and_assessment,
@@ -725,6 +726,17 @@ def init_app(app):
         """Poll progress of a running NVD refresh for the given variant."""
         return scan_status_response(variant_id, _nvd_refresh_in_progress)
 
+    @app.route('/api/variants/<variant_id>/nvd-refresh', methods=['DELETE'])
+    def cancel_nvd_refresh(variant_id):
+        """Request cancellation of a running NVD refresh for the given variant."""
+        variant_uuid, err = parse_uuid_or_400(variant_id, "variant id")
+        if err is not None:
+            return err
+        vid_str = str(variant_uuid)
+        if cancel_progress(_nvd_refresh_in_progress, vid_str):
+            return jsonify({"status": "cancelling", "variant_id": vid_str}), 200
+        return jsonify({"status": "not_running", "variant_id": vid_str}), 200
+
     # ------------------------------------------------------------------
     # NVD CVE Refresh (bulk, project-scoped)
     # ------------------------------------------------------------------
@@ -787,3 +799,14 @@ def init_app(app):
         if info is None:
             return jsonify({"status": "idle"})
         return jsonify(info)
+
+    @app.route('/api/projects/<project_id>/nvd-refresh', methods=['DELETE'])
+    def cancel_project_nvd_refresh(project_id):
+        """Request cancellation of a running NVD refresh for the given project."""
+        project_uuid, err = parse_uuid_or_400(project_id, "project id")
+        if err is not None:
+            return err
+        pid_str = str(project_uuid)
+        if cancel_progress(_nvd_refresh_project_in_progress, pid_str):
+            return jsonify({"status": "cancelling", "project_id": pid_str}), 200
+        return jsonify({"status": "not_running", "project_id": pid_str}), 200

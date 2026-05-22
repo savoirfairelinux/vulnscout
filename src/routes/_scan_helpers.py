@@ -113,7 +113,27 @@ def init_progress(progress_dict: dict, vid_str: str, total: int = 0):
         "logs": [],
         "total": total,
         "done_count": 0,
+        "cancelled": False,
     }
+
+
+def cancel_progress(progress_dict: dict, key: str):
+    """Signal an in-progress scan to stop.
+
+    Sets the ``cancelled`` flag so the worker thread can detect the request
+    and exit cleanly between iterations.  The status field is intentionally
+    left as ``"running"`` here; the worker will update it to ``"cancelled"``
+    once it has actually stopped.  This keeps ``validate_trigger``'s
+    already-running guard accurate — a second POST for the same scope will
+    still get a 409 until the worker acknowledges the cancellation.
+
+    Returns True if a running entry was found, False otherwise.
+    """
+    entry = progress_dict.get(key)
+    if entry is None or entry.get("status") != "running":
+        return False
+    entry["cancelled"] = True
+    return True
 
 
 def set_error(progress_dict: dict, vid_str: str, error: str):

@@ -322,6 +322,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         error: string | null;
     } | null>(null);
     const refreshPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Tracks the currently active refresh scope so cancel calls can target the right endpoint,
+    // even from cleanup closures that may capture stale prop values (e.g. on unmount).
+    const activeRefreshScopeRef = useRef<{ variantId?: string; projectId?: string } | null>(null);
     const [showRefreshDropdown, setShowRefreshDropdown] = useState(false);
     const refreshDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -393,13 +396,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useEffect(() => {
         return () => {
             if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+            const scope = activeRefreshScopeRef.current;
+            if (scope) {
+                if (scope.variantId) NvdRefreshHandler.cancelBulkRefresh(scope.variantId).catch(() => {});
+                else if (scope.projectId) NvdRefreshHandler.cancelBulkRefreshForProject(scope.projectId).catch(() => {});
+            }
         };
     }, []);
 
-    // Cancel stale poll and reset status when the scope (variant/project) changes
+    // Cancel backend process and reset status when the scope (variant/project) changes.
+    // The cancel call uses the OLD variantId/projectId captured by the closure, so it
+    // correctly targets the previous scope's refresh rather than the new one.
     useEffect(() => {
-        if (refreshPollRef.current) clearInterval(refreshPollRef.current);
-        setRefreshStatus(null);
+        return () => {
+            if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+            if (variantId) NvdRefreshHandler.cancelBulkRefresh(variantId).catch(() => {});
+            else if (projectId) NvdRefreshHandler.cancelBulkRefreshForProject(projectId).catch(() => {});
+            setRefreshStatus(null);
+        };
     }, [variantId, projectId]);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
@@ -414,23 +428,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const startRefreshPoll = useCallback((fetchStatus: () => Promise<RefreshStatus>) => {
         if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+        const TERMINAL = ['done', 'error', 'idle', 'cancelled'];
         refreshPollRef.current = setInterval(async () => {
             try {
                 const status = await fetchStatus();
                 setRefreshStatus({
-                    running: status.status !== 'done' && status.status !== 'error' && status.status !== 'idle',
+                    running: !TERMINAL.includes(status.status),
                     progress: status.progress ?? null,
                     total: status.total ?? null,
                     error: status.error ?? null,
                 });
-                if (status.status === 'done' || status.status === 'error' || status.status === 'idle') {
+                if (TERMINAL.includes(status.status)) {
                     if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+                    activeRefreshScopeRef.current = null;
                     if (status.status === 'done' && onRefreshComplete) {
                         onRefreshComplete(status.changed_cves ?? []);
                     }
                 }
             } catch (e) {
                 if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+                activeRefreshScopeRef.current = null;
                 setRefreshStatus({ running: false, progress: null, total: null, error: String(e) });
             }
         }, 3000);
@@ -442,9 +459,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         try {
             if (variantId) {
                 await NvdRefreshHandler.triggerBulkRefresh(variantId);
+                activeRefreshScopeRef.current = { variantId };
                 startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatus(variantId));
             } else if (projectId) {
                 await NvdRefreshHandler.triggerBulkRefreshForProject(projectId);
+                activeRefreshScopeRef.current = { projectId };
                 startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatusForProject(projectId));
             }
         } catch (e) {
@@ -459,9 +478,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         try {
             if (variantId) {
                 await NvdRefreshHandler.triggerBulkRefresh(variantId, ids);
+                activeRefreshScopeRef.current = { variantId };
                 startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatus(variantId));
             } else if (projectId) {
                 await NvdRefreshHandler.triggerBulkRefreshForProject(projectId, ids);
+                activeRefreshScopeRef.current = { projectId };
                 startRefreshPoll(() => NvdRefreshHandler.getBulkRefreshStatusForProject(projectId));
             }
         } catch (e) {
@@ -1494,8 +1515,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         )}
                     </span>
                 )}
-                {!refreshStatus.running && !refreshStatus.error && (
+                {!refreshStatus.running && !refreshStatus.error && refreshStatus.progress !== 'Cancelled' && (
                     <span>✓ NVD refresh complete</span>
+                )}
+                {!refreshStatus.running && !refreshStatus.error && refreshStatus.progress === 'Cancelled' && (
+                    <span>✗ NVD refresh cancelled</span>
                 )}
                 {refreshStatus.error && (
                     <span>⚠ Refresh error: {refreshStatus.error}</span>
@@ -1505,6 +1529,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                         if (refreshPollRef.current) {
                             clearInterval(refreshPollRef.current);
                             refreshPollRef.current = null;
+                        }
+                        const scope = activeRefreshScopeRef.current;
+                        if (scope) {
+                            if (scope.variantId) NvdRefreshHandler.cancelBulkRefresh(scope.variantId).catch(() => {});
+                            else if (scope.projectId) NvdRefreshHandler.cancelBulkRefreshForProject(scope.projectId).catch(() => {});
+                            activeRefreshScopeRef.current = null;
                         }
                         setRefreshStatus(null);
                     }}
