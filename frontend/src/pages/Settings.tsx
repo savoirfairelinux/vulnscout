@@ -378,34 +378,37 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         </p>
 
         {/* ======== Manage Projects ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-projects">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Manage Projects</h2>
+            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-projects" className="text-xl font-bold text-white">Manage Projects</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
 
             {/* -- Create project -- */}
             <div className="space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Add Project</label>
+              <label htmlFor="new-project-name" className="block text-sm text-zinc-300 font-semibold">Add Project</label>
               <div className="flex gap-2">
                 <input
+                  id="new-project-name"
                   type="text"
                   value={newProjectName}
                   onChange={(e) => { setNewProjectName(e.target.value); setProjectMsg(null); }}
                   placeholder="New project name"
                   className={inputClass + " flex-1"}
+                  aria-required="true"
                   onKeyDown={(e) => e.key === "Enter" && handleCreateProject()}
                 />
                 <button
                   onClick={handleCreateProject}
                   disabled={createProjectBusy || !newProjectName.trim()}
                   className={btnPrimary}
+                  aria-busy={createProjectBusy}
                 >
                   {createProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                   ) : (
-                    <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
                   )}
                   Add
                 </button>
@@ -414,8 +417,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Rename project -- */}
             <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
+              <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
               <select
+                id="rename-project-select"
                 value={renameProjectId}
                 onChange={(e) => {
                   setRenameProjectId(e.target.value);
@@ -432,24 +436,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </select>
 
               <div className="flex gap-2">
+                <label htmlFor="rename-project-name" className="sr-only">New project name</label>
                 <input
+                  id="rename-project-name"
                   type="text"
                   value={renameProjectName}
                   onChange={(e) => setRenameProjectName(e.target.value)}
                   placeholder="Enter new name"
                   className={inputClass + " flex-1"}
                   disabled={!renameProjectId}
+                  aria-required="true"
                   onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
                 />
                 <button
                   onClick={handleRenameProject}
                   disabled={renameProjectBusy || !renameProjectId || !renameProjectName.trim()}
                   className={btnPrimary}
+                  aria-busy={renameProjectBusy}
                 >
                   {renameProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                   ) : (
-                    <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                   )}
                   Rename
                 </button>
@@ -458,9 +466,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Delete project -- */}
             <div className="border-t border-zinc-600 pt-4 space-y-2">
-              <label className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
+              <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
               <div className="flex gap-2">
                 <select
+                  id="delete-project-select"
                   value={deleteProjectId}
                   onChange={(e) => { setDeleteProjectId(e.target.value); setProjectMsg(null); }}
                   className={selectClass + " flex-1"}
@@ -475,7 +484,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   disabled={!deleteProjectId}
                   className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                 >
-                  <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
                   Delete
                 </button>
               </div>
@@ -483,26 +492,27 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {projectMsg && (
-              <span className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                 {projectMsg}
               </span>
             )}
           </div>
-        </div>
+        </section>
 
         {/* ======== Manage Variants ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-variants">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Manage Variants</h2>
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variants" className="text-xl font-bold text-white">Manage Variants</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
 
             {/* -- Project picker -- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Project</label>
+              <label htmlFor="variant-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
               <select
+                id="variant-project-select"
                 value={variantProjectId}
                 onChange={(e) => {
                   setVariantProjectId(e.target.value);
@@ -524,25 +534,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Create variant -- */}
             {variantProjectId && (
               <div className="space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
+                <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
                 <div className="flex gap-2">
                   <input
+                    id="new-variant-name"
                     type="text"
                     value={newVariantName}
                     onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
                     placeholder="New variant name"
                     className={inputClass + " flex-1"}
+                    aria-required="true"
                     onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
                   />
                   <button
                     onClick={handleCreateVariant}
                     disabled={createVariantBusy || !newVariantName.trim()}
                     className={btnPrimary}
+                    aria-busy={createVariantBusy}
                   >
                     {createVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                     ) : (
-                      <FontAwesomeIcon icon={faPlus} className="mr-1" />
+                      <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
                     )}
                     Add
                   </button>
@@ -553,8 +566,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Rename variant -- */}
             {variantProjectId && (
               <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+                <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
                 <select
+                  id="rename-variant-select"
                   value={renameVariantId}
                   onChange={(e) => {
                     setRenameVariantId(e.target.value);
@@ -571,24 +585,28 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 </select>
 
                 <div className="flex gap-2">
+                  <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
                   <input
+                    id="rename-variant-name"
                     type="text"
                     value={renameVariantName}
                     onChange={(e) => setRenameVariantName(e.target.value)}
                     placeholder="Enter new name"
                     className={inputClass + " flex-1"}
                     disabled={!renameVariantId}
+                    aria-required="true"
                     onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
                   />
                   <button
                     onClick={handleRenameVariant}
                     disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
                     className={btnPrimary}
+                    aria-busy={renameVariantBusy}
                   >
                     {renameVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                     ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                     )}
                     Rename
                   </button>
@@ -599,9 +617,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             {/* -- Delete variant -- */}
             {variantProjectId && (
               <div className="border-t border-zinc-600 pt-4 space-y-2">
-                <label className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
+                <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
                 <div className="flex gap-2">
                   <select
+                    id="delete-variant-select"
                     value={deleteVariantId}
                     onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
                     className={selectClass + " flex-1"}
@@ -616,7 +635,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     disabled={!deleteVariantId}
                     className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                   >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
                     Delete
                   </button>
                 </div>
@@ -625,26 +644,27 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Feedback -- */}
             {variantMsg && (
-              <span className="text-red-400 text-sm">
-                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                 {variantMsg}
               </span>
             )}
           </div>
-        </div>
+        </section>
 
         {/* ======== Import SBOM ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-import">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">Import SBOM</h2>
+            <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-import" className="text-xl font-bold text-white">Import SBOM</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
 
             {/* ---- Project selector ---- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Project</label>
+              <label htmlFor="import-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
               <select
+                id="import-project-select"
                 value={importProjectId}
                 onChange={(e) => {
                   setImportProjectId(e.target.value);
@@ -662,8 +682,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* ---- Variant selector ---- */}
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">Variant</label>
+              <label htmlFor="import-variant-select" className="block text-sm text-zinc-300 mb-1">Variant</label>
               <select
+                id="import-variant-select"
                 value={importVariantId}
                 onChange={(e) => { setImportVariantId(e.target.value); setImportMsg(null); }}
                 disabled={!importProjectId}
@@ -678,7 +699,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* ---- File picker(s) ---- */}
             <div className="space-y-2">
-              <label className="block text-sm text-zinc-300 mb-1">SBOM Files</label>
+              <label className="block text-sm text-zinc-300 mb-1" id="sbom-files-label">SBOM Files</label>
               {/* Existing files */}
               {importFiles.map((file, idx) => (
                 <div key={idx} className="flex items-center gap-2">
@@ -690,9 +711,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     onClick={() => handleRemoveFile(idx)}
                     disabled={importBusy}
                     className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
-                    title="Remove file"
+                    aria-label={`Remove file ${file.name}`}
                   >
-                    <FontAwesomeIcon icon={faXmark} />
+                    <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -703,6 +724,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 accept=".json,.spdx,.cdx,.xml"
                 onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                 disabled={importBusy}
+                aria-labelledby="sbom-files-label"
                 className={
                   inputClass +
                   " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
@@ -716,32 +738,33 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 onClick={handleUploadSBOM}
                 disabled={importBusy || !importProjectId || !importVariantId || importFiles.length === 0}
                 className={btnPrimary}
+                aria-busy={importBusy}
               >
                 {importBusy ? (
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                 ) : (
-                  <FontAwesomeIcon icon={faFileImport} className="mr-1" />
+                  <FontAwesomeIcon icon={faFileImport} className="mr-1" aria-hidden="true" />
                 )}
                 Import
               </button>
               {importMsg && (
-                <span className="text-red-400 text-sm">
-                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                <span role="alert" className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                   {importMsg}
                 </span>
               )}
             </div>
           </div>
-        </div>
+        </section>
 
         {/* ======== NVD API Key ======== */}
-        <div>
+        <section aria-labelledby="settings-heading-nvd">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faKey} className="text-cyan-400" />
-            <h2 className="text-xl font-bold text-white">NVD API Key</h2>
+            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
-            <p className="text-zinc-400 text-sm">
+            <p id="nvd-key-description" className="text-zinc-400 text-sm">
               An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
               Get a free key at{" "}
               <a
@@ -777,7 +800,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
                     className={btnPrimary}
                   >
-                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" />
+                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
                     Modify
                   </button>
                   <button
@@ -785,7 +808,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     disabled={nvdBusy}
                     className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
                   >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" />
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
                     Remove
                   </button>
                 </div>
@@ -794,10 +817,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               <>
                 {/* -- No key or editing: show input field -- */}
                 <div className="space-y-2">
-                  <label className="block text-sm text-zinc-300 font-semibold">
+                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
                     {nvdEditing ? "New API Key" : "API Key"}
                   </label>
                   <input
+                    id="nvd-api-key-input"
                     type="password"
                     value={nvdKeyInput}
                     onChange={e => setNvdKeyInput(e.target.value)}
@@ -805,6 +829,8 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     className={inputClass}
                     disabled={nvdBusy}
                     autoComplete="off"
+                    aria-required="true"
+                    aria-describedby="nvd-key-description"
                   />
                 </div>
 
@@ -813,11 +839,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     onClick={handleSaveNvdKey}
                     disabled={nvdBusy || !nvdKeyInput.trim()}
                     className={btnPrimary}
+                    aria-busy={nvdBusy}
                   >
                     {nvdBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
                     ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                     )}
                     Save
                   </button>
@@ -826,7 +853,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                       onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
                       className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
                     >
-                      <FontAwesomeIcon icon={faXmark} className="mr-1" />
+                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
                       Cancel
                     </button>
                   )}
@@ -834,7 +861,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </>
             )}
           </div>
-        </div>
+        </section>
       </div>
 
       {/* ======== Confirmation Modals ======== */}
