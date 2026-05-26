@@ -19,13 +19,14 @@ type Props = {
 
 function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, onApply }: Readonly<Props>) {
   return (
-  <nav>
+  <nav aria-label="Main navigation">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
       {/* === VulnScout (Logo + text) === */}
       <li className={[bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
         <button
           onClick={() => changeTab('metrics')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'metrics' ? 'page' : undefined}
         >
           <img
             src="/vulnscout_logo.png"
@@ -41,6 +42,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('packages')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'packages' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faBox} className="mr-1" />
           SBOM
@@ -52,6 +54,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('vulnerabilities')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'vulnerabilities' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faShieldHalved} className="mr-1" />
           Vulnerabilities
@@ -63,6 +66,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('scans')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'scans' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faClockRotateLeft} className="mr-1" />
           Scans
@@ -74,6 +78,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('review')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'review' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
           Review
@@ -90,6 +95,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('exports')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'exports' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faFileExport} className="mr-1" />
           Export
@@ -101,6 +107,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <button
           onClick={() => changeTab('settings')}
           className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'settings' ? 'page' : undefined}
         >
           <FontAwesomeIcon icon={faGear} className="mr-1" />
           Settings
@@ -126,8 +133,10 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
 
       {/* === Dark Mode Toggle === */}
       <li className="px-4 py-2">
-        <div
+        <button
+          type="button"
           onClick={() => setDarkMode(!darkMode)}
+          aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
           className="flex items-center w-14 h-7 bg-neutral-300 dark:bg-neutral-700 rounded-full px-1 cursor-pointer relative transition-all duration-300"
         >
           <FontAwesomeIcon icon={faSun} className="text-yellow-500 text-sm" />
@@ -140,7 +149,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
               darkMode ? "translate-x-7" : "translate-x-0"
             ].join(' ')}
           ></div>
-        </div>
+        </button>
       </li>
     </ul>
   </nav>

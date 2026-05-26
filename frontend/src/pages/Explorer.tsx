@@ -198,19 +198,38 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setTab(newTab);
     }
 
+    const tabLabels: Record<string, string> = {
+        metrics: 'Metrics',
+        packages: 'SBOM',
+        vulnerabilities: 'Vulnerabilities',
+        scans: 'Scans',
+        review: 'Review',
+        exports: 'Export',
+        settings: 'Settings',
+    };
+
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">
-            <NavigationBar
-                key={selectorKey}
-                tab={tab}
-                changeTab={handleTabChange}
-                darkMode={darkMode}
-                setDarkMode={setDarkMode}
-                defaultProject={defaultConfig.project}
-                defaultVariant={defaultConfig.variant}
-                onApply={handleApply}
-            />
+            <a
+                href="#main-content"
+                className="sr-only focus:not-sr-only focus:absolute focus:z-[100] focus:top-2 focus:left-2 focus:px-4 focus:py-2 focus:bg-cyan-800 focus:text-white focus:rounded focus:text-sm focus:font-semibold"
+            >
+                Skip to content
+            </a>
+            <header>
+                <NavigationBar
+                    key={selectorKey}
+                    tab={tab}
+                    changeTab={handleTabChange}
+                    darkMode={darkMode}
+                    setDarkMode={setDarkMode}
+                    defaultProject={defaultConfig.project}
+                    defaultVariant={defaultConfig.variant}
+                    onApply={handleApply}
+                />
+            </header>
 
+            <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">
                 <MessageBanner
                     type={bannerType}
@@ -221,9 +240,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
             </div>
 
             {isLoadingData && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
                     <div className="flex flex-col items-center gap-3 text-white">
-                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
                         <span className="text-sm font-semibold">{loadingMessage}</span>
                     </div>
                 </div>
@@ -273,7 +292,10 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     }
                 }} />}
             </div>
-            <VersionDisplay />
+            </main>
+            <footer>
+                <VersionDisplay />
+            </footer>
         </div>
     )
 }
