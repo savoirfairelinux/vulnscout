@@ -3,6 +3,7 @@
 
 from flask import request
 from datetime import datetime
+import re
 from ..models.assessment import Assessment as DBAssessment, STATUS_TO_SIMPLIFIED
 from ..models.package import Package
 from ..models.finding import Finding
@@ -26,6 +27,28 @@ from ..helpers.assessment_io import (
 )
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
+
+_SCANNER_AUTHORS = {
+    "nvd",
+    "unknown",
+    "nvd@nist.gov",
+    "security-advisories@github.com",
+    "cve@mitre.org",
+    "secalert@redhat.com",
+    "cna@cloudflare.com",
+}
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _is_scanner_author(author: str | None) -> bool:
+    if not author:
+        return True
+    a = author.strip().lower()
+    if a in _SCANNER_AUTHORS:
+        return True
+    if _UUID_RE.match(a):
+        return True
+    return False
 
 
 def _resolve_package(pkg_string_id: str) -> "Package":
@@ -419,20 +442,56 @@ def init_app(app):
 
     @app.route('/api/assessments/review/custom-cvss')
     def review_custom_cvss():
-        """Return vulnerabilities that have custom CVSS scores (author is not
-        ``nvd`` or ``unknown``).
+        """Return vulnerabilities that have custom CVSS scores.
+
+        A custom CVSS score is identified by ``origin == 'custom'``.
         """
         from ..models.metrics import Metrics
+        from ..models.observation import Observation
+        from ..models.scan import Scan
 
-        all_metrics = list(db.session.execute(
-            db.select(Metrics).where(
-                Metrics.author.notin_(["nvd", "unknown"]),
-                Metrics.author.isnot(None),
-            )
-        ).scalars().all())
+        variant_id = request.args.get('variant_id')
+        project_id = request.args.get('project_id')
+
+        query = db.select(Metrics).where(Metrics.origin == "custom")
+
+        vuln_ids_filter = None
+        if variant_id:
+            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            vuln_ids_filter = db.select(Finding.vulnerability_id).join(
+                Observation, Finding.id == Observation.finding_id
+            ).join(
+                Scan, Observation.scan_id == Scan.id
+            ).where(
+                Scan.variant_id == vid
+            ).distinct()
+        elif project_id:
+            pid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            variant_ids = [v.id for v in DBVariant.get_by_project(pid)]
+            if variant_ids:
+                vuln_ids_filter = db.select(Finding.vulnerability_id).join(
+                    Observation, Finding.id == Observation.finding_id
+                ).join(
+                    Scan, Observation.scan_id == Scan.id
+                ).where(
+                    Scan.variant_id.in_(variant_ids)
+                ).distinct()
+            else:
+                vuln_ids_filter = db.select(Finding.vulnerability_id).where(db.false())
+
+        if vuln_ids_filter is not None:
+            query = query.where(Metrics.vulnerability_id.in_(vuln_ids_filter))
+
+        all_metrics = list(db.session.execute(query).scalars().all())
 
         result: list[dict] = []
         for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
+            if _is_scanner_author(m.author):
+                continue
             vuln = DBVuln.get_by_id(m.vulnerability_id)
             result.append({
                 "vuln_id": m.vulnerability_id,
@@ -440,6 +499,7 @@ def init_app(app):
                 "vector_string": m.vector or "",
                 "base_score": float(m.score) if m.score is not None else 0.0,
                 "author": m.author,
+                "origin": m.origin or "scanner",
                 "vuln_texts": dict(vuln.texts or {}) if vuln else {},
             })
 

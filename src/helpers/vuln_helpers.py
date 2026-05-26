@@ -50,6 +50,10 @@ def _validate_and_apply_cvss(new_cvss: dict, record_id: str, log_prefix: str = "
     required_keys = {"base_score", "vector_string", "version"}
     if not required_keys.issubset(new_cvss.keys()):
         return "Invalid CVSS data"
+    if not new_cvss.get("author"):
+        new_cvss["author"] = "unknown"
+    if not new_cvss.get("origin"):
+        new_cvss["origin"] = "scanner"
     cvss_obj = CVSS.from_dict(new_cvss)
     try:
         Metrics.from_cvss(cvss_obj, record_id)

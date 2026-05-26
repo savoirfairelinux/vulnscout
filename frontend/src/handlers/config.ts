@@ -1,6 +1,7 @@
 type AppConfig = {
     project: { id: string; name: string } | null;
     variant: { id: string; name: string } | null;
+    author: string;
 };
 
 export type { AppConfig };
@@ -24,6 +25,9 @@ class Config {
                 typeof data.variant.name === "string"
                     ? { id: data.variant.id, name: data.variant.name }
                     : null,
+            author: typeof data?.author === "string" && data.author.trim().length > 0
+                ? data.author
+                : "Savoir-faire Linux",
         };
     }
 }

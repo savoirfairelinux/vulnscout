@@ -20,6 +20,7 @@ class Metrics(Base):
     score = db.Column(db.Numeric, nullable=True)
     vector = db.Column(db.Text, nullable=True)
     author = db.Column(db.String, nullable=True)
+    origin = db.Column(db.String, nullable=True)
 
     vulnerability = db.relationship("Vulnerability", back_populates="metrics")
 
@@ -40,6 +41,7 @@ class Metrics(Base):
         score: Optional[float] = None,
         vector: Optional[str] = None,
         author: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "Metrics":
         """Create a new metrics record, persist it and return it."""
         metrics = Metrics(
@@ -48,6 +50,7 @@ class Metrics(Base):
             score=score,
             vector=vector,
             author=author,
+            origin=origin,
         )
         db.session.add(metrics)
         db.session.commit()
@@ -73,6 +76,7 @@ class Metrics(Base):
         score: Optional[float] = None,
         vector: Optional[str] = None,
         author: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> "Metrics":
         """Update fields in place, persist the change and return ``self``."""
         if version is not None:
@@ -83,6 +87,8 @@ class Metrics(Base):
             self.vector = vector
         if author is not None:
             self.author = author
+        if origin is not None:
+            self.origin = origin
         db.session.commit()
         return self
 
@@ -128,6 +134,7 @@ class Metrics(Base):
                     score=cvss.base_score,
                     vector=cvss.vector_string,
                     author=cvss.author,
+                    origin=getattr(cvss, "origin", None),
                 )
                 db.session.add(record)
                 db.session.flush()

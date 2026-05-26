@@ -35,7 +35,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
-    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null });
+    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null, author: "Savoir-faire Linux" });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
@@ -123,7 +123,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function appendCVSS(vulnId: string, vector: string) {
-        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector) ?? null;
+        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author) ?? null;
         if (cvss !== null) {
             const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
             setVulns(updatedVulns);

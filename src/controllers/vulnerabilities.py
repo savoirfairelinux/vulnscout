@@ -197,6 +197,7 @@ class VulnerabilitiesController:
                             float(m.score) if m.score is not None else 0.0,
                             0.0,
                             0.0,
+                            m.origin or "scanner",
                         ))
                     except Exception as e:
                         verbose(f"[VulnerabilitiesController._preload_cache register_cvss {rec.id!r}] {e}")

@@ -30,6 +30,7 @@ class MetricsController:
             "score": float(metrics.score) if metrics.score is not None else None,
             "vector": metrics.vector,
             "author": metrics.author,
+            "origin": metrics.origin,
         }
 
     @staticmethod
@@ -62,6 +63,7 @@ class MetricsController:
         score: Optional[float] = None,
         vector: Optional[str] = None,
         author: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Metrics:
         """Create a new :class:`Metrics` record.
 
@@ -74,6 +76,7 @@ class MetricsController:
             score=score,
             vector=vector,
             author=author,
+            origin=origin,
         )
 
     @staticmethod
@@ -83,13 +86,14 @@ class MetricsController:
         score: Optional[float] = None,
         vector: Optional[str] = None,
         author: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Metrics:
         """Update *metrics* fields.
 
         :raises ValueError: if the record is not found.
         """
         resolved = resolve_entity(metrics, MetricsController.get, "Metrics record")
-        return resolved.update(version=version, score=score, vector=vector, author=author)
+        return resolved.update(version=version, score=score, vector=vector, author=author, origin=origin)
 
     @staticmethod
     def delete(metrics: Metrics | uuid.UUID | str) -> None:

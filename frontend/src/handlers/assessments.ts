@@ -48,6 +48,7 @@ type ReviewCustomCvss = {
     vector_string: string;
     base_score: number;
     author: string;
+    origin?: string;
     vuln_texts?: Record<string, string>;
 };
 

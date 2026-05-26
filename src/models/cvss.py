@@ -10,12 +10,14 @@ class CVSS:
     """
 
     def __init__(self, version: str, vector_string: str, author: str,
-                 base_score: float, exploitability_score: float, impact_score: float):
+                 base_score: float, exploitability_score: float, impact_score: float,
+                 origin: str = "scanner"):
         """Create a new CVSS score with the given parameters."""
         self.version = version
         self.vector_string = vector_string
         self.parse_vector_string()
         self.author = author
+        self.origin = origin
         self.base_score = base_score
         self.exploitability_score = exploitability_score
         self.impact_score = impact_score
@@ -169,6 +171,7 @@ class CVSS:
             "version": self.version,
             "vector_string": self.vector_string,
             "author": self.author,
+            "origin": self.origin,
             "base_score": self.base_score,
             "exploitability_score": self.exploitability_score,
             "impact_score": self.impact_score,
@@ -181,8 +184,9 @@ class CVSS:
         return CVSS(
             data["version"],
             data["vector_string"],
-            data["author"],
+            data.get("author", "unknown"),
             data["base_score"],
-            data["exploitability_score"],
-            data["impact_score"]
+            data.get("exploitability_score", 0.0),
+            data.get("impact_score", 0.0),
+            data.get("origin", "scanner"),
         )

@@ -525,6 +525,8 @@ def init_app(app):
                               log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
             if "cvss" in payload_data:
+                if isinstance(payload_data["cvss"], dict):
+                    payload_data["cvss"].setdefault("origin", "custom")
                 cvss_err = _validate_and_apply_cvss(
                     payload_data["cvss"], record.id,
                     log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
@@ -571,6 +573,8 @@ def init_app(app):
                               log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
 
             if "cvss" in item:
+                if isinstance(item["cvss"], dict):
+                    item["cvss"].setdefault("origin", "custom")
                 cvss_err = _validate_and_apply_cvss(
                     item["cvss"], record.id,
                     log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")

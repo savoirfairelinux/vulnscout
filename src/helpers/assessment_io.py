@@ -508,13 +508,12 @@ def build_custom_data_export(
             "variant_id": d.get("variant_id"),
         })
 
-    # Gather ALL custom CVSS entries (exclude 'nvd' and 'unknown' authors),
-    # not just those linked to handmade assessments.
+    # Gather ALL custom CVSS entries, not just those linked to handmade
+    # assessments.
     cvss_entries: list[dict] = []
     all_metrics = list(db.session.execute(
         db.select(Metrics).where(
-            Metrics.author.notin_(["nvd", "unknown"]),
-            Metrics.author.isnot(None),
+            Metrics.origin == "custom",
         )
     ).scalars().all())
     for m in sorted(all_metrics, key=lambda m: m.vulnerability_id):
@@ -524,6 +523,7 @@ def build_custom_data_export(
             "vector_string": m.vector or "",
             "base_score": float(m.score) if m.score is not None else 0.0,
             "author": m.author,
+            "origin": m.origin or "scanner",
         })
 
     # Gather ALL non-zero time estimates, not just those linked to
@@ -728,6 +728,7 @@ def import_custom_data(
                 "vector_string": c.get("vector_string"),
                 "version": c.get("version"),
                 "author": c.get("author", "custom"),
+                "origin": c.get("origin", "custom"),
                 "exploitability_score": c.get("exploitability_score", 0.0),
                 "impact_score": c.get("impact_score", 0.0),
             }

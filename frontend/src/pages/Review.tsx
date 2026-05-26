@@ -184,7 +184,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             .then(([reviewData, teData, cvssData]) => {
                 setAssessments(groupAssessments(reviewData));
                 setTimeEstimates(teData);
-                setCustomCvss(cvssData);
+                setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 // Build tooltip descriptions from vuln_texts included in the response
                 const descMap: Record<string, { title: string; content: string }[]> = {};
