@@ -21,14 +21,26 @@ def upgrade():
         batch_op.add_column(sa.Column('origin', sa.String(), nullable=True))
 
     # Existing rows predate explicit CVSS origin tracking.
-    # Preserve legacy behavior where non-nvd/non-unknown authors were treated
-    # as custom entries in review/export flows.
+    # Normalize legacy UUID placeholders to the historical custom author and
+    # treat only that author as custom during backfill.
+    #
+    # Older UI-created custom CVSS entries used "vulnscout" as the author.
+    # Some legacy databases instead contain UUID-format placeholder authors;
+    # those must be normalized during backfill or the review UI will now
+    # classify them as scanner-authored and hide them.
     op.execute(
         """
         UPDATE metrics
-        SET origin = CASE
-            WHEN lower(coalesce(author, '')) IN ('nvd', 'unknown', '') THEN 'scanner'
-            ELSE 'custom'
+        SET author = CASE
+            WHEN coalesce(author, '') LIKE '________-____-____-____-____________' THEN 'vulnscout'
+            ELSE author
+        END,
+            origin = CASE
+            WHEN lower(trim(CASE
+                WHEN coalesce(author, '') LIKE '________-____-____-____-____________' THEN 'vulnscout'
+                ELSE coalesce(author, '')
+            END)) = 'vulnscout' THEN 'custom'
+            ELSE 'scanner'
         END
         WHERE origin IS NULL
         """
