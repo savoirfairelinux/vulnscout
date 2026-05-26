@@ -138,6 +138,35 @@ def test_export_import_cvss(cvss_critical):
     assert cvss_critical.vector_string == cvss2.vector_string
 
 
+def test_cvss_origin_round_trip_custom_origin():
+    """
+    GIVEN a CVSS object with explicit origin
+    WHEN exporting/importing through dict
+    THEN origin is preserved
+    """
+    cvss = CVSS("3.1", "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "author", 9.8, 3.9, 5.9, origin="custom")
+    restored = CVSS.from_dict(cvss.to_dict())
+    assert restored.origin == "custom"
+
+
+def test_cvss_from_dict_defaults_origin_to_scanner_when_missing():
+    """
+    GIVEN a CVSS dict without origin
+    WHEN importing from dict
+    THEN origin defaults to scanner
+    """
+    data = {
+        "version": "3.1",
+        "vector_string": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "author": "author",
+        "base_score": 9.8,
+        "exploitability_score": 3.9,
+        "impact_score": 5.9,
+    }
+    restored = CVSS.from_dict(data)
+    assert restored.origin == "scanner"
+
+
 def test_compare_cvss(cvss_critical, cvss_high):
     """
     GIVEN two different CVSS objects
