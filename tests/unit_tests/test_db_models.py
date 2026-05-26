@@ -645,9 +645,10 @@ class TestMetricsModel:
         VulnModel.create_record("CVE-METRICS-2")
         m = Metrics.create("CVE-METRICS-2", version="3.1", score=7.5,
                            vector="AV:N/AC:L", author="tester")
-        m.update(score=8.0, vector="AV:N/AC:H", author="updated")
+        m.update(score=8.0, vector="AV:N/AC:H", author="updated", origin="manual")
         assert float(m.score) == 8.0
         assert m.vector == "AV:N/AC:H"
+        assert m.origin == "manual"
 
         mid = m.id
         m.delete()

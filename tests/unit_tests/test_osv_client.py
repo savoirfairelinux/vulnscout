@@ -105,3 +105,10 @@ class TestOSVClientQueryByPurl:
         with pytest.raises(TimeoutError):
             client.query_by_purl("pkg:pypi/lib@1.0", retries=2)
         assert mock_urlopen.call_count == 2
+
+    @patch("src.controllers.osv_client.urllib.request.urlopen")
+    def test_zero_retries_returns_empty_without_http_call(self, mock_urlopen):
+        client = OSVClient(timeout=5)
+        result = client.query_by_purl("pkg:pypi/lib@1.0", retries=0)
+        assert result == []
+        mock_urlopen.assert_not_called()

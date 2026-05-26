@@ -9,6 +9,9 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.package import Package
+from src.models.project import Project
+from src.models.variant import Variant
+from src.models.scan import Scan
 
 
 @pytest.fixture()
@@ -94,3 +97,24 @@ def test_controller_from_dict_roundtrip_preserves_supplier(app):
     key = "foo@1.0::Organization: Acme Corp"
     assert key in ctrl2.packages
     assert ctrl2.packages[key].supplier == "Organization: Acme Corp"
+
+
+def test_controller_current_sbom_document_defaults_to_none(app):
+    from src.controllers.packages import PackagesController
+    ctrl = PackagesController()
+    assert ctrl.current_sbom_document is None
+
+
+def test_active_package_ids_for_scans_returns_empty_for_non_sbom_scan(app):
+    from src.helpers.active_scans import active_package_ids_for_scans
+
+    project = Project.create("active-scan-proj")
+    variant = Variant.create("active-scan-variant", project.id)
+    tool_scan = Scan.create("tool-only", variant.id, scan_type="tool", scan_source="osv")
+
+    assert active_package_ids_for_scans([tool_scan.id]) == set()
+
+
+def test_active_package_ids_for_scans_returns_empty_for_empty_input(app):
+    from src.helpers.active_scans import active_package_ids_for_scans
+    assert active_package_ids_for_scans([]) == set()
