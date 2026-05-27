@@ -14,7 +14,7 @@ def init_app(app):
     def get_config():
         project_name = os.environ.get('PROJECT_NAME', '')
         variant_name = os.environ.get('VARIANT_NAME', 'default')
-        author_name = os.environ.get('AUTHOR_NAME', 'Savoir-faire Linux')
+        author_name = os.environ.get('AUTHOR_NAME', 'vulnscout')
 
         project = None
         variant = None

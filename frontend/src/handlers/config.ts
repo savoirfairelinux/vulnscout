@@ -27,7 +27,7 @@ class Config {
                     : null,
             author: typeof data?.author === "string" && data.author.trim().length > 0
                 ? data.author
-                : "Savoir-faire Linux",
+                : "vulnscout",
         };
     }
 }

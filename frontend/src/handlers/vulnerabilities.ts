@@ -228,7 +228,7 @@ class Vulnerabilities {
         });
     }
 
-    static calculate_cvss_from_vector(vector: string, author = "Savoir-faire Linux"): CVSS | null {
+    static calculate_cvss_from_vector(vector: string, author = "vulnscout"): CVSS | null {
         const sev = (s: number) =>
             s === 0 ? "NONE" :
             s < 4.0 ? "LOW" :
