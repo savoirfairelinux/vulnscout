@@ -21,13 +21,14 @@ def upgrade():
         batch_op.add_column(sa.Column('origin', sa.String(), nullable=True))
 
     # Existing rows predate explicit CVSS origin tracking.
-    # Normalize legacy UUID placeholders to the historical custom author and
-    # treat only that author as custom during backfill.
+    # Normalize legacy UUID placeholders to the historical custom author name.
     #
-    # Older UI-created custom CVSS entries used "vulnscout" as the author.
-    # Some legacy databases instead contain UUID-format placeholder authors;
-    # those must be normalized during backfill or the review UI will now
-    # classify them as scanner-authored and hide them.
+    # For origin classification we use the same blocklist that the runtime
+    # _is_scanner_author() helper applies.  Only well-known scanner/NVD
+    # identifiers and UUID-format placeholders become 'scanner'; every other
+    # author — including any user-supplied name — becomes 'custom'.  This
+    # preserves the behavioural contract of the old UI, which showed all
+    # metrics whose author was NOT 'nvd' or 'unknown'.
     op.execute(
         """
         UPDATE metrics
@@ -36,11 +37,18 @@ def upgrade():
             ELSE author
         END,
             origin = CASE
-            WHEN lower(trim(CASE
-                WHEN coalesce(author, '') LIKE '________-____-____-____-____________' THEN 'vulnscout'
-                ELSE coalesce(author, '')
-            END)) = 'vulnscout' THEN 'custom'
-            ELSE 'scanner'
+            WHEN coalesce(author, '') = '' THEN 'scanner'
+            WHEN coalesce(author, '') LIKE '________-____-____-____-____________' THEN 'custom'
+            WHEN lower(trim(coalesce(author, ''))) IN (
+                'nvd',
+                'unknown',
+                'nvd@nist.gov',
+                'security-advisories@github.com',
+                'cve@mitre.org',
+                'secalert@redhat.com',
+                'cna@cloudflare.com'
+            ) THEN 'scanner'
+            ELSE 'custom'
         END
         WHERE origin IS NULL
         """

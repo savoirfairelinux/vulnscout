@@ -8,7 +8,7 @@ from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 
 
-def test_metrics_origin_migration_backfills_using_vulnscout_only_custom_policy():
+def test_metrics_origin_migration_backfills_using_scanner_blocklist_policy():
     migration = importlib.import_module(
         "src.migrations.versions.k7f8a9b0c1d2_add_origin_to_metrics"
     )
@@ -36,7 +36,9 @@ def test_metrics_origin_migration_backfills_using_vulnscout_only_custom_policy()
                 ('2', 'CVE-2020-0002', '3.1', 9.1, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H', 'nvd'),
                 ('3', 'CVE-2020-0003', '3.1', 6.8, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N', 'secalert@redhat.com'),
                 ('4', 'CVE-2020-0004', '3.1', 5.5, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N', 'custom-tool'),
-                ('5', 'CVE-2020-0005', '3.1', 5.2, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N', 'vulnscout')
+                ('5', 'CVE-2020-0005', '3.1', 5.2, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:N', 'vulnscout'),
+                ('6', 'CVE-2020-0006', '3.1', 4.3, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N', 'nvd@nist.gov'),
+                ('7', 'CVE-2020-0007', '3.1', 3.5, 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N', 'Savoir-faire Linux')
             """
         ))
 
@@ -48,9 +50,11 @@ def test_metrics_origin_migration_backfills_using_vulnscout_only_custom_policy()
         )).all()
 
     assert rows == [
-        ('CVE-2020-0001', 'vulnscout', 'custom'),
-        ('CVE-2020-0002', 'nvd', 'scanner'),
-        ('CVE-2020-0003', 'secalert@redhat.com', 'scanner'),
-        ('CVE-2020-0004', 'custom-tool', 'scanner'),
-        ('CVE-2020-0005', 'vulnscout', 'custom'),
+        ('CVE-2020-0001', 'vulnscout', 'custom'),          # UUID → normalized to vulnscout → custom
+        ('CVE-2020-0002', 'nvd', 'scanner'),               # known scanner author
+        ('CVE-2020-0003', 'secalert@redhat.com', 'scanner'),  # in scanner blocklist
+        ('CVE-2020-0004', 'custom-tool', 'custom'),        # user-supplied name → custom
+        ('CVE-2020-0005', 'vulnscout', 'custom'),          # historical custom author
+        ('CVE-2020-0006', 'nvd@nist.gov', 'scanner'),      # expanded blocklist entry
+        ('CVE-2020-0007', 'Savoir-faire Linux', 'custom'), # org name → custom
     ]
