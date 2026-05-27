@@ -58,3 +58,41 @@ def test_metrics_origin_migration_backfills_using_scanner_blocklist_policy():
         ('CVE-2020-0006', 'nvd@nist.gov', 'scanner'),      # expanded blocklist entry
         ('CVE-2020-0007', 'Savoir-faire Linux', 'custom'), # org name → custom
     ]
+
+
+def test_metrics_origin_migration_downgrade_removes_column():
+    """downgrade() must drop the origin column without error."""
+    migration = importlib.import_module(
+        "src.migrations.versions.k7f8a9b0c1d2_add_origin_to_metrics"
+    )
+
+    engine = sa.create_engine("sqlite:///:memory:")
+
+    with engine.begin() as connection:
+        # Create the table already containing the origin column (post-upgrade state)
+        connection.execute(sa.text(
+            """
+            CREATE TABLE metrics (
+                id TEXT PRIMARY KEY,
+                vulnerability_id VARCHAR(50) NOT NULL,
+                version VARCHAR,
+                score NUMERIC,
+                vector TEXT,
+                author VARCHAR,
+                origin VARCHAR
+            )
+            """
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO metrics VALUES ('1', 'CVE-2020-0001', '3.1', 7.5, 'v', 'nvd', 'scanner')"
+        ))
+
+        migration.op = Operations(MigrationContext.configure(connection))
+        migration.downgrade()
+
+        columns = [row[1] for row in connection.execute(
+            sa.text("PRAGMA table_info(metrics)")
+        ).all()]
+
+    assert 'origin' not in columns
+    assert 'author' in columns

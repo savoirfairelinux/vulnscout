@@ -965,3 +965,171 @@ def test_export_import_custom_data_round_trip(client):
     assert import_resp.status_code == 200
     result = json.loads(import_resp.data)
     assert result["status"] == "success"
+
+
+# ── review_custom_cvss: variant/project filtering ────────────────────────
+
+def test_review_custom_cvss_by_variant(client):
+    """Filter by variant_id returns only CVSSes for that variant's findings."""
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 4.1,
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "version": "3.1",
+                "author": "my-org",
+                "origin": "custom",
+                "exploitability_score": 0.0,
+                "impact_score": 0.0,
+            },
+        }]
+    })
+    resp = client.get(f"/api/assessments/review/custom-cvss?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    assert isinstance(json.loads(resp.data), list)
+
+
+def test_review_custom_cvss_by_variant_invalid(client):
+    """Invalid variant_id UUID → 400."""
+    resp = client.get("/api/assessments/review/custom-cvss?variant_id=not-a-uuid")
+    assert resp.status_code == 400
+
+
+def test_review_custom_cvss_by_project(client):
+    """Filter by project_id returns results scoped to that project."""
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 4.2,
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "version": "3.1",
+                "author": "sec-team",
+                "origin": "custom",
+                "exploitability_score": 0.0,
+                "impact_score": 0.0,
+            },
+        }]
+    })
+    resp = client.get(f"/api/assessments/review/custom-cvss?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    assert isinstance(json.loads(resp.data), list)
+
+
+def test_review_custom_cvss_by_project_invalid(client):
+    """Invalid project_id UUID → 400."""
+    resp = client.get("/api/assessments/review/custom-cvss?project_id=bad")
+    assert resp.status_code == 400
+
+
+def test_review_custom_cvss_by_project_no_variants(client):
+    """project_id pointing to a project with no variants → empty list."""
+    fake_project = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    resp = client.get(f"/api/assessments/review/custom-cvss?project_id={fake_project}")
+    assert resp.status_code == 200
+    assert json.loads(resp.data) == []
+
+
+def test_review_custom_cvss_origin_field_present(client):
+    """Each entry in the response includes the 'origin' field."""
+    _create_handmade_assessment(client)
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 4.3,
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "version": "3.1",
+                "author": "researcher",
+                "origin": "custom",
+                "exploitability_score": 0.0,
+                "impact_score": 0.0,
+            },
+        }]
+    })
+    resp = client.get("/api/assessments/review/custom-cvss")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    assert "origin" in data[0]
+    assert data[0]["origin"] == "custom"
+
+
+def test_review_custom_cvss_skips_scanner_author(client):
+    """CVSS stored with origin=custom but scanner-like author is excluded.
+
+    When a CVSS is PATCHed without an explicit author, origin is forced to
+    'custom' by the route, but _validate_and_apply_cvss then defaults the
+    author to 'unknown' (a scanner author). The review endpoint must skip
+    such entries via _is_scanner_author.
+    """
+    _create_handmade_assessment(client)
+    # PATCH without author → stored as origin=custom, author=unknown
+    client.patch("/api/vulnerabilities/batch", json={
+        "vulnerabilities": [{
+            "id": "CVE-2020-35492",
+            "cvss": {
+                "base_score": 4.4,
+                "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                "version": "3.1",
+                # no 'author' key — defaults to "unknown" inside _validate_and_apply_cvss
+                "exploitability_score": 0.0,
+                "impact_score": 0.0,
+            },
+        }]
+    })
+    resp = client.get("/api/assessments/review/custom-cvss")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    # The entry must not appear because "unknown" is a scanner author
+    for entry in data:
+        assert entry.get("author") != "unknown"
+
+
+# ── import_review_custom_data: additional error paths ─────────────────────
+
+def test_import_custom_data_invalid_variant_id(client):
+    """variant_id query param that is not a valid UUID → 400."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data?variant_id=not-a-uuid",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_import_custom_data_invalid_json_body(client):
+    """application/json body that cannot be parsed → 400."""
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        data=b"this is not json",
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_import_custom_data_cvss_sets_origin_from_import(client):
+    """CVSS imported without an explicit origin gets origin='scanner' from
+    _validate_and_apply_cvss defaults (no setdefault in the import path)."""
+    payload = _custom_data_payload(cvss=[{
+        "vuln_id": "CVE-2020-35492",
+        "version": "3.1",
+        "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "base_score": 7.5,
+        # no 'origin' key → _validate_and_apply_cvss defaults to "scanner"
+        "author": "imported-tool",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["cvss_imported"] >= 1
