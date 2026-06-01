@@ -575,6 +575,12 @@ class TestMetricsController:
         assert data["vulnerability_id"] == "CVE-2024-1234"
         assert data["version"] == "3.1"
         assert data["score"] == pytest.approx(7.5)
+        assert data["variant_id"] is None
+
+    def test_serialize_with_variant_id(self, app, vuln, variant):
+        m = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, score=6.0)
+        data = MetricsController.serialize(m)
+        assert data["variant_id"] == str(variant.id)
 
     def test_serialize_list(self, metrics):
         lst = MetricsController.serialize_list([metrics])
@@ -587,9 +593,19 @@ class TestMetricsController:
         results = MetricsController.get_by_vulnerability(vuln.id)
         assert any(m.id == metrics.id for m in results)
 
+    def test_get_by_vulnerability_and_variant(self, app, vuln, variant):
+        m = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, version="3.1", score=7.5)
+        results = MetricsController.get_by_vulnerability_and_variant(vuln.id, variant.id)
+        assert any(metric.id == m.id for metric in results)
+
     def test_create(self, app, vuln):
         m = MetricsController.create(vuln.id, version="2.0", score=5.0, author="NVD")
         assert float(m.score) == pytest.approx(5.0)
+
+    def test_create_with_variant_id(self, app, vuln, variant):
+        m = MetricsController.create(vuln.id, variant_id=variant.id, version="3.1", score=8.5)
+        assert m.variant_id == variant.id
+        assert float(m.score) == pytest.approx(8.5)
 
     def test_create_empty_vuln_id_raises(self, app):
         with pytest.raises(ValueError):
@@ -723,6 +739,64 @@ class TestFindingModelExtra:
 
 class TestMetricsModelExtra:
     """Cover Metrics model paths not in the main TestMetricsModel."""
+
+    def test_create_with_variant_id(self, app, vuln, variant):
+        """create() with variant_id parameter persists the variant relationship."""
+        m = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, score=5.5)
+        assert m.variant_id == variant.id
+        assert Metrics.get_by_id(m.id).variant_id == variant.id
+
+    def test_create_with_string_variant_id(self, app, vuln, variant):
+        """create() converts string variant_id to UUID (line 47)."""
+        m = Metrics.create(vulnerability_id=vuln.id, variant_id=str(variant.id), score=4.5)
+        assert m.variant_id == variant.id
+
+    def test_get_by_vulnerability_and_variant_include_unscoped(self, app, vuln, variant):
+        """get_by_vulnerability_and_variant() includes legacy unscoped records."""
+        m1 = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, score=7.0)
+        m2 = Metrics.create(vulnerability_id=vuln.id, score=6.0)  # No variant_id
+        results = Metrics.get_by_vulnerability_and_variant(vuln.id, variant.id, include_unscoped=True)
+        assert any(m.id == m1.id for m in results)
+        assert any(m.id == m2.id for m in results)
+
+    def test_get_by_vulnerability_and_variant_scoped_only(self, app, vuln, variant):
+        """get_by_vulnerability_and_variant() can exclude unscoped records."""
+        m1 = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, score=7.0)
+        m2 = Metrics.create(vulnerability_id=vuln.id, score=6.0)  # No variant_id
+        results = Metrics.get_by_vulnerability_and_variant(vuln.id, variant.id, include_unscoped=False)
+        assert any(m.id == m1.id for m in results)
+        assert not any(m.id == m2.id for m in results)
+
+    def test_from_cvss_with_variant_id(self, app, vuln, variant):
+        """from_cvss() with variant_id parameter creates scoped metrics."""
+        from src.models.cvss import CVSS
+        cvss = CVSS(
+            version="3.1",
+            vector_string="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author="NVD",
+            base_score=7.5,
+            exploitability_score=3.9,
+            impact_score=3.6,
+        )
+        Metrics._seen = set()
+        m = Metrics.from_cvss(cvss, vuln.id, variant_id=variant.id)
+        assert m.variant_id == variant.id
+        assert m.vulnerability_id == vuln.id
+
+    def test_from_cvss_with_string_variant_id(self, app, vuln, variant):
+        """from_cvss() converts string variant_id to UUID (line 130)."""
+        from src.models.cvss import CVSS
+        cvss = CVSS(
+            version="3.0",
+            vector_string="CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author="NVD",
+            base_score=7.5,
+            exploitability_score=3.9,
+            impact_score=3.6,
+        )
+        Metrics._seen = set()
+        m = Metrics.from_cvss(cvss, vuln.id, variant_id=str(variant.id))
+        assert m.variant_id == variant.id
 
     def test_get_by_id_with_string_uuid(self, app, metrics):
         """get_by_id() accepts a string UUID (line 62)."""

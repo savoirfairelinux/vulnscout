@@ -319,6 +319,13 @@ describe('MultiEditBar', () => {
         const mockTriggerBanner = jest.fn();
         const mockPatchVuln = jest.fn();
         const mockResetVulns = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             vulnerabilities: [{
@@ -352,7 +359,7 @@ describe('MultiEditBar', () => {
 
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith(
-                expect.stringContaining('Successfully updated time estimates'),
+                expect.stringContaining('Successfully updated'),
                 'success'
             );
         });
@@ -449,6 +456,13 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation error path: triggers error banner with error details', async () => {
         const mockTriggerBanner = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             errors: [{ error: 'invalid duration' }]
@@ -480,6 +494,13 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation error path: triggers error banner with HTTP status when no errors array', async () => {
         const mockTriggerBanner = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'fail'
         }), { status: 500 });
@@ -510,6 +531,13 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation catch: triggers error banner on network failure', async () => {
         const mockTriggerBanner = jest.fn();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ]));
         fetchMock.mockRejectOnce(new Error('Network error'));
 
         const props = {

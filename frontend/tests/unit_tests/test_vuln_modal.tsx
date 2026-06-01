@@ -240,7 +240,13 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
-        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'variant-1',
+                name: 'variant-a',
+                project_id: 'project-1'
+            }
+        ])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({
             id: vulnerability.id,
@@ -258,7 +264,7 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} />);
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} variantId="variant-1" />);
         const user = userEvent.setup();
 
         // ACT
@@ -287,7 +293,7 @@ describe('Vulnerability Modal', () => {
         // appendCVSS returns null -> invalid vector branch (lines 61-66)
         const appendCVSS = jest.fn().mockReturnValue(null);
 
-        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         const addCustomBtn = await screen.getByRole('button', { name: /add custom cvss vector/i });
@@ -329,7 +335,7 @@ describe('Vulnerability Modal', () => {
             } as Response)
         );
 
-        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         await user.click(await screen.getByRole('button', { name: /add custom cvss vector/i }));
@@ -381,7 +387,7 @@ describe('Vulnerability Modal', () => {
         // Use fresh copy so mutation in component doesn't leak to other tests
         const vulnCopy = { ...vulnerability, severity: { ...vulnerability.severity, cvss: [] } };
 
-        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         await user.click(await screen.getByRole('button', { name: /add custom cvss vector/i }));
@@ -571,7 +577,7 @@ describe('Vulnerability Modal', () => {
         // Use fresh copy so mutation in component doesn't leak to other tests
         const vulnCopy = { ...vulnerability };
 
-        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} isEditing={true} />);
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} isEditing={true} variantId="variant-1" />);
 
         const user = userEvent.setup();
         const optimistic = await screen.getByPlaceholderText(/shortest estimate/i);
