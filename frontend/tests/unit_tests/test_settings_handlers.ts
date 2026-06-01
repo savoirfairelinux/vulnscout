@@ -55,6 +55,18 @@ describe('Projects.rename', () => {
 
         await expect(Projects.rename('p1', 'X')).rejects.toThrow('Rename failed (500)');
     });
+
+    test('throws generic message when rename error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 502,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Projects.rename('p1', 'Broken')).rejects.toThrow('Rename failed (502)');
+    });
 });
 
 
@@ -84,6 +96,18 @@ describe('Projects.create', () => {
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'already exists' }), { status: 409 });
 
         await expect(Projects.create('Dup')).rejects.toThrow('already exists');
+    });
+
+    test('throws generic message when error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Projects.create('Broken')).rejects.toThrow('Create failed (500)');
     });
 });
 
@@ -121,6 +145,18 @@ describe('Projects.delete', () => {
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Not found' }), { status: 404 });
 
         await expect(Projects.delete('missing')).rejects.toThrow('Not found');
+    });
+
+    test('throws generic message when delete error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 502,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Projects.delete('broken')).rejects.toThrow('Delete failed (502)');
     });
 });
 
@@ -193,6 +229,18 @@ describe('Variants.create', () => {
 
         await expect(Variants.create('p1', 'Dup')).rejects.toThrow('exists');
     });
+
+    test('throws generic message when create error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 503,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Variants.create('p1', 'release')).rejects.toThrow('Create failed (503)');
+    });
 });
 
 
@@ -218,6 +266,18 @@ describe('Variants.delete', () => {
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Not found' }), { status: 404 });
 
         await expect(Variants.delete('missing')).rejects.toThrow('Not found');
+    });
+
+    test('throws generic message when delete error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        await expect(Variants.delete('broken')).rejects.toThrow('Delete failed (500)');
     });
 });
 
@@ -284,6 +344,19 @@ describe('Variants.uploadSBOM', () => {
 
         const file = new File(['{}'], 'test.json');
         await expect(Variants.uploadSBOM('p1', 'v1', [file])).rejects.toThrow('Upload failed (500)');
+    });
+
+    test('throws generic message when upload error body cannot be parsed', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: false,
+                status: 503,
+                json: () => Promise.reject(new Error('invalid json')),
+            } as Response)
+        );
+
+        const file = new File(['{}'], 'test.json');
+        await expect(Variants.uploadSBOM('p1', 'v1', [file])).rejects.toThrow('Upload failed (503)');
     });
 });
 

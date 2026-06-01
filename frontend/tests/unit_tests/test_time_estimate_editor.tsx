@@ -146,4 +146,110 @@ describe('TimeEstimateEditor component', () => {
     expect(screen.queryByText(/Invalid optimistic duration/i)).not.toBeInTheDocument();
   });
 
+  test('uses external triggerBanner when provided', () => {
+    const onSave = jest.fn();
+    const triggerBanner = jest.fn();
+    render(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        triggerBanner={triggerBanner}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Save estimation/i }));
+
+    expect(triggerBanner).toHaveBeenCalledWith('All time estimate fields must be filled.', 'error');
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  test('renders variant selector and updates selection from checkbox changes', () => {
+    const onSave = jest.fn();
+    const onSelectedVariantIdsChange = jest.fn();
+    const variants = [
+      { id: 'v1', name: 'Variant A', project_id: 'p1' },
+      { id: 'v2', name: 'Variant B', project_id: 'p1' },
+    ];
+
+    const { rerender } = render(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        variants={variants}
+        selectedVariantIds={[]}
+        onSelectedVariantIdsChange={onSelectedVariantIdsChange}
+      />
+    );
+
+    expect(screen.getByText(/select variants/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Variant A'));
+    expect(onSelectedVariantIdsChange).toHaveBeenCalledWith(['v1']);
+
+    onSelectedVariantIdsChange.mockClear();
+    rerender(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        variants={variants}
+        selectedVariantIds={['v1']}
+        onSelectedVariantIdsChange={onSelectedVariantIdsChange}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Variant A'));
+    expect(onSelectedVariantIdsChange).toHaveBeenCalledWith([]);
+  });
+
+  test('does not render variant selector when inputs are hidden', () => {
+    const onSave = jest.fn();
+    render(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        hideInputs={true}
+        variants={[{ id: 'v1', name: 'Variant A', project_id: 'p1' }]}
+        selectedVariantIds={[]}
+        onSelectedVariantIdsChange={() => {}}
+      />
+    );
+
+    expect(screen.queryByText(/select variants/i)).not.toBeInTheDocument();
+  });
+
+  test('clears input fields when clearFields prop toggles', () => {
+    const onSave = jest.fn();
+    const { rerender } = render(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        clearFields={false}
+      />
+    );
+
+    const optimistic = screen.getByPlaceholderText(optimisticPh) as HTMLInputElement;
+    const likely = screen.getByPlaceholderText(likelyPh) as HTMLInputElement;
+    const pessimistic = screen.getByPlaceholderText(pessimisticPh) as HTMLInputElement;
+
+    fireEvent.input(optimistic, { target: { value: '1h' } });
+    fireEvent.input(likely, { target: { value: '2h' } });
+    fireEvent.input(pessimistic, { target: { value: '3h' } });
+
+    expect(optimistic.value).toBe('1h');
+    expect(likely.value).toBe('2h');
+    expect(pessimistic.value).toBe('3h');
+
+    rerender(
+      <TimeEstimateEditor
+        actualEstimate={{}}
+        onSaveTimeEstimation={onSave}
+        clearFields={true}
+      />
+    );
+
+    expect((screen.getByPlaceholderText(optimisticPh) as HTMLInputElement).value).toBe('');
+    expect((screen.getByPlaceholderText(likelyPh) as HTMLInputElement).value).toBe('');
+    expect((screen.getByPlaceholderText(pessimisticPh) as HTMLInputElement).value).toBe('');
+  });
+
 });
