@@ -193,7 +193,7 @@ For CI pipelines or automated scans, use the `--match-condition` argument instea
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json \
-  --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending == true or affected == true))"
+  --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
 
 If vulnerabilities match the condition, the script exits with **code 2**, allowing CI systems to fail the pipeline.

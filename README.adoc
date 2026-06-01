@@ -175,7 +175,7 @@ If you want to use the non-interactive mode, without the web interface, you can 
 
 [source,shell]
 ----
-./vulnscout --project demo --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending == true or affected == true))"
+./vulnscout --project demo --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ----
 
 The command exits with code `2` if any vulnerability matches the condition, enabling use in CI pipelines.
@@ -189,7 +189,7 @@ You can combine inputs with a match condition in a single invocation:
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json \
-  --match-condition "((cvss >= 9.0) and (pending == true or affected == true)) "
+  --match-condition "((cvss >= 9.0) and (pending or affected)) "
 ----
 
 ===  Performing a Grype Scan

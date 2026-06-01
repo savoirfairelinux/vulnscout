@@ -20,7 +20,7 @@ Match conditions can be combined with input files in a single invocation:
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
   --add-cve-check /path/to/cve-check.json \
-    --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending == true or affected == true))"
+    --match-condition "((cvss >= 9.0 or (cvss >= 7.0 and epss >= 30%)) and (pending or affected))"
 ```
 
 If the `CONDITION` is invalid, the configuration is not found, or an error occurs during the process, the command returns an exit code of **1**. This allows users to differentiate between a configuration error and a condition match.
@@ -45,21 +45,21 @@ This example will cause the command to exit with code **2** if any vulnerability
 
 ## Global Syntax and Language Definition
 
-The full language definition can be found in `src/controllers/conditions_parser.py`. The following keywords are recognized:
+The full language definition can be found in `src/controllers/conditions_parser.py`.
 
-- `true`, `false`
-- `and`, `or`, `not`
-- `>`, `>=`, `<`, `<=`, `==`, `!=`
-- `0`, `5`, `2.3`, `-1`, `.42`, `25%` are recognized as numbers. Percentages are divided by 100 internally.
-- `(` ... `)` are used to group expressions.
+A condition is always expressed as either:
+- `<left condition> <operator> <right condition>` where `<operator>` is :
+  - `and`, `or`, `not`
+  - `>`, `>=`, `<`, `<=`, `==`, `!=`
+- `( <condition> )`: can be used to group expressions
+- `<boolean expression>`: as an alias to `<token> == {true|false}`
 
-Any condition is always expressed as `<left token> <operator> <right token>`.
+Tokens can be:
+- `true`, `false`: mapped to the corresponding boolean values
+- `0`, `5`, `2.3`, `-1`, `.42`, `25%`: recognized as numbers. Percentages are divided by 100 internally.
+- any unrecognised token is treated as a string identifier. String tokens can start with `[a-zA-Z_]` and contain `[a-zA-Z0-9_-:]`.
 
-**Example:** `cvss >= 5 or ignored == true`
-
-> **Note:** `true` alone is not a valid expression, but `true == true` is.
-
-Any unrecognised token is treated as a string identifier. String tokens can start with `[a-zA-Z_]` and contain `[a-zA-Z0-9_-:]`.
+**Example:** `cvss >= 5 or ignored`
 
 ---
 
@@ -100,27 +100,22 @@ cvss >= 9.0 or (cvss >= 7.0 and epss >= 50%)
 
 **Fail if any vulnerability was not reviewed by a human yet:**
 ```
-pending == true
+pending
 ```
 
 **Fail if there are important vulnerabilities not fixed or ignored:**
 ```
-cvss >= 7.0 and (not fixed == true and not ignored == true)
-```
-
-Or more concisely:
-```
-cvss >= 7 and fixed == false and ignored == false
+cvss >= 7 and not fixed and not ignored
 ```
 
 **Fail if a vulnerability with affected status doesn't have an effort set already:**
 ```
-affected == true and effort == false
+affected and not effort
 ```
 
 **Fail if a high vulnerability is affecting the product and needs less than an hour to fix:**
 ```
-cvss >= 7.0 and affected == true and effort < 3600
+cvss >= 7.0 and affected and effort < 3600
 ```
 
 **Fail if Log4j is found:**
@@ -130,5 +125,5 @@ id == CVE-2021-44228
 
 **Fail if any new (previously unseen) vulnerability is critical:**
 ```
-new == true and cvss >= 9.0
+new and cvss >= 9.0
 ```
