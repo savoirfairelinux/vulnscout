@@ -1,12 +1,23 @@
 import { useState } from "react";
+import type { Variant } from "../handlers/variant";
 
 type Props = {
   onCancel: () => void;
   onAddCvss: (vector: string) => void;
   triggerBanner: (message: string, type: "error" | "success") => void;
+  variants?: Variant[];
+  selectedVariantIds?: string[];
+  onSelectedVariantIdsChange?: (variantIds: string[]) => void;
 };
 
-function CustomCvss({ onCancel, onAddCvss, triggerBanner }: Props) {
+function CustomCvss({
+  onCancel,
+  onAddCvss,
+  triggerBanner,
+  variants,
+  selectedVariantIds,
+  onSelectedVariantIdsChange,
+}: Props) {
   const [vectorString, setVectorString] = useState("");
 
   const handleAdd = () => {
@@ -25,6 +36,31 @@ function CustomCvss({ onCancel, onAddCvss, triggerBanner }: Props) {
         You can enter a custom CVSS vector to assess the vulnerability with your own parameters. 
         You can use an online CVSS calculator to help you generate the vector.
       </p>
+
+      {variants && variants.length > 0 && selectedVariantIds && onSelectedVariantIdsChange && (
+        <div className="mt-2 mb-1">
+          <p className="text-sm font-medium text-gray-300 mb-1">Select variants:</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {variants.map(v => (
+              <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={selectedVariantIds.includes(v.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      onSelectedVariantIdsChange([...selectedVariantIds, v.id]);
+                    } else {
+                      onSelectedVariantIdsChange(selectedVariantIds.filter(id => id !== v.id));
+                    }
+                  }}
+                  className="accent-blue-500"
+                />
+                <span className="text-gray-200">{v.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <label className="block text-sm text-gray-300 mb-1">Vector String</label>

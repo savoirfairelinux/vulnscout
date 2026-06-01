@@ -6,6 +6,7 @@ import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 type CVSS = {
     author: string;
     origin?: string;
+    variant_id?: string;
     severity: string;
     version: string;
     vector_string: string;
@@ -68,6 +69,7 @@ const asCVSS = (data: any): CVSS | [] => {
     let score: CVSS = {
         author: "unknown",
         origin: "scanner",
+        variant_id: undefined,
         severity: "unknown",
         version: data.version,
         vector_string: "",
@@ -78,6 +80,7 @@ const asCVSS = (data: any): CVSS | [] => {
     };
     if (typeof data?.author === "string") score.author = data.author
     if (typeof data?.origin === "string") score.origin = data.origin
+    if (typeof data?.variant_id === "string") score.variant_id = data.variant_id
     if (typeof data?.severity === "string") score.severity = data.severity
     if (typeof data?.vector_string === "string") {
         score.vector_string = data.vector_string

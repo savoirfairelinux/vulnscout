@@ -585,6 +585,15 @@ def init_app(app):
         if not record:
             return "Not found", 404
 
+        if request.method == 'GET':
+            variant_id = request.args.get("variant_id")
+            if variant_id:
+                variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+                if err:
+                    return err
+                _apply_variant_scoped_metrics_and_effort([record], variant_uuid)
+            return record.to_dict()
+
         if request.method == 'PATCH':
             payload_data = request.get_json()
             if payload_data is None:
@@ -647,6 +656,8 @@ def init_app(app):
 
             if response_variant_id is not None:
                 _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
+
+            return record.to_dict()
 
         return record.to_dict()
 

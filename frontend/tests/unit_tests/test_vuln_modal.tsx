@@ -1851,6 +1851,8 @@ describe('Vulnerability Modal', () => {
             { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v1
+        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v2
         // Two POST responses for two variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -1895,7 +1897,7 @@ describe('Vulnerability Modal', () => {
         const user = userEvent.setup();
 
         // Wait for variants to load, then select both
-        await screen.findByText('Variant Alpha');
+        expect((await screen.findAllByText('Variant Alpha')).length).toBeGreaterThan(0);
         const variantCheckboxes = screen.getAllByRole('checkbox');
         // Select both variants
         for (const cb of variantCheckboxes) {
@@ -2010,8 +2012,8 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Wait for variants to load
-        await screen.findByText('Variant A');
-        expect(screen.getByText('Variant B')).toBeInTheDocument();
+        expect((await screen.findAllByText('Variant A')).length).toBeGreaterThan(0);
+        expect(screen.queryAllByText('Variant B').length).toBeGreaterThan(0);
         // Variant from the other project should NOT be shown
         expect(screen.queryByText('Variant Other')).not.toBeInTheDocument();
     });
@@ -2035,8 +2037,8 @@ describe('Vulnerability Modal', () => {
         />);
 
         // Wait for variants to load — both should be shown without projectId filter
-        await screen.findByText('Variant A');
-        expect(screen.getByText('Variant Other')).toBeInTheDocument();
+        expect((await screen.findAllByText('Variant A')).length).toBeGreaterThan(0);
+        expect(screen.queryAllByText('Variant Other').length).toBeGreaterThan(0);
     });
 
     test('packages_current scopes available packages to current project', async () => {

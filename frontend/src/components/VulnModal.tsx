@@ -1,5 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
+import { asVulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -58,6 +59,18 @@ type AssessmentGroup = {
     packages: string[];
 };
 
+type VariantScopedSnapshot = {
+    variantId: string;
+    variantName: string;
+    hasEffort: boolean;
+    effort: {
+        optimistic?: string;
+        likely?: string;
+        pessimistic?: string;
+    };
+    customCvss: CVSS[];
+};
+
   function VulnModal(props: Readonly<Props>) {
     const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
@@ -74,6 +87,8 @@ type AssessmentGroup = {
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
+    const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
+    const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
@@ -107,6 +122,69 @@ type AssessmentGroup = {
             })
             .catch(() => {});
     }, [vuln.id]);
+
+    // In all-variants mode, default to all variant targets for custom CVSS/time edits.
+    useEffect(() => {
+        if (variantId || availableVariants.length === 0) {
+            setSelectedTargetVariantIds([]);
+            return;
+        }
+        setSelectedTargetVariantIds(availableVariants.map(v => v.id));
+    }, [variantId, vuln.id, availableVariants]);
+
+    // Build per-variant snapshots so the modal can show where custom CVSS and
+    // effort differ across variants directly in all-variants mode.
+    useEffect(() => {
+        let cancelled = false;
+        if (variantId || availableVariants.length === 0) {
+            setVariantSnapshots([]);
+            return;
+        }
+
+        (async () => {
+            const snapshots = await Promise.all(availableVariants.map(async (variant): Promise<VariantScopedSnapshot | null> => {
+                try {
+                    const response = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}?variant_id=${encodeURIComponent(variant.id)}`,
+                        { mode: 'cors' }
+                    );
+                    if (!response.ok) return null;
+                    const raw = await response.json();
+                    const vulnData = asVulnerability(raw);
+                    if (Array.isArray(vulnData)) return null;
+                    const customCvss = Array.isArray(vulnData?.severity?.cvss)
+                        ? vulnData.severity.cvss.filter(score => score.origin === 'custom')
+                        : [];
+
+                    const optimisticDuration = vulnData?.effort?.optimistic;
+                    const likelyDuration = vulnData?.effort?.likely;
+                    const pessimisticDuration = vulnData?.effort?.pessimistic;
+                    const hasEffort = [optimisticDuration, likelyDuration, pessimisticDuration].some((duration) => {
+                        return typeof duration?.total_seconds === 'number' && duration.total_seconds > 0;
+                    });
+                    return {
+                        variantId: variant.id,
+                        variantName: variant.name,
+                        hasEffort,
+                        effort: {
+                            optimistic: typeof optimisticDuration?.formatHumanShort === 'function' && optimisticDuration.total_seconds > 0 ? optimisticDuration.formatHumanShort() : undefined,
+                            likely: typeof likelyDuration?.formatHumanShort === 'function' && likelyDuration.total_seconds > 0 ? likelyDuration.formatHumanShort() : undefined,
+                            pessimistic: typeof pessimisticDuration?.formatHumanShort === 'function' && pessimisticDuration.total_seconds > 0 ? pessimisticDuration.formatHumanShort() : undefined,
+                        },
+                        customCvss,
+                    };
+                } catch {
+                    return null;
+                }
+            }));
+
+            if (!cancelled) {
+                setVariantSnapshots(snapshots.filter((s): s is VariantScopedSnapshot => s !== null));
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [variantId, availableVariants, vuln.id]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -683,11 +761,6 @@ type AssessmentGroup = {
     };
 
     const addCvss = async (vector: string) => {
-        if (!variantId) {
-            showMessage("Please select a variant before adding a custom CVSS score.", "error");
-            return;
-        }
-
         const content = appendCVSS(vuln.id, vector);
 
         if (content === null) {
@@ -695,25 +768,48 @@ type AssessmentGroup = {
             return;
         }
 
+        const targetVariantIds: Array<string | undefined> =
+            variantId
+                ? [variantId]
+                : (availableVariants.length > 0
+                    ? (selectedTargetVariantIds.length > 0 ? selectedTargetVariantIds : [])
+                    : [undefined]);
 
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+        if (!variantId && availableVariants.length > 0 && targetVariantIds.length === 0) {
+            showMessage("Please select at least one variant before adding a custom CVSS score.", "error");
+            return;
+        }
+
+        const updates = targetVariantIds.map((vid) => ({
+            id: vuln.id,
+            ...(vid ? { variant_id: vid } : {}),
+            cvss: content,
+        }));
+
+        const url = updates.length > 1
+            ? import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch'
+            : import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`;
+        const body = updates.length > 1 ? { vulnerabilities: updates } : updates[0];
+
+        const response = await fetch(url, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                variant_id: variantId,
-                cvss: content
-            })
+            body: JSON.stringify(body)
         });
 
         if (response.status == 200) {
             const data = await response.json();
 
-            if (Array.isArray(data?.severity?.cvss)) {
+            const updatedSeverity = updates.length > 1
+                ? data?.vulnerabilities?.[0]?.severity?.cvss
+                : data?.severity?.cvss;
+
+            if (Array.isArray(updatedSeverity)) {
                 // Update the local vuln object immediately for instant UI update
-                vuln.severity.cvss = data.severity.cvss;
+                vuln.severity.cvss = updatedSeverity;
 
                 // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
@@ -729,37 +825,54 @@ type AssessmentGroup = {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
-        if (!variantId) {
-            showMessage("Please select a variant before saving an estimate.", "error");
+        const targetVariantIds: Array<string | undefined> =
+            variantId
+                ? [variantId]
+                : (availableVariants.length > 0
+                    ? (selectedTargetVariantIds.length > 0 ? selectedTargetVariantIds : [])
+                    : [undefined]);
+
+        if (!variantId && availableVariants.length > 0 && targetVariantIds.length === 0) {
+            showMessage("Please select at least one variant before saving an estimate.", "error");
             return;
         }
 
-        const body: Record<string, unknown> = {
-            variant_id: variantId,
+        const updates = targetVariantIds.map((vid) => ({
+            id: vuln.id,
+            ...(vid ? { variant_id: vid } : {}),
             effort: {
                 optimistic: content.optimistic.formatAsIso8601(),
                 likely: content.likely.formatAsIso8601(),
                 pessimistic: content.pessimistic.formatAsIso8601()
             }
-        };
-        const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
+        }));
+
+        const url = updates.length > 1
+            ? import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch'
+            : import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`;
+
+        const response = await fetch(url, {
             method: 'PATCH',
             mode: 'cors',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify(updates.length > 1 ? { vulnerabilities: updates } : updates[0])
         })
         if (response.status == 200) {
             const data = await response.json()
 
+            const updatedEffort = updates.length > 1
+                ? data?.vulnerabilities?.[0]?.effort
+                : data?.effort;
+
             // Update the local vuln object immediately for instant UI update
-            if (typeof data?.effort?.optimistic === "string")
-                vuln.effort.optimistic = new Iso8601Duration(data.effort.optimistic);
-            if (typeof data?.effort?.likely === "string")
-                vuln.effort.likely = new Iso8601Duration(data.effort.likely);
-            if (typeof data?.effort?.pessimistic === "string")
-                vuln.effort.pessimistic = new Iso8601Duration(data.effort.pessimistic);
+            if (typeof updatedEffort?.optimistic === "string")
+                vuln.effort.optimistic = new Iso8601Duration(updatedEffort.optimistic);
+            if (typeof updatedEffort?.likely === "string")
+                vuln.effort.likely = new Iso8601Duration(updatedEffort.likely);
+            if (typeof updatedEffort?.pessimistic === "string")
+                vuln.effort.pessimistic = new Iso8601Duration(updatedEffort.pessimistic);
 
             // Also patch the vulnerability for real-time refresh in other views
             patchVuln(vuln.id, vuln);
@@ -978,6 +1091,9 @@ type AssessmentGroup = {
                                                             addCvss(vector);
                                                         }}
                                                         triggerBanner={showMessage}
+                                                        variants={!variantId ? availableVariants : undefined}
+                                                        selectedVariantIds={!variantId ? selectedTargetVariantIds : undefined}
+                                                        onSelectedVariantIdsChange={!variantId ? setSelectedTargetVariantIds : undefined}
                                                     />
                                                 </div>
                                             )}
@@ -994,10 +1110,35 @@ type AssessmentGroup = {
                                         className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >
                                         <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
+                                        {cvss.variant_id && (
+                                            <div className="flex justify-center mb-1">
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                                    {availableVariants.find(v => v.id === cvss.variant_id)?.name ?? cvss.variant_id}
+                                                </span>
+                                            </div>
+                                        )}
                                         <CvssGauge data={cvss} />
                                     </div>
                                     ))}
                                 </div>
+
+                                {!variantId && variantSnapshots.some(s => s.customCvss.length > 0) && (
+                                    <div className="mt-3 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                        <h4 className="font-semibold text-gray-200 mb-2">Custom CVSS by variant</h4>
+                                        <div className="space-y-2">
+                                            {variantSnapshots
+                                                .filter(snapshot => snapshot.customCvss.length > 0)
+                                                .map(snapshot => (
+                                                    <div key={snapshot.variantId} className="text-sm">
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 mr-2">{snapshot.variantName}</span>
+                                                        <span className="text-gray-300">
+                                                            {snapshot.customCvss.map(score => `CVSS ${score.version} (${score.base_score})`).join(', ')}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                         </div>
@@ -1029,12 +1170,31 @@ type AssessmentGroup = {
                                 onFieldsChange={setHasTimeChanges}
                                 triggerBanner={showMessage}
                                 hideInputs={!isEditing}
+                                variants={!variantId && isEditing ? availableVariants : undefined}
+                                selectedVariantIds={!variantId && isEditing ? selectedTargetVariantIds : undefined}
+                                onSelectedVariantIdsChange={!variantId && isEditing ? setSelectedTargetVariantIds : undefined}
                                 actualEstimate={{
                                     optimistic: vuln?.effort?.optimistic?.formatHumanShort(),
                                     likely: vuln?.effort?.likely?.formatHumanShort(),
                                     pessimistic: vuln?.effort?.pessimistic?.formatHumanShort(),
                                 }}
                             />
+
+                            {!variantId && variantSnapshots.some(s => s.hasEffort) && (
+                                <div className="mt-3 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Time estimate by variant</h4>
+                                    <div className="space-y-1 text-sm text-gray-300">
+                                        {variantSnapshots
+                                            .filter(snapshot => snapshot.hasEffort)
+                                            .map(snapshot => (
+                                                <div key={snapshot.variantId}>
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 mr-2">{snapshot.variantName}</span>
+                                                    <span>O: {snapshot.effort.optimistic ?? 'N/A'} | L: {snapshot.effort.likely ?? 'N/A'} | P: {snapshot.effort.pessimistic ?? 'N/A'}</span>
+                                                </div>
+                                            ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="mt-6">
