@@ -1,6 +1,6 @@
 """add variant_id to metrics and backfill legacy CVSS rows
 
-Revision ID: k7f8a9b0c1d2
+Revision ID: l8a9b0c1d2e3
 Revises: j6e7f8a9b0c1
 Create Date: 2026-05-26 00:00:00.000000
 """
@@ -10,7 +10,7 @@ import uuid
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'k7f8a9b0c1d2'
+revision = 'l8a9b0c1d2e3'
 down_revision = 'j6e7f8a9b0c1'
 branch_labels = None
 depends_on = None

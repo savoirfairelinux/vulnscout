@@ -1,7 +1,7 @@
 """add origin column to metrics
 
 Revision ID: k7f8a9b0c1d2
-Revises: j6e7f8a9b0c1
+Revises: l8a9b0c1d2e3
 Create Date: 2026-05-26 00:00:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'k7f8a9b0c1d2'
-down_revision = 'j6e7f8a9b0c1'
+down_revision = 'l8a9b0c1d2e3'
 branch_labels = None
 depends_on = None
 
