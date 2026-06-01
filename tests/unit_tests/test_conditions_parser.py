@@ -18,6 +18,8 @@ def test_true_and_false(parser):
     WHEN parsing a string with True and False
     THEN check the result is correct
     """
+    assert parser.evaluate("true", None) is True
+    assert parser.evaluate("false", None) is False
     assert parser.evaluate("true == true", None) is True
     assert parser.evaluate("true == false", None) is False
     assert parser.evaluate("true != false", None) is True
@@ -29,6 +31,7 @@ def test_using_data(parser):
     WHEN parsing a string with data
     THEN check the result is correct
     """
+    assert parser.evaluate("true", {"true": False}) is False
     assert parser.evaluate("true == false", {"true": False}) is True
     assert parser.evaluate("a == 2", {"a": 2}) is True
     assert parser.evaluate("a == 2", {"a": 3}) is False
@@ -42,6 +45,8 @@ def test_not_operation(parser):
     WHEN parsing a string with not operation
     THEN check the result is correct
     """
+    assert parser.evaluate("not true", None) is False
+    assert parser.evaluate("not false", None) is True
     assert parser.evaluate("not true == true", None) is False
     assert parser.evaluate("not false == true", None) is True
     assert parser.evaluate("not a == 42", {"a": 42}) is False
@@ -72,6 +77,8 @@ def test_and_or_operations(parser):
     assert parser.evaluate("true == a and true == a", {"a": False}) is False
     assert parser.evaluate("true == a or a == false", {"a": True}) is True
     assert parser.evaluate("true == a or a == false", {"a": False}) is True
+    assert parser.evaluate("true == a or not a", {"a": True}) is True
+    assert parser.evaluate("true == a or not a", {"a": False}) is True
 
 
 def test_percentage(parser):
@@ -104,8 +111,6 @@ def test_invalid(parser):
     with pytest.raises(Exception):
         parser.evaluate("unknown == 2", None)
     with pytest.raises(Exception):
-        parser.evaluate("true", None)
-    with pytest.raises(Exception):
         parser.evaluate("true == true == true", None)
     with pytest.raises(Exception):
         parser.evaluate("true == true and", None)
@@ -119,8 +124,8 @@ def test_complex_scenario(parser):
     WHEN parsing a string with complex scenario
     THEN check the result is correct
     """
-    conditions = "(epss > 5% or (cvss >= 4 and fix_exist == true) or cvss >= 9)" \
-        + " and not (fixed == true or ignored == true)"
+    conditions = "(epss > 5% or (cvss >= 4 and fix_exist) or cvss >= 9)" \
+        + " and not (fixed or ignored)"
 
     assert parser.evaluate(conditions, {
         "epss": 0.06,
@@ -143,6 +148,20 @@ def test_complex_scenario(parser):
         "fixed": True,
         "ignored": False
     }) is False
+
+
+def test_simple_bool(parser):
+    assert parser.evaluate("var", {
+        "var": True
+    })
+
+    assert not parser.evaluate("var", {
+        "var": False
+    })
+
+    assert parser.evaluate("not var", {
+        "var": False
+    })
 
 
 def test_invalid_identifier(parser):

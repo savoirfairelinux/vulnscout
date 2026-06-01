@@ -35,6 +35,7 @@ class ConditionParser:
         condition = (
             pp.Group(LPAR + condition_base + RPAR)
             | condition_base
+            | element
         ).set_name("condition").set_debug(flag=debug)
 
         self.conditions = pp.Forward()

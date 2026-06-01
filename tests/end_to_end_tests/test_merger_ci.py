@@ -131,10 +131,10 @@ def test_invalid_cdx(app, init_files, monkeypatch):
 
 
 def test_ci_mode(app, monkeypatch):
-    monkeypatch.setenv("MATCH_CONDITION", "false == true")
+    monkeypatch.setenv("MATCH_CONDITION", "false")
     _run_main()
 
-    monkeypatch.setenv("MATCH_CONDITION", "true == true")
+    monkeypatch.setenv("MATCH_CONDITION", "true")
     with pytest.raises(SystemExit) as e:
         _run_main()
     assert e.type == SystemExit
