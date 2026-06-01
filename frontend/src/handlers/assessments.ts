@@ -33,6 +33,7 @@ export type { Assessment };
 
 type ReviewTimeEstimate = {
     vuln_id: string;
+    variant_id?: string;
     optimistic: number;
     likely: number;
     pessimistic: number;
@@ -44,6 +45,7 @@ type ReviewTimeEstimate = {
 
 type ReviewCustomCvss = {
     vuln_id: string;
+    variant_id?: string;
     version: string;
     vector_string: string;
     base_score: number;

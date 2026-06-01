@@ -42,7 +42,12 @@ def _validate_effort(eff: dict):
     return opt, lik, pes, None
 
 
-def _validate_and_apply_cvss(new_cvss: dict, record_id: str, log_prefix: str = ""):
+def _validate_and_apply_cvss(
+    new_cvss: dict,
+    record_id: str,
+    variant_id,
+    log_prefix: str = "",
+):
     """Validate CVSS payload and persist to Metrics.
 
     Returns an error string on validation failure, ``None`` on success.
@@ -56,7 +61,7 @@ def _validate_and_apply_cvss(new_cvss: dict, record_id: str, log_prefix: str = "
         new_cvss["origin"] = "scanner"
     cvss_obj = CVSS.from_dict(new_cvss)
     try:
-        Metrics.from_cvss(cvss_obj, record_id)
+        Metrics.from_cvss(cvss_obj, record_id, variant_id)
     except Exception as e:
         verbose(f"[{log_prefix} cvss] {e}")
     return None

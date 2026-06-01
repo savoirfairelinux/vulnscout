@@ -421,7 +421,9 @@ def init_app(app):
             if te.finding is None:
                 continue
             vid = te.finding.vulnerability_id
-            if vid in vuln_map:
+            current = vuln_map.get(vid)
+            is_scoped = te.variant_id is not None
+            if current is not None and current.get("variant_id") and not is_scoped:
                 continue
             opt = te.optimistic or 0
             lik = te.likely or 0
@@ -429,6 +431,7 @@ def init_app(app):
             vuln = DBVuln.get_by_id(vid)
             vuln_map[vid] = {
                 "vuln_id": vid,
+                "variant_id": str(te.variant_id) if te.variant_id else None,
                 "optimistic": opt,
                 "likely": lik,
                 "pessimistic": pes,
@@ -447,44 +450,25 @@ def init_app(app):
         A custom CVSS score is identified by ``origin == 'custom'``.
         """
         from ..models.metrics import Metrics
-        from ..models.observation import Observation
-        from ..models.scan import Scan
 
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
 
         query = db.select(Metrics).where(Metrics.origin == "custom")
-
-        vuln_ids_filter = None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            vuln_ids_filter = db.select(Finding.vulnerability_id).join(
-                Observation, Finding.id == Observation.finding_id
-            ).join(
-                Scan, Observation.scan_id == Scan.id
-            ).where(
-                Scan.variant_id == vid
-            ).distinct()
+            query = query.where(db.or_(Metrics.variant_id == vid, Metrics.variant_id.is_(None)))
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
             variant_ids = [v.id for v in DBVariant.get_by_project(pid)]
             if variant_ids:
-                vuln_ids_filter = db.select(Finding.vulnerability_id).join(
-                    Observation, Finding.id == Observation.finding_id
-                ).join(
-                    Scan, Observation.scan_id == Scan.id
-                ).where(
-                    Scan.variant_id.in_(variant_ids)
-                ).distinct()
+                query = query.where(db.or_(Metrics.variant_id.in_(variant_ids), Metrics.variant_id.is_(None)))
             else:
-                vuln_ids_filter = db.select(Finding.vulnerability_id).where(db.false())
-
-        if vuln_ids_filter is not None:
-            query = query.where(Metrics.vulnerability_id.in_(vuln_ids_filter))
+                query = query.where(db.false())
 
         all_metrics = list(db.session.execute(query).scalars().all())
 
@@ -495,6 +479,7 @@ def init_app(app):
             vuln = DBVuln.get_by_id(m.vulnerability_id)
             result.append({
                 "vuln_id": m.vulnerability_id,
+                "variant_id": str(m.variant_id) if m.variant_id else None,
                 "version": m.version or "",
                 "vector_string": m.vector or "",
                 "base_score": float(m.score) if m.score is not None else 0.0,

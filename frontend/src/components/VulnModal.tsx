@@ -683,6 +683,11 @@ type AssessmentGroup = {
     };
 
     const addCvss = async (vector: string) => {
+        if (!variantId) {
+            showMessage("Please select a variant before adding a custom CVSS score.", "error");
+            return;
+        }
+
         const content = appendCVSS(vuln.id, vector);
 
         if (content === null) {
@@ -698,6 +703,7 @@ type AssessmentGroup = {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
+                variant_id: variantId,
                 cvss: content
             })
         });
@@ -723,14 +729,19 @@ type AssessmentGroup = {
     };
 
     const saveEstimation = async (content: PostTimeEstimate) => {
+        if (!variantId) {
+            showMessage("Please select a variant before saving an estimate.", "error");
+            return;
+        }
+
         const body: Record<string, unknown> = {
+            variant_id: variantId,
             effort: {
                 optimistic: content.optimistic.formatAsIso8601(),
                 likely: content.likely.formatAsIso8601(),
                 pessimistic: content.pessimistic.formatAsIso8601()
             }
         };
-        if (variantId) body.variant_id = variantId;
         const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}`, {
             method: 'PATCH',
             mode: 'cors',

@@ -6,7 +6,7 @@ import os
 
 from flask import jsonify, request
 from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload, aliased
+from sqlalchemy.orm import selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
     Finding,
@@ -70,6 +70,84 @@ _TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
     "nvd": "nvd_cpe",
     "osv": "osv",
 }
+
+
+def _apply_variant_scoped_metrics_and_effort(records: list, variant_uuid) -> None:
+    """Inject variant-scoped metrics/effort into in-memory vulnerability records.
+
+    This keeps list responses deterministic for the currently selected variant,
+    while still allowing legacy unscoped records as a fallback.
+    """
+    if not records:
+        return
+
+    vuln_ids = [r.id for r in records]
+
+    metric_rows = db.session.execute(
+        db.select(Metrics).where(
+            Metrics.vulnerability_id.in_(vuln_ids),
+            db.or_(Metrics.variant_id == variant_uuid, Metrics.variant_id.is_(None)),
+        )
+    ).scalars().all()
+
+    metrics_by_vuln: dict[str, dict[str, list]] = {}
+    for m in metric_rows:
+        bucket = metrics_by_vuln.setdefault(m.vulnerability_id, {"scoped": [], "fallback": []})
+        if m.variant_id == variant_uuid:
+            bucket["scoped"].append(m)
+        else:
+            bucket["fallback"].append(m)
+
+    from ..models.time_estimate import TimeEstimate
+    raw_te_rows = db.session.execute(
+        db.select(
+            Finding.vulnerability_id,
+            TimeEstimate.variant_id,
+            TimeEstimate.optimistic,
+            TimeEstimate.likely,
+            TimeEstimate.pessimistic,
+        )
+        .join(Finding, TimeEstimate.finding_id == Finding.id)
+        .where(
+            Finding.vulnerability_id.in_(vuln_ids),
+            db.or_(TimeEstimate.variant_id == variant_uuid, TimeEstimate.variant_id.is_(None)),
+        )
+    ).all()
+
+    effort_by_vuln: dict[str, tuple[int | None, int | None, int | None]] = {}
+    fallback_effort_by_vuln: dict[str, tuple[int | None, int | None, int | None]] = {}
+    for vuln_id, te_variant_id, opti, like, pess in raw_te_rows:
+        packed = (opti, like, pess)
+        if te_variant_id == variant_uuid and vuln_id not in effort_by_vuln:
+            effort_by_vuln[vuln_id] = packed
+        elif te_variant_id is None and vuln_id not in fallback_effort_by_vuln:
+            fallback_effort_by_vuln[vuln_id] = packed
+
+    for r in records:
+        metric_bucket = metrics_by_vuln.get(r.id, {"scoped": [], "fallback": []})
+        selected_metrics = metric_bucket["scoped"] or metric_bucket["fallback"]
+        orm_attrs.set_committed_value(r, 'metrics', selected_metrics)
+
+        chosen_effort = effort_by_vuln.get(r.id) or fallback_effort_by_vuln.get(r.id)
+        if chosen_effort is not None:
+            opti, like, pess = chosen_effort
+            r.effort = {
+                "optimistic": None if opti is None else Iso8601Duration(f"PT{opti}H"),
+                "likely": None if like is None else Iso8601Duration(f"PT{like}H"),
+                "pessimistic": None if pess is None else Iso8601Duration(f"PT{pess}H"),
+            }
+
+
+def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
+    """Return distinct variant IDs where a vulnerability is observed."""
+    rows = db.session.execute(
+        db.select(Scan.variant_id)
+        .join(Observation, Observation.scan_id == Scan.id)
+        .join(Finding, Observation.finding_id == Finding.id)
+        .where(Finding.vulnerability_id == vulnerability_id)
+        .distinct()
+    ).all()
+    return [variant_id for (variant_id,) in rows]
 
 
 def _populate_found_by(
@@ -244,6 +322,7 @@ def init_app(app):
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
+            _apply_variant_scoped_metrics_and_effort(records, compare_uuid)
         elif variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -300,6 +379,7 @@ def init_app(app):
                         _pkgs_by_vuln_var.setdefault(str(_vid), []).append(_sid)
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
+                _apply_variant_scoped_metrics_and_effort(records, variant_uuid)
         elif project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
@@ -377,7 +457,6 @@ def init_app(app):
                         effort_by_vuln[vid] = (opti, like, pess)
 
                 # Pre-populate transient fields so to_dict() won't lazy-load findings
-                from sqlalchemy.orm import attributes as orm_attrs
                 for r in records:
                     r.packages = pkgs_by_vuln.get(r.id, [])
                     te = effort_by_vuln.get(r.id)
@@ -510,6 +589,7 @@ def init_app(app):
             payload_data = request.get_json()
             if payload_data is None:
                 return {"error": "Invalid request data"}, 400
+            response_variant_id = None
 
             if "effort" in payload_data:
                 eff = payload_data["effort"]
@@ -521,18 +601,52 @@ def init_app(app):
                     variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
                     if err:
                         return err
-                _apply_effort(record, variant_id, opt, lik, pes,
-                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                    target_variant_ids = [variant_id]
+                else:
+                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                    if not target_variant_ids:
+                        target_variant_ids = [None]
+
+                for target_variant_id in target_variant_ids:
+                    _apply_effort(record, target_variant_id, opt, lik, pes,
+                                  log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+
+                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                    response_variant_id = target_variant_ids[0]
+                record.effort = {
+                    "optimistic": Iso8601Duration(f"PT{opt}H"),
+                    "likely": Iso8601Duration(f"PT{lik}H"),
+                    "pessimistic": Iso8601Duration(f"PT{pes}H"),
+                }
 
             if "cvss" in payload_data:
+                variant_id = payload_data.get("variant_id")
+                if variant_id is not None:
+                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
+                    if err:
+                        return err
+                    target_variant_ids = [variant_id]
+                else:
+                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                    if not target_variant_ids:
+                        target_variant_ids = [None]
+
                 if isinstance(payload_data["cvss"], dict):
                     payload_data["cvss"].setdefault("origin", "custom")
-                cvss_err = _validate_and_apply_cvss(
-                    payload_data["cvss"], record.id,
-                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
-                if cvss_err:
-                    return cvss_err, 400
+
+                for target_variant_id in target_variant_ids:
+                    cvss_err = _validate_and_apply_cvss(
+                        payload_data["cvss"], record.id, target_variant_id,
+                        log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                    if cvss_err:
+                        return cvss_err, 400
+
+                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                    response_variant_id = target_variant_ids[0]
                 db.session.expire(record, ['metrics'])
+
+            if response_variant_id is not None:
+                _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
 
         return record.to_dict()
 
@@ -557,6 +671,8 @@ def init_app(app):
                 errors.append({"id": item["id"], "error": "Vulnerability not found"})
                 continue
 
+            response_variant_id = None
+
             if "effort" in item:
                 eff = item["effort"]
                 opt, lik, pes, err = _validate_effort(eff)
@@ -569,19 +685,59 @@ def init_app(app):
                     if err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                _apply_effort(record, item_variant_id, opt, lik, pes,
-                              log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                    target_variant_ids = [item_variant_id]
+                else:
+                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                    if not target_variant_ids:
+                        target_variant_ids = [None]
+
+                for target_variant_id in target_variant_ids:
+                    _apply_effort(record, target_variant_id, opt, lik, pes,
+                                  log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+
+                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                    response_variant_id = target_variant_ids[0]
+                record.effort = {
+                    "optimistic": Iso8601Duration(f"PT{opt}H"),
+                    "likely": Iso8601Duration(f"PT{lik}H"),
+                    "pessimistic": Iso8601Duration(f"PT{pes}H"),
+                }
 
             if "cvss" in item:
+                cvss_variant_id = item.get("variant_id")
+                if cvss_variant_id is not None:
+                    cvss_variant_id, err = parse_uuid_or_400(cvss_variant_id, "variant_id")
+                    if err:
+                        errors.append({"id": item["id"], "error": "Invalid variant_id"})
+                        continue
+                    target_variant_ids = [cvss_variant_id]
+                else:
+                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                    if not target_variant_ids:
+                        target_variant_ids = [None]
+
                 if isinstance(item["cvss"], dict):
                     item["cvss"].setdefault("origin", "custom")
-                cvss_err = _validate_and_apply_cvss(
-                    item["cvss"], record.id,
-                    log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
-                if cvss_err:
-                    errors.append({"id": item["id"], "error": cvss_err})
+
+                cvss_failed = False
+                for target_variant_id in target_variant_ids:
+                    cvss_err = _validate_and_apply_cvss(
+                        item["cvss"], record.id, target_variant_id,
+                        log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
+                    if cvss_err:
+                        errors.append({"id": item["id"], "error": cvss_err})
+                        cvss_failed = True
+                        break
+
+                if cvss_failed:
                     continue
+
+                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                    response_variant_id = target_variant_ids[0]
                 db.session.expire(record, ['metrics'])
+
+            if response_variant_id is not None:
+                _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
 
             results.append(record.to_dict())
 

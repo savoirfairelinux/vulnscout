@@ -16,6 +16,7 @@ class Metrics(Base):
 
     id = db.Column(db.Uuid, primary_key=True, default=uuid.uuid4)
     vulnerability_id = db.Column(db.String(50), db.ForeignKey("vulnerabilities.id"), nullable=False, index=True)
+    variant_id = db.Column(db.Uuid, db.ForeignKey("variants.id"), nullable=True, index=True)
     version = db.Column(db.String, nullable=True)
     score = db.Column(db.Numeric, nullable=True)
     vector = db.Column(db.Text, nullable=True)
@@ -23,6 +24,7 @@ class Metrics(Base):
     origin = db.Column(db.String, nullable=True)
 
     vulnerability = db.relationship("Vulnerability", back_populates="metrics")
+    variant = db.relationship("Variant", back_populates="metrics")
 
     def __repr__(self) -> str:
         return (
@@ -37,6 +39,7 @@ class Metrics(Base):
     @staticmethod
     def create(
         vulnerability_id: str,
+        variant_id: Optional[uuid.UUID | str] = None,
         version: Optional[str] = None,
         score: Optional[float] = None,
         vector: Optional[str] = None,
@@ -44,8 +47,11 @@ class Metrics(Base):
         origin: Optional[str] = None,
     ) -> "Metrics":
         """Create a new metrics record, persist it and return it."""
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
         metrics = Metrics(
             vulnerability_id=vulnerability_id.upper(),
+            variant_id=variant_id,
             version=version,
             score=score,
             vector=vector,
@@ -69,6 +75,26 @@ class Metrics(Base):
         return list(db.session.execute(
             db.select(Metrics).where(Metrics.vulnerability_id == vulnerability_id.upper())
         ).scalars().all())
+
+    @staticmethod
+    def get_by_vulnerability_and_variant(
+        vulnerability_id: str,
+        variant_id: uuid.UUID | str,
+        include_unscoped: bool = True,
+    ) -> list["Metrics"]:
+        """Return metrics for a vulnerability scoped to *variant_id*.
+
+        When *include_unscoped* is ``True``, legacy records with
+        ``variant_id is NULL`` are also included.
+        """
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+        query = db.select(Metrics).where(Metrics.vulnerability_id == vulnerability_id.upper())
+        if include_unscoped:
+            query = query.where(db.or_(Metrics.variant_id == variant_id, Metrics.variant_id.is_(None)))
+        else:
+            query = query.where(Metrics.variant_id == variant_id)
+        return list(db.session.execute(query).scalars().all())
 
     def update(
         self,
@@ -107,14 +133,27 @@ class Metrics(Base):
         cls._seen = set()
 
     @classmethod
-    def from_cvss(cls, cvss: "CVSS", vulnerability_id: str) -> "Metrics":
+    def from_cvss(
+        cls,
+        cvss: "CVSS",
+        vulnerability_id: str,
+        variant_id: uuid.UUID | str | None = None,
+    ) -> "Metrics":
         """Create a :class:`Metrics` record from an in-memory :class:`CVSS` object.
 
         If a matching record (same vulnerability_id + version + score) already exists it is
         returned unchanged; otherwise a new one is persisted.
         """
         vid = vulnerability_id.upper()
-        dedup_key = (vid, cvss.version, float(cvss.base_score) if cvss.base_score is not None else None)
+        if isinstance(variant_id, str):
+            variant_id = uuid.UUID(variant_id)
+
+        dedup_key = (
+            vid,
+            variant_id,
+            cvss.version,
+            float(cvss.base_score) if cvss.base_score is not None else None,
+        )
         if dedup_key in cls._seen:
             # Already persisted in this session — skip the SELECT entirely.
             return None  # type: ignore[return-value]
@@ -130,6 +169,7 @@ class Metrics(Base):
             with db.session.begin_nested():
                 record = cls(
                     vulnerability_id=vid,
+                    variant_id=variant_id,
                     version=cvss.version,
                     score=cvss.base_score,
                     vector=cvss.vector_string,
@@ -143,6 +183,7 @@ class Metrics(Base):
             return db.session.execute(
                 db.select(Metrics).where(
                     Metrics.vulnerability_id == vid,
+                    Metrics.variant_id == variant_id,
                     Metrics.version == cvss.version,
                     Metrics.score == cvss.base_score,
                 )

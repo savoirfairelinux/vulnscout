@@ -219,16 +219,51 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const saveTimeEstimation = async (content: PostTimeEstimate) => {
         setIsLoading(true);
 
-        // Prepare batch request payload
-        const vulnerabilityUpdates = selectedVulns.map(vuln_id => ({
-            id: vuln_id,
-            ...(variantId ? { variant_id: variantId } : {}),
+        // Build variant-scoped updates for every selected vulnerability.
+        const vulnerabilityUpdates: Array<{
+            id: string;
+            variant_id: string;
             effort: {
-                optimistic: content.optimistic.formatAsIso8601(),
-                likely: content.likely.formatAsIso8601(),
-                pessimistic: content.pessimistic.formatAsIso8601()
+                optimistic: string;
+                likely: string;
+                pessimistic: string;
+            };
+        }> = [];
+
+        if (variantId) {
+            for (const vuln_id of selectedVulns) {
+                vulnerabilityUpdates.push({
+                    id: vuln_id,
+                    variant_id: variantId,
+                    effort: {
+                        optimistic: content.optimistic.formatAsIso8601(),
+                        likely: content.likely.formatAsIso8601(),
+                        pessimistic: content.pessimistic.formatAsIso8601()
+                    }
+                });
             }
-        }));
+        } else {
+            await Promise.all(selectedVulns.map(async (vuln_id) => {
+                const variants = await Variants.listByVuln(vuln_id).catch(() => []);
+                for (const variant of variants) {
+                    vulnerabilityUpdates.push({
+                        id: vuln_id,
+                        variant_id: variant.id,
+                        effort: {
+                            optimistic: content.optimistic.formatAsIso8601(),
+                            likely: content.likely.formatAsIso8601(),
+                            pessimistic: content.pessimistic.formatAsIso8601()
+                        }
+                    });
+                }
+            }));
+        }
+
+        if (vulnerabilityUpdates.length === 0) {
+            triggerBanner('No variants found for selected vulnerabilities.', 'error');
+            setIsLoading(false);
+            return;
+        }
 
         try {
             const response = await fetch(import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch', {
@@ -259,7 +294,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 }
 
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';
-                triggerBanner(`Successfully updated time estimates for ${data.count} vulnerabilities${errorMsg}`, 'success');
+                triggerBanner(`Successfully updated ${data.count} variant-scoped time estimates${errorMsg}`, 'success');
                 resetVulns();
             } else {
                 const errorMsg = data?.errors?.length
