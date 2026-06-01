@@ -30,7 +30,7 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
       - name: Set up QEMU
@@ -48,7 +48,13 @@ jobs:
       - name: Build and push multi-arch image
         run: |
           TAGS="-t ${IMAGE_NAME}:${IMAGE_TAG}"
-          if [ "${{ inputs.publish_latest }}" = "true" ]; then
+          PUBLISH_LATEST="${{ inputs.publish_latest }}"
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${IMAGE_TAG}" != *beta* ]]; then
+            PUBLISH_LATEST="true"
+          fi
+
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
             TAGS="${TAGS} -t ${IMAGE_NAME}:latest"
           fi
           docker buildx build \
