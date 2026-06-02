@@ -6,6 +6,37 @@ from flask import jsonify, request
 
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
+from ..controllers.nvd_db import NVD_DB
+
+_CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
+
+
+def _config_file_path() -> str:
+    return os.environ.get('VULNSCOUT_CONFIG', _CONFIG_FILE_DEFAULT)
+
+
+def _write_config_key(key: str, value: str | None) -> None:
+    """Write or remove *key* in the persistent config.env file.
+
+    If *value* is ``None`` or an empty string the key is removed; otherwise
+    it is written as ``KEY=value``.  Silently ignores OS errors (e.g. the
+    file is on a read-only mount).
+    """
+    config_file = _config_file_path()
+    try:
+        dirname = os.path.dirname(config_file)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        existing_lines: list[str] = []
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as fh:
+                existing_lines = [ln for ln in fh.readlines() if not ln.startswith(f'{key}=')]
+        with open(config_file, 'w') as fh:
+            fh.writelines(existing_lines)
+            if value:
+                fh.write(f'{key}={value}\n')
+    except OSError:
+        pass
 
 
 def init_app(app):
@@ -54,6 +85,32 @@ def init_app(app):
         if data is None or "api_key" not in data:
             return {"error": "Missing 'api_key' field"}, 400
         api_key = data["api_key"].strip()
+
+        if api_key:
+            # Validate the key with a single, non-retrying NVD probe call.
+            # CVE-2021-44228 (Log4Shell) is a well-known CVE that will always
+            # be present in the NVD database and requires no special access.
+            nvd = NVD_DB(nvd_api_key=api_key)
+            try:
+                status_code, _ = nvd.api_get_cve("CVE-2021-44228", max_retries=0)
+            except Exception:
+                return jsonify(
+                    {"error": "Could not reach the NVD API to validate the key. "
+                              "Check network connectivity and try again."}
+                ), 503
+            if status_code == 403:
+                return jsonify({"error": "Invalid NVD API key: rejected by the NVD API."}), 400
+            if status_code not in {200}:
+                return jsonify(
+                    {"error": f"Unexpected NVD API response (HTTP {status_code}). "
+                              "The key could not be confirmed."}
+                ), 502
+
+        # Persist to config.env so the key survives container restarts.
+        _write_config_key('NVD_API_KEY', api_key if api_key else None)
+
+        # Also update the current process environment so running NVD calls
+        # (e.g. single-CVE refresh) pick up the key immediately.
         if api_key:
             os.environ['NVD_API_KEY'] = api_key
         else:
