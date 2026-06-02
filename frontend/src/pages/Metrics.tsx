@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback } from "react";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability } from "../handlers/vulnerabilities";
-        import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
+        import { SEVERITY_ORDER, getVulnerabilityStatusSummary, isVulnerabilityActive } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
         import TableGeneric from "../components/TableGeneric";
@@ -337,9 +337,11 @@ const packageColumns = [
                     datasets: [{
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
-                            const status = vuln.simplified_status;
-                            const index = status == 'Not affected' ? 0 : status == 'Fixed' ? 1 : status == 'Pending Assessment' ? 2 : 3;
-                            acc[index]++;
+                          const summary = getVulnerabilityStatusSummary(vuln);
+                          acc[0] += summary.counts['Not affected'] ?? 0;
+                          acc[1] += summary.counts['Fixed'] ?? 0;
+                          acc[2] += summary.counts['Pending Assessment'] ?? 0;
+                          acc[3] += summary.counts['Exploitable'] ?? 0;
                             return acc;
                         }, [0, 0, 0, 0]),
                         backgroundColor: [
@@ -430,7 +432,7 @@ const packageColumns = [
 
   const TopVulns = useMemo(() => {
     return [...vulnerabilities]
-      .filter((vuln) => vuln.simplified_status !== 'Fixed' && vuln.simplified_status !== 'Not affected')
+      .filter((vuln) => isVulnerabilityActive(vuln))
       .map((vuln, index) => {
         const maxCvss = vuln.severity.cvss?.length
           ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
@@ -549,11 +551,11 @@ const packageColumns = [
                     const targetStatus = statusOrder[index];
 
                     const matchingStatus = vulnerabilities.find(v =>
-                        v.simplified_status === targetStatus
-                    )?.simplified_status;
+                      (getVulnerabilityStatusSummary(v).counts[targetStatus] ?? 0) > 0
+                    );
 
                     if (matchingStatus) {
-                        goToVulnsTabWithFilter("Status", matchingStatus);
+                      goToVulnsTabWithFilter("Status", targetStatus);
                     }
                 }
             }

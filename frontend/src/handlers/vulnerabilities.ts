@@ -55,12 +55,108 @@ type Vulnerability = {
     };
     status: string;
     simplified_status: string;
+    status_summary?: {
+        counts: Record<string, number>;
+        ordered: { status: string; count: number }[];
+        total_assessments: number;
+        dominant_status: string;
+        has_active_status: boolean;
+    };
     assessments: Assessment[];
 };
+
+type StatusSummary = NonNullable<Vulnerability['status_summary']>;
 
 export type { Vulnerability, CVSS };
 
 const SEVERITY_ORDER = ['NONE', 'UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+const STATUS_SORT_ORDER = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'];
+const STATUS_DOMINANT_PRIORITY = ['Exploitable', 'Pending Assessment', 'Not affected', 'Fixed', 'unknown'];
+
+const getStatusSortIndex = (status: string): number => {
+    const index = STATUS_SORT_ORDER.indexOf(status);
+    return index === -1 ? STATUS_SORT_ORDER.length : index;
+}
+
+const getStatusDominantIndex = (status: string): number => {
+    const index = STATUS_DOMINANT_PRIORITY.indexOf(status);
+    return index === -1 ? STATUS_DOMINANT_PRIORITY.length : index;
+}
+
+const isActiveStatus = (status: string): boolean => {
+    return status !== 'Fixed' && status !== 'Not affected' && status !== 'unknown';
+}
+
+const getStatusSummaryEntries = (counts: Record<string, number>): { status: string; count: number }[] => {
+    return Object.entries(counts)
+        .map(([status, count]) => ({ status, count }))
+        .sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            const priorityDelta = getStatusDominantIndex(a.status) - getStatusDominantIndex(b.status);
+            if (priorityDelta !== 0) return priorityDelta;
+            return a.status.localeCompare(b.status);
+        });
+}
+
+const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
+    const counts = assessments.reduce((acc, assessment) => {
+        const simplified = assessment.simplified_status || 'unknown';
+        acc[simplified] = (acc[simplified] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+
+    if (Object.keys(counts).length === 0) {
+        counts.unknown = 1;
+    }
+
+    const ordered = getStatusSummaryEntries(counts);
+    const dominant_status = ordered[0]?.status ?? 'unknown';
+    return {
+        counts,
+        ordered,
+        total_assessments: assessments.length,
+        dominant_status,
+        has_active_status: ordered.some((entry) => isActiveStatus(entry.status)),
+    };
+}
+
+const buildFallbackStatusSummary = (simplified_status: string): StatusSummary => {
+    const fallbackStatus = simplified_status || 'unknown';
+    return {
+        counts: { [fallbackStatus]: 1 },
+        ordered: [{ status: fallbackStatus, count: 1 }],
+        total_assessments: 0,
+        dominant_status: fallbackStatus,
+        has_active_status: isActiveStatus(fallbackStatus),
+    };
+}
+
+const getVulnerabilityStatusSummary = (vulnerability: Pick<Vulnerability, 'status_summary' | 'simplified_status'>): StatusSummary => {
+    return vulnerability.status_summary ?? buildFallbackStatusSummary(vulnerability.simplified_status);
+}
+
+const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string => {
+    const top = summary.ordered.slice(0, maxItems).map((entry) => `${entry.status} (${entry.count})`);
+    const hiddenCount = summary.ordered.length - top.length;
+    if (hiddenCount > 0) {
+        top.push(`+${hiddenCount} more`);
+    }
+    return top.join(', ');
+}
+
+const getLegacyStatusFromSummary = (assessments: Assessment[], dominantStatus: string): string => {
+    for (let i = assessments.length - 1; i >= 0; i -= 1) {
+        const assessment = assessments[i];
+        if ((assessment.simplified_status || 'unknown') === dominantStatus) {
+            return assessment.status;
+        }
+    }
+    return assessments[assessments.length - 1]?.status ?? 'unknown';
+}
+
+const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {
+    return getVulnerabilityStatusSummary(vulnerability).has_active_status;
+}
 
 const asCVSS = (data: any): CVSS | [] => {
     if (typeof data !== "object") return [];
@@ -129,6 +225,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         },
         status: 'unknown',
         simplified_status: 'unknown',
+        status_summary: buildStatusSummary([]),
         assessments: [],
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace
@@ -185,18 +282,27 @@ class Vulnerabilities {
         }, {} as {[key: string]: Assessment[]});
 
         return vulns.map((vuln) => {
-            if (!assessments_per_vuln[vuln.id]) return vuln;
-            if (assessments_per_vuln[vuln.id].length < 1) return vuln;
+            if (!assessments_per_vuln[vuln.id] || assessments_per_vuln[vuln.id].length < 1) {
+                return {
+                    ...vuln,
+                    status: 'unknown',
+                    simplified_status: 'unknown',
+                    status_summary: buildStatusSummary([]),
+                    assessments: [],
+                };
+            }
 
             assessments_per_vuln[vuln.id].sort((a, b) => {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
-            const latest = assessments_per_vuln[vuln.id][assessments_per_vuln[vuln.id].length - 1];
+            const vulnAssessments = assessments_per_vuln[vuln.id];
+            const statusSummary = buildStatusSummary(vulnAssessments);
             return {
                 ...vuln,
-                status: latest?.status ?? 'unknown',
-                simplified_status: latest?.simplified_status ?? 'unknown',
-                assessments: assessments_per_vuln[vuln.id],
+                status: getLegacyStatusFromSummary(vulnAssessments, statusSummary.dominant_status),
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+                assessments: vulnAssessments,
             };
         });
     }
@@ -204,11 +310,16 @@ class Vulnerabilities {
     static append_assessment(vulns: Vulnerability[], assessment: Assessment): Vulnerability[] {
         return vulns.map((vuln) => {
             if (vuln.id === assessment.vuln_id) {
+                const assessments = [...vuln.assessments, assessment].sort((a, b) => {
+                    return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+                });
+                const statusSummary = buildStatusSummary(assessments);
                 return {
                     ...vuln,
-                    status: assessment.status,
-                    simplified_status: assessment.simplified_status,
-                    assessments: [...vuln.assessments, assessment],
+                    status: getLegacyStatusFromSummary(assessments, statusSummary.dominant_status),
+                    simplified_status: statusSummary.dominant_status,
+                    status_summary: statusSummary,
+                    assessments,
                 };
             }
 
@@ -294,4 +405,14 @@ class Vulnerabilities {
 
 
 export default Vulnerabilities;
-export { SEVERITY_ORDER, asVulnerability };
+export {
+    SEVERITY_ORDER,
+    STATUS_SORT_ORDER,
+    asVulnerability,
+    buildStatusSummary,
+    getStatusSortIndex,
+    getTopStatusSummaryLabel,
+    getVulnerabilityStatusSummary,
+    isActiveStatus,
+    isVulnerabilityActive,
+};

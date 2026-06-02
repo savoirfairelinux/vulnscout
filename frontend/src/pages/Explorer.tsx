@@ -181,13 +181,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                         : a
                 );
             }
-            if (newAssessments.length === 0) {
-                return { ...vuln, assessments: [], status: 'unknown', simplified_status: 'unknown' };
-            }
-            const latest = [...newAssessments].sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            )[0];
-            return { ...vuln, assessments: newAssessments, status: latest.status, simplified_status: latest.simplified_status };
+            const [enriched] = Vulnerabilities.enrich_with_assessments([
+                {
+                    ...vuln,
+                    assessments: [],
+                    status: 'unknown',
+                    simplified_status: 'unknown',
+                }
+            ], newAssessments);
+            return enriched;
         }));
     }, []);
 

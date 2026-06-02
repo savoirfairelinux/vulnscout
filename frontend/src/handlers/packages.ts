@@ -16,7 +16,7 @@ type Package = {
 
 export type { Package, VulnCounts, Severities };
 import type { Vulnerability } from "./vulnerabilities";
-import { SEVERITY_ORDER } from "./vulnerabilities";
+import { SEVERITY_ORDER, getVulnerabilityStatusSummary } from "./vulnerabilities";
 
 const asPackage = (data: any): Package | [] => {
     if (typeof data !== "object") return [];
@@ -94,17 +94,17 @@ class Packages {
             const vulnerabilities = vulns_per_pkg[pkg.id] || [];
             let severities: Severities = {};
             const counts: VulnCounts = vulnerabilities.reduce((acc, vuln) => {
-                const status = vuln.simplified_status || "unknown";
-
-                // compute max severity per status
-                if (!severities[status]) {
-                    severities[status] = {label: "NONE", index: 0};
-                }
                 const severity = {label: vuln.severity.severity, index: SEVERITY_ORDER.indexOf(vuln.severity.severity.toUpperCase())};
-                if(severity.index > severities[status].index) severities[status] = severity;
+                const summary = getVulnerabilityStatusSummary(vuln);
 
-                // count vulnerabilities per status
-                acc[status] = acc[status] ? acc[status] + 1 : 1;
+                // Aggregate status counts by scenario summary instead of only the dominant status.
+                Object.entries(summary.counts).forEach(([status, count]) => {
+                    if (!severities[status]) {
+                        severities[status] = {label: "NONE", index: 0};
+                    }
+                    if (severity.index > severities[status].index) severities[status] = severity;
+                    acc[status] = (acc[status] || 0) + count;
+                });
                 return acc;
             }, {} as VulnCounts);
             return {

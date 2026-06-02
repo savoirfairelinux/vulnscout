@@ -6,7 +6,7 @@ import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
 import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import SeverityTag from "../components/SeverityTag";
-import { SEVERITY_ORDER } from "../handlers/vulnerabilities";
+import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulnerabilityStatusSummary } from "../handlers/vulnerabilities";
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
@@ -113,9 +113,20 @@ const sortSeverityByScoreFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 }
 
 const sortStatusFn: SortingFn<Vulnerability> = (rowA, rowB) => {
-    const indexA = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowA.original.simplified_status)
-    const indexB = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'].indexOf(rowB.original.simplified_status)
-    return indexA - indexB
+    const summaryA = getVulnerabilityStatusSummary(rowA.original);
+    const summaryB = getVulnerabilityStatusSummary(rowB.original);
+    const statusA = summaryA.dominant_status;
+    const statusB = summaryB.dominant_status;
+    const indexA = getStatusSortIndex(statusA);
+    const indexB = getStatusSortIndex(statusB);
+
+    if (indexA !== indexB) return indexA - indexB;
+
+    const dominantCountA = summaryA.counts[statusA] || 0;
+    const dominantCountB = summaryB.counts[statusB] || 0;
+    if (dominantCountA !== dominantCountB) return dominantCountA - dominantCountB;
+
+    return rowA.original.id.localeCompare(rowB.original.id);
 }
 
 const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
@@ -689,9 +700,18 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columnHelper.accessor('simplified_status', {
             id: 'simplified_status',
             header: () => <div className="flex items-center justify-center">Status</div>,
-            cell: info => <div className="flex items-center justify-center h-full text-center"><code>{info.renderValue()}</code></div>,
+            cell: info => {
+                const summary = getVulnerabilityStatusSummary(info.row.original);
+                const label = getTopStatusSummaryLabel(summary);
+                const details = summary.ordered.map(entry => `${entry.status} (${entry.count})`).join(', ');
+                return (
+                    <div className="flex items-center justify-center h-full text-center" title={details}>
+                        <code>{label}</code>
+                    </div>
+                );
+            },
             sortingFn: sortStatusFn,
-            size: 130
+            size: 220
             }),
             columnHelper.accessor('effort.likely', {
             id: 'effort.likely',
@@ -938,7 +958,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
-            if (selectedStatuses.length && !selectedStatuses.includes(el.simplified_status)) return false;
+            if (selectedStatuses.length) {
+                const summary = getVulnerabilityStatusSummary(el);
+                const statusKeys = new Set(Object.keys(summary.counts));
+                if (!selectedStatuses.some(status => statusKeys.has(status))) return false;
+            }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
 
@@ -1037,6 +1061,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
+
+    const availableStatuses = useMemo(() => {
+        const statuses = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            const summary = getVulnerabilityStatusSummary(vuln);
+            Object.keys(summary.counts).forEach(status => statuses.add(status));
+        });
+        return Array.from(statuses).sort((a, b) => getStatusSortIndex(a) - getStatusSortIndex(b));
+    }, [vulnerabilities]);
 
     const handleModalNavigation = (newIndex: number) => {
         if (newIndex >= 0 && newIndex < modalVulnSnapshot.length) {
@@ -1250,7 +1283,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             <FilterOption
                 label="Status"
-                options={Array.from(new Set(vulnerabilities.map(v => v.simplified_status)))}
+                options={availableStatuses}
                 selected={selectedStatuses}
                 setSelected={setSelectedStatuses}
             />
