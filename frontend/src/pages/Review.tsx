@@ -840,29 +840,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         );
     }
 
-    const hasAnyData = assessments.length > 0 || timeEstimates.length > 0 || customCvss.length > 0;
-
-    if (!hasAnyData) {
-        return (
-            <div>
-                {showBanner && (
-                    <MessageBanner
-                        type={bannerType}
-                        message={bannerMessage}
-                        isVisible={showBanner}
-                        onClose={() => setShowBanner(false)}
-                    />
-                )}
-                <div className="text-center py-10 text-gray-400">
-                    <p className="text-lg">No custom data found</p>
-                    <p className="text-sm mt-2">
-                        Assessments, time estimates or custom CVSS scores created directly in VulnScout will appear here.
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
     const filteredAssessments = assessments.filter((a) => {
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
