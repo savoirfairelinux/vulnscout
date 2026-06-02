@@ -39,7 +39,7 @@ class Metrics(Base):
     @staticmethod
     def create(
         vulnerability_id: str,
-        variant_id: Optional[uuid.UUID | str] = None,
+        variant_id: Optional[uuid.UUID] = None,
         version: Optional[str] = None,
         score: Optional[float] = None,
         vector: Optional[str] = None,
@@ -47,8 +47,6 @@ class Metrics(Base):
         origin: Optional[str] = None,
     ) -> "Metrics":
         """Create a new metrics record, persist it and return it."""
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
         metrics = Metrics(
             vulnerability_id=vulnerability_id.upper(),
             variant_id=variant_id,
@@ -79,7 +77,7 @@ class Metrics(Base):
     @staticmethod
     def get_by_vulnerability_and_variant(
         vulnerability_id: str,
-        variant_id: uuid.UUID | str,
+        variant_id: uuid.UUID,
         include_unscoped: bool = True,
     ) -> list["Metrics"]:
         """Return metrics for a vulnerability scoped to *variant_id*.
@@ -87,8 +85,6 @@ class Metrics(Base):
         When *include_unscoped* is ``True``, legacy records with
         ``variant_id is NULL`` are also included.
         """
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
         query = db.select(Metrics).where(Metrics.vulnerability_id == vulnerability_id.upper())
         if include_unscoped:
             query = query.where(db.or_(Metrics.variant_id == variant_id, Metrics.variant_id.is_(None)))
@@ -137,7 +133,7 @@ class Metrics(Base):
         cls,
         cvss: "CVSS",
         vulnerability_id: str,
-        variant_id: uuid.UUID | str | None = None,
+        variant_id: uuid.UUID | None = None,
     ) -> "Metrics":
         """Create a :class:`Metrics` record from an in-memory :class:`CVSS` object.
 
@@ -145,8 +141,6 @@ class Metrics(Base):
         returned unchanged; otherwise a new one is persisted.
         """
         vid = vulnerability_id.upper()
-        if isinstance(variant_id, str):
-            variant_id = uuid.UUID(variant_id)
 
         dedup_key = (
             vid,

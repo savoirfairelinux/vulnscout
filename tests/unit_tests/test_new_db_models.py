@@ -607,6 +607,11 @@ class TestMetricsController:
         assert m.variant_id == variant.id
         assert float(m.score) == pytest.approx(8.5)
 
+    def test_create_with_string_variant_id(self, app, vuln, variant):
+        m = MetricsController.create(vuln.id, variant_id=str(variant.id), version="3.1", score=8.5)
+        assert m.variant_id == variant.id
+        assert float(m.score) == pytest.approx(8.5)
+
     def test_create_empty_vuln_id_raises(self, app):
         with pytest.raises(ValueError):
             MetricsController.create("  ")
@@ -746,11 +751,6 @@ class TestMetricsModelExtra:
         assert m.variant_id == variant.id
         assert Metrics.get_by_id(m.id).variant_id == variant.id
 
-    def test_create_with_string_variant_id(self, app, vuln, variant):
-        """create() converts string variant_id to UUID (line 47)."""
-        m = Metrics.create(vulnerability_id=vuln.id, variant_id=str(variant.id), score=4.5)
-        assert m.variant_id == variant.id
-
     def test_get_by_vulnerability_and_variant_include_unscoped(self, app, vuln, variant):
         """get_by_vulnerability_and_variant() includes legacy unscoped records."""
         m1 = Metrics.create(vulnerability_id=vuln.id, variant_id=variant.id, score=7.0)
@@ -782,21 +782,6 @@ class TestMetricsModelExtra:
         m = Metrics.from_cvss(cvss, vuln.id, variant_id=variant.id)
         assert m.variant_id == variant.id
         assert m.vulnerability_id == vuln.id
-
-    def test_from_cvss_with_string_variant_id(self, app, vuln, variant):
-        """from_cvss() converts string variant_id to UUID (line 130)."""
-        from src.models.cvss import CVSS
-        cvss = CVSS(
-            version="3.0",
-            vector_string="CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
-            author="NVD",
-            base_score=7.5,
-            exploitability_score=3.9,
-            impact_score=3.6,
-        )
-        Metrics._seen = set()
-        m = Metrics.from_cvss(cvss, vuln.id, variant_id=str(variant.id))
-        assert m.variant_id == variant.id
 
     def test_get_by_id_with_string_uuid(self, app, metrics):
         """get_by_id() accepts a string UUID (line 62)."""

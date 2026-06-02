@@ -60,7 +60,11 @@ class MetricsController:
         include_unscoped: bool = True,
     ) -> list[Metrics]:
         """Return metrics for the given vulnerability and variant."""
-        return Metrics.get_by_vulnerability_and_variant(vulnerability_id, variant_id, include_unscoped)
+        return Metrics.get_by_vulnerability_and_variant(
+            vulnerability_id,
+            ensure_uuid(variant_id),
+            include_unscoped,
+        )
 
     # ------------------------------------------------------------------
     # Mutations
@@ -81,9 +85,10 @@ class MetricsController:
         :raises ValueError: if *vulnerability_id* is empty or blank.
         """
         vulnerability_id = validate_non_empty(vulnerability_id, "Vulnerability id")
+        normalized_variant_id = ensure_uuid(variant_id) if variant_id is not None else None
         return Metrics.create(
             vulnerability_id=vulnerability_id,
-            variant_id=variant_id,
+            variant_id=normalized_variant_id,
             version=version,
             score=score,
             vector=vector,
