@@ -26,6 +26,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
   useEffect(() => {
+    unmountedRef.current = false;
     return () => { unmountedRef.current = true; };
   }, []);
 
