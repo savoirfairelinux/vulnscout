@@ -46,7 +46,7 @@ class FastSPDX ():
                 purl = _get_field(external_ref, ["referenceLocator"])
                 assert isinstance(purl, str)
                 package.add_purl(purl)
-            elif ref_type == "cpe23Type":
+            elif ref_type in ("cpe23Type", "http://spdx.org/rdf/references/cpe23Type"):
                 cpe = _get_field(external_ref, ["referenceLocator"])
                 if isinstance(cpe, str):
                     package.add_cpe(cpe)

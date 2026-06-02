@@ -170,6 +170,42 @@ def test_parse_cpe23type_externalrefs(spdx_parser):
     assert "pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64" in pkg.purl
 
 
+def test_parse_cpe23type_uri_referenceType(spdx_parser):
+    """referenceType given as full URI 'http://spdx.org/rdf/references/cpe23Type' must be accepted."""
+    spdx_parser.parse_from_dict({
+        "spdxVersion": "SPDX-2.2",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": "test",
+        "creationInfo": {"created": "2026-05-10T05:32:45Z", "creators": ["Tool: OpenEmbedded"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": "https://example.com/test",
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-linux-kernel",
+                "name": "linux-jammy-nvidia-tegra",
+                "versionInfo": "5.15.148+git",
+                "filesAnalyzed": False,
+                "downloadLocation": "NOASSERTION",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "SECURITY",
+                        "referenceType": "http://spdx.org/rdf/references/cpe23Type",
+                        "referenceLocator": "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*"
+                    }
+                ]
+            }
+        ]
+    })
+
+    pkg = spdx_parser.packagesCtrl.get("linux-jammy-nvidia-tegra@5.15.148")
+    assert pkg is not None
+
+    # URI-form referenceType CPE must be extracted
+    assert "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*" in pkg.cpe
+    # Must be first (before generic fallback)
+    assert pkg.cpe[0] == "cpe:2.3:*:*:linux_kernel:5.15.148:*:*:*:*:*:*:*"
+
+
 def test_parse_no_cpe23type_still_gets_generic(spdx_parser):
     """Packages without cpe23Type externalRefs must still receive the generic CPE fallback."""
     spdx_parser.parse_from_dict({

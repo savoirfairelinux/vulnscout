@@ -110,7 +110,7 @@ class SPDX:
             for external_ref in package.external_references:
                 if external_ref.reference_type == "purl":
                     pkg.add_purl(external_ref.locator)
-                elif external_ref.reference_type == "cpe23Type":
+                elif external_ref.reference_type in ("cpe23Type", "http://spdx.org/rdf/references/cpe23Type"):
                     pkg.add_cpe(external_ref.locator)
 
             pkg.generate_generic_cpe()
