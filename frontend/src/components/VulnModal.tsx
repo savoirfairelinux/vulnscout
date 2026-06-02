@@ -1023,10 +1023,12 @@ type AssessmentGroup = {
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
+                                                    const supplierName = extractSupplierName(supplier);
                                                     return (
-                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={`Supplier: ${extractSupplierName(supplier) || 'unknown supplier'}`}>
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300" title={supplierName ? `Supplier: ${supplierName}` : undefined}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
-                                                            {nameVersion}<span className="ml-1 opacity-70 text-xs">({extractSupplierName(supplier) || 'unknown supplier'})</span>
+                                                            {nameVersion}
+                                                            {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
                                                         </span>
                                                     );
                                                 })}

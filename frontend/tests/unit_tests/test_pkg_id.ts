@@ -45,8 +45,8 @@ describe('formatPkgId', () => {
         expect(formatPkgId('mylib@1.2.3::Organization: Acme Corp')).toBe('mylib@1.2.3 (Acme Corp)');
     });
 
-    test('falls back to "unknown supplier" when no supplier', () => {
-        expect(formatPkgId('mylib@1.2.3')).toBe('mylib@1.2.3 (unknown supplier)');
+    test('returns name@version when supplier is missing', () => {
+        expect(formatPkgId('mylib@1.2.3')).toBe('mylib@1.2.3');
     });
 
     test('uses raw supplier name when no prefix', () => {

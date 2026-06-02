@@ -17,10 +17,10 @@ export function extractSupplierName(supplier: string): string {
 }
 
 /**
- * Format a package ID for display, always showing supplier name (falling back to 'unknown supplier').
+ * Format a package ID for display, showing supplier name only when present.
  */
 export function formatPkgId(id: string): string {
     const { nameVersion, supplier } = splitPkgId(id);
     const supplierName = supplier ? extractSupplierName(supplier) : '';
-    return `${nameVersion} (${supplierName || 'unknown supplier'})`;
+    return supplierName ? `${nameVersion} (${supplierName})` : nameVersion;
 }
