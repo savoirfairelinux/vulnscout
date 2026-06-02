@@ -374,6 +374,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
+    const [showStatusHelper, setShowStatusHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -381,6 +382,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
+    const statusHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const statusHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
     const prevNvdInProgress = useRef<boolean | null>(null);
     const prevNvdPhase = useRef<string | null>(null);
@@ -699,7 +702,39 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('simplified_status', {
             id: 'simplified_status',
-            header: () => <div className="flex items-center justify-center">Status</div>,
+            header: () => (
+                <div className="relative flex items-center justify-center gap-1">
+                    <span>Status</span>
+                    <button
+                        ref={statusHelperButtonRef}
+                        type="button"
+                        aria-label="status summary helper"
+                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setShowStatusHelper(!showStatusHelper);
+                        }}
+                    >
+                        <FontAwesomeIcon icon={faCircleQuestion} />
+                    </button>
+                    {showStatusHelper && (
+                        <div
+                            ref={statusHelperDropdownRef}
+                            className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <h3 className="font-bold text-white mb-2">Status Summary</h3>
+                            <div className="space-y-1 text-gray-100">
+                                <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
+                                <p>Scope follows your active project, variant, and compare selection.</p>
+                                <p>Display shows top outcomes with counts, for example: Fixed (2), Pending Assessment (1).</p>
+                                <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            ),
             cell: info => {
                 const summary = getVulnerabilityStatusSummary(info.row.original);
                 const label = getTopStatusSummaryLabel(summary);
@@ -944,7 +979,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, showStatusHelper]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -1159,16 +1194,24 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ) {
                 setShowSearchHelper(false);
             }
+            if (
+                statusHelperDropdownRef.current &&
+                statusHelperButtonRef.current &&
+                !statusHelperDropdownRef.current.contains(event.target as Node) &&
+                !statusHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowStatusHelper(false);
+            }
         };
 
-        if (showShortcutHelper || showSearchHelper) {
+        if (showShortcutHelper || showSearchHelper || showStatusHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper, showSearchHelper]);
+    }, [showShortcutHelper, showSearchHelper, showStatusHelper]);
 
     // Close "More Filters" on click outside
     useEffect(() => {
