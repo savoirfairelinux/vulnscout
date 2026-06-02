@@ -225,7 +225,6 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         },
         status: 'unknown',
         simplified_status: 'unknown',
-        status_summary: buildStatusSummary([]),
         assessments: [],
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace

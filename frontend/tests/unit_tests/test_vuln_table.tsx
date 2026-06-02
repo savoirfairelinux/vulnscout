@@ -603,7 +603,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const statusBtn = await screen.getByRole('button', { name: /status/i });
+        const statusBtn = await screen.getByRole('button', { name: /^status$/i });
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
@@ -625,7 +625,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const statusBtn = await screen.getByRole('button', { name: /status/i });
+        const statusBtn = await screen.getByRole('button', { name: /^status$/i });
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
