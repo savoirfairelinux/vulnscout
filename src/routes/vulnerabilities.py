@@ -579,87 +579,93 @@ def init_app(app):
             case _ as fmt:
                 raise ValueError("Unknown format", fmt)
 
-    @app.route('/api/vulnerabilities/<id>', methods=['GET', 'PATCH'])
-    def update_vuln(id):
+    @app.get('/api/vulnerabilities/<id>')
+    def get_vuln(id):
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
 
-        if request.method == 'GET':
-            variant_id = request.args.get("variant_id")
-            if variant_id:
-                variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+        variant_id = request.args.get("variant_id")
+        if variant_id:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            _apply_variant_scoped_metrics_and_effort([record], variant_uuid)
+        return record.to_dict()
+
+    @app.patch('/api/vulnerabilities/<id>')
+    def patch_vuln(id):
+        record = Vulnerability.get_by_id(id)
+        if not record:
+            return "Not found", 404
+
+        payload_data = request.get_json()
+        if payload_data is None:
+            return {"error": "Invalid request data"}, 400
+        response_variant_id = None
+        _updated_effort: dict | None = None
+
+        if "effort" in payload_data:
+            eff = payload_data["effort"]
+            opt, lik, pes, err = _validate_effort(eff)
+            if err:
+                return err, 400
+            variant_id = payload_data.get("variant_id")
+            if variant_id is not None:
+                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
                 if err:
                     return err
-                _apply_variant_scoped_metrics_and_effort([record], variant_uuid)
-            return record.to_dict()
+                target_variant_ids = [variant_id]
+            else:
+                target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                if not target_variant_ids:
+                    target_variant_ids = [None]
 
-        if request.method == 'PATCH':
-            payload_data = request.get_json()
-            if payload_data is None:
-                return {"error": "Invalid request data"}, 400
-            response_variant_id = None
+            for target_variant_id in target_variant_ids:
+                _apply_effort(record, target_variant_id, opt, lik, pes,
+                              log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
-            if "effort" in payload_data:
-                eff = payload_data["effort"]
-                opt, lik, pes, err = _validate_effort(eff)
+            if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                response_variant_id = target_variant_ids[0]
+            _updated_effort = {
+                "optimistic": str(Iso8601Duration(f"PT{opt}H")),
+                "likely": str(Iso8601Duration(f"PT{lik}H")),
+                "pessimistic": str(Iso8601Duration(f"PT{pes}H")),
+            }
+
+        if "cvss" in payload_data:
+            variant_id = payload_data.get("variant_id")
+            if variant_id is not None:
+                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
                 if err:
-                    return err, 400
-                variant_id = payload_data.get("variant_id")
-                if variant_id is not None:
-                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                    if err:
-                        return err
-                    target_variant_ids = [variant_id]
-                else:
-                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
-                    if not target_variant_ids:
-                        target_variant_ids = [None]
+                    return err
+                target_variant_ids = [variant_id]
+            else:
+                target_variant_ids = _variant_ids_for_vulnerability(record.id)
+                if not target_variant_ids:
+                    target_variant_ids = [None]
 
-                for target_variant_id in target_variant_ids:
-                    _apply_effort(record, target_variant_id, opt, lik, pes,
-                                  log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+            if isinstance(payload_data["cvss"], dict):
+                payload_data["cvss"].setdefault("origin", "custom")
 
-                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
-                    response_variant_id = target_variant_ids[0]
-                record.effort = {
-                    "optimistic": Iso8601Duration(f"PT{opt}H"),
-                    "likely": Iso8601Duration(f"PT{lik}H"),
-                    "pessimistic": Iso8601Duration(f"PT{pes}H"),
-                }
+            for target_variant_id in target_variant_ids:
+                cvss_err = _validate_and_apply_cvss(
+                    payload_data["cvss"], record.id, target_variant_id,
+                    log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
+                if cvss_err:
+                    return cvss_err, 400
 
-            if "cvss" in payload_data:
-                variant_id = payload_data.get("variant_id")
-                if variant_id is not None:
-                    variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                    if err:
-                        return err
-                    target_variant_ids = [variant_id]
-                else:
-                    target_variant_ids = _variant_ids_for_vulnerability(record.id)
-                    if not target_variant_ids:
-                        target_variant_ids = [None]
+            if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
+                response_variant_id = target_variant_ids[0]
+            db.session.expire(record, ['metrics'])
 
-                if isinstance(payload_data["cvss"], dict):
-                    payload_data["cvss"].setdefault("origin", "custom")
+        if response_variant_id is not None:
+            _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
 
-                for target_variant_id in target_variant_ids:
-                    cvss_err = _validate_and_apply_cvss(
-                        payload_data["cvss"], record.id, target_variant_id,
-                        log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
-                    if cvss_err:
-                        return cvss_err, 400
-
-                if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
-                    response_variant_id = target_variant_ids[0]
-                db.session.expire(record, ['metrics'])
-
-            if response_variant_id is not None:
-                _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
-
-            return record.to_dict()
-
-        return record.to_dict()
+        response = record.to_dict()
+        if _updated_effort is not None and response_variant_id is None:
+            response["effort"] = _updated_effort
+        return response
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
     def update_vulns_batch():
@@ -683,6 +689,7 @@ def init_app(app):
                 continue
 
             response_variant_id = None
+            _updated_effort: dict | None = None
 
             if "effort" in item:
                 eff = item["effort"]
@@ -708,10 +715,10 @@ def init_app(app):
 
                 if len(target_variant_ids) == 1 and target_variant_ids[0] is not None:
                     response_variant_id = target_variant_ids[0]
-                record.effort = {
-                    "optimistic": Iso8601Duration(f"PT{opt}H"),
-                    "likely": Iso8601Duration(f"PT{lik}H"),
-                    "pessimistic": Iso8601Duration(f"PT{pes}H"),
+                _updated_effort = {
+                    "optimistic": str(Iso8601Duration(f"PT{opt}H")),
+                    "likely": str(Iso8601Duration(f"PT{lik}H")),
+                    "pessimistic": str(Iso8601Duration(f"PT{pes}H")),
                 }
 
             if "cvss" in item:
@@ -750,7 +757,10 @@ def init_app(app):
             if response_variant_id is not None:
                 _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
 
-            results.append(record.to_dict())
+            result_dict = record.to_dict()
+            if _updated_effort is not None and response_variant_id is None:
+                result_dict["effort"] = _updated_effort
+            results.append(result_dict)
 
         response = {
             "status": "success" if results else "error",

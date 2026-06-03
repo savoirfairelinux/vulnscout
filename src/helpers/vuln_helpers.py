@@ -14,7 +14,7 @@ from ..models import Metrics, CVSS, Iso8601Duration
 from ..helpers.verbose import verbose
 
 
-def _parse_effort_hours(value) -> int:
+def _parse_effort_hours(value: int | str) -> int:
     """Parse an effort value (ISO 8601 duration string or integer hours) to whole hours."""
     if isinstance(value, int):
         return value

@@ -378,6 +378,7 @@ def init_app(app):
 
         query = (
             db.select(TimeEstimate)
+            .join(Finding, TimeEstimate.finding_id == Finding.id)
             .options(joinedload(TimeEstimate.finding))
             .where(
                 db.or_(
@@ -416,19 +417,26 @@ def init_app(app):
             except (ValueError, TypeError):
                 return f"PT{h}H"
 
+        # Bulk-load vulnerability texts to avoid N+1 queries
+        vuln_ids_for_te = {te.finding.vulnerability_id for te in all_te}
+        vuln_texts_map: dict[str, dict] = {}
+        if vuln_ids_for_te:
+            for vuln in db.session.execute(
+                db.select(DBVuln).where(DBVuln.id.in_(vuln_ids_for_te))
+            ).scalars().all():
+                vuln_texts_map[vuln.id] = dict(vuln.texts or {})
+
         vuln_map: dict[str, dict] = {}
         for te in all_te:
-            if te.finding is None:
-                continue
             vid = te.finding.vulnerability_id
             current = vuln_map.get(vid)
             is_scoped = te.variant_id is not None
+            # Prefer variant-scoped entries over unscoped ones for the same vuln
             if current is not None and current.get("variant_id") and not is_scoped:
                 continue
             opt = te.optimistic or 0
             lik = te.likely or 0
             pes = te.pessimistic or 0
-            vuln = DBVuln.get_by_id(vid)
             vuln_map[vid] = {
                 "vuln_id": vid,
                 "variant_id": str(te.variant_id) if te.variant_id else None,
@@ -438,7 +446,7 @@ def init_app(app):
                 "optimistic_iso": _hours_to_iso(opt),
                 "likely_iso": _hours_to_iso(lik),
                 "pessimistic_iso": _hours_to_iso(pes),
-                "vuln_texts": dict(vuln.texts or {}) if vuln else {},
+                "vuln_texts": vuln_texts_map.get(vid, {}),
             }
 
         return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])

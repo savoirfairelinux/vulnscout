@@ -119,6 +119,19 @@ class Metrics(Base):
         db.session.delete(self)
         db.session.commit()
 
+    def to_dict(self) -> dict:
+        """Return a CVSS-compatible dict representation of this metrics record."""
+        return {
+            "variant_id": str(self.variant_id) if self.variant_id is not None else None,
+            "version": self.version or "",
+            "vector_string": self.vector or "",
+            "author": self.author or "unknown",
+            "origin": self.origin or "scanner",
+            "base_score": float(self.score) if self.score is not None else 0.0,
+            "exploitability_score": 0.0,
+            "impact_score": 0.0,
+        }
+
     # Session-level dedup cache: avoids repeated 3-column SELECTs during
     # bulk ingestion.  Cleared automatically when the session is reset.
     _seen: set[tuple] = set()
@@ -149,8 +162,15 @@ class Metrics(Base):
             float(cvss.base_score) if cvss.base_score is not None else None,
         )
         if dedup_key in cls._seen:
-            # Already persisted in this session — skip the SELECT entirely.
-            return None  # type: ignore[return-value]
+            # Already persisted in this session — return the existing record.
+            return db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == vid,
+                    Metrics.variant_id == variant_id,
+                    Metrics.version == cvss.version,
+                    Metrics.score == cvss.base_score,
+                )
+            ).scalar_one_or_none()
         cls._seen.add(dedup_key)
 
         # _seen is pre-populated from the DB at startup for all existing metrics.
@@ -173,12 +193,15 @@ class Metrics(Base):
                 db.session.add(record)
                 db.session.flush()
                 return record
-        except Exception:
-            return db.session.execute(
+        except Exception as exc:
+            existing = db.session.execute(
                 db.select(Metrics).where(
                     Metrics.vulnerability_id == vid,
                     Metrics.variant_id == variant_id,
                     Metrics.version == cvss.version,
                     Metrics.score == cvss.base_score,
                 )
-            ).scalar_one()
+            ).scalar_one_or_none()
+            if existing is None:
+                raise exc
+            return existing
