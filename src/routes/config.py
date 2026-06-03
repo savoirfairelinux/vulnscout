@@ -7,6 +7,7 @@ from flask import jsonify, request
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
+from ..helpers.verbose import verbose
 
 _CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 
@@ -43,7 +44,8 @@ def _write_config_key(key: str, value: str | None) -> bool:
             if value:
                 fh.write(f'{key}={value}\n')
         return True
-    except OSError:
+    except Exception as e:
+        verbose(f"[_write_config_key {key!r}] {e}")
         return False
 
 
