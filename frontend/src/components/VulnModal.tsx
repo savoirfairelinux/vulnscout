@@ -89,6 +89,7 @@ type VariantScopedSnapshot = {
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
+    const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
 
@@ -184,7 +185,7 @@ type VariantScopedSnapshot = {
         })();
 
         return () => { cancelled = true; };
-    }, [variantId, availableVariants, vuln.id]);
+    }, [variantId, availableVariants, vuln.id, snapshotVersion]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -807,14 +808,16 @@ type VariantScopedSnapshot = {
                 ? data?.vulnerabilities?.[0]?.severity?.cvss
                 : data?.severity?.cvss;
 
-            if (Array.isArray(updatedSeverity)) {
-                // Update the local vuln object immediately for instant UI update
+            if (Array.isArray(updatedSeverity) && variantId) {
+                // Only update the local vuln object when viewing a specific variant.
+                // In all-variants mode the snapshot refresh below handles the display.
                 vuln.severity.cvss = updatedSeverity;
-
-                // Also patch the vulnerability for real-time refresh in other views
                 patchVuln(vuln.id, vuln);
             }
 
+            // Refresh per-variant snapshots immediately so the panel reflects the
+            // new data without requiring the modal to be closed and reopened.
+            setSnapshotVersion(v => v + 1);
             setShowCustomCvss(false);
             showMessage("Successfully added Custom CVSS.", "success");
         } else {
@@ -866,16 +869,24 @@ type VariantScopedSnapshot = {
                 ? data?.vulnerabilities?.[0]?.effort
                 : data?.effort;
 
-            // Update the local vuln object immediately for instant UI update
-            if (typeof updatedEffort?.optimistic === "string")
-                vuln.effort.optimistic = new Iso8601Duration(updatedEffort.optimistic);
-            if (typeof updatedEffort?.likely === "string")
-                vuln.effort.likely = new Iso8601Duration(updatedEffort.likely);
-            if (typeof updatedEffort?.pessimistic === "string")
-                vuln.effort.pessimistic = new Iso8601Duration(updatedEffort.pessimistic);
+            if (variantId) {
+                // Only update the local vuln object when viewing a specific variant.
+                // In all-variants mode the snapshot refresh below handles the display,
+                // so we must not overwrite the global vuln with variant-scoped values.
+                if (typeof updatedEffort?.optimistic === "string")
+                    vuln.effort.optimistic = new Iso8601Duration(updatedEffort.optimistic);
+                if (typeof updatedEffort?.likely === "string")
+                    vuln.effort.likely = new Iso8601Duration(updatedEffort.likely);
+                if (typeof updatedEffort?.pessimistic === "string")
+                    vuln.effort.pessimistic = new Iso8601Duration(updatedEffort.pessimistic);
 
-            // Also patch the vulnerability for real-time refresh in other views
-            patchVuln(vuln.id, vuln);
+                // Also patch the vulnerability for real-time refresh in other views
+                patchVuln(vuln.id, vuln);
+            }
+
+            // Refresh per-variant snapshots immediately so the panel reflects the
+            // new data without requiring the modal to be closed and reopened.
+            setSnapshotVersion(v => v + 1);
             setClearTimeFields(true);
             setTimeout(() => setClearTimeFields(false), 100);
             showMessage("Successfully added estimation.", "success");

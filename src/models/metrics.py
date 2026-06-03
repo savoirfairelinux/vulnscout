@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, cast
 from ..extensions import db, Base
 
 if TYPE_CHECKING:
@@ -147,11 +147,12 @@ class Metrics(Base):
         cvss: "CVSS",
         vulnerability_id: str,
         variant_id: uuid.UUID | None = None,
-    ) -> "Metrics":
+    ) -> Optional["Metrics"]:
         """Create a :class:`Metrics` record from an in-memory :class:`CVSS` object.
 
         If a matching record (same vulnerability_id + version + score) already exists it is
-        returned unchanged; otherwise a new one is persisted.
+        returned unchanged when insert fallback is triggered; otherwise a new one is persisted.
+        When the session dedup cache hits, ``None`` is returned to signal a no-op.
         """
         vid = vulnerability_id.upper()
 
@@ -162,15 +163,8 @@ class Metrics(Base):
             float(cvss.base_score) if cvss.base_score is not None else None,
         )
         if dedup_key in cls._seen:
-            # Already persisted in this session — return the existing record.
-            return db.session.execute(
-                db.select(Metrics).where(
-                    Metrics.vulnerability_id == vid,
-                    Metrics.variant_id == variant_id,
-                    Metrics.version == cvss.version,
-                    Metrics.score == cvss.base_score,
-                )
-            ).scalar_one_or_none()
+            # Already persisted in this session: no-op.
+            return None
         cls._seen.add(dedup_key)
 
         # _seen is pre-populated from the DB at startup for all existing metrics.
@@ -204,4 +198,4 @@ class Metrics(Base):
             ).scalar_one_or_none()
             if existing is None:
                 raise exc
-            return existing
+            return cast("Metrics", existing)
