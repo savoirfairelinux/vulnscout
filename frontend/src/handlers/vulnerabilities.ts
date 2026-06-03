@@ -91,17 +91,22 @@ const getStatusSummaryEntries = (counts: Record<string, number>): { status: stri
     return Object.entries(counts)
         .map(([status, count]) => ({ status, count }))
         .sort((a, b) => {
-            if (b.count !== a.count) return b.count - a.count;
             const priorityDelta = getStatusDominantIndex(a.status) - getStatusDominantIndex(b.status);
             if (priorityDelta !== 0) return priorityDelta;
+            if (b.count !== a.count) return b.count - a.count;
             return a.status.localeCompare(b.status);
         });
 }
 
 const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
-    const counts = assessments.reduce((acc, assessment) => {
+    const uniqueStatuses = assessments.reduce((acc, assessment) => {
         const simplified = assessment.simplified_status || 'unknown';
-        acc[simplified] = (acc[simplified] || 0) + 1;
+        acc.add(simplified);
+        return acc;
+    }, new Set<string>());
+
+    const counts = Array.from(uniqueStatuses).reduce((acc, status) => {
+        acc[status] = 1;
         return acc;
     }, {} as Record<string, number>);
 
@@ -136,7 +141,7 @@ const getVulnerabilityStatusSummary = (vulnerability: Pick<Vulnerability, 'statu
 }
 
 const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string => {
-    const top = summary.ordered.slice(0, maxItems).map((entry) => `${entry.status} (${entry.count})`);
+    const top = summary.ordered.slice(0, maxItems).map((entry) => entry.status);
     const hiddenCount = summary.ordered.length - top.length;
     if (hiddenCount > 0) {
         top.push(`+${hiddenCount} more`);
