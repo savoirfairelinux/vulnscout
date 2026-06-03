@@ -13,9 +13,13 @@ class FakeResp:
     def __init__(self, status=200, body=b'{"ok": true}'):
         self.status = status
         self._body = body
+        self.headers = {}
 
     def read(self):
         return self._body
+
+    def items(self):
+        return self.headers.items()
 
     def __enter__(self):
         return self
@@ -28,7 +32,7 @@ def test_call_nvd_api_json_decode(monkeypatch):
     monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen",
                         lambda req, timeout=None: FakeResp(200, b"not json"))
     db = NVD_DB()
-    status, data = db._call_nvd_api({"foo": "bar"})
+    status, data, _ = db._call_nvd_api({"foo": "bar"})
     assert status == 200
     assert data == {}
 
@@ -43,7 +47,7 @@ def test_call_nvd_api_exception(monkeypatch):
 
 
 def test_api_get_cve_retry_success(monkeypatch):
-    seq = [(500, {}), (429, {}), (200, {"ok": True})]
+    seq = [(500, {}, {}), (429, {}, {}), (200, {"ok": True}, {})]
 
     def fake_call(self, params):
         return seq.pop(0)
@@ -58,7 +62,7 @@ def test_api_get_cve_retry_success(monkeypatch):
 
 def test_api_get_cve_retry_fail_returns_last_status(monkeypatch):
     """Exhausting retries returns (status, data) rather than raising."""
-    monkeypatch.setattr(NVD_DB, "_call_nvd_api", lambda self, p: (429, {}))
+    monkeypatch.setattr(NVD_DB, "_call_nvd_api", lambda self, p: (429, {}, {}))
     monkeypatch.setattr("src.controllers.nvd_db.time.sleep", lambda *_: None)
 
     db = NVD_DB()
@@ -74,7 +78,7 @@ def test_api_get_cve_max_retries_zero_single_call(monkeypatch):
     def fake_call(self, params):
         nonlocal call_count
         call_count += 1
-        return (500, {})
+        return (500, {}, {})
 
     monkeypatch.setattr(NVD_DB, "_call_nvd_api", fake_call)
     monkeypatch.setattr("src.controllers.nvd_db.time.sleep", lambda *_: None)
@@ -203,7 +207,7 @@ def test_api_get_cve_non_retryable_returns_immediately(monkeypatch, status_code)
     def fake_call(self, params):
         nonlocal call_count
         call_count += 1
-        return status_code, {}
+        return status_code, {}, {}
 
     monkeypatch.setattr(NVD_DB, "_call_nvd_api", fake_call)
     monkeypatch.setattr("src.controllers.nvd_db.time.sleep", lambda *_: None)
@@ -236,7 +240,7 @@ def test_call_nvd_api_404_no_print(monkeypatch, capsys):
 
     monkeypatch.setattr("src.controllers.nvd_db.urllib.request.urlopen", boom)
     db = NVD_DB()
-    status, data = db._call_nvd_api({"cveId": "CVE-2019-5747"})
+    status, data, _ = db._call_nvd_api({"cveId": "CVE-2019-5747"})
     assert status == 404
     assert data == {}
 

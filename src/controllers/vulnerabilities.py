@@ -544,6 +544,7 @@ class VulnerabilitiesController:
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
+        self.nvd_api = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
         DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:

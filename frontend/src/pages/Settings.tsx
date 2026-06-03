@@ -19,6 +19,7 @@ import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
+import NvdApiKey from "../handlers/nvdApiKey";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
@@ -296,40 +297,32 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [confirmDeleteNvdKey, setConfirmDeleteNvdKey] = useState(false);
 
   useEffect(() => {
-    fetch(import.meta.env.VITE_API_URL + "/api/config/nvd-api-key", { mode: "cors" })
-      .then(r => r.json())
+    NvdApiKey.get()
       .then(data => {
-        setNvdHasKey(!!data.has_key);
-        setNvdMaskedKey(data.masked_key || "");
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
       })
-      .catch(() => {});
+      .catch((e) => {
+        console.error(e instanceof Error ? e.message : String(e));
+      });
   }, []);
 
   const handleSaveNvdKey = async () => {
     setNvdBusy(true);
     setNvdMsg(null);
     try {
-      const res = await fetch(import.meta.env.VITE_API_URL + "/api/config/nvd-api-key", {
-        method: "PUT",
-        mode: "cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: nvdKeyInput }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
+      const data = await NvdApiKey.set(nvdKeyInput);
+      if (!data.ok) {
         setNvdMsg({ text: data.error || "Failed to save API key", type: "error" });
       } else {
         setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
         setNvdKeyInput("");
-        // Refresh masked key
-        const r2 = await fetch(import.meta.env.VITE_API_URL + "/api/config/nvd-api-key", { mode: "cors" });
-        const d2 = await r2.json();
-        setNvdMaskedKey(d2.masked_key || "");
         setNvdEditing(false);
         setNvdMsg({ text: data.has_key ? "API key saved." : "API key removed.", type: "success" });
       }
-    } catch {
-      setNvdMsg({ text: "Network error", type: "error" });
+    } catch (e) {
+      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
     } finally {
       setNvdBusy(false);
     }
@@ -340,23 +333,17 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     setNvdBusy(true);
     setNvdMsg(null);
     try {
-      const res = await fetch(import.meta.env.VITE_API_URL + "/api/config/nvd-api-key", {
-        method: "PUT",
-        mode: "cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: "" }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setNvdHasKey(false);
-        setNvdMaskedKey("");
+      const data = await NvdApiKey.remove();
+      if (data.ok) {
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
         setNvdKeyInput("");
         setNvdMsg({ text: "API key removed.", type: "success" });
       } else {
         setNvdMsg({ text: data.error || "Failed to remove API key", type: "error" });
       }
-    } catch {
-      setNvdMsg({ text: "Network error", type: "error" });
+    } catch (e) {
+      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
     } finally {
       setNvdBusy(false);
     }

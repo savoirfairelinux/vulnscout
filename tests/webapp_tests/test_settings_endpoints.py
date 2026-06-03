@@ -726,6 +726,7 @@ class TestNvdApiKey:
             data = resp.get_json()
             assert data["status"] == "ok"
             assert data["has_key"] is True
+            assert data["masked_key"] == "vali******1234"
 
             # Key should now be in the process environment
             assert os.environ.get("NVD_API_KEY") == "valid-key-1234"
@@ -759,18 +760,22 @@ class TestNvdApiKey:
             os.environ.pop("VULNSCOUT_CONFIG", None)
 
     @patch("src.routes.config.NVD_DB")
-    def test_put_malformed_key_rejected(self, mock_nvd_cls, client, tmp_path):
-        """PUT with malformed key string returns 400 and skips NVD probe."""
+    def test_put_key_rejected_by_probe(self, mock_nvd_cls, client, tmp_path):
+        """PUT rejects keys when the NVD probe rejects them, regardless of format."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (403, {}, {})
+        mock_nvd_cls.return_value = mock_instance
+
         os.environ.pop("NVD_API_KEY", None)
         os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
         try:
             resp = client.put("/api/config/nvd-api-key", json={"api_key": "test65869896"})
             assert resp.status_code == 400
-            assert "format" in resp.get_json()["error"].lower()
+            assert "Invalid" in resp.get_json()["error"]
 
-            # No persistence and no remote validation call for malformed input.
+            # Validation should go through the NVD probe even if the key format is unusual.
             assert os.environ.get("NVD_API_KEY") is None
-            mock_nvd_cls.assert_not_called()
+            mock_nvd_cls.assert_called_once_with(nvd_api_key="test65869896")
         finally:
             os.environ.pop("NVD_API_KEY", None)
             os.environ.pop("VULNSCOUT_CONFIG", None)
@@ -809,6 +814,8 @@ class TestNvdApiKey:
             data = resp.get_json()
             assert data["status"] == "ok"
             assert data["has_key"] is True
+            assert data["masked_key"].startswith("D77A")
+            assert data["masked_key"].endswith("670D")
             assert "warning" in data
 
             # Key should be stored despite unexpected probe status.
@@ -830,7 +837,9 @@ class TestNvdApiKey:
         try:
             resp = client.put("/api/config/nvd-api-key", json={"api_key": ""})
             assert resp.status_code == 200
-            assert resp.get_json()["has_key"] is False
+            data = resp.get_json()
+            assert data["has_key"] is False
+            assert data["masked_key"] == ""
 
             # Key removed from env
             assert os.environ.get("NVD_API_KEY") is None
@@ -842,6 +851,29 @@ class TestNvdApiKey:
 
             # NVD_DB should NOT have been instantiated (no key to validate)
             mock_nvd_cls.assert_not_called()
+        finally:
+            os.environ.pop("NVD_API_KEY", None)
+            os.environ.pop("VULNSCOUT_CONFIG", None)
+
+    @patch("src.routes.config._write_config_key", return_value=False)
+    @patch("src.routes.config.NVD_DB")
+    def test_put_write_failure_returns_500(self, mock_nvd_cls, mock_write_config, client, tmp_path):
+        """If config.env cannot be written, the request should fail."""
+        mock_instance = MagicMock()
+        mock_instance.api_probe_cve.return_value = (
+            200,
+            {"vulnerabilities": [{}]},
+            {"x-ratelimit-limit": "50"},
+        )
+        mock_nvd_cls.return_value = mock_instance
+
+        os.environ.pop("NVD_API_KEY", None)
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        try:
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": "persist-me-5678"})
+            assert resp.status_code == 500
+            assert "persist" in resp.get_json()["error"].lower()
+            assert os.environ.get("NVD_API_KEY") is None
         finally:
             os.environ.pop("NVD_API_KEY", None)
             os.environ.pop("VULNSCOUT_CONFIG", None)

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import os
-import re
 from flask import jsonify, request
 
 from ..controllers.projects import ProjectController
@@ -10,19 +9,25 @@ from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
 
 _CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
-_NVD_API_KEY_PATTERN = re.compile(r'^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$')
 
 
 def _config_file_path() -> str:
     return os.environ.get('VULNSCOUT_CONFIG', _CONFIG_FILE_DEFAULT)
 
 
-def _write_config_key(key: str, value: str | None) -> None:
+def _mask_nvd_api_key(key: str) -> str:
+    if not key:
+        return ''
+    if len(key) <= 8:
+        return '*' * len(key)
+    return key[:4] + '*' * (len(key) - 8) + key[-4:]
+
+
+def _write_config_key(key: str, value: str | None) -> bool:
     """Write or remove *key* in the persistent config.env file.
 
     If *value* is ``None`` or an empty string the key is removed; otherwise
-    it is written as ``KEY=value``.  Silently ignores OS errors (e.g. the
-    file is on a read-only mount).
+    it is written as ``KEY=value``.
     """
     config_file = _config_file_path()
     try:
@@ -37,8 +42,9 @@ def _write_config_key(key: str, value: str | None) -> None:
             fh.writelines(existing_lines)
             if value:
                 fh.write(f'{key}={value}\n')
+        return True
     except OSError:
-        pass
+        return False
 
 
 def init_app(app):
@@ -74,12 +80,7 @@ def init_app(app):
         key = os.environ.get('NVD_API_KEY', '')
         if not key:
             return jsonify({"has_key": False, "masked_key": ""})
-        # Return masked version: show first 4 and last 4 chars only
-        if len(key) <= 8:
-            masked = '*' * len(key)
-        else:
-            masked = key[:4] + '*' * (len(key) - 8) + key[-4:]
-        return jsonify({"has_key": True, "masked_key": masked})
+        return jsonify({"has_key": True, "masked_key": _mask_nvd_api_key(key)})
 
     @app.route('/api/config/nvd-api-key', methods=['PUT'])
     def set_nvd_api_key():
@@ -90,11 +91,6 @@ def init_app(app):
         validation_warning = None
 
         if api_key:
-            if not _NVD_API_KEY_PATTERN.fullmatch(api_key):
-                return jsonify(
-                    {"error": "Invalid NVD API key format. Expected 32 hex chars in 8-4-4-4-12 form."}
-                ), 400
-
             # Validate the key with a single, non-retrying NVD probe call.
             # CVE-2021-44228 (Log4Shell) is a well-known CVE that will always
             # be present in the NVD database and requires no special access.
@@ -133,7 +129,8 @@ def init_app(app):
                 )
 
         # Persist to config.env so the key survives container restarts.
-        _write_config_key('NVD_API_KEY', api_key if api_key else None)
+        if not _write_config_key('NVD_API_KEY', api_key if api_key else None):
+            return jsonify({"error": "Failed to persist NVD API key to config.env."}), 500
 
         # Also update the current process environment so running NVD calls
         # (e.g. single-CVE refresh) pick up the key immediately.
@@ -141,7 +138,11 @@ def init_app(app):
             os.environ['NVD_API_KEY'] = api_key
         else:
             os.environ.pop('NVD_API_KEY', None)
-        response_payload = {"status": "ok", "has_key": bool(api_key)}
+        response_payload = {
+            "status": "ok",
+            "has_key": bool(api_key),
+            "masked_key": _mask_nvd_api_key(api_key),
+        }
         if validation_warning:
             response_payload["warning"] = validation_warning
         return jsonify(response_payload)
