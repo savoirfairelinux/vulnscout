@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import os
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -22,7 +23,8 @@ class NVD_DB(BaseAPIClient):
 
     def __init__(self, nvd_api_key: Optional[str] = None):
         super().__init__()
-        self.nvd_api_key = nvd_api_key or None
+        api_key = nvd_api_key if nvd_api_key is not None else os.getenv("NVD_API_KEY")
+        self.nvd_api_key = api_key or None
 
     def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict, dict[str, str]]:
         """

@@ -168,7 +168,7 @@ class VulnerabilitiesController:
         self._db_record_cache: dict = {}
         """Cache of {vuln_id: DB record} — avoids get_by_id SELECT in persist_from_transient."""
         self.epss_api = EPSS_DB()
-        self.nvd_api = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+        self.nvd_api = NVD_DB()
         self._preload_cache()
 
     def _preload_cache(self) -> None:
@@ -544,7 +544,7 @@ class VulnerabilitiesController:
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
-        self.nvd_api = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+        self.nvd_api = NVD_DB()
         DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:
