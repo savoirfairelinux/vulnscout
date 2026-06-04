@@ -72,14 +72,15 @@ _TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
 }
 
 
-def _apply_variant_scoped_metrics_and_effort(records: list, variant_uuid) -> None:
-    """Inject variant-scoped metrics/effort into in-memory vulnerability records.
+def _variant_scoped_metrics_and_effort_overrides(records: list, variant_uuid) -> dict[str, dict]:
+    """Build response-level overrides for variant-scoped metrics/effort.
 
-    This keeps list responses deterministic for the currently selected variant,
-    while still allowing legacy unscoped records as a fallback.
+    Returns a mapping keyed by vulnerability id with:
+      - ``cvss``: selected metric dicts (scoped first, legacy fallback)
+      - ``effort``: selected effort dict (scoped first, legacy fallback)
     """
     if not records:
-        return
+        return {}
 
     vuln_ids = [r.id for r in records]
 
@@ -99,6 +100,7 @@ def _apply_variant_scoped_metrics_and_effort(records: list, variant_uuid) -> Non
             bucket["fallback"].append(m)
 
     from ..models.time_estimate import TimeEstimate
+
     raw_te_rows = db.session.execute(
         db.select(
             Finding.vulnerability_id,
@@ -123,23 +125,45 @@ def _apply_variant_scoped_metrics_and_effort(records: list, variant_uuid) -> Non
         elif te_variant_id is None and vuln_id not in fallback_effort_by_vuln:
             fallback_effort_by_vuln[vuln_id] = packed
 
+    overrides: dict[str, dict] = {}
     for r in records:
         metric_bucket = metrics_by_vuln.get(r.id, {"scoped": [], "fallback": []})
         selected_metrics = metric_bucket["scoped"] or metric_bucket["fallback"]
-        orm_attrs.set_committed_value(r, 'metrics', selected_metrics)
 
         chosen_effort = effort_by_vuln.get(r.id) or fallback_effort_by_vuln.get(r.id)
         if chosen_effort is not None:
             opti, like, pess = chosen_effort
-            r.effort = {
-                "optimistic": None if opti is None else Iso8601Duration(f"PT{opti}H"),
-                "likely": None if like is None else Iso8601Duration(f"PT{like}H"),
-                "pessimistic": None if pess is None else Iso8601Duration(f"PT{pess}H"),
+            effort_dict = {
+                "optimistic": None if opti is None else str(Iso8601Duration(f"PT{opti}H")),
+                "likely": None if like is None else str(Iso8601Duration(f"PT{like}H")),
+                "pessimistic": None if pess is None else str(Iso8601Duration(f"PT{pess}H")),
             }
-        # Mark the effort as already resolved so to_dict() does not fall back
-        # to Finding.time_estimate, which is not variant-aware and could return
-        # data belonging to a different variant.
-        r.effort_variant_loaded = True
+        else:
+            effort_dict = {
+                "optimistic": None,
+                "likely": None,
+                "pessimistic": None,
+            }
+
+        overrides[str(r.id)] = {
+            "cvss": [m.to_dict() for m in selected_metrics],
+            "effort": effort_dict,
+        }
+
+    return overrides
+
+
+def _apply_variant_scoped_overrides_to_vuln_dicts(vulns: dict[str, dict], overrides: dict[str, dict]) -> None:
+    """Apply variant-scoped metrics/effort overrides to serialized vulnerability dicts."""
+    if not vulns or not overrides:
+        return
+
+    for vuln_id, vuln in vulns.items():
+        scoped = overrides.get(str(vuln_id))
+        if scoped is None:
+            continue
+        vuln.setdefault("severity", {})["cvss"] = scoped["cvss"]
+        vuln["effort"] = scoped["effort"]
 
 
 def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
@@ -256,6 +280,7 @@ def init_app(app):
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
+        variant_scoped_overrides: dict[str, dict] = {}
         current_scan_ids: list = []
         if variant_id and compare_variant_id:
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
@@ -326,7 +351,7 @@ def init_app(app):
                     if base_ids:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
-            _apply_variant_scoped_metrics_and_effort(records, compare_uuid)
+            variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, compare_uuid)
         elif variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -383,7 +408,7 @@ def init_app(app):
                         _pkgs_by_vuln_var.setdefault(str(_vid), []).append(_sid)
                     for r in records:
                         r.packages = _pkgs_by_vuln_var.get(str(r.id), [])
-                _apply_variant_scoped_metrics_and_effort(records, variant_uuid)
+                variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, variant_uuid)
         elif project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
@@ -487,6 +512,7 @@ def init_app(app):
         _populate_found_by(records, _scope_variant, _scope_project,
                            active_scan_ids=current_scan_ids or None)
         vulns = {r.id: r.to_dict() for r in records}
+        _apply_variant_scoped_overrides_to_vuln_dicts(vulns, variant_scoped_overrides)
         vuln_ids = vulns.keys()
 
         if vulns:
@@ -590,12 +616,14 @@ def init_app(app):
             return "Not found", 404
 
         variant_id = request.args.get("variant_id")
+        response = record.to_dict()
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            _apply_variant_scoped_metrics_and_effort([record], variant_uuid)
-        return record.to_dict()
+            overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
+            _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
+        return response
 
     @app.patch('/api/vulnerabilities/<id>')
     def patch_vuln(id):
@@ -663,10 +691,10 @@ def init_app(app):
                 response_variant_id = target_variant_ids[0]
             db.session.expire(record, ['metrics'])
 
-        if response_variant_id is not None:
-            _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
-
         response = record.to_dict()
+        if response_variant_id is not None:
+            overrides = _variant_scoped_metrics_and_effort_overrides([record], response_variant_id)
+            _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
         if _updated_effort is not None and response_variant_id is None:
             response["effort"] = _updated_effort
         return response
@@ -758,10 +786,10 @@ def init_app(app):
                     response_variant_id = target_variant_ids[0]
                 db.session.expire(record, ['metrics'])
 
-            if response_variant_id is not None:
-                _apply_variant_scoped_metrics_and_effort([record], response_variant_id)
-
             result_dict = record.to_dict()
+            if response_variant_id is not None:
+                overrides = _variant_scoped_metrics_and_effort_overrides([record], response_variant_id)
+                _apply_variant_scoped_overrides_to_vuln_dicts({result_dict["id"]: result_dict}, overrides)
             if _updated_effort is not None and response_variant_id is None:
                 result_dict["effort"] = _updated_effort
             results.append(result_dict)
