@@ -466,8 +466,8 @@ const packageColumns = [
                 // so that the sum of all bars equals the total vulnerability count.
                 const SOURCE_PRIORITY: Record<string, number> = {
                     grype: 1,
-                  yocto_cve_check: 2,
-                  yocto: 2,
+                    yocto_cve_check: 2,
+                    yocto: 2,
                     nvd_cpe: 3,
                     osv: 4,
                     cyclonedx: 5,
