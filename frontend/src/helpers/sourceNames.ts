@@ -2,6 +2,7 @@
 export const SOURCE_DISPLAY_NAMES: Record<string, string> = {
     openvex: 'OpenVex',
     local_user_data: 'Local User Data',
+    yocto_cve_check: 'Yocto',
     yocto: 'Yocto',
     grype: 'Grype',
     cyclonedx: 'CycloneDx',

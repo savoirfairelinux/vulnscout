@@ -57,13 +57,12 @@ def _sbom_pkg_filter(pkg_ids):
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
 _DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
 
-# Mapping from SBOMDocument.format to the legacy found_by string the front-end expects
+# Mapping from SBOMDocument.format to the found_by string exposed by the API
 _FORMAT_TO_FOUND_BY: dict[str, str] = {
     "grype": "grype",
     "spdx": "spdx3",
     "cdx": "cyclonedx",
     "openvex": "openvex",
-    "yocto_cve_check": "yocto",
 }
 
 # Mapping from Scan.scan_source to the found_by string for tool scans

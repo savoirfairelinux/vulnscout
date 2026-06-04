@@ -43,7 +43,7 @@ class YoctoVulns:
                 for issue in pkg.get("issue", []):
                     vuln = Vulnerability(
                         issue.get("id").upper(),
-                        ["yocto"],
+                        ["yocto_cve_check"],
                         issue.get("link", ""),
                         "unknown"
                     )
