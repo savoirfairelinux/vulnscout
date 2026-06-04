@@ -89,6 +89,10 @@ def init_app(app):
         data = request.get_json(silent=True)
         if data is None or "api_key" not in data:
             return {"error": "Missing 'api_key' field"}, 400
+
+        if not isinstance(data["api_key"], str):
+            return jsonify({"error": "Field 'api_key' must be a string."}), 400
+
         api_key = data["api_key"].strip()
         validation_warning = None
 

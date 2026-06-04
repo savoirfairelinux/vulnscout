@@ -883,6 +883,12 @@ class TestNvdApiKey:
         resp = client.put("/api/config/nvd-api-key", json={"other": "stuff"})
         assert resp.status_code == 400
 
+    def test_put_non_string_api_key_returns_400(self, client):
+        """PUT with a non-string api_key returns 400."""
+        resp = client.put("/api/config/nvd-api-key", json={"api_key": 12345})
+        assert resp.status_code == 400
+        assert "must be a string" in resp.get_json()["error"].lower()
+
     @patch("src.routes.config.NVD_DB")
     def test_put_config_file_persists_between_calls(self, mock_nvd_cls, client, tmp_path):
         """Setting a key writes to config.env; a subsequent GET sees it via os.environ."""
