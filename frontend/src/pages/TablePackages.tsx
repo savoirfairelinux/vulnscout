@@ -10,6 +10,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { extractSupplierName } from '../helpers/pkgId';
+import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames';
 
 type Props = {
     packages: Package[];
@@ -135,6 +136,11 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         }
         return acc;
     }, []), [packages])
+
+    const sources_display_list = useMemo(
+        () => sources_list.map(formatSourceName),
+        [sources_list]
+    );
 
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
@@ -309,7 +315,11 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             columnHelper.accessor('source', {
                 id: 'source',
                 header: () => <div className="flex items-center justify-center">Sources</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()?.join(', ')}</div>,
+                cell: info => (
+                    <div className="flex items-center justify-center h-full text-center">
+                        {info.getValue()?.map(formatSourceName).join(', ')}
+                    </div>
+                ),
                 enableSorting: false
             }),
             columnHelper.accessor('sbom_documents', {
@@ -437,9 +447,9 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
 
             <FilterOption
                 label="Source"
-                options={sources_list}
-                selected={selectedSources}
-                setSelected={setSelectedSources}
+                options={sources_display_list}
+                selected={selectedSources.map(formatSourceName)}
+                setSelected={(displayNames) => setSelectedSources(displayNames.map(getOriginalSourceName))}
             />
 
             <FilterOption

@@ -20,6 +20,7 @@ import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
+import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload } from "@fortawesome/free-solid-svg-icons";
@@ -421,7 +422,7 @@ function VulnDiffList({ vulns, label, colorClass, originMap }: {
                             {filtered.map((v) => (
                                 <tr key={v} className="border-t border-gray-600 hover:bg-gray-600/40">
                                     <td className="px-3 py-1.5 font-mono">{v}</td>
-                                    {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{(originMap?.[v] || []).join(', ')}</td>}
+                                    {hasOrigin && <td className="px-3 py-1.5 text-gray-400">{(originMap?.[v] || []).map(formatSourceName).join(', ')}</td>}
                                 </tr>
                             ))}
                         </tbody>
@@ -559,7 +560,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                                 <td className="px-3 py-1.5 font-mono">{p.package_name}</td>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{p.package_version}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(p.package_supplier || '') || '—'}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{p.sources.join(', ')}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{p.sources.map(formatSourceName).join(', ')}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -586,7 +587,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                                 <td className="px-3 py-1.5 font-mono text-gray-400">{f.package_version}</td>
                                                 <td className="px-3 py-1.5 text-gray-400">{extractSupplierName(f.package_supplier || '') || '—'}</td>
                                                 <td className="px-3 py-1.5 font-mono">{f.vulnerability_id}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{f.sources.join(', ')}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{f.sources.map(formatSourceName).join(', ')}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -607,7 +608,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                                         {filteredVulns.map(v => (
                                             <tr key={v.vulnerability_id} className="border-t border-gray-600 hover:bg-gray-600/40">
                                                 <td className="px-3 py-1.5 font-mono">{v.vulnerability_id}</td>
-                                                <td className="px-3 py-1.5 text-gray-400">{v.sources.join(', ')}</td>
+                                                <td className="px-3 py-1.5 text-gray-400">{v.sources.map(formatSourceName).join(', ')}</td>
                                             </tr>
                                         ))}
                                     </tbody>
