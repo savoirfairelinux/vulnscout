@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import os
+import fcntl
 from flask import jsonify, request
 
 from ..controllers.projects import ProjectController
@@ -35,14 +36,20 @@ def _write_config_key(key: str, value: str | None) -> bool:
         dirname = os.path.dirname(config_file)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-        existing_lines: list[str] = []
-        if os.path.exists(config_file):
-            with open(config_file, 'r') as fh:
+        with open(config_file, 'a+') as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                fh.seek(0)
                 existing_lines = [ln for ln in fh.readlines() if not ln.startswith(f'{key}=')]
-        with open(config_file, 'w') as fh:
-            fh.writelines(existing_lines)
-            if value:
-                fh.write(f'{key}={value}\n')
+                fh.seek(0)
+                fh.truncate(0)
+                fh.writelines(existing_lines)
+                if value:
+                    fh.write(f'{key}={value}\n')
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         return True
     except Exception as e:
         verbose(f"[_write_config_key {key!r}] {e}")
