@@ -219,7 +219,7 @@ EOF
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
-        -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:ro,Z"
+        -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:Z"
     )
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src)
