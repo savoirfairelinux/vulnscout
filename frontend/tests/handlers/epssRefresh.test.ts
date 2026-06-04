@@ -73,4 +73,17 @@ describe("EpssRefreshHandler.triggerSingleRefresh", () => {
         expect(calledUrl).toContain("/epss-refresh");
         expect(calledUrl).not.toContain("/nvd-refresh");
     });
+
+    it("returns null when response body is not valid JSON", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => {
+                throw new Error("invalid json");
+            },
+        } as unknown as Response);
+
+        const result = await EpssRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+        expect(result).toBeNull();
+    });
 });
