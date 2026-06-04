@@ -19,6 +19,16 @@ import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '..
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
 
+const tabLabels: Record<string, string> = {
+        metrics: 'Metrics',
+        packages: 'SBOM',
+        vulnerabilities: 'Vulnerabilities',
+        scans: 'Scans',
+        review: 'Review',
+        exports: 'Export',
+        settings: 'Settings',
+};
+
 type Props = {
   darkMode: boolean;
   setDarkMode: (mode: boolean) => void;
@@ -197,16 +207,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         }
         setTab(newTab);
     }
-
-    const tabLabels: Record<string, string> = {
-        metrics: 'Metrics',
-        packages: 'SBOM',
-        vulnerabilities: 'Vulnerabilities',
-        scans: 'Scans',
-        review: 'Review',
-        exports: 'Export',
-        settings: 'Settings',
-    };
 
     return (
         <div className="w-screen h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] flex flex-col overflow-hidden">

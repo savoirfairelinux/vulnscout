@@ -544,12 +544,12 @@ class VulnerabilitiesController:
         tracker.start("nvd_enrichment")
 
         # NVD lookups via API
-        self.nvd_api = NVD_DB()
+        nvd_api = NVD_DB()
         DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:
             try:
-                result = self.nvd_api.fetch_cve_data(vuln.id)
+                result = nvd_api.fetch_cve_data(vuln.id)
                 if result and result.get("not_found"):
                     # NVD has no record for this CVE (404 or empty result set).
                     # Persist nvd_fetched_at as a sentinel so it is not re-queried
