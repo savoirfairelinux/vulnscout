@@ -45,7 +45,15 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
-    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({ project: null, variant: null, author: "vulnscout" });
+    const [defaultConfig, setDefaultConfig] = useState<AppConfig>({
+        project: null,
+        variant: null,
+        author: "vulnscout",
+        product_name: "",
+        author_name: "",
+        client_name: "",
+        contact_email: "",
+    });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);

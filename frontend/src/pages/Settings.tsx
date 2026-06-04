@@ -17,6 +17,7 @@ import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import Config from "../handlers/config";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import NvdApiKey from "../handlers/nvdApiKey";
@@ -42,6 +43,59 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       .then(setProjects)
       .catch(() => setProjects([]));
   }, []);
+
+  const [configBusy, setConfigBusy] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSaved, setConfigSaved] = useState<string | null>(null);
+  const [configForm, setConfigForm] = useState({
+    product_name: "",
+    author_name: "",
+    client_name: "",
+    contact_email: "",
+  });
+
+  useEffect(() => {
+    Config.get()
+      .then((config) => {
+        if (unmountedRef.current) return;
+        setConfigForm({
+          product_name: config.product_name,
+          author_name: config.author_name,
+          client_name: config.client_name,
+          contact_email: config.contact_email,
+        });
+      })
+      .catch(() => {
+        if (unmountedRef.current) return;
+        setConfigError("Failed to load report metadata settings.");
+      });
+  }, []);
+
+  const handleSaveConfig = async () => {
+    if (configBusy) return;
+    setConfigBusy(true);
+    setConfigError(null);
+    setConfigSaved(null);
+    try {
+      const updated = await Config.patch(configForm);
+      if (unmountedRef.current) return;
+      setConfigForm({
+        product_name: updated.product_name,
+        author_name: updated.author_name,
+        client_name: updated.client_name,
+        contact_email: updated.contact_email,
+      });
+      setConfigSaved("Report metadata settings saved.");
+      onDataChanged?.("Updating default settings...");
+    } catch (e: any) {
+      if (unmountedRef.current) return;
+      setConfigError(e?.message || "Failed to save report metadata settings.");
+    } finally {
+      if (!unmountedRef.current) {
+        setConfigBusy(false);
+      }
+    }
+  };
 
   useEffect(() => {
     loadProjects();
@@ -363,6 +417,97 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         <p className="text-zinc-400 mb-4">
           Manage projects, variants, and import SBOM files.
         </p>
+
+        {/* ======== Report Metadata ======== */}
+        <div>
+          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+            <FontAwesomeIcon icon={faCheck} className="text-cyan-400" />
+            <h2 className="text-xl font-bold text-white">Report Metadata</h2>
+          </div>
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
+              <input
+                type="text"
+                value={configForm.product_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, product_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Product name embedded in reports and SBOMs"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">AUTHOR_NAME</label>
+              <input
+                type="text"
+                value={configForm.author_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, author_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Author/company name embedded in reports"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">CLIENT_NAME</label>
+              <input
+                type="text"
+                value={configForm.client_name}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, client_name: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Customer company name (optional)"
+                className={inputClass}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-zinc-300 mb-1">CONTACT_EMAIL</label>
+              <input
+                type="email"
+                value={configForm.contact_email}
+                onChange={(e) => {
+                  setConfigForm((prev) => ({ ...prev, contact_email: e.target.value }));
+                  setConfigError(null);
+                  setConfigSaved(null);
+                }}
+                placeholder="Contact email embedded in reports"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleSaveConfig}
+                disabled={configBusy}
+                className={btnPrimary}
+              >
+                {configBusy ? (
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" />
+                ) : (
+                  <FontAwesomeIcon icon={faCheck} className="mr-1" />
+                )}
+                Save
+              </button>
+              {configSaved && <span className="text-emerald-400 text-sm">{configSaved}</span>}
+              {configError && (
+                <span className="text-red-400 text-sm">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
+                  {configError}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* ======== Manage Projects ======== */}
         <section aria-labelledby="settings-heading-projects">
