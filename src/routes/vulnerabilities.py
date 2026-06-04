@@ -139,7 +139,7 @@ def _apply_variant_scoped_metrics_and_effort(records: list, variant_uuid) -> Non
         # Mark the effort as already resolved so to_dict() does not fall back
         # to Finding.time_estimate, which is not variant-aware and could return
         # data belonging to a different variant.
-        r._effort_variant_loaded = True
+        r.effort_variant_loaded = True
 
 
 def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
