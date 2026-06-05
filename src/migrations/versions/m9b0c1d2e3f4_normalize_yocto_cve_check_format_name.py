@@ -1,7 +1,7 @@
 """normalize yocto cve check format name in sbom documents
 
 Revision ID: m9b0c1d2e3f4
-Revises: k7f8a9b0c1d2
+Revises: l8a9b0c1d2e3
 Create Date: 2026-06-02 00:00:00.000000
 
 """
@@ -10,7 +10,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'm9b0c1d2e3f4'
-down_revision = 'k7f8a9b0c1d2'
+down_revision = 'l8a9b0c1d2e3'
 branch_labels = None
 depends_on = None
 
