@@ -313,6 +313,80 @@ class TestConfigEndpoint:
         assert body["project"]["name"] == "ProjectA"
         assert body["variant"] is None
 
+    def test_config_includes_report_metadata_fields(self, client):
+        os.environ["PRODUCT_NAME"] = "Widget Suite"
+        os.environ["AUTHOR_NAME"] = "SFL"
+        os.environ["CLIENT_NAME"] = "Acme"
+        os.environ["CONTACT_EMAIL"] = "security@acme.test"
+
+        response = client.get("/api/config")
+        assert response.status_code == 200
+        body = json.loads(response.data)
+
+        assert body["product_name"] == "Widget Suite"
+        assert body["author_name"] == "SFL"
+        assert body["client_name"] == "Acme"
+        assert body["contact_email"] == "security@acme.test"
+
+    def test_patch_config_rejects_invalid_payload_and_key(self, client):
+        response = client.patch("/api/config", data="not-json", content_type="text/plain")
+        assert response.status_code == 400
+        assert "Expected a JSON object" in json.loads(response.data)["error"]
+
+        response = client.patch("/api/config", json={"unsupported_key": "x"})
+        assert response.status_code == 400
+        assert "Unsupported config key" in json.loads(response.data)["error"]
+
+    def test_patch_config_updates_env_and_trims_values(self, client, tmp_path):
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        response = client.patch(
+            "/api/config",
+            json={
+                "product_name": "  Product X  ",
+                "author_name": "  Alice  ",
+                "client_name": "  Client Y  ",
+                "contact_email": "  alice@example.com  ",
+            },
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body["product_name"] == "Product X"
+        assert body["author_name"] == "Alice"
+        assert body["client_name"] == "Client Y"
+        assert body["contact_email"] == "alice@example.com"
+
+        assert os.environ["PRODUCT_NAME"] == "Product X"
+        assert os.environ["AUTHOR_NAME"] == "Alice"
+        assert os.environ["CLIENT_NAME"] == "Client Y"
+        assert os.environ["CONTACT_EMAIL"] == "alice@example.com"
+
+        with open(os.environ["VULNSCOUT_CONFIG"], "r", encoding="utf-8") as fh:
+            saved = fh.read()
+        assert "PRODUCT_NAME=Product X" in saved
+        assert "AUTHOR_NAME=Alice" in saved
+        assert "CLIENT_NAME=Client Y" in saved
+        assert "CONTACT_EMAIL=alice@example.com" in saved
+
+    def test_patch_config_rejects_non_string_value(self, client):
+        response = client.patch("/api/config", json={"author_name": 123})
+        assert response.status_code == 400
+        assert "Invalid value for 'author_name'" in json.loads(response.data)["error"]
+
+    def test_patch_config_blank_value_clears_env_var(self, client, tmp_path):
+        os.environ["VULNSCOUT_CONFIG"] = str(tmp_path / "config.env")
+        os.environ["PRODUCT_NAME"] = "Legacy"
+
+        response = client.patch("/api/config", json={"product_name": "   "})
+        assert response.status_code == 200
+        body = json.loads(response.data)
+
+        assert body["product_name"] == ""
+        assert "PRODUCT_NAME" not in os.environ
+
+        with open(os.environ["VULNSCOUT_CONFIG"], "r", encoding="utf-8") as fh:
+            saved = fh.read()
+        assert "PRODUCT_NAME=" not in saved
+
 
 # ===========================================================================
 # /api/packages  — variant / project filtering
