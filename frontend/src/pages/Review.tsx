@@ -729,6 +729,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
+        teColumnHelper.accessor("variant_id", {
+            header: () => <div className="flex items-center justify-center">Variant</div>,
+            size: 150,
+            cell: info => {
+                const variant = info.getValue();
+                if (!variant) {
+                    return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">-</span></div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                            {variantNames[variant] ?? variant.slice(0, 8)}
+                        </span>
+                    </div>
+                );
+            },
+        }),
         teColumnHelper.accessor("optimistic", {
             header: () => <div className="flex items-center justify-center">Optimistic (h)</div>,
             size: 120,
@@ -756,7 +773,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick]);
+    ], [handleVulnClick, variantNames]);
 
     const cvssColumns = useMemo(() => [
         cvssColumnHelper.accessor("vuln_id", {
@@ -772,6 +789,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <span className="font-mono text-sm">{info.getValue()}</span>
                 </div>
             ),
+        }),
+        cvssColumnHelper.accessor("variant_id", {
+            header: () => <div className="flex items-center justify-center">Variant</div>,
+            size: 150,
+            cell: info => {
+                const variant = info.getValue();
+                if (!variant) {
+                    return <div className="flex items-center justify-center h-full"><span className="text-gray-500 italic">-</span></div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                            {variantNames[variant] ?? variant.slice(0, 8)}
+                        </span>
+                    </div>
+                );
+            },
         }),
         cvssColumnHelper.accessor("version", {
             header: () => <div className="flex items-center justify-center">CVSS Version</div>,
@@ -817,7 +851,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick]);
+    ], [handleVulnClick, variantNames]);
 
     if (loading) {
         return (
@@ -1089,7 +1123,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[te.vuln_id] ?? [],
                         }))}
                         search={search}
-                        fuseKeys={["vuln_id"]}
+                        fuseKeys={["vuln_id", "variant_id"]}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"
@@ -1114,7 +1148,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[c.vuln_id] ?? [],
                         }))}
                         search={search}
-                        fuseKeys={["vuln_id", "vector_string", "author"]}
+                        fuseKeys={["vuln_id", "variant_id", "vector_string", "author"]}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"
