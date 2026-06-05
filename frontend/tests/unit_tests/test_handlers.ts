@@ -270,3 +270,145 @@ describe('Assessments', () => {
     });
 });
 
+describe('Packages additional coverage', () => {
+    beforeEach(() => {
+        fetchMock.resetMocks();
+    });
+
+    test('asPackage parses variants, sources, and sbom_documents arrays', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([{
+                    name: 'mypkg',
+                    version: '3.0',
+                    cpe: ['cpe:2.3:a:x:mypkg:3.0:*'],
+                    purl: ['pkg:generic/mypkg@3.0'],
+                    variants: ['variant-a', 42, 'variant-b'],
+                    sources: ['scanner1', null, 'scanner2'],
+                    sbom_documents: ['doc1.spdx', 'doc2.spdx'],
+                }])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].variants).toEqual(['variant-a', 'variant-b']);
+        expect(packages[0].source).toEqual(['scanner1', 'scanner2']);
+        expect(packages[0].sbom_documents).toEqual(['doc1.spdx', 'doc2.spdx']);
+    });
+
+    test('asPackage uses custom id when provided and non-empty', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([{
+                    id: 'custom-id-123',
+                    name: 'mypkg',
+                    version: '1.0',
+                    cpe: [],
+                    purl: [],
+                }])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].id).toBe('custom-id-123');
+    });
+
+    test('asPackage falls back to name@version when id is empty string', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                json: () => Promise.resolve([{
+                    id: '',
+                    name: 'mypkg',
+                    version: '2.0',
+                    cpe: [],
+                    purl: [],
+                }])
+            } as Response)
+        );
+        const packages = await Packages.list();
+        expect(packages[0].id).toBe('mypkg@2.0');
+    });
+
+    test('list with compareVariantId and operation sets correct query params', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+        await Packages.list('var-1', undefined, 'var-2', 'intersection');
+        const url = new URL(fetchMock.mock.calls[0][0] as string);
+        expect(url.searchParams.get('variant_id')).toBe('var-1');
+        expect(url.searchParams.get('compare_variant_id')).toBe('var-2');
+        expect(url.searchParams.get('operation')).toBe('intersection');
+    });
+
+    test('list with compareVariantId but no operation omits operation param', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+        await Packages.list('var-1', undefined, 'var-2');
+        const url = new URL(fetchMock.mock.calls[0][0] as string);
+        expect(url.searchParams.get('variant_id')).toBe('var-1');
+        expect(url.searchParams.get('compare_variant_id')).toBe('var-2');
+        expect(url.searchParams.has('operation')).toBe(false);
+    });
+
+    test('list with projectId only sets project_id param', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+        await Packages.list(undefined, 'proj-5');
+        const url = new URL(fetchMock.mock.calls[0][0] as string);
+        expect(url.searchParams.get('project_id')).toBe('proj-5');
+        expect(url.searchParams.has('variant_id')).toBe(false);
+    });
+
+    test('enrich_with_vulns uses buildStatusSummary when pkg assessments exist', () => {
+        const pkg = {
+            id: 'mypkg@1.0',
+            name: 'mypkg',
+            version: '1.0',
+            cpe: [],
+            purl: [],
+            vulnerabilities: {},
+            maxSeverity: {},
+            source: [],
+            variants: [],
+            sbom_documents: [],
+            supplier: '',
+        };
+
+        const assessment = {
+            id: 'a1',
+            vuln_id: 'CVE-2024-1',
+            packages: ['mypkg@1.0'],
+            origin: 'sbom',
+            status: 'fixed',
+            simplified_status: 'Fixed',
+            timestamp: '2024-01-01T00:00:00',
+            responses: [],
+        };
+
+        const vuln = {
+            id: 'CVE-2024-1',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['scanner'],
+            datasource: '',
+            packages: ['mypkg@1.0'],
+            packages_current: [],
+            variants: [],
+            urls: [],
+            texts: [],
+            severity: { severity: 'high', min_score: 7, max_score: 8, cvss: [] },
+            epss: { score: undefined, percentile: undefined },
+            effort: { optimistic: null, likely: null, pessimistic: null },
+            fix: { state: 'unknown' },
+            status: 'fixed',
+            simplified_status: 'Fixed',
+            assessments: [assessment],
+        } as any;
+
+        const result = Packages.enrich_with_vulns([pkg], [vuln]);
+        expect(result[0].vulnerabilities['Fixed']).toBe(1);
+        expect(result[0].maxSeverity['Fixed'].label).toBe('high');
+    });
+});
+
