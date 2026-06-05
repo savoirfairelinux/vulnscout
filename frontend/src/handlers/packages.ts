@@ -16,7 +16,7 @@ type Package = {
 
 export type { Package, VulnCounts, Severities };
 import type { Vulnerability } from "./vulnerabilities";
-import { SEVERITY_ORDER, getVulnerabilityStatusSummary } from "./vulnerabilities";
+import { SEVERITY_ORDER, buildStatusSummary, getVulnerabilityStatusSummary } from "./vulnerabilities";
 
 const asPackage = (data: any): Package | [] => {
     if (typeof data !== "object") return [];
@@ -95,7 +95,18 @@ class Packages {
             let severities: Severities = {};
             const counts: VulnCounts = vulnerabilities.reduce((acc, vuln) => {
                 const severity = {label: vuln.severity.severity, index: SEVERITY_ORDER.indexOf(vuln.severity.severity.toUpperCase())};
-                const summary = getVulnerabilityStatusSummary(vuln);
+
+                // Build a summary scoped to this package + each variant:
+                // keep only assessments that explicitly cover this package (or
+                // carry no package list at all), then let buildStatusSummary
+                // group by variant_id so each variant contributes exactly one
+                // count — the last assessment for that (variant, package) pair.
+                const pkgAssessments = vuln.assessments.filter(
+                    (a) => a.packages.length === 0 || a.packages.includes(pkg.id)
+                );
+                const summary = pkgAssessments.length > 0
+                    ? buildStatusSummary(pkgAssessments)
+                    : getVulnerabilityStatusSummary(vuln);
 
                 // Aggregate status counts by scenario summary instead of only the dominant status.
                 Object.entries(summary.counts).forEach(([status, count]) => {

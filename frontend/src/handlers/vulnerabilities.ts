@@ -99,20 +99,40 @@ const getStatusSummaryEntries = (counts: Record<string, number>): { status: stri
 }
 
 const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
-    const uniqueStatuses = assessments.reduce((acc, assessment) => {
-        const simplified = assessment.simplified_status || 'unknown';
-        acc.add(simplified);
-        return acc;
-    }, new Set<string>());
+    if (assessments.length === 0) {
+        return {
+            counts: { unknown: 1 },
+            ordered: [{ status: 'unknown', count: 1 }],
+            total_assessments: 0,
+            dominant_status: 'unknown',
+            has_active_status: false,
+        };
+    }
 
-    const counts = Array.from(uniqueStatuses).reduce((acc, status) => {
-        acc[status] = 1;
+    // Group assessments by variant_id. Assessments without a variant_id are
+    // grouped together under a single fallback key so they contribute one slot.
+    const byVariant = new Map<string, Assessment[]>();
+    assessments.forEach((assessment) => {
+        const key = assessment.variant_id ?? '__no_variant__';
+        if (!byVariant.has(key)) byVariant.set(key, []);
+        byVariant.get(key)!.push(assessment);
+    });
+
+    // For each variant keep only the most recent assessment.
+    const latestPerVariant: Assessment[] = [];
+    byVariant.forEach((variantAssessments) => {
+        const latest = variantAssessments.reduce((best, a) =>
+            new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best
+        );
+        latestPerVariant.push(latest);
+    });
+
+    // Count how many variants share each simplified status.
+    const counts = latestPerVariant.reduce((acc, assessment) => {
+        const simplified = assessment.simplified_status || 'unknown';
+        acc[simplified] = (acc[simplified] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
-
-    if (Object.keys(counts).length === 0) {
-        counts.unknown = 1;
-    }
 
     const ordered = getStatusSummaryEntries(counts);
     const dominant_status = ordered[0]?.status ?? 'unknown';
