@@ -643,6 +643,7 @@ def test_export_custom_data_basic(client):
     assert "vuln_id" in a
     assert "status" in a
     assert "packages" in a
+    assert "variant" in a
 
 
 def test_export_custom_data_by_variant(client):
@@ -696,6 +697,8 @@ def test_export_custom_data_with_cvss(client):
     data = json.loads(resp.data)
     # The CVSS entry should exist (author may vary depending on Metrics.from_cvss logic)
     assert isinstance(data["cvss"], list)
+    if data["cvss"]:
+        assert "variant" in data["cvss"][0]
 
 
 def test_export_custom_data_with_time_estimate(client):
@@ -722,6 +725,7 @@ def test_export_custom_data_with_time_estimate(client):
     assert "optimistic" in te
     assert "likely" in te
     assert "pessimistic" in te
+    assert "variant" in te
 
 
 def test_export_custom_data_filename_by_variant(client):
@@ -806,6 +810,43 @@ def test_import_custom_data_assessments(client):
     assert result["assessments_imported"] >= 1
 
 
+def test_import_custom_data_assessments_without_variant_field(client):
+    """Import remains backward compatible when variant fields are missing."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_assessments_with_variant_name(client):
+    """Assessment import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant": "default",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] >= 1
+
+
 def test_import_custom_data_duplicate_skipped(client):
     """Same assessment imported twice → second is skipped."""
     payload = _custom_data_payload(assessments=[{
@@ -851,10 +892,47 @@ def test_import_custom_data_cvss(client):
     assert result["cvss_imported"] >= 1
 
 
+def test_import_custom_data_cvss_with_variant_name(client):
+    """CVSS import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(cvss=[{
+        "vuln_id": "CVE-2020-35492",
+        "variant": "default",
+        "version": "3.1",
+        "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "base_score": 7.5,
+        "author": "custom-author",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["cvss_imported"] >= 1
+
+
 def test_import_custom_data_time_estimates(client):
     """Import time estimates via the custom-data endpoint."""
     payload = _custom_data_payload(time_estimates=[{
         "vuln_id": "CVE-2020-35492",
+        "optimistic": "PT2H",
+        "likely": "PT4H",
+        "pessimistic": "PT8H",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["time_estimates_imported"] >= 1
+
+
+def test_import_custom_data_time_estimates_with_variant_name(client):
+    """Time-estimate import accepts the human-readable variant name field."""
+    payload = _custom_data_payload(time_estimates=[{
+        "vuln_id": "CVE-2020-35492",
+        "variant": "default",
         "optimistic": "PT2H",
         "likely": "PT4H",
         "pessimistic": "PT8H",
