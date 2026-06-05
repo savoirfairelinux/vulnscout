@@ -1,6 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
-import { asVulnerability } from "../handlers/vulnerabilities";
+import { asVulnerability, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -748,7 +748,15 @@ type VariantScopedSnapshot = {
         }
 
         if (lastCasted) {
-            patchVuln(vuln.id, vuln);
+            const updatedAssessments = [...vuln.assessments];
+            const statusSummary = buildStatusSummary(updatedAssessments);
+            patchVuln(vuln.id, {
+                ...vuln,
+                assessments: updatedAssessments,
+                status: lastCasted.status,
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+            });
             const msg = successCount > 1
                 ? `Successfully added assessment to ${successCount} variants.`
                 : 'Successfully added assessment.';
