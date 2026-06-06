@@ -8,7 +8,7 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-from src.routes.bulk_refresh import _nvd_sleep_interval, _safe_commit
+from src.controllers.refresh import _nvd_sleep_interval, _safe_commit
 from src.controllers.nvd_apply import apply_cvss_update
 from src.controllers.progress_tracker import ProgressTracker
 
