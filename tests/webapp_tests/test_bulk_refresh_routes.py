@@ -317,12 +317,12 @@ class TestBulkNvdRefreshBackground:
         mock_rec = MagicMock()
         mock_details = {"base_score": 7.5, "cvss_version": "3.1", "cvss_vector": "CVSS:3.1/X"}
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.apply_nvd_update") as mock_apply, \
-             patch("src.routes.bulk_refresh.apply_cvss_update") as mock_cvss, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.apply_nvd_update") as mock_apply, \
+             patch("src.controllers.refresh.apply_cvss_update") as mock_cvss, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (
                 200, {"vulnerabilities": [{"cve": {}}]}
@@ -338,11 +338,11 @@ class TestBulkNvdRefreshBackground:
         """_run() skips the update and logs when API returns a non-200 status."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.apply_nvd_update") as mock_apply, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.apply_nvd_update") as mock_apply, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             target()
@@ -353,11 +353,11 @@ class TestBulkNvdRefreshBackground:
         """_run() skips update when 200 but vulnerabilities list is empty."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.apply_nvd_update") as mock_apply, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.apply_nvd_update") as mock_apply, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (200, {"vulnerabilities": []})
             target()
@@ -368,11 +368,11 @@ class TestBulkNvdRefreshBackground:
         """_run() skips apply_nvd_update when the vulnerability is absent from the local DB."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.apply_nvd_update") as mock_apply, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.apply_nvd_update") as mock_apply, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (
                 200, {"vulnerabilities": [{"cve": {}}]}
@@ -394,11 +394,11 @@ class TestBulkNvdRefreshBackground:
                 raise RuntimeError("transient API error")
             return (404, {})
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.apply_nvd_update") as mock_apply, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.apply_nvd_update") as mock_apply, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.side_effect = fake_get_cve
             target()
@@ -410,11 +410,11 @@ class TestBulkNvdRefreshBackground:
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(50)]
         target = self._capture_target(client, cve_ids)
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh._safe_commit") as mock_commit, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh._safe_commit") as mock_commit, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             target()
@@ -427,10 +427,10 @@ class TestBulkNvdRefreshBackground:
         cve_ids = ["CVE-2024-00001", "CVE-2024-00002"]
         target = self._capture_target(client, cve_ids)
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep") as mock_sleep, \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep") as mock_sleep, \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             target()
@@ -441,10 +441,10 @@ class TestBulkNvdRefreshBackground:
         """_run() calls NVDProgressTracker.complete() after all CVEs are processed."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             target()
@@ -455,10 +455,10 @@ class TestBulkNvdRefreshBackground:
         """_run() calls NVDProgressTracker.error() when an unhandled exception occurs."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             # complete() is inside the outer try, so making it raise triggers the outer except
@@ -495,9 +495,9 @@ class TestBulkEpssRefreshBackground:
         target = self._capture_target(client, [existing_cve_id])
         mock_rec = MagicMock()
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {
                 existing_cve_id: {"score": 0.42}
@@ -512,9 +512,9 @@ class TestBulkEpssRefreshBackground:
         target = self._capture_target(client, [existing_cve_id])
         mock_rec = MagicMock()
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {}
             mock_db.session.get.return_value = mock_rec
@@ -526,9 +526,9 @@ class TestBulkEpssRefreshBackground:
         """_run() skips update_record when the vulnerability is absent from the local DB."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {
                 existing_cve_id: {"score": 0.5}
@@ -541,9 +541,9 @@ class TestBulkEpssRefreshBackground:
         """_run() continues processing after api_get_epss_batch raises."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.side_effect = Exception("API timeout")
             target()
@@ -556,9 +556,9 @@ class TestBulkEpssRefreshBackground:
         mock_rec = MagicMock()
         mock_rec.update_record.side_effect = Exception("DB constraint")
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db") as mock_db, \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db") as mock_db, \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {
                 existing_cve_id: {"score": 0.3}
@@ -573,9 +573,9 @@ class TestBulkEpssRefreshBackground:
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(150)]
         target = self._capture_target(client, cve_ids)
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {}
             target()
@@ -586,9 +586,9 @@ class TestBulkEpssRefreshBackground:
         """_run() calls EPSSProgressTracker.complete() after successful processing."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {}
             target()
@@ -599,9 +599,9 @@ class TestBulkEpssRefreshBackground:
         """_run() calls EPSSProgressTracker.error() on an unhandled outer exception."""
         target = self._capture_target(client, [existing_cve_id])
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockTracker.is_cancelled.return_value = False
             MockEPSS.return_value.api_get_epss_batch.return_value = {}
             # complete() is inside the outer try, so making it raise triggers the outer except
@@ -697,11 +697,11 @@ class TestBulkNvdRefreshCancellation:
             # Cancel after first iteration
             return call_count["n"] > 1
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh._safe_commit") as mock_commit, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh._safe_commit") as mock_commit, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockNVD.return_value.api_get_cve.return_value = (404, {})
             MockTracker.is_cancelled.side_effect = fake_is_cancelled
             target()
@@ -726,11 +726,11 @@ class TestBulkNvdRefreshCancellation:
         def fake_is_cancelled():
             return api_call_count["n"] >= cancel_after
 
-        with patch("src.routes.bulk_refresh.NVD_DB") as MockNVD, \
-             patch("src.routes.bulk_refresh._safe_commit"), \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.time.sleep"), \
-             patch("src.routes.bulk_refresh.NVDProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.NVD_DB") as MockNVD, \
+             patch("src.controllers.refresh._safe_commit"), \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.time.sleep"), \
+             patch("src.controllers.refresh.NVDProgressTracker") as MockTracker:
             MockNVD.return_value.api_get_cve.side_effect = fake_api_get
             MockTracker.is_cancelled.side_effect = fake_is_cancelled
             target()
@@ -756,10 +756,10 @@ class TestBulkEpssRefreshCancellation:
             chunk_count["n"] += 1
             return chunk_count["n"] > 1
 
-        with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
-             patch("src.routes.bulk_refresh._safe_commit") as mock_commit, \
-             patch("src.routes.bulk_refresh.db"), \
-             patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker:
+        with patch("src.controllers.refresh.EPSS_DB") as MockEPSS, \
+             patch("src.controllers.refresh._safe_commit") as mock_commit, \
+             patch("src.controllers.refresh.db"), \
+             patch("src.controllers.refresh.EPSSProgressTracker") as MockTracker:
             MockEPSS.return_value.api_get_epss_batch.return_value = {}
             MockTracker.is_cancelled.side_effect = fake_is_cancelled
             target()

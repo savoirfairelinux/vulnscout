@@ -9,55 +9,20 @@ Progress is reported via the shared NVDProgressTracker / EPSSProgressTracker
 singletons, which are already polled by /api/nvd/progress and /api/epss/progress.
 """
 
-import datetime
-import os
-import re
 import threading
-import time
 
 from flask import jsonify, request
 
-from ..models import Vulnerability
-from ..extensions import db
-from ..controllers.nvd_db import NVD_DB
-from ..controllers.nvd_apply import apply_nvd_update, apply_cvss_update
-from ..controllers.epss_db import EPSS_DB
+from ..controllers.refresh import (
+    run_epss_refresh,
+    run_nvd_refresh,
+    _MAX_CVE_IDS,
+    _CVE_RE,
+    _safe_commit,
+    _nvd_sleep_interval,
+)
 from ..controllers.nvd_progress import NVDProgressTracker
 from ..controllers.epss_progress import EPSSProgressTracker
-
-_EPSS_BATCH_SIZE = 100
-_NVD_COMMIT_EVERY = 50
-# HIGH: cap prevents unbounded background threads (no API key = 6 s/CVE × N seconds of work)
-_MAX_CVE_IDS = 1000
-# HIGH: only accept well-formed CVE identifiers to avoid wasting rate-limit quota
-_CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$')
-
-
-def _nvd_sleep_interval() -> float:
-    """Return seconds to sleep between NVD API calls based on key presence.
-
-    Without an API key: 5 req / 30 s → 6 s per call.
-    With an API key:   50 req / 30 s → 0.6 s per call.
-
-    Reference: https://nvd.nist.gov/developers/start-here, section "Rate Limits"
-    """
-    return 0.6 if os.getenv("NVD_API_KEY") else 6.0
-
-
-def _safe_commit(label: str) -> None:
-    """Commit the current session; rollback and log on failure.
-
-    Always expunges all objects from the session after commit or rollback so
-    that the SQLAlchemy identity map does not accumulate loaded records across
-    many loop iterations (fix for unbounded session-cache growth).
-    """
-    try:
-        db.session.commit()
-    except Exception as exc:
-        print(f"[{label}] commit error: {exc}", flush=True)
-        db.session.rollback()
-    finally:
-        db.session.expunge_all()
 
 
 def init_app(app):
@@ -90,63 +55,14 @@ def init_app(app):
         NVDProgressTracker.update("bulk_nvd_refresh", 0, total, f"Starting bulk NVD refresh: 0/{total}")
 
         def _run():
-            with app.app_context():
-                sleep_between = _nvd_sleep_interval()
-                nvd_api_key = os.getenv("NVD_API_KEY")
-                nvd = NVD_DB(nvd_api_key=nvd_api_key)
-                done = 0
-                try:
-                    for cve_id in cve_ids:
-                        if NVDProgressTracker.is_cancelled():
-                            _safe_commit("bulk NVD refresh cancel")
-                            NVDProgressTracker.mark_cancelled()
-                            return
-
-                        try:
-                            now = datetime.datetime.now(datetime.timezone.utc)
-                            status_code, data = nvd.api_get_cve(cve_id, max_retries=2)
-                            if status_code == 200 and data.get("vulnerabilities"):
-                                cve = data["vulnerabilities"][0]["cve"]
-                                details = NVD_DB.extract_cve_details(cve)
-                                rec = db.session.get(Vulnerability, cve_id)
-                                if rec is not None:
-                                    apply_nvd_update(rec, details, now)
-                                    apply_cvss_update(rec, details, db)
-                            else:
-                                print(
-                                    f"[bulk NVD refresh] {cve_id}: status={status_code}, "
-                                    "skipping",
-                                    flush=True,
-                                )
-                        except Exception as exc:
-                            print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
-
-                        done += 1
-                        NVDProgressTracker.update(
-                            "bulk_nvd_refresh", done, total,
-                            f"NVD refresh: {done}/{total} ({cve_id})",
-                        )
-                        if done % _NVD_COMMIT_EVERY == 0:
-                            _safe_commit("bulk NVD refresh")
-                        if done < total:
-                            time.sleep(sleep_between)
-
-                    _safe_commit("bulk NVD refresh final")
-                    NVDProgressTracker.complete()
-                except Exception as exc:
-                    print(f"[bulk NVD refresh] unhandled error: {exc}", flush=True)
-                    NVDProgressTracker.error(str(exc)[:200])
+            run_nvd_refresh(app, cve_ids)
 
         threading.Thread(target=_run, name="bulk-nvd-refresh", daemon=True).start()
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-nvd-refresh', methods=['POST'])
     def cancel_nvd_refresh():
-        """Request cancellation of an in-progress bulk NVD refresh.
-
-        Returns 200 when the cancellation was accepted (refresh was running).
-        Returns 409 when no bulk NVD refresh is currently in progress.
-        """
+        """Request cancellation of an in-progress bulk NVD refresh."""
         if NVDProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
         return jsonify({"error": "No bulk NVD refresh is currently in progress"}), 409
@@ -179,71 +95,14 @@ def init_app(app):
         EPSSProgressTracker.update("bulk_epss_refresh", 0, total, f"Starting bulk EPSS refresh: 0/{total}")
 
         def _run():
-            with app.app_context():
-                epss = EPSS_DB()
-                now = datetime.datetime.now(datetime.timezone.utc)
-                processed = 0
-                try:
-                    chunks = [
-                        cve_ids[i:i + _EPSS_BATCH_SIZE]
-                        for i in range(0, total, _EPSS_BATCH_SIZE)
-                    ]
-                    for chunk in chunks:
-                        if EPSSProgressTracker.is_cancelled():
-                            _safe_commit("bulk EPSS refresh cancel")
-                            EPSSProgressTracker.mark_cancelled()
-                            return
-
-                        try:
-                            results = epss.api_get_epss_batch(chunk)
-                        except Exception as exc:
-                            print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
-                            processed += len(chunk)
-                            EPSSProgressTracker.update(
-                                "bulk_epss_refresh", processed, total,
-                                f"EPSS refresh: {processed}/{total}",
-                            )
-                            continue
-
-                        for cve_id in chunk:
-                            result = results.get(cve_id)
-                            if result:
-                                try:
-                                    rec = db.session.get(Vulnerability, cve_id)
-                                    if rec is not None:
-                                        rec.update_record(
-                                            epss_score=result["score"],
-                                            epss_fetched_at=now,
-                                            commit=False,
-                                        )
-                                except Exception as exc:
-                                    print(
-                                        f"[bulk EPSS refresh] error updating {cve_id}: {exc}",
-                                        flush=True,
-                                    )
-                            processed += 1
-
-                        _safe_commit("bulk EPSS refresh")
-                        EPSSProgressTracker.update(
-                            "bulk_epss_refresh", processed, total,
-                            f"EPSS refresh: {processed}/{total}",
-                        )
-
-                    EPSSProgressTracker.complete()
-                except Exception as exc:
-                    print(f"[bulk EPSS refresh] unhandled error: {exc}", flush=True)
-                    EPSSProgressTracker.error(str(exc)[:200])
+            run_epss_refresh(app, cve_ids)
 
         threading.Thread(target=_run, name="bulk-epss-refresh", daemon=True).start()
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-epss-refresh', methods=['POST'])
     def cancel_epss_refresh():
-        """Request cancellation of an in-progress bulk EPSS refresh.
-
-        Returns 200 when the cancellation was accepted (refresh was running).
-        Returns 409 when no bulk EPSS refresh is currently in progress.
-        """
+        """Request cancellation of an in-progress bulk EPSS refresh."""
         if EPSSProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
         return jsonify({"error": "No bulk EPSS refresh is currently in progress"}), 409

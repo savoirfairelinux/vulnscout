@@ -113,24 +113,24 @@ class TestApplyCvssUpdate:
 class TestSafeCommit:
 
     def test_commits_successfully(self):
-        with patch("src.routes.bulk_refresh.db") as mock_db:
+        with patch("src.controllers.refresh.db") as mock_db:
             _safe_commit("test")
             mock_db.session.commit.assert_called_once()
             mock_db.session.rollback.assert_not_called()
 
     def test_expunges_session_after_successful_commit(self):
-        with patch("src.routes.bulk_refresh.db") as mock_db:
+        with patch("src.controllers.refresh.db") as mock_db:
             _safe_commit("test")
             mock_db.session.expunge_all.assert_called_once()
 
     def test_rolls_back_on_commit_error(self):
-        with patch("src.routes.bulk_refresh.db") as mock_db:
+        with patch("src.controllers.refresh.db") as mock_db:
             mock_db.session.commit.side_effect = Exception("DB error")
             _safe_commit("test")
             mock_db.session.rollback.assert_called_once()
 
     def test_expunges_session_after_rollback(self):
-        with patch("src.routes.bulk_refresh.db") as mock_db:
+        with patch("src.controllers.refresh.db") as mock_db:
             mock_db.session.commit.side_effect = Exception("DB error")
             _safe_commit("test")
             mock_db.session.expunge_all.assert_called_once()
