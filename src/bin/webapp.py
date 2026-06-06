@@ -10,7 +10,10 @@ from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..routes import init_app
 from .. import models  # noqa: F401
-from .merger_ci import init_app as init_merger_cli, post_treatment
+from .merger_ci import init_app as init_merger_cli
+from ..controllers.refresh import run_epss_refresh, run_nvd_refresh
+from ..controllers.nvd_progress import NVDProgressTracker
+from ..controllers.epss_progress import EPSSProgressTracker
 import sys
 import os
 import threading
@@ -28,23 +31,50 @@ def _launch_enrichment(app):
     Runs in its own thread so it doesn't block Flask request handlers
     (WAL journal mode allows concurrent reads).
     """
-    def _enrich_epss():
-        with app.app_context():
-            # Disable autoflush: without this, every SELECT triggers a flush
-            # which acquires the write-lock and holds it across the slow HTTP
-            # calls until the next explicit commit().  With autoflush=False
-            # the lock is only held during commit() itself (milliseconds).
-            db.session.autoflush = False
-            try:
-                from ..controllers.packages import PackagesController
-                from ..controllers.vulnerabilities import VulnerabilitiesController
-                pkgCtrl = PackagesController()
-                vulnCtrl = VulnerabilitiesController(pkgCtrl)
-                post_treatment({"vulnerabilities": vulnCtrl, "packages": pkgCtrl})
-            except Exception as e:
-                print(f"[enrichment/epss] {e}", flush=True)
+    run_epss = os.getenv("INITIAL_REFRESH_EPSS", "true").lower() not in ("false", "0", "no")
+    run_nvd = os.getenv("INITIAL_REFRESH_NVD", "false").lower() not in ("false", "0", "no")
 
-    threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
+    if not run_epss and not run_nvd:
+        return
+
+    cve_ids = db.session.execute(
+        db.select(models.Vulnerability.id).filter(
+            models.Vulnerability.id.like('CVE-%')
+        )
+    ).scalars().all()
+    if not cve_ids:
+        print("[enrichment] No CVE IDs found in DB, skipping enrichment", flush=True)
+        return
+
+    if run_epss:
+        print("[enrichment/epss] EPSS enrichment enabled by config", flush=True)
+        if EPSSProgressTracker.start_if_idle("bulk_epss_refresh"):
+            EPSSProgressTracker.update(
+                "bulk_epss_refresh", 0, len(cve_ids),
+                f"Starting EPSS enrichment: 0/{len(cve_ids)}",
+            )
+
+            def _epss():
+                run_epss_refresh(app, cve_ids)
+
+            threading.Thread(target=_epss, name="enrichment-epss", daemon=True).start()
+        else:
+            print("[enrichment/epss] Already in progress, skipping", flush=True)
+
+    if run_nvd:
+        print("[enrichment/nvd] NVD enrichment enabled by config", flush=True)
+        if NVDProgressTracker.start_if_idle("bulk_nvd_refresh"):
+            NVDProgressTracker.update(
+                "bulk_nvd_refresh", 0, len(cve_ids),
+                f"Starting NVD enrichment: 0/{len(cve_ids)}",
+            )
+
+            def _nvd():
+                run_nvd_refresh(app, cve_ids)
+
+            threading.Thread(target=_nvd, name="enrichment-nvd", daemon=True).start()
+        else:
+            print("[enrichment/nvd] Already in progress, skipping", flush=True)
 
 
 def create_app():
