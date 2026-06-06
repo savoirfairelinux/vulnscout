@@ -18,8 +18,6 @@ from ..controllers.refresh import (
     run_nvd_refresh,
     _MAX_CVE_IDS,
     _CVE_RE,
-    _safe_commit,
-    _nvd_sleep_interval,
 )
 from ..controllers.nvd_progress import NVDProgressTracker
 from ..controllers.epss_progress import EPSSProgressTracker
