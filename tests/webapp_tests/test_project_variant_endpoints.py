@@ -138,6 +138,22 @@ def setup_db_with_project_variant(app):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _restore_env_vars():
+    """Save and restore report-metadata env vars around every test."""
+    _KEYS = [
+        "PRODUCT_NAME", "AUTHOR_NAME", "CLIENT_NAME", "CONTACT_EMAIL",
+        "VULNSCOUT_CONFIG",
+    ]
+    saved = {k: os.environ.get(k) for k in _KEYS}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 @pytest.fixture()
 def app_with_data():
     os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
