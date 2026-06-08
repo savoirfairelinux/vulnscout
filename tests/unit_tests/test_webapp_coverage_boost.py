@@ -23,18 +23,30 @@ class _InlineThread:
         self._target()
 
 
+def _make_fake_db(cve_ids):
+    """Build a minimal fake db object whose session.execute() chain returns cve_ids."""
+    mock_scalars = SimpleNamespace(all=lambda: cve_ids)
+    mock_result = SimpleNamespace(scalars=lambda: mock_scalars)
+    fake_session = SimpleNamespace(autoflush=True, execute=lambda *a, **kw: mock_result)
+    fake_db = SimpleNamespace(session=fake_session, select=lambda *a, **kw: SimpleNamespace(
+        filter=lambda *a, **kw: None
+    ))
+    return fake_db, fake_session
+
+
 def test_launch_enrichment_executes_epss(monkeypatch):
     calls: list[str] = []
 
-    fake_session = SimpleNamespace(autoflush=True)
-    fake_db = SimpleNamespace(session=fake_session)
+    fake_db, fake_session = _make_fake_db(["CVE-2024-1234", "CVE-2024-5678"])
 
-    def _record_post_treatment(_controllers):
+    def _record_run_epss_refresh(_app, _cve_ids):
         calls.append("epss")
 
     monkeypatch.setattr(webapp_mod, "db", fake_db)
     monkeypatch.setattr(webapp_mod.threading, "Thread", _InlineThread)
-    monkeypatch.setattr(webapp_mod, "post_treatment", _record_post_treatment)
+    monkeypatch.setattr(webapp_mod, "run_epss_refresh", _record_run_epss_refresh)
+    monkeypatch.setattr(webapp_mod.EPSSProgressTracker, "start_if_idle", staticmethod(lambda *a: True))
+    monkeypatch.setattr(webapp_mod.EPSSProgressTracker, "update", staticmethod(lambda *a, **kw: None))
 
     app = Flask(__name__)
     webapp_mod._launch_enrichment(app)
@@ -44,15 +56,16 @@ def test_launch_enrichment_executes_epss(monkeypatch):
 
 
 def test_launch_enrichment_catches_and_logs_failures(monkeypatch, capsys):
-    fake_session = SimpleNamespace(autoflush=True)
-    fake_db = SimpleNamespace(session=fake_session)
+    fake_db, fake_session = _make_fake_db(["CVE-2024-1234"])
 
-    def _raise_in_post_treatment(_controllers):
+    def _raise_in_run_epss_refresh(_app, _cve_ids):
         raise RuntimeError("epss failure")
 
     monkeypatch.setattr(webapp_mod, "db", fake_db)
     monkeypatch.setattr(webapp_mod.threading, "Thread", _InlineThread)
-    monkeypatch.setattr(webapp_mod, "post_treatment", _raise_in_post_treatment)
+    monkeypatch.setattr(webapp_mod, "run_epss_refresh", _raise_in_run_epss_refresh)
+    monkeypatch.setattr(webapp_mod.EPSSProgressTracker, "start_if_idle", staticmethod(lambda *a: True))
+    monkeypatch.setattr(webapp_mod.EPSSProgressTracker, "update", staticmethod(lambda *a, **kw: None))
 
     app = Flask(__name__)
     webapp_mod._launch_enrichment(app)

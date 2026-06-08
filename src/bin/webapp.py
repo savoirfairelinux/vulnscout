@@ -30,7 +30,11 @@ def _launch_enrichment(app):
 
     Runs in its own thread so it doesn't block Flask request handlers
     (WAL journal mode allows concurrent reads).
+    Setting autoflush=False prevents every SELECT from triggering a flush
+    that would hold the write lock across slow HTTP calls.
     """
+    db.session.autoflush = False
+
     run_epss = os.getenv("INITIAL_REFRESH_EPSS", "true").lower() not in ("false", "0", "no")
     run_nvd = os.getenv("INITIAL_REFRESH_NVD", "false").lower() not in ("false", "0", "no")
 
@@ -55,7 +59,10 @@ def _launch_enrichment(app):
             )
 
             def _epss():
-                run_epss_refresh(app, cve_ids)
+                try:
+                    run_epss_refresh(app, cve_ids)
+                except Exception as exc:
+                    print(f"[enrichment/epss] Error during EPSS enrichment: {exc}", flush=True)
 
             threading.Thread(target=_epss, name="enrichment-epss", daemon=True).start()
         else:
@@ -70,7 +77,10 @@ def _launch_enrichment(app):
             )
 
             def _nvd():
-                run_nvd_refresh(app, cve_ids)
+                try:
+                    run_nvd_refresh(app, cve_ids)
+                except Exception as exc:
+                    print(f"[enrichment/nvd] Error during NVD enrichment: {exc}", flush=True)
 
             threading.Thread(target=_nvd, name="enrichment-nvd", daemon=True).start()
         else:
