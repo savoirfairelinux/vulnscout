@@ -108,14 +108,16 @@ class Packages {
                     ? buildStatusSummary(pkgAssessments)
                     : getVulnerabilityStatusSummary(vuln);
 
-                // Aggregate status counts by scenario summary instead of only the dominant status.
-                Object.entries(summary.counts).forEach(([status, count]) => {
-                    if (!severities[status]) {
-                        severities[status] = {label: "NONE", index: 0};
-                    }
-                    if (severity.index > severities[status].index) severities[status] = severity;
-                    acc[status] = (acc[status] || 0) + count;
-                });
+                // Count this CVE as 1 toward its dominant status so the badge
+                // always means "N distinct CVEs in this status", not
+                // "N (CVE × variant) pairs". Variant-aware logic still drives
+                // which status bucket each CVE lands in.
+                const status = summary.dominant_status;
+                if (!severities[status]) {
+                    severities[status] = {label: "NONE", index: 0};
+                }
+                if (severity.index > severities[status].index) severities[status] = severity;
+                acc[status] = (acc[status] || 0) + 1;
                 return acc;
             }, {} as VulnCounts);
             return {
