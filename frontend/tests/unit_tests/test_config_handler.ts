@@ -9,11 +9,11 @@ describe('Config.get', () => {
         fetchMock.resetMocks();
     });
 
-    test('maps report metadata fields and author_name fallback', async () => {
+    test('maps report metadata fields', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({
             project: { id: 'p1', name: 'Project 1' },
             variant: { id: 'v1', name: 'Variant 1' },
-            author: 'Legacy Author',
+            author_name: 'Alice',
             product_name: 'Product X',
             client_name: 'Client Y',
             contact_email: 'alice@example.com',
@@ -23,9 +23,8 @@ describe('Config.get', () => {
 
         expect(result.project).toEqual({ id: 'p1', name: 'Project 1' });
         expect(result.variant).toEqual({ id: 'v1', name: 'Variant 1' });
-        expect(result.author).toBe('Legacy Author');
         expect(result.product_name).toBe('Product X');
-        expect(result.author_name).toBe('Legacy Author');
+        expect(result.author_name).toBe('Alice');
         expect(result.client_name).toBe('Client Y');
         expect(result.contact_email).toBe('alice@example.com');
     });
@@ -34,7 +33,6 @@ describe('Config.get', () => {
         fetchMock.mockResponseOnce(JSON.stringify({
             project: { id: 7, name: 'bad' },
             variant: null,
-            author: '   ',
             product_name: null,
             author_name: 5,
             client_name: null,
@@ -45,9 +43,8 @@ describe('Config.get', () => {
 
         expect(result.project).toBeNull();
         expect(result.variant).toBeNull();
-        expect(result.author).toBe('vulnscout');
         expect(result.product_name).toBe('');
-        expect(result.author_name).toBe('   ');
+        expect(result.author_name).toBe('vulnscout');
         expect(result.client_name).toBe('');
         expect(result.contact_email).toBe('');
     });
@@ -63,7 +60,6 @@ describe('Config.patch', () => {
         fetchMock.mockResponseOnce(JSON.stringify({
             project: null,
             variant: null,
-            author: 'vulnscout',
             product_name: 'Product X',
             author_name: 'Alice',
             client_name: 'Client Y',

@@ -48,9 +48,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({
         project: null,
         variant: null,
-        author: "vulnscout",
         product_name: "",
-        author_name: "",
+        author_name: "vulnscout",
         client_name: "",
         contact_email: "",
     });
@@ -145,7 +144,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     }
 
     function appendCVSS(vulnId: string, vector: string) {
-        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author) ?? null;
+        const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author_name) ?? null;
         if (cvss !== null) {
             const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
             setVulns(updatedVulns);

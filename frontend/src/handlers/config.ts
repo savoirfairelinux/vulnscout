@@ -1,7 +1,6 @@
 type AppConfig = {
     project: { id: string; name: string } | null;
     variant: { id: string; name: string } | null;
-    author: string;
     product_name: string;
     author_name: string;
     client_name: string;
@@ -11,11 +10,8 @@ type AppConfig = {
 export type { AppConfig };
 
 class Config {
-    static async get(): Promise<AppConfig> {
-        const response = await fetch(import.meta.env.VITE_API_URL + "/api/config", {
-            mode: "cors",
-        });
-        const data = await response.json();
+     
+    private static _normalizeConfig(data: any): AppConfig {
         return {
             project:
                 data?.project &&
@@ -29,16 +25,22 @@ class Config {
                 typeof data.variant.name === "string"
                     ? { id: data.variant.id, name: data.variant.name }
                     : null,
-            author: typeof data?.author === "string" && data.author.trim().length > 0
-                ? data.author
-                : "vulnscout",
             product_name: typeof data?.product_name === "string" ? data.product_name : "",
-            author_name: typeof data?.author_name === "string"
-                ? data.author_name
-                : (typeof data?.author === "string" ? data.author : ""),
+            author_name:
+                typeof data?.author_name === "string" && data.author_name.trim().length > 0
+                    ? data.author_name
+                    : "vulnscout",
             client_name: typeof data?.client_name === "string" ? data.client_name : "",
             contact_email: typeof data?.contact_email === "string" ? data.contact_email : "",
         };
+    }
+
+    static async get(): Promise<AppConfig> {
+        const response = await fetch(import.meta.env.VITE_API_URL + "/api/config", {
+            mode: "cors",
+        });
+        const data = await response.json();
+        return Config._normalizeConfig(data);
     }
 
     static async patch(data: {
@@ -68,29 +70,7 @@ class Config {
         }
 
         const body = await response.json();
-        return {
-            project:
-                body?.project &&
-                typeof body.project.id === "string" &&
-                typeof body.project.name === "string"
-                    ? { id: body.project.id, name: body.project.name }
-                    : null,
-            variant:
-                body?.variant &&
-                typeof body.variant.id === "string" &&
-                typeof body.variant.name === "string"
-                    ? { id: body.variant.id, name: body.variant.name }
-                    : null,
-            author: typeof body?.author === "string" && body.author.trim().length > 0
-                ? body.author
-                : "vulnscout",
-            product_name: typeof body?.product_name === "string" ? body.product_name : "",
-            author_name: typeof body?.author_name === "string"
-                ? body.author_name
-                : (typeof body?.author === "string" ? body.author : ""),
-            client_name: typeof body?.client_name === "string" ? body.client_name : "",
-            contact_email: typeof body?.contact_email === "string" ? body.contact_email : "",
-        };
+        return Config._normalizeConfig(body);
     }
 }
 
