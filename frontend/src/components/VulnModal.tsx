@@ -328,7 +328,6 @@ type VariantScopedSnapshot = {
             if (nvdUpdated || epssUpdated) {
                 if (nvdUpdated) {
                     const {
-                        status: _s,
                         simplified_status: _ss,
                         assessments: _a,
                         packages_current: _pc,
@@ -408,7 +407,6 @@ type VariantScopedSnapshot = {
                     const sortedAssessments = [...vuln.assessments].sort(
                         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
                     );
-                    vuln.status = sortedAssessments[0].status;
                     vuln.simplified_status = sortedAssessments[0].simplified_status;
                 }
 
@@ -589,7 +587,6 @@ type VariantScopedSnapshot = {
                 (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
             )[0];
             if (latest) {
-                vuln.status = latest.status;
                 vuln.simplified_status = latest.simplified_status;
             }
             patchVuln(vuln.id, vuln);
@@ -738,7 +735,6 @@ type VariantScopedSnapshot = {
                         vuln.assessments.push(casted);
                         // Keep allVulnAssessments in sync so variant tags appear immediately
                         setAllVulnAssessments(prev => [...prev, casted]);
-                        vuln.status = casted.status;
                         vuln.simplified_status = casted.simplified_status;
                     }
                 }
@@ -753,7 +749,6 @@ type VariantScopedSnapshot = {
             patchVuln(vuln.id, {
                 ...vuln,
                 assessments: updatedAssessments,
-                status: lastCasted.status,
                 simplified_status: statusSummary.dominant_status,
                 status_summary: statusSummary,
             });

@@ -185,7 +185,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {
                     ...vuln,
                     assessments: [],
-                    status: 'unknown',
                     simplified_status: 'unknown',
                 }
             ], newAssessments);

@@ -92,7 +92,6 @@ describe('Vulnerability Table', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'affected',
             simplified_status: 'Exploitable',
             assessments: [],
             variants: [],
@@ -153,7 +152,6 @@ describe('Vulnerability Table', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             published: '2018-07-22T14:30:00Z',
             assessments: [],
@@ -204,7 +202,6 @@ describe('Vulnerability Table', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'fixed',
             simplified_status: 'Fixed',
             assessments: [
                 {
@@ -250,7 +247,6 @@ describe('Vulnerability Table', () => {
             pessimistic: new Iso8601Duration(undefined)
         },
         fix: { state: 'unknown' },
-        status: 'affected',
         simplified_status: 'Exploitable',
         assessments: [],
         published: '2024-01-01T00:00:00Z'
@@ -1613,7 +1609,6 @@ describe('Vulnerability Table', () => {
                     pessimistic: new Iso8601Duration('PT4H')
                 },
                 fix: { state: 'unknown' },
-                status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
                 variants: [],
@@ -1824,7 +1819,6 @@ describe('Vulnerability Table', () => {
                     pessimistic: new Iso8601Duration('PT4H')
                 },
                 fix: { state: 'unknown' },
-                status: 'under_investigation',
                 simplified_status: 'Pending Assessment',
                 assessments: [],
                 variants: [],
@@ -2175,7 +2169,6 @@ describe('More Filters dropdown', () => {
                 pessimistic: new Iso8601Duration(undefined)
             },
             fix: { state: 'unknown' },
-            status: 'affected',
             simplified_status: 'Exploitable',
             assessments: [],
             variants: [],
@@ -2214,7 +2207,6 @@ describe('More Filters dropdown', () => {
                 pessimistic: new Iso8601Duration(undefined)
             },
             fix: { state: 'unknown' },
-            status: 'under_investigation',
             simplified_status: 'Pending Assessment',
             assessments: [],
             variants: [],
@@ -2373,7 +2365,6 @@ describe('NVD timestamp columns', () => {
             pessimistic: new Iso8601Duration(undefined)
         },
         fix: { state: 'unknown' },
-        status: 'under_investigation',
         simplified_status: 'Pending Assessment',
         assessments: [],
         variants: [],

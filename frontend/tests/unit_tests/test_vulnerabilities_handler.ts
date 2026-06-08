@@ -161,7 +161,6 @@ describe('enrich_with_assessments', () => {
     ].map((v: any) => {
       return {
         ...v,
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       };
@@ -202,7 +201,6 @@ describe('enrich_with_assessments', () => {
 
     // CVE-2021-1 should have latest assessment (most recent timestamp)
     const cve1 = enriched.find((v: any) => v.id === 'CVE-2021-1');
-    expect(cve1?.status).toBe('resolved');
     expect(cve1?.simplified_status).toBe('closed');
     expect(cve1?.assessments).toHaveLength(3);
     // Assessments should be sorted by timestamp
@@ -212,13 +210,11 @@ describe('enrich_with_assessments', () => {
 
     // CVE-2021-2 should have single assessment
     const cve2 = enriched.find((v: any) => v.id === 'CVE-2021-2');
-    expect(cve2?.status).toBe('affected');
     expect(cve2?.simplified_status).toBe('open');
     expect(cve2?.assessments).toHaveLength(1);
 
     // CVE-2021-3 should remain unchanged
     const cve3 = enriched.find((v: any) => v.id === 'CVE-2021-3');
-    expect(cve3?.status).toBe('unknown');
     expect(cve3?.simplified_status).toBe('unknown');
     expect(cve3?.assessments).toHaveLength(0);
   });
@@ -227,14 +223,13 @@ describe('enrich_with_assessments', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
     ];
 
     const enriched = Vulnerabilities.enrich_with_assessments(vulns, []);
-    expect(enriched[0].status).toBe('unknown');
+    expect(enriched[0].simplified_status).toBe('unknown');
     expect(enriched[0].assessments).toHaveLength(0);
   });
 
@@ -242,7 +237,6 @@ describe('enrich_with_assessments', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
@@ -250,7 +244,7 @@ describe('enrich_with_assessments', () => {
 
     // This simulates the case where no assessments exist for the vulnerability
     const enriched = Vulnerabilities.enrich_with_assessments(vulns, []);
-    expect(enriched[0].status).toBe('unknown');
+    expect(enriched[0].simplified_status).toBe('unknown');
   });
 });
 
@@ -259,13 +253,11 @@ describe('append_assessment', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       },
       {
         ...rawVuln({ id: 'CVE-2021-2' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: []
       }
@@ -282,12 +274,11 @@ describe('append_assessment', () => {
     const result = Vulnerabilities.append_assessment(vulns, assessment);
 
     const cve1 = result.find((v: any) => v.id === 'CVE-2021-1');
-    expect(cve1?.status).toBe('investigating');
     expect(cve1?.simplified_status).toBe('open');
     expect(cve1?.assessments).toHaveLength(1);
 
     const cve2 = result.find((v: any) => v.id === 'CVE-2021-2');
-    expect(cve2?.status).toBe('unknown');
+    expect(cve2?.simplified_status).toBe('unknown');
     expect(cve2?.assessments).toHaveLength(0);
   });
 });
@@ -297,7 +288,6 @@ describe('append_cvss', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -330,7 +320,6 @@ describe('append_cvss', () => {
     const vulns = [
       {
         ...rawVuln({ id: 'CVE-2021-1' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -342,7 +331,6 @@ describe('append_cvss', () => {
       },
       {
         ...rawVuln({ id: 'CVE-2021-2' }),
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
         severity: {
@@ -561,7 +549,6 @@ describe('isVulnerabilityActive', () => {
     epss: { score: undefined, percentile: undefined },
     effort: { optimistic: null as any, likely: null as any, pessimistic: null as any },
     fix: { state: 'unknown' },
-    status: simplified_status,
     simplified_status,
     assessments: [],
     status_summary,
@@ -621,10 +608,9 @@ describe('getStatusSortIndex', () => {
   });
 });
 
-describe('getLegacyStatusFromSummary via append_assessment', () => {
+describe('append_assessment via sort comparator', () => {
   const makeVuln = (id: string) => ({
     ...rawVuln({ id }),
-    status: 'unknown',
     simplified_status: 'unknown',
     assessments: [],
   });
@@ -649,17 +635,14 @@ describe('getLegacyStatusFromSummary via append_assessment', () => {
     expect(result[0].assessments[1].id).toBe('a1');
   });
 
-  test('getLegacyStatusFromSummary fallback: no matching dominant status', () => {
-    // enrich_with_assessments where all assessments have a different simplified_status
-    // than the computed dominant, triggering the fallback return
+  test('dominant status reflects highest-priority variant', () => {
+    // enrich_with_assessments with two variants: Fixed and Exploitable
+    // Exploitable has higher priority so it should be dominant
     const vuln = {
       ...rawVuln({ id: 'CVE-X' }),
-      status: 'unknown',
       simplified_status: 'unknown',
       assessments: [],
     };
-    // Use two different variants so dominant_status is Exploitable (highest priority)
-    // but we supply only non-matching assessments to trigger the loop fallback
     const assessments = [
       {
         vuln_id: 'CVE-X',
@@ -686,9 +669,6 @@ describe('getLegacyStatusFromSummary via append_assessment', () => {
     ] as any[];
 
     const enriched = Vulnerabilities.enrich_with_assessments([vuln as any], assessments);
-    // dominant_status should be Exploitable; getLegacyStatusFromSummary scans
-    // from the end to find the last assessment with simplified_status === 'Exploitable'
-    expect(enriched[0].status).toBe('affected');
     expect(enriched[0].simplified_status).toBe('Exploitable');
   });
 });

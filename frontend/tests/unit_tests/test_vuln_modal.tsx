@@ -48,7 +48,6 @@ describe('Vulnerability Modal', () => {
         fix: {
             state: 'unknown'
         },
-        status: 'affected',
         simplified_status: 'active',
         variants: [],
         assessments: [{
@@ -635,7 +634,6 @@ describe('Vulnerability Modal', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'affected',
             simplified_status: 'active',
             variants: [],
             assessments: []
@@ -2118,7 +2116,6 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
             pessimistic: new Iso8601Duration(undefined)
         },
         fix: { state: 'unknown' },
-        status: 'under_investigation',
         simplified_status: 'Pending Assessment',
         assessments: [],
         variants: [],
@@ -2183,7 +2180,6 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         const vulnWithAssessment: Vulnerability = {
             ...vulnerability,
             found_by: ['grype', 'osv'],
-            status: 'not_affected',
             simplified_status: 'Not Affected',
             assessments: [assessment],
             packages_current: ['libfoo@1.2.3'],
@@ -2207,7 +2203,6 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
                 vulnWithAssessment.id,
                 expect.objectContaining({
                     found_by: ['grype', 'osv'],
-                    status: 'not_affected',
                     simplified_status: 'Not Affected',
                     assessments: [assessment],
                     packages_current: ['libfoo@1.2.3'],

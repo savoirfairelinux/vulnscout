@@ -52,7 +52,6 @@ describe('MultiEditBar', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'not_affected',
             simplified_status: 'not_affected',
             variants: [],
             assessments: [],
@@ -86,7 +85,6 @@ describe('MultiEditBar', () => {
             fix: {
                 state: 'unknown'
             },
-            status: 'affected',
             simplified_status: 'affected',
             variants: [],
             assessments: [],
@@ -163,8 +161,8 @@ describe('MultiEditBar', () => {
 
     test('handles same status across vulnerabilities', () => {
         const sameStatusVulns = [
-            { ...mockVulnerabilities[0], id: 'vuln-1', status: 'affected' },
-            { ...mockVulnerabilities[0], id: 'vuln-2', status: 'affected' }
+            { ...mockVulnerabilities[0], id: 'vuln-1' },
+            { ...mockVulnerabilities[0], id: 'vuln-2' }
         ];
         const props = {
             ...mockProps,
@@ -177,8 +175,8 @@ describe('MultiEditBar', () => {
 
     test('handles different status across vulnerabilities', () => {
         const mixedStatusVulns = [
-            { ...mockVulnerabilities[0], id: 'vuln-1', status: 'affected' },
-            { ...mockVulnerabilities[0], id: 'vuln-2', status: 'not_affected' }
+            { ...mockVulnerabilities[0], id: 'vuln-1' },
+            { ...mockVulnerabilities[0], id: 'vuln-2' }
         ];
         const props = {
             ...mockProps,

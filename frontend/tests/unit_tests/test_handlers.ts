@@ -240,11 +240,9 @@ describe('Vulnerabilities', () => {
         const enrichedvuln = Vulnerabilities.enrich_with_assessments(vulnerabilities, assessments);
         expect(enrichedvuln.length).toEqual(2);
 
-        expect(enrichedvuln[0].status).toEqual('fixed');
         expect(enrichedvuln[0].simplified_status).toEqual('Fixed');
         expect(enrichedvuln[0].assessments.length).toEqual(1);
 
-        expect(enrichedvuln[1].status).toEqual('affected');
         expect(enrichedvuln[1].simplified_status).toEqual('Exploitable');
         expect(enrichedvuln[1].assessments.length).toEqual(2);
     });

@@ -168,8 +168,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         const selectedVulnerabilities = vulnerabilities.filter(vuln => selectedVulns.includes(vuln.id));
         if (selectedVulnerabilities.length === 0) return undefined;
 
-        const firstStatus = selectedVulnerabilities[0].status;
-        const allHaveSameStatus = selectedVulnerabilities.every(vuln => vuln.status === firstStatus);
+        const firstStatus = selectedVulnerabilities[0].assessments[selectedVulnerabilities[0].assessments.length - 1]?.status;
+        const allHaveSameStatus = selectedVulnerabilities.every(vuln => vuln.assessments[vuln.assessments.length - 1]?.status === firstStatus);
 
         // Debug logging
 
@@ -261,7 +261,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                         const vuln = vulnerabilities.find(v => v.id === casted.vuln_id);
                         if (vuln) {
                             vuln.assessments.push(casted);
-                            vuln.status = casted.status;
                             vuln.simplified_status = casted.simplified_status;
                             patchVuln(casted.vuln_id, vuln);
                         }

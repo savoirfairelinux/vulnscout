@@ -53,7 +53,6 @@ type Vulnerability = {
     fix: {
         state: string;
     };
-    status: string;
     simplified_status: string;
     status_summary?: {
         counts: Record<string, number>;
@@ -169,16 +168,6 @@ const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string 
     return top.join(', ');
 }
 
-const getLegacyStatusFromSummary = (assessments: Assessment[], dominantStatus: string): string => {
-    for (let i = assessments.length - 1; i >= 0; i -= 1) {
-        const assessment = assessments[i];
-        if ((assessment.simplified_status || 'unknown') === dominantStatus) {
-            return assessment.status;
-        }
-    }
-    return assessments[assessments.length - 1]?.status ?? 'unknown';
-}
-
 const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {
     return getVulnerabilityStatusSummary(vulnerability).has_active_status;
 }
@@ -248,7 +237,6 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         fix: {
             state: "unknown",
         },
-        status: 'unknown',
         simplified_status: 'unknown',
         assessments: [],
     };
@@ -309,7 +297,6 @@ class Vulnerabilities {
             if (!assessments_per_vuln[vuln.id] || assessments_per_vuln[vuln.id].length < 1) {
                 return {
                     ...vuln,
-                    status: 'unknown',
                     simplified_status: 'unknown',
                     status_summary: buildStatusSummary([]),
                     assessments: [],
@@ -323,7 +310,6 @@ class Vulnerabilities {
             const statusSummary = buildStatusSummary(vulnAssessments);
             return {
                 ...vuln,
-                status: getLegacyStatusFromSummary(vulnAssessments, statusSummary.dominant_status),
                 simplified_status: statusSummary.dominant_status,
                 status_summary: statusSummary,
                 assessments: vulnAssessments,
@@ -340,7 +326,6 @@ class Vulnerabilities {
                 const statusSummary = buildStatusSummary(assessments);
                 return {
                     ...vuln,
-                    status: getLegacyStatusFromSummary(assessments, statusSummary.dominant_status),
                     simplified_status: statusSummary.dominant_status,
                     status_summary: statusSummary,
                     assessments,
