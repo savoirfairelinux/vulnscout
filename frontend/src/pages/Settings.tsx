@@ -3,6 +3,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
   faFileImport,
+  faFileLines,
   faPlus,
   faCheck,
   faSpinner,
@@ -421,7 +422,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         {/* ======== Report Metadata ======== */}
         <div>
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faCheck} className="text-cyan-400" />
+            <FontAwesomeIcon icon={faFileLines} className="text-cyan-400" />
             <h2 className="text-xl font-bold text-white">Report Metadata</h2>
           </div>
           <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
