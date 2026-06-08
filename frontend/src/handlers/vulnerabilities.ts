@@ -16,6 +16,14 @@ type CVSS = {
     impact_score: number;
 };
 
+type StatusSummary = {
+    counts: Record<string, number>;
+    ordered: { status: string; count: number }[];
+    total_assessments: number;
+    dominant_status: string;
+    has_active_status: boolean;
+};
+
 type Vulnerability = {
     id: string;
     aliases: string[];
@@ -54,17 +62,9 @@ type Vulnerability = {
         state: string;
     };
     simplified_status: string;
-    status_summary?: {
-        counts: Record<string, number>;
-        ordered: { status: string; count: number }[];
-        total_assessments: number;
-        dominant_status: string;
-        has_active_status: boolean;
-    };
+    status_summary?: StatusSummary;
     assessments: Assessment[];
 };
-
-type StatusSummary = NonNullable<Vulnerability['status_summary']>;
 
 export type { Vulnerability, CVSS };
 
