@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import type { Vulnerability } from "../handlers/vulnerabilities";
+import { buildStatusSummary } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
@@ -260,9 +261,14 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                         // Update the vulnerability
                         const vuln = vulnerabilities.find(v => v.id === casted.vuln_id);
                         if (vuln) {
-                            vuln.assessments.push(casted);
-                            vuln.simplified_status = casted.simplified_status;
-                            patchVuln(casted.vuln_id, vuln);
+                            const updatedAssessments = [...vuln.assessments, casted];
+                            const statusSummary = buildStatusSummary(updatedAssessments);
+                            patchVuln(casted.vuln_id, {
+                                ...vuln,
+                                assessments: updatedAssessments,
+                                simplified_status: statusSummary.dominant_status,
+                                status_summary: statusSummary,
+                            });
                         }
                     }
                 }
