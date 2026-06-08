@@ -218,6 +218,8 @@ cmd_scan() {
     export DOCUMENT_URL="${DOCUMENT_URL:-}"
     export NVD_API_KEY="${NVD_API_KEY:-}"
     export REFRESH_REMOTE_DELAY="${REFRESH_REMOTE_DELAY:-48h}"
+    export INITIAL_REFRESH_NVD="${INITIAL_REFRESH_NVD:-false}"
+    export INITIAL_REFRESH_EPSS="${INITIAL_REFRESH_EPSS:-true}"
     export HTTP_PROXY="${HTTP_PROXY:-}"
     export HTTPS_PROXY="${HTTPS_PROXY:-}"
     export NO_PROXY="${NO_PROXY:-}"
@@ -544,6 +546,8 @@ SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
 NVD_SCAN_REQUESTED=false
 OSV_SCAN_REQUESTED=false
+INITIAL_REFRESH_NVD="${INITIAL_REFRESH_NVD:-false}"
+INITIAL_REFRESH_EPSS="${INITIAL_REFRESH_EPSS:-true}"
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
@@ -642,6 +646,18 @@ while [[ $# -gt 0 ]]; do
             NVD_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-osv-scan)
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --initial-refresh-nvd)
+            if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                INITIAL_REFRESH_NVD="$2"; shift 2
+            else
+                INITIAL_REFRESH_NVD=true; shift
+            fi ;;
+        --initial-refresh-epss)
+            if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                INITIAL_REFRESH_EPSS="$2"; shift 2
+            else
+                INITIAL_REFRESH_EPSS=true; shift
+            fi ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
         --delete-scan)

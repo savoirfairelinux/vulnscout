@@ -66,6 +66,8 @@ Input commands (can be chained, triggers scan automatically):
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
   --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
   --perform-osv-scan              Run an OSV PURL-based vulnerability scan
+  --initial-refresh-nvd [true|false]  Enable/disable NVD background enrichment at startup (default: false)
+  --initial-refresh-epss [true|false] Enable/disable EPSS background enrichment at startup (default: true)
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
@@ -314,6 +316,20 @@ parse_and_run() {
                 ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
             perform-osv-scan|--perform-osv-scan)
                 ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
+            initial-refresh-nvd|--initial-refresh-nvd)
+                ensure_running
+                if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                    PENDING_ARGS+=(--initial-refresh-nvd "$2"); shift 2
+                else
+                    PENDING_ARGS+=(--initial-refresh-nvd); shift
+                fi ;;
+            initial-refresh-epss|--initial-refresh-epss)
+                ensure_running
+                if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                    PENDING_ARGS+=(--initial-refresh-epss "$2"); shift 2
+                else
+                    PENDING_ARGS+=(--initial-refresh-epss); shift
+                fi ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)
