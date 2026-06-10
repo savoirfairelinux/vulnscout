@@ -4,7 +4,7 @@
 from datetime import datetime, timezone
 
 
-def ensure_utc_iso(dt) -> str | None:
+def ensure_utc_iso(dt: datetime | None) -> str | None:
     """Return an ISO 8601 string that always carries the UTC offset.
 
     SQLite does not preserve timezone info, so datetimes read back from
@@ -25,7 +25,7 @@ def ensure_utc_iso(dt) -> str | None:
 _DATETIME_MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
 
 
-def normalize_timestamp_for_sort(ts) -> datetime:
+def normalize_timestamp_for_sort(ts: str | datetime | None) -> datetime:
     """Normalise a timestamp (str, datetime, or None) to a UTC datetime for sorting.
 
     Returns ``datetime.min`` (UTC) when *ts* is ``None`` or unparseable so that

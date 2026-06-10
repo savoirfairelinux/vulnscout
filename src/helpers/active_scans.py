@@ -45,7 +45,7 @@ from ..models.sbom_package import SBOMPackage
 # Active scan IDs
 # ------------------------------------------------------------------
 
-def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
+def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
     """Return the active Scan IDs for *variant_uuid*.
 
     ``[latest_sbom, latest_tool:nvd, latest_tool:osv, …]``
@@ -55,8 +55,8 @@ def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
         .where(Scan.variant_id == variant_uuid)
         .order_by(Scan.timestamp.desc())
     ).all()
-    ids: list = []
-    seen_keys: set = set()  # "sbom" or "tool:<source>"
+    ids: list[uuid.UUID] = []
+    seen_keys: set[str] = set()  # "sbom" or "tool:<source>"
     for scan_id, scan_type, scan_source in rows:
         st = scan_type or "sbom"
         key = f"tool:{scan_source}" if st == "tool" else "sbom"
@@ -66,7 +66,7 @@ def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
     return ids
 
 
-def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
+def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]:
     """Return the active Scan IDs for every variant in *project_uuid*."""
     rows = db.session.execute(
         db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source, Scan.timestamp)
@@ -74,8 +74,8 @@ def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
         .where(Variant.project_id == project_uuid)
         .order_by(Scan.variant_id, Scan.timestamp.desc())
     ).all()
-    ids: list = []
-    seen: dict = {}  # variant_id -> set of keys already picked
+    ids: list[uuid.UUID] = []
+    seen: dict[uuid.UUID, set[str]] = {}  # variant_id -> set of keys already picked
     for scan_id, vid, scan_type, scan_source, _ts in rows:
         st = scan_type or "sbom"
         key = f"tool:{scan_source}" if st == "tool" else "sbom"
@@ -90,7 +90,7 @@ def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
 # SBOM-only scan IDs (for package queries)
 # ------------------------------------------------------------------
 
-def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
+def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
     """Return only the SBOM-type scan ID(s) from the active set for *variant_uuid*.
 
     Packages come exclusively from SBOM scans (tool scans don't create
@@ -107,7 +107,7 @@ def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list:
     return [r[0] for r in rows]
 
 
-def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
+def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]:
     """Return only the SBOM-type scan ID(s) from the active set for *project_uuid*.
 
     One latest SBOM scan per variant.
@@ -119,8 +119,8 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
         .order_by(Scan.variant_id, Scan.timestamp.desc())
     ).all()
-    ids: list = []
-    seen_variants: set = set()
+    ids: list[uuid.UUID] = []
+    seen_variants: set[uuid.UUID] = set()
     for scan_id, vid, _ts in rows:
         if vid not in seen_variants:
             seen_variants.add(vid)
@@ -132,7 +132,7 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list:
 # Active package IDs (from SBOM scans only)
 # ------------------------------------------------------------------
 
-def active_package_ids_for_scans(scan_ids: list) -> set:
+def active_package_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[uuid.UUID]:
     """Return the set of package IDs present in the SBOM documents of *scan_ids*.
 
     Packages listed by SBOM scans form the "active" package set.

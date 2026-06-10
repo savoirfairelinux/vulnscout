@@ -1,7 +1,7 @@
 import os
 
 
-def get_bool_env(name: str, default: bool = False):
+def get_bool_env(name: str, default: bool = False) -> bool:
     """
     Get a boolean from an environment variable.
     Any casing of 'true' or 1 is considered True.

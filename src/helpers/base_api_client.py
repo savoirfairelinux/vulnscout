@@ -1,7 +1,10 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import http.client
 import json
+from typing import Any
+
 from .proxy import install_proxy_opener
 
 
@@ -12,10 +15,10 @@ class BaseAPIClient:
     JSON from an urllib HTTP response object.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         install_proxy_opener()
 
     @staticmethod
-    def _decode_response_json(response) -> dict:
+    def _decode_response_json(response: http.client.HTTPResponse) -> dict[str, Any]:
         """Decode JSON from an urllib HTTP response object."""
         return json.loads(response.read().decode())

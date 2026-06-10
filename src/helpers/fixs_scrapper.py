@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import re
-from typing import Optional
+from typing import Any, Optional
 
 
 class FixSolution:
@@ -36,7 +36,7 @@ class FixsScrapper:
     first group contain context keywords if any, second major, third minor, and patch is eventualy in five
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.solutions: list[FixSolution] = []
 
     def _extract_from_criteria(self, criteria: str) -> Optional[tuple[str, str]]:
@@ -50,7 +50,7 @@ class FixsScrapper:
                 return parts[4], parts[5]
         return None
 
-    def _search_in_nvd_node(self, node: dict, negate: bool = False):
+    def _search_in_nvd_node(self, node: dict[str, Any], negate: bool = False) -> None:
         """
         Generate a list of FixSolution from a NVD node
         Internal use only
@@ -112,7 +112,7 @@ class FixsScrapper:
                         artifact.vulnerables.append(f"= {pkg_version}")
                 self.solutions.append(artifact)
 
-    def search_in_nvd(self, nvd_results: dict):
+    def search_in_nvd(self, nvd_results: dict[str, Any]) -> None:
         """
         Generate a list of FixSolution from a result from NVD API
         """

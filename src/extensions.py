@@ -3,6 +3,7 @@ from flask_migrate import Migrate
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import event
 from contextlib import contextmanager
+from typing import Any, Generator
 import threading
 
 
@@ -50,7 +51,7 @@ class _PriorityWriteLock:
     _EPSS = 1
     _NVD = 2
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._mutex = threading.Lock()
         self._held = False
         self._waiters: list = []  # [(priority, Event)]
@@ -68,7 +69,7 @@ class _PriorityWriteLock:
 
     # ---- public API --------------------------------------------------------
 
-    def acquire(self):
+    def acquire(self) -> None:
         priority = self._thread_priority()
         evt = threading.Event()
         with self._mutex:
@@ -79,7 +80,7 @@ class _PriorityWriteLock:
             self._waiters.sort(key=lambda w: w[0])
         evt.wait()  # block until release() hands ownership to us
 
-    def release(self):
+    def release(self) -> None:
         with self._mutex:
             if not self._held:
                 return
@@ -106,7 +107,7 @@ _write_lock_state = threading.local()
 _write_serialization_initialized = False
 
 
-def setup_write_serialization(session_factory):
+def setup_write_serialization(session_factory: Any) -> None:
     """Register SQLAlchemy session events that serialise SQLite writes.
 
     Call once after ``db.init_app(app)`` when the engine is SQLite.  The
@@ -118,13 +119,13 @@ def setup_write_serialization(session_factory):
         return
     _write_serialization_initialized = True
 
-    def _release_lock(*_args, **_kwargs):
+    def _release_lock(*_args: Any, **_kwargs: Any) -> None:
         if getattr(_write_lock_state, "held", False):
             _write_lock_state.held = False
             _db_write_lock.release()
 
     @event.listens_for(session_factory, "before_flush")
-    def _before_flush(session, flush_context, instances):
+    def _before_flush(session: Any, flush_context: Any, instances: Any) -> None:
         # Only acquire if there are actual pending writes.
         if not (session.new or session.dirty or session.deleted):
             return
@@ -133,16 +134,16 @@ def setup_write_serialization(session_factory):
             _write_lock_state.held = True
 
     @event.listens_for(session_factory, "after_commit")
-    def _after_commit(session):
+    def _after_commit(session: Any) -> None:
         _release_lock()
 
     @event.listens_for(session_factory, "after_soft_rollback")
-    def _after_soft_rollback(session, previous_transaction):
+    def _after_soft_rollback(session: Any, previous_transaction: Any) -> None:
         _release_lock()
 
 
 @contextmanager
-def batch_session():
+def batch_session() -> Generator[Any, None, None]:
     """Context manager that defers all ``db.session.commit()`` calls to a single
     commit at the end of the block.  Inside the block every ``commit()`` is
     silently replaced by ``flush()`` so that auto-generated PKs are available
@@ -169,7 +170,7 @@ def batch_session():
         yield None
         return
 
-    def _deferred_commit():
+    def _deferred_commit() -> None:
         session.flush()
 
     session.commit = _deferred_commit  # type: ignore[assignment]

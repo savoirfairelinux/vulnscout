@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from typing import Any, Callable
+
 from flask import Flask
 from functools import wraps
 
@@ -10,26 +12,26 @@ from functools import wraps
 
 
 class FlaskWithMiddleware(Flask):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
 
-        self.middlewares = []
+        self.middlewares: list[tuple[str, Callable[..., Any]]] = []
         super().__init__(*args, **kwargs)
 
-    def middleware(self, path_prefix: str):
-        def middleware_decorator(func):
+    def middleware(self, path_prefix: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def middleware_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             self.middlewares.append((path_prefix.lstrip("/"), func))
             return func
         return middleware_decorator
 
-    def route(self, rule: str, **options):
-        def route_decorator(func):
+    def route(self, rule: str, **options: Any) -> Callable[[Callable[..., Any]], Any]:  # type: ignore[override]
+        def route_decorator(func: Callable[..., Any]) -> Any:
             enabled_middlewares = [
                 middleware for path_prefix, middleware in self.middlewares if
                 rule.lstrip("/").startswith(path_prefix)
             ]
 
             @wraps(func)
-            def wrapper(*args, **kwargs):
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
                 for middleware in enabled_middlewares:
                     result = middleware(*args, **kwargs)
                     if result is not None:

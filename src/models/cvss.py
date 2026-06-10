@@ -28,7 +28,7 @@ class CVSS:
                 + f"exploitability_score={self.exploitability_score}, "
                 + f"impact_score={self.impact_score})")
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check if the CVSS score is equal to another CVSS score, comparing the 3 scores."""
         if not isinstance(other, CVSS):
             return False
@@ -36,11 +36,11 @@ class CVSS:
                 and self.exploitability_score == other.exploitability_score
                 and self.impact_score == other.impact_score)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         """Return a hash of the CVSS score, using it's 3 scores as identifier."""
         return hash((self.base_score, self.exploitability_score, self.impact_score))
 
-    def parse_vector_string(self):
+    def parse_vector_string(self) -> None:
         """Parse the CVSS vector string and set the long/explicit values for each part."""
         parts = self.vector_string.split("/")
         for part in parts:
@@ -179,7 +179,7 @@ class CVSS:
         }
 
     @staticmethod
-    def from_dict(data: dict):
+    def from_dict(data: dict) -> "CVSS":
         """Import a CVSS score from a dictionary."""
         return CVSS(
             data["version"],

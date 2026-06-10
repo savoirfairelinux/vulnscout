@@ -59,7 +59,7 @@ class Iso8601Duration:
 
         self.parse_duration(duration)
 
-    def parse_duration(self, duration: str):
+    def parse_duration(self, duration: str) -> None:
         """
         Parse the ISO 8601 duration string
         Internal use only, automatically called when creating the object
@@ -138,7 +138,7 @@ class Iso8601Duration:
                 * 60 + self.minutes)
             * 60 + self.seconds)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Return the ISO 8601 duration as tidy string, removing overloaded or empty parts
         """
@@ -164,10 +164,10 @@ class Iso8601Duration:
             fmt += "0D"
         return fmt
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Iso8601Duration({str(self)})"
 
-    def human_readable(self):
+    def human_readable(self) -> str:
         """
         Return the ISO 8601 duration as human readable string
         """
@@ -190,7 +190,7 @@ class Iso8601Duration:
         return fmt.strip()
 
     @staticmethod
-    def try_parse(something):
+    def try_parse(something: object) -> "Iso8601Duration":
         """
         Try to parse the input as Iso8601Duration
         Raise ValueError if not possible
@@ -203,7 +203,7 @@ class Iso8601Duration:
             return something
         raise ValueError(f"Can only compare with 0, Iso8601duration or valid ISO 8601 string, compared to: {something}")
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if other == 0:
             return self.total_seconds == 0
         if other is None:
@@ -211,13 +211,13 @@ class Iso8601Duration:
         other = Iso8601Duration.try_parse(other)
         return self.total_seconds == other.total_seconds
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return not self == other
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return self.total_seconds > 0
 
-    def __gt__(self, other):
+    def __gt__(self, other: object) -> bool:
         if other == 0:
             return self.total_seconds > 0
         if other is None:
@@ -225,36 +225,36 @@ class Iso8601Duration:
         other = Iso8601Duration.try_parse(other)
         return self.total_seconds > other.total_seconds
 
-    def __ge__(self, other):
+    def __ge__(self, other: object) -> bool:
         return self == other or self > other
 
-    def __lt__(self, other):
+    def __lt__(self, other: object) -> bool:
         return not self >= other
 
-    def __le__(self, other):
+    def __le__(self, other: object) -> bool:
         return not self > other
 
-    def __add__(self, other):
+    def __add__(self, other: "Iso8601Duration | str | int") -> "Iso8601Duration":
         other = Iso8601Duration.try_parse(other)
         return Iso8601Duration(f"PT{self.total_seconds + other.total_seconds}S")
 
-    def __sub__(self, other):
+    def __sub__(self, other: "Iso8601Duration | str | int") -> "Iso8601Duration":
         other = Iso8601Duration.try_parse(other)
         if self.total_seconds < other.total_seconds:
             raise ValueError(f"Subtracting larger duration from smaller is not allowed: {self} - {other}")
         return Iso8601Duration(f"PT{self.total_seconds - other.total_seconds}S")
 
-    def __mul__(self, other):
+    def __mul__(self, other: float | int) -> "Iso8601Duration":
         if type(other) is not float and type(other) is not int:
             raise ValueError(f"Can only multiply with integer or float, received: {other}")
         if other < 0:
             raise ValueError(f"Multiplying with negative number is not allowed: {other}")
         return Iso8601Duration(f"PT{self.total_seconds * other}S")
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: int) -> "Iso8601Duration":
         if type(other) is not int:
             raise ValueError(f"Can only divide by integer, received: {other}")
         return Iso8601Duration(f"PT{self.total_seconds // other}S")
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: int) -> "Iso8601Duration":
         return self.__truediv__(other)

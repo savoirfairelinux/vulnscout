@@ -6,7 +6,7 @@ import re
 import hashlib
 import typing
 import semver
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, relationship, mapped_column
@@ -92,11 +92,11 @@ class Package(Base):
         self,
         name: str = "",
         version: str = "",
-        cpe: Optional[list] = None,
-        purl: Optional[list] = None,
+        cpe: Optional[list[str]] = None,
+        purl: Optional[list[str]] = None,
         licences: str = "",
         supplier: str = "",
-        **kwargs,
+        **kwargs: Any,
     ):
         version = str(version).strip().split("+git")[0]
 
@@ -134,8 +134,7 @@ class Package(Base):
 
     # TODO: Remove in-memory logic in parsers to use DB directly. The following are concerned
 
-    def add_cpe(self, cpe: str):
-        """Add a single cpe (str) identifier to the package if not already present."""
+    def add_cpe(self, cpe: str) -> None:
         if not cpe:
             return
         current = list(self.cpe or [])
@@ -143,8 +142,7 @@ class Package(Base):
             current.append(cpe)
             self.cpe = current
 
-    def add_purl(self, purl: str):
-        """Add a PURL identifier if not already present."""
+    def add_purl(self, purl: str) -> None:
         if not purl:
             return
         purl = _normalize_purl(purl)
@@ -187,11 +185,11 @@ class Package(Base):
     # Comparison operators
     # ------------------------------------------------------------------
 
-    def _parse_version(self):
+    def _parse_version(self) -> semver.Version:
         assert self.version is not None
         return semver.Version.parse(self.version, optional_minor_and_patch=True)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, Package):
             return NotImplemented
         try:
@@ -212,38 +210,38 @@ class Package(Base):
     def __repr__(self) -> str:
         return f"<Package id={self.id} string_id={self.string_id!r}>"
 
-    def __lt__(self, other) -> bool:
-        if self.name != other.name:
-            return self.name < other.name
+    def __lt__(self, other: "Package") -> bool:
+        if (self.name or "") != (other.name or ""):
+            return (self.name or "") < (other.name or "")
         try:
             if self._parse_version() != other._parse_version():
                 return self._parse_version() < other._parse_version()
         except Exception:
-            if self.version != other.version:
-                return self.version < other.version
-        return self.supplier < other.supplier
+            if (self.version or "") != (other.version or ""):
+                return (self.version or "") < (other.version or "")
+        return (self.supplier or "") < (other.supplier or "")
 
-    def __gt__(self, other) -> bool:
-        if self.name != other.name:
-            return self.name > other.name
+    def __gt__(self, other: "Package") -> bool:
+        if (self.name or "") != (other.name or ""):
+            return (self.name or "") > (other.name or "")
         try:
             if self._parse_version() != other._parse_version():
                 return self._parse_version() > other._parse_version()
         except Exception:
-            if self.version != other.version:
-                return self.version > other.version
-        return self.supplier > other.supplier
+            if (self.version or "") != (other.version or ""):
+                return (self.version or "") > (other.version or "")
+        return (self.supplier or "") > (other.supplier or "")
 
-    def __le__(self, other) -> bool:
+    def __le__(self, other: "Package") -> bool:
         return self < other or self == other
 
-    def __ge__(self, other) -> bool:
+    def __ge__(self, other: "Package") -> bool:
         return self > other or self == other
 
-    def __ne__(self, other) -> bool:
+    def __ne__(self, other: object) -> bool:
         return not self == other
 
-    def __contains__(self, item) -> bool:
+    def __contains__(self, item: "Package | str") -> bool:
         if isinstance(item, Package):
             return item.string_id == self.string_id
         if isinstance(item, str):

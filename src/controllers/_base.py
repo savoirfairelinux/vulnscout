@@ -3,6 +3,7 @@
 
 import typing
 import uuid
+from typing import Any, Callable, Iterable
 
 T = typing.TypeVar("T")
 
@@ -49,7 +50,12 @@ def validate_non_empty(value: str, field_name: str) -> str:
     return value
 
 
-def to_dict_with_fallback(cache: dict, db_get_all, key_fn, label: str) -> dict:
+def to_dict_with_fallback(
+    cache: dict[Any, Any],
+    db_get_all: Callable[[], Iterable[Any]],
+    key_fn: Callable[[Any], Any],
+    label: str,
+) -> dict[Any, Any]:
     """Return a ``{key: dict}`` mapping preferring *cache* when populated.
 
     Falls back to *db_get_all* (a callable returning an iterable of model
