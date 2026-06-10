@@ -14,13 +14,13 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     op.add_column('packages', sa.Column('supplier', sa.String(), server_default='', nullable=False))
     op.drop_index('ix_packages_name_version', table_name='packages')
     op.create_index('ix_packages_name_version_supplier', 'packages', ['name', 'version', 'supplier'])
 
 
-def downgrade():
+def downgrade() -> None:
     op.drop_index('ix_packages_name_version_supplier', table_name='packages')
     op.create_index('ix_packages_name_version', 'packages', ['name', 'version'])
     op.drop_column('packages', 'supplier')

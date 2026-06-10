@@ -16,7 +16,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     with op.batch_alter_table('vulnerabilities', schema=None) as batch_op:
         batch_op.add_column(sa.Column('weaknesses', sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column('versions_data', sa.JSON(), nullable=True))
@@ -24,7 +24,7 @@ def upgrade():
         batch_op.add_column(sa.Column('nvd_last_modified', sa.Text(), nullable=True))
 
 
-def downgrade():
+def downgrade() -> None:
     with op.batch_alter_table('vulnerabilities', schema=None) as batch_op:
         batch_op.drop_column('nvd_last_modified')
         batch_op.drop_column('patch_url')

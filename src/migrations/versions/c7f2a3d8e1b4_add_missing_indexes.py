@@ -15,7 +15,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     # packages: lookups by (name, version) in find_or_create / get_by_string_id
     op.create_index('ix_packages_name_version', 'packages', ['name', 'version'])
 
@@ -51,7 +51,7 @@ def upgrade():
     op.create_index('ix_sbom_packages_package_id', 'sbom_packages', ['package_id'])
 
 
-def downgrade():
+def downgrade() -> None:
     op.drop_index('ix_sbom_packages_package_id', 'sbom_packages')
     op.drop_index('ix_sbom_documents_scan_id', 'sbom_documents')
     op.drop_index('ix_scans_variant_id', 'scans')

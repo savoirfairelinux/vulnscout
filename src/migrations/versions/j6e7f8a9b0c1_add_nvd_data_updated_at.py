@@ -13,11 +13,11 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     with op.batch_alter_table('vulnerabilities', schema=None) as batch_op:
         batch_op.add_column(sa.Column('nvd_data_updated_at', sa.DateTime(), nullable=True))
 
 
-def downgrade():
+def downgrade() -> None:
     with op.batch_alter_table('vulnerabilities', schema=None) as batch_op:
         batch_op.drop_column('nvd_data_updated_at')

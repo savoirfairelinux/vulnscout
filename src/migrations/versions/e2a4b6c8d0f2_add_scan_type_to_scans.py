@@ -16,11 +16,11 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     with op.batch_alter_table('scans', schema=None) as batch_op:
         batch_op.add_column(sa.Column('scan_type', sa.String(), nullable=True, server_default='sbom'))
 
 
-def downgrade():
+def downgrade() -> None:
     with op.batch_alter_table('scans', schema=None) as batch_op:
         batch_op.drop_column('scan_type')
