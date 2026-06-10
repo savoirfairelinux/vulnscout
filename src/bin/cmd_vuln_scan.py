@@ -17,6 +17,7 @@ from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_pack
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import os
+from typing import Any
 from flask.cli import with_appcontext
 
 
@@ -24,7 +25,7 @@ from flask.cli import with_appcontext
 # Shared helpers for vuln scan commands
 # ---------------------------------------------------------------------------
 
-def _resolve_active_packages(variant_uuid):
+def _resolve_active_packages(variant_uuid: Any) -> Any:
     """Resolve active packages for a variant, raising on failure."""
     click.echo("Resolving active packages…")
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
@@ -38,7 +39,7 @@ def _resolve_active_packages(variant_uuid):
     ).scalars().all()
 
 
-def _create_tool_scan(variant_uuid, scan_source: str):
+def _create_tool_scan(variant_uuid: Any, scan_source: str) -> Any:
     """Create a new tool scan for the given variant."""
     return ScanModel.create(
         description="empty description",
@@ -49,7 +50,7 @@ def _create_tool_scan(variant_uuid, scan_source: str):
 
 
 def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
-                        noun: str = "vuln(s)", no_results: str = "no vulnerabilities"):
+                        noun: str = "vuln(s)", no_results: str = "no vulnerabilities") -> None:
     """Print progress line for a query result."""
     if vuln_ids:
         ids_str = ', '.join(vuln_ids[:10])
@@ -62,8 +63,8 @@ def _echo_query_results(idx: int, total: int, label: str, vuln_ids: list[str],
         click.echo(f"[{idx}/{total}] {label} → {no_results}")
 
 
-def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
-                     observation_pairs: set, assessed_findings: set):
+def _persist_finding(pkg_id: Any, vuln_id: Any, scan_id: Any, variant_uuid: Any, origin: str,
+                     observation_pairs: set, assessed_findings: set) -> None:
     """Create Finding, Observation and initial Assessment (if missing) for a package+vuln pair."""
     finding = FindingModel.get_or_create(pkg_id, vuln_id)
     pair = (finding.id, scan_id)

@@ -14,12 +14,13 @@ from ..helpers.env_vars import get_bool_env
 import glob
 import os
 import json
+from typing import Any
 
 INPUT_OPENVEX_FOLDER = "/scan/tmp/openvex"
 OUTPUT_OPENVEX_FILE = "/scan/outputs/sbom.openvex.json"
 
 
-def read_inputs(controllers):
+def read_inputs(controllers: Any) -> None:
     """Read OpenVEX files from folder and merge them into controllers."""
     openvex = OpenVex(controllers)
 
@@ -38,7 +39,7 @@ def read_inputs(controllers):
                 print(f"Ignored: Error parsing OpenVEX file: {file} {e}")
 
 
-def output_results(controllers):
+def output_results(controllers: Any) -> None:
     """Output the merged OpenVEX results to a single file."""
     openvex = OpenVex(controllers)
 
@@ -47,7 +48,7 @@ def output_results(controllers):
         json.dump(openvex.to_dict(), f, indent=2)
 
 
-def main():
+def main() -> None:
     pkg_ctrl = PackagesController()
     pkg_ctrl._preload_cache()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)

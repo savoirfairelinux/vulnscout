@@ -8,6 +8,7 @@ import uuid
 import click
 import json as _json
 import tarfile
+from typing import Any
 import os
 from flask.cli import with_appcontext
 from ..helpers.assessment_io import (
@@ -58,14 +59,14 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
     os.makedirs(output_dir, exist_ok=True)
     vuln_cache: dict = {}
 
-    def _write_doc(assessments, filename):
+    def _write_doc(assessments: Any, filename: str) -> str:
         doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
         out_path = os.path.join(output_dir, filename)
         with open(out_path, "w") as fh:
             _json.dump(doc, fh, indent=2)
         return out_path
 
-    def _write_tar(docs: dict[str, list]):
+    def _write_tar(docs: dict[str, list]) -> str:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode='w:gz') as tar:
             for filename, assessments in docs.items():

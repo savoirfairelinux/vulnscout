@@ -16,12 +16,13 @@ from ..helpers.env_vars import get_bool_env
 import glob
 import os
 import json
+from typing import Any
 
 INPUT_SPDX_FOLDER = "/scan/tmp/spdx"
 OUTPUT_SPDX_FILE = "/scan/outputs/sbom.spdx.json"
 
 
-def read_inputs(controllers):
+def read_inputs(controllers: Any) -> None:
     """Read from folder."""
     use_fastspdx = False
     if get_bool_env('IGNORE_PARSING_ERRORS'):
@@ -54,7 +55,7 @@ def read_inputs(controllers):
                 print(f"Ignored: Error parsing SPDX file: {file} {e}")
 
 
-def output_results(controllers):
+def output_results(controllers: Any) -> None:
     """Output the results to files."""
     spdx = SPDX(controllers)
 
@@ -63,7 +64,7 @@ def output_results(controllers):
         f.write(spdx.output_as_json(with_cpe=True))
 
 
-def main():
+def main() -> None:
     pkg_ctrl = PackagesController()
     pkg_ctrl._preload_cache()
     vuln_ctrl = VulnerabilitiesController(pkg_ctrl)

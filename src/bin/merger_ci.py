@@ -37,9 +37,10 @@ from .cmd_scans import (
     delete_scan_command,
 )
 from .cmd_vuln_scan import nvd_scan_command, osv_scan_command
+from typing import Any
 
 
-def init_app(app) -> None:
+def init_app(app: Any) -> None:
     """Register all Flask CLI commands with *app*."""
     app.cli.add_command(create_project_context)
     app.cli.add_command(process_command)

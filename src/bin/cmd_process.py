@@ -26,7 +26,7 @@ from ..extensions import batch_session, db as _db
 import click
 import json
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from flask.cli import with_appcontext
 from sqlalchemy import and_, exists
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant, build_controllers
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from ..controllers.assessments import AssessmentsController
 
 
-def _ts_key(ts) -> str:
+def _ts_key(ts: Any) -> str:
     """Normalise a timestamp (str or datetime) to an ISO string for comparison."""
     if ts is None:
         return ""
@@ -49,12 +49,12 @@ def _ts_key(ts) -> str:
         return str(ts)
 
 
-def post_treatment(controllers, documents=None):
+def post_treatment(controllers: Any, documents: Any = None) -> None:
     """Enrich vulnerabilities with EPSS scores."""
     controllers["vulnerabilities"].fetch_epss_scores()
 
 
-def evaluate_condition(controllers, condition):
+def evaluate_condition(controllers: Any, condition: Any) -> Any:
     """Evaluate a condition and return the list of vulnerability IDs that trigger it."""
     parser = ConditionParser()
     failed_vulns = []
@@ -90,7 +90,7 @@ def evaluate_condition(controllers, condition):
     return failed_vulns
 
 
-def read_inputs(controllers, scan_id=None):
+def read_inputs(controllers: Any, scan_id: Any = None) -> Any:
     """Parse all SBOM documents registered in the DB.
 
     When *scan_id* is provided only the documents that belong to that scan
@@ -238,7 +238,7 @@ def process_command() -> None:
     _run_main()
 
 
-def populate_observations(scan, vulnCtrl, log_prefix: str = "merger_ci") -> None:
+def populate_observations(scan: Any, vulnCtrl: Any, log_prefix: str = "merger_ci") -> None:
     """Link findings discovered in *scan* to that scan's observations row.
 
     Only findings whose package appears in one of *scan*'s SBOM documents are

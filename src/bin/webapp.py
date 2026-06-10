@@ -14,6 +14,7 @@ from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
 import os
 import threading
+from typing import Any
 from datetime import datetime, timezone
 import signal
 
@@ -22,13 +23,13 @@ SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 
 
-def _launch_enrichment(app):
+def _launch_enrichment(app: Any) -> None:
     """Spawn background thread for EPSS enrichment.
 
     Runs in its own thread so it doesn't block Flask request handlers
     (WAL journal mode allows concurrent reads).
     """
-    def _enrich_epss():
+    def _enrich_epss() -> None:
         with app.app_context():
             # Disable autoflush: without this, every SELECT triggers a flush
             # which acquires the write-lock and holds it across the slow HTTP
@@ -47,10 +48,10 @@ def _launch_enrichment(app):
     threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
 
 
-def create_app():
+def create_app() -> Any:
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
-    app._INT_SCAN_FINISHED = False
+    app._INT_SCAN_FINISHED = False  # type: ignore[attr-defined]
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
     app.config["SCAN_DATE"] = "unknown date"
@@ -98,43 +99,43 @@ def create_app():
         from sqlalchemy import event as _sa_event
 
         @_sa_event.listens_for(db.engine, "connect")
-        def _set_sqlite_busy_timeout(dbapi_conn, _rec):
+        def _set_sqlite_busy_timeout(dbapi_conn: Any, _rec: Any) -> None:
             dbapi_conn.execute("PRAGMA busy_timeout=30000")
     except Exception:
         pass
 
-    def is_scan_finished():
-        if app._INT_SCAN_FINISHED:
+    def is_scan_finished() -> bool:
+        if app._INT_SCAN_FINISHED:  # type: ignore[attr-defined]
             return True
         with open(app.config["SCAN_FILE"], "r") as f:
             if "__END_OF_SCAN_SCRIPT__" in f.read():
                 if not get_bool_env('DEBUG_SKIP_SCAN'):
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
-                app._INT_SCAN_FINISHED = True
+                app._INT_SCAN_FINISHED = True  # type: ignore[attr-defined]
                 if not app.config.get("TESTING"):
                     _launch_enrichment(app)
                 return True
         return False
 
     @app.after_request
-    def add_CORS_header(response):
+    def add_CORS_header(response: Any) -> Any:
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
 
     @app.route("/<path:path>", methods=["OPTIONS"])
-    def allow_OPTION_CORS(path):
+    def allow_OPTION_CORS(path: str) -> Any:
         return "OK", 200
 
     # provide version info
     @app.route("/api/version")
-    def version():
+    def version() -> Any:
         return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
     # bypass fail_scan middleware because it's before
     @app.route("/api/scan/status")
-    def loading():
+    def loading() -> Any:
         with open(app.config["SCAN_FILE"], "r") as f:
             text = f.read()
             if "__END_OF_SCAN_SCRIPT__" in text:
@@ -154,7 +155,7 @@ def create_app():
                 }
 
     @app.middleware("/api")
-    def fail_scan_not_finished(*args, **kw):
+    def fail_scan_not_finished(*args: Any, **kw: Any) -> Any:
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 
@@ -163,7 +164,7 @@ def create_app():
     return app
 
 
-def stop_handler(signal, frame):
+def stop_handler(signal: Any, frame: Any) -> None:
     print("Stopping Flask server")
     sys.exit(0)
 
