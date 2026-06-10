@@ -1155,6 +1155,34 @@ class TestVulnerabilitiesController:
         assert rec is not None
         assert float(rec.epss_score) == pytest.approx(0.42)
 
+    def test_fetch_epss_scores_skips_already_fetched(self, app, monkeypatch):
+        """fetch_epss_scores skips CVEs whose epss_fetched_at is already set."""
+        import datetime
+        from src.controllers.packages import PackagesController
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.models.vulnerability import Vulnerability
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr("src.controllers.vulnerabilities.EPSS_DB", lambda: MagicMock())
+        rec = Vulnerability.create_record("CVE-2099-EPSS-SKIP")
+        rec.update_record(
+            epss_score=0.10,
+            epss_fetched_at=datetime.datetime.utcnow(),
+            commit=True,
+        )
+        pkgctrl = PackagesController()
+        ctrl = VulnerabilitiesController(pkgctrl)
+        ctrl.epss_api = MagicMock()
+        ctrl.epss_api.api_get_epss_batch.return_value = {
+            "CVE-2099-EPSS-SKIP": {"score": 0.99, "percentile": 99.0}
+        }
+        ctrl.fetch_epss_scores()
+        # The already-enriched CVE must not be re-fetched...
+        ctrl.epss_api.api_get_epss_batch.assert_not_called()
+        # ...and its stored score must be left untouched.
+        refreshed = Vulnerability.get_by_id("CVE-2099-EPSS-SKIP")
+        assert float(refreshed.epss_score) == pytest.approx(0.10)
+
     def test_fetch_ghsa_published_success(self):
         """_fetch_ghsa_published returns the published_at value on success (lines 279-280)."""
         import json

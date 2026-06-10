@@ -300,13 +300,27 @@ class VulnerabilitiesController:
         # Only CVE-prefixed IDs exist in the EPSS database.
         all_cve_ids = [vid for vid in self.vulnerabilities if vid.startswith("CVE-")]
 
-        cve_vulns = {vid: self.vulnerabilities[vid] for vid in all_cve_ids}
+        # Skip CVEs whose EPSS score was already fetched in a previous run
+        # (``epss_fetched_at`` is set). The score is persisted in the DB at
+        # ingestion time, so re-fetching it from the FIRST.org API on every
+        # webapp start is redundant network/DB work.
+        cve_vulns = {
+            vid: self.vulnerabilities[vid]
+            for vid in all_cve_ids
+            if getattr(self.vulnerabilities[vid], "epss_fetched_at", None) is None
+        }
         skipped_non_cve = len(self.vulnerabilities) - len(all_cve_ids)
+        skipped_already_fetched = len(all_cve_ids) - len(cve_vulns)
 
         total = len(cve_vulns)
         msg = f"=== EPSS: starting enrichment for {total} CVEs"
+        extra = []
         if skipped_non_cve:
-            msg += f" ({skipped_non_cve} non-CVE IDs skipped)"
+            extra.append(f"{skipped_non_cve} non-CVE IDs skipped")
+        if skipped_already_fetched:
+            extra.append(f"{skipped_already_fetched} already enriched")
+        if extra:
+            msg += f" ({', '.join(extra)})"
         print(msg, flush=True)
 
         tracker = EPSSProgressTracker
