@@ -847,9 +847,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     if (loading) {
         return (
             <div className="relative h-64">
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="flex flex-col items-center gap-3 text-white">
-                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                <div className="absolute inset-0 z-50 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-3 text-gray-300">
+                        <div className="w-10 h-10 border-4 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                         <span className="text-sm font-semibold">Loading assessments...</span>
                     </div>
                 </div>
