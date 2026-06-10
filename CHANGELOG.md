@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.16.1] - 2026-06-10
+
+### Fixed
+- Vulnerabilities: scope affected-package list to the latest SBOM scan; packages from older or unrelated documents no longer leak into a vulnerability's affected-package list.
+- CVSS: scanner scores (NVD/Grype/Yocto) are now stored globally (variant-independent); only custom user scores remain variant-scoped. A migration collapses previously duplicated per-variant scanner rows back to a single global row.
+- NVD refresh: fix `MultipleResultsFound` error when refreshing NVD data caused by duplicated metric rows from the previous migration.
+- EPSS: skip re-fetching scores for CVEs whose `epss_fetched_at` is already set on webapp start, avoiding redundant API calls on every restart.
+- UI: remove black overlay flash on the Review tab while assessments load.
+
+---
+
 ## [0.16.0] - 2026-06-09
 
 ### Added
