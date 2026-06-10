@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pyparsing as pp
+from typing import Any
 
 
 class ConditionParser:
@@ -11,13 +12,13 @@ class ConditionParser:
     More examples and information in unit tests and in documentation
     """
 
-    def __init__(self, debug=False):
+    def __init__(self, debug: bool = False) -> None:
         """
         Initialize a parser using pyparsing and custom expression language
         :param debug: Enable debug mode in pyparsing
         """
         self.debug = debug
-        self.data = {}
+        self.data: dict[str, Any] = {}
         self.cache_parsed = ("", None)
 
         pp.ParserElement.enable_left_recursion()
@@ -47,7 +48,7 @@ class ConditionParser:
             | condition
         ).set_name("conditions")
 
-    def parse_string(self, conditions: str, parse_all=True):
+    def parse_string(self, conditions: str, parse_all: bool = True) -> Any:
         """
         Parse a conditions (string) and return the parsed object
         Not intended for public use, use evaluate() instead
@@ -57,7 +58,7 @@ class ConditionParser:
         """
         return self.conditions.parse_string(conditions, parse_all=parse_all)
 
-    def _eval_internal(self, condition: list):
+    def _eval_internal(self, condition: Any) -> Any:
         """
         Evaluate a part of a condition
         Not intended for public use, use evaluate() instead

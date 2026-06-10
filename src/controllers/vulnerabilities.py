@@ -9,7 +9,7 @@ import logging
 import typing
 import urllib.request
 import urllib.error
-from typing import Optional
+from typing import Optional, Any
 
 from ..models import Vulnerability, Package, SBOMObservation
 from ..controllers.packages import PackagesController
@@ -39,8 +39,10 @@ def _batch_commit(done: int, total: int, label: str) -> None:
 
 
 def _persist_vuln_to_db(
-        vuln: Vulnerability, pkg_id_cache=None, finding_cache=None,
-        db_record_cache=None, use_savepoint: bool = True) -> None:
+        vuln: Vulnerability, pkg_id_cache: dict | None = None,
+        finding_cache: dict | None = None,
+        db_record_cache: dict | None = None,
+        use_savepoint: bool = True) -> None:
     """Silently persist a Vulnerability to the DB.
 
     Uses a SAVEPOINT so that a failure (e.g. IntegrityError) only rolls
@@ -271,7 +273,7 @@ class VulnerabilitiesController:
         self._encountered_this_run.add(vulnerability.id)
         return self.vulnerabilities[vulnerability.id]
 
-    def register_alias(self, alias: list, vuln_id: str):
+    def register_alias(self, alias: list, vuln_id: str) -> None:
         """Allow to register an list of alias pointing to a vulnerability id."""
         for a in alias:
             if a not in self.alias_registered and a != vuln_id:
@@ -292,7 +294,7 @@ class VulnerabilitiesController:
             return True
         return False
 
-    def fetch_epss_scores(self):
+    def fetch_epss_scores(self) -> None:
         from ..controllers.epss_progress import EPSSProgressTracker
         start_time = time.time()
         nb_vuln = 0
@@ -397,7 +399,7 @@ class VulnerabilitiesController:
             print(f"Error for {vuln_id}: {e}")
         return None
 
-    def fetch_published_dates(self):
+    def fetch_published_dates(self) -> None:
         """Fetch published dates for all vulnerabilities from local cache / GHSA API.
 
         CVE-prefixed IDs are looked up from the local NVD SQLite cache (if
@@ -445,7 +447,7 @@ class VulnerabilitiesController:
                     except Exception:
                         pass
 
-    def fetch_nvd_data(self):
+    def fetch_nvd_data(self) -> None:
         """Fetch NVD data (published date, weaknesses, versions_data, patch_url) for all vulnerabilities.
 
         CVE-prefixed IDs are looked up via the NVD API. GHSA-prefixed IDs use
@@ -595,7 +597,7 @@ class VulnerabilitiesController:
         )
 
     @staticmethod
-    def from_dict(pkgCtrl, data: dict):
+    def from_dict(pkgCtrl: Any, data: dict) -> "VulnerabilitiesController":
         """
         Import a list of vulnerabilities from a dictionary of dictionaries.
         Require a PackagesController instance.
@@ -614,7 +616,7 @@ class VulnerabilitiesController:
             return {"is_alias": True, "id": self.alias_registered[vuln_id]}
         return {"is_alias": False, "id": None}
 
-    def __contains__(self, item):
+    def __contains__(self, item: "Vulnerability | str") -> bool:
         """
         Check if the item is in the vulnerabilities list.
         The item can be a Vulnerability class or a string representation of Vulnerability.id.
@@ -631,7 +633,7 @@ class VulnerabilitiesController:
                 return True
         return False
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Return the number of vulnerabilities in the list."""
         return len(self.vulnerabilities)
 
@@ -717,7 +719,7 @@ class VulnerabilitiesController:
         )
 
     @staticmethod
-    def get_or_create_db(vuln_id: str, **kwargs) -> Vulnerability:
+    def get_or_create_db(vuln_id: str, **kwargs: Any) -> Vulnerability:
         """Return an existing record by id, or create and persist a new one.
 
         :raises ValueError: if *vuln_id* is empty or blank.
@@ -730,7 +732,7 @@ class VulnerabilitiesController:
     @staticmethod
     def update_db(
         record: Vulnerability | str,
-        **kwargs,
+        **kwargs: Any,
     ) -> Vulnerability:
         """Update *record* fields.  *record* may be a model instance or an id string.
 

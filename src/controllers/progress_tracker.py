@@ -28,7 +28,7 @@ class ProgressTracker:
             "started_at": None,
         }
 
-    def start(self, phase: Optional[str] = None):
+    def start(self, phase: Optional[str] = None) -> None:
         """Mark the start of an enrichment process."""
         phase = phase or self._default_phase
         now = datetime.now(timezone.utc).isoformat()
@@ -72,7 +72,7 @@ class ProgressTracker:
             }
             return True
 
-    def update(self, phase: str, current: int, total: int, message: Optional[str] = None):
+    def update(self, phase: str, current: int, total: int, message: Optional[str] = None) -> None:
         """Update progress information."""
         with self._lock:
             self._data["in_progress"] = True
@@ -82,7 +82,7 @@ class ProgressTracker:
             self._data["message"] = message or f"{phase}: {current}/{total}"
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
-    def complete(self):
+    def complete(self) -> None:
         """Mark the enrichment as complete."""
         with self._lock:
             self._data["in_progress"] = False
@@ -90,7 +90,7 @@ class ProgressTracker:
             self._data["message"] = self._completed_message
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         """Request cancellation of the in-progress enrichment.
 
         Thread-safe: the background thread must poll ``is_cancelled()`` and
@@ -109,7 +109,7 @@ class ProgressTracker:
         with self._lock:
             return self._cancelled
 
-    def mark_cancelled(self):
+    def mark_cancelled(self) -> None:
         """Called by the background thread once it has stopped gracefully."""
         with self._lock:
             self._cancelled = False
@@ -118,7 +118,7 @@ class ProgressTracker:
             self._data["message"] = "Bulk refresh cancelled"
             self._data["last_update"] = datetime.now(timezone.utc).isoformat()
 
-    def error(self, message: str):
+    def error(self, message: str) -> None:
         """Mark the enrichment as failed."""
         with self._lock:
             self._data["in_progress"] = False

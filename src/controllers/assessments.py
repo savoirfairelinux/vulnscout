@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from typing import Optional
+from typing import Optional, Any, Iterator, Iterable
 import uuid
 
 from ..models import Assessment, Package, Finding
@@ -12,10 +12,10 @@ from ._base import to_dict_with_fallback
 
 def _persist_assessment_to_db(
     assessment: Assessment,
-    pkg_id_cache=None,
-    finding_cache=None,
+    pkg_id_cache: dict[str, Any] | None = None,
+    finding_cache: dict[Any, Any] | None = None,
     use_savepoint: bool = True,
-    variant_id=None,
+    variant_id: uuid.UUID | None = None,
 ) -> None:
     """Persist an Assessment DTO to the DB via Finding resolution.
 
@@ -64,14 +64,14 @@ class AssessmentsController:
     Assessments can be added, removed, retrieved and exported or imported as dictionaries.
     """
 
-    def __init__(self, pkgCtrl, vulnCtrl):
+    def __init__(self, pkgCtrl: Any, vulnCtrl: Any) -> None:
         """
         Take an instance of PackagesController and VulnerabilitiesController.
         They are used to resolve package and vulnerabilities by their id.
         """
         self.packagesCtrl = pkgCtrl
         self.vulnerabilitiesCtrl = vulnCtrl
-        self.assessments = {}
+        self.assessments: dict[str, Assessment] = {}
         self.current_variant_id: uuid.UUID | None = None
         """A dictionary of assessments, indexed by their id."""
         # Secondary indexes for O(1) lookups in hot ingestion paths.
@@ -86,14 +86,14 @@ class AssessmentsController:
         self._db_queried_pkgs: set[str] = set()
         self.use_savepoints: bool = True
 
-    def get_by_id(self, assess_id) -> Optional[Assessment]:
+    def get_by_id(self, assess_id: uuid.UUID | str) -> Optional[Assessment]:
         """Return an assessment by id (str or UUID) or None if not found."""
         key = str(assess_id) if assess_id is not None else None
         if key in self.assessments:
             return self.assessments[key]
         return None
 
-    def gets_by_vuln(self, vuln_id) -> list:
+    def gets_by_vuln(self, vuln_id: Any) -> list:
         """Return assessments for a vulnerability, querying DB then supplementing with in-memory."""
         if vuln_id is None:
             return []
@@ -113,7 +113,7 @@ class AssessmentsController:
             verbose(f"[AssessmentsController.gets_by_vuln {vuln_str!r}] {e}")
         return list(results.values())
 
-    def gets_by_pkg(self, pkg_id) -> list:
+    def gets_by_pkg(self, pkg_id: Any) -> list:
         """Return assessments for a package, querying DB then supplementing with in-memory."""
         if pkg_id is None:
             return []
@@ -144,7 +144,7 @@ class AssessmentsController:
             return True
         return assessment.variant_id is None or assessment.variant_id == self.current_variant_id
 
-    def gets_by_vuln_pkg(self, vuln_id, pkg_id) -> list:
+    def gets_by_vuln_pkg(self, vuln_id: Any, pkg_id: Any) -> list:
         """Return assessments for a (vulnerability, package) pair, querying DB then in-memory."""
         vuln_str = vuln_id if isinstance(vuln_id, str) else vuln_id.id
         pkg_str = pkg_id if isinstance(pkg_id, str) else pkg_id.string_id
@@ -198,7 +198,7 @@ class AssessmentsController:
                 # gets_by_vuln_pkg skips the redundant SELECT on the first call.
                 self._db_queried_vuln_pkg.add((vuln, pkg))
 
-    def warm_packages(self, package_ids) -> None:
+    def warm_packages(self, package_ids: "Iterable[Any]") -> None:
         """Pre-warm the in-memory assessment index for the given package IDs.
 
         Bulk-fetches all existing assessments for each package from the DB
@@ -215,8 +215,7 @@ class AssessmentsController:
                     self._index_existing(a)
             self._db_queried_pkgs.add(pkg_id)
 
-    def add(self, assessment: Assessment):
-        """Add an assessment to the list, merging it with an existing one if present, and persist to DB."""
+    def add(self, assessment: Assessment) -> None:
         if assessment is None:
             return
         key = str(assessment.id)
@@ -243,7 +242,7 @@ class AssessmentsController:
                 if key not in vp_list:
                     vp_list.append(key)
 
-    def remove(self, assess_id) -> bool:
+    def remove(self, assess_id: uuid.UUID | str) -> bool:
         """Remove an assessment by id (str or UUID) and return True if removed, False if not found."""
         if assess_id is None:
             return False
@@ -277,14 +276,14 @@ class AssessmentsController:
         )
 
     @staticmethod
-    def from_dict(pkgCtrl, vulnCtrl, data: dict):
+    def from_dict(pkgCtrl: Any, vulnCtrl: Any, data: dict) -> "AssessmentsController":
         """Return a new instance of AssessmentsController from a dictionary."""
         item = AssessmentsController(pkgCtrl, vulnCtrl)
         for k, v in data.items():
             item.add(Assessment.from_dict(v))
         return item
 
-    def __contains__(self, item) -> bool:
+    def __contains__(self, item: "Assessment | str") -> bool:
         """Check if an item (str or Assessment) is in the list of assessments."""
         if isinstance(item, str):
             return item in self.assessments
@@ -296,6 +295,6 @@ class AssessmentsController:
         """Return the number of assessments in the list."""
         return len(self.assessments)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Assessment]:
         """Allow iteration over the list of assessments."""
         return iter(self.assessments.values())

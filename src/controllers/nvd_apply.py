@@ -1,11 +1,12 @@
 """NVD update helper — applies NVD API details to a Vulnerability record."""
 
 import datetime
+from typing import Any
 
 from ..models import Metrics
 
 
-def apply_cvss_update(rec, details: dict, db) -> None:
+def apply_cvss_update(rec: Any, details: dict, db: Any) -> None:
     """Upsert the CVSS Metrics row for *rec* from NVD *details* (in-place, no commit).
 
     *db* must be the SQLAlchemy extension instance (passed in to keep this module
@@ -37,7 +38,7 @@ def apply_cvss_update(rec, details: dict, db) -> None:
         ))
 
 
-def apply_nvd_update(vuln_record, details: dict, now: datetime.datetime) -> bool:
+def apply_nvd_update(vuln_record: Any, details: dict, now: datetime.datetime) -> bool:
     """Compare NVD *details* against *vuln_record* and update in place if different.
 
     Returns True if any field changed, False if nothing differed.

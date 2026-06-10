@@ -1,6 +1,9 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import uuid
+from typing import Iterator
+
 from ..models import Package, Finding, SBOMDocument, SBOMPackage
 from ..helpers.verbose import verbose
 from ..extensions import db
@@ -17,7 +20,7 @@ class PackagesController:
     directly; the session cache may be empty.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cache: dict[str, Package] = {}
         self._current_sbom_document: SBOMDocument | None = None
         # Fast PK lookup: string_id → DB UUID.  Avoids SELECT in
@@ -67,11 +70,11 @@ class PackagesController:
     # Fast accessors for other controllers
     # ------------------------------------------------------------------
 
-    def get_db_id(self, string_id: str):
+    def get_db_id(self, string_id: str) -> uuid.UUID | None:
         """Return the DB UUID primary key for *string_id*, or ``None``."""
         return self._db_id_cache.get(string_id)
 
-    def get_or_resolve_db_id(self, string_id: str):
+    def get_or_resolve_db_id(self, string_id: str) -> uuid.UUID | None:
         """Return the DB UUID, falling back to a DB query only if not cached."""
         uid = self._db_id_cache.get(string_id)
         if uid is not None:
@@ -194,7 +197,7 @@ class PackagesController:
     # Container protocol
     # ------------------------------------------------------------------
 
-    def __contains__(self, item) -> bool:
+    def __contains__(self, item: "Package | str") -> bool:
         if isinstance(item, str):
             if item in self._cache:
                 return True
@@ -216,7 +219,7 @@ class PackagesController:
             verbose(f"[PackagesController.__len__] {e}")
             return 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Package]:
         """Iterate over all packages.
 
         When the session cache is populated (during scan processing) it is
