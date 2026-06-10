@@ -5,6 +5,7 @@ Flask-SQLAlchemy==3.1.1
 Flask-Migrate==4.1.0
 jinja2==3.1.4
 mypy==1.11.2
+lxml
 pdoc==14.5.0
 pre-commit==3.7.1
 pyparsing==3.1.2
