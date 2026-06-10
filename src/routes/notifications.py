@@ -3,15 +3,16 @@
 
 import json
 import os
+from typing import Any
 from flask import jsonify
 
 NOTIFICATION_FILE = "/scan/legacy_notification.json"
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/notifications')
-    def get_notifications():
+    def get_notifications() -> Any:
         """Return any pending system notification (e.g. legacy-setup warning).
 
         Returns an empty list when no notification is pending, or a list with

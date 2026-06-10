@@ -10,6 +10,7 @@ dicts/sets without any diff or comparison logic.
 import uuid as uuid_module
 from dataclasses import dataclass
 import typing
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -165,7 +166,7 @@ _TOOL_SOURCE_LABELS: dict = {
 }
 
 
-def _origin_for_scan(scan) -> str:
+def _origin_for_scan(scan: Any) -> str:
     """Return a human-readable origin label for a scan."""
     if (scan.scan_type or "sbom") == "tool":
         return _TOOL_SOURCE_LABELS.get(scan.scan_source or "", "Vulnerability Scan")
@@ -177,7 +178,7 @@ def _origin_for_scan(scan) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _assessment_rows_for_scans(scan_ids: list):
+def _assessment_rows_for_scans(scan_ids: list) -> Any:
     """Shared query returning assessment rows linked to the given scan IDs.
 
     Returns a list of tuples:
@@ -340,7 +341,7 @@ def _assessments_by_scan(scans: list[Scan]) -> dict:
     return result
 
 
-def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) -> dict:
+def _assessments_detail_for_scan(scan: Scan, next_scan_ts: Any = None, prev_scan: Any = None) -> dict:
     """Return assessment details AND counts for a single scan.
 
     Uses the SAME shared query (_assessment_rows_for_scans) as

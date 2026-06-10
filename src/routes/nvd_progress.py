@@ -1,17 +1,18 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from typing import Any
 from flask import jsonify
 from ..controllers.nvd_progress import NVDProgressTracker
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
     """
     Initialize NVD progress routes.
     """
 
     @app.route('/api/nvd/progress', methods=['GET'])
-    def get_nvd_progress():
+    def get_nvd_progress() -> Any:
         """
         Get the current progress of NVD database updates.
 

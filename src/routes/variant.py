@@ -1,16 +1,17 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from typing import Any
 from flask import jsonify
 
 from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/variants')
-    def list_all_variants():
+    def list_all_variants() -> Any:
         projects = ProjectController.get_all()
         all_variants = []
         for project in projects:
@@ -20,7 +21,7 @@ def init_app(app):
         return jsonify(all_variants)
 
     @app.route('/api/projects/<project_id>/variants')
-    def list_variants_by_project(project_id):
+    def list_variants_by_project(project_id: str) -> Any:
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found"}), 404

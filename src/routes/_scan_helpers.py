@@ -16,13 +16,14 @@ from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_pack
 from ..models.observation import Observation
 from ..models.package import Package
 from ..extensions import db
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
 # UUID parsing
 # ---------------------------------------------------------------------------
 
-def parse_uuid_or_400(value: str, label: str = "id"):
+def parse_uuid_or_400(value: str, label: str = "id") -> tuple:
     """Parse *value* as a UUID or return a 400 JSON error response.
 
     Returns ``(uuid, None)`` on success or ``(None, Response)`` on failure.
@@ -37,7 +38,7 @@ def parse_uuid_or_400(value: str, label: str = "id"):
 # Scan-trigger boilerplate
 # ---------------------------------------------------------------------------
 
-def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
+def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str) -> tuple:
     """Common validation for scan trigger endpoints.
 
     Parses the variant UUID, checks the variant exists, and checks that
@@ -64,7 +65,7 @@ def validate_trigger(variant_id: str, progress_dict: dict, scan_label: str):
     return variant_uuid, variant, None
 
 
-def scan_status_response(variant_id: str, progress_dict: dict):
+def scan_status_response(variant_id: str, progress_dict: dict) -> Any:
     """Common handler for ``/status`` endpoints."""
     variant_uuid, err = parse_uuid_or_400(variant_id, "variant id")
     if err is not None:
@@ -76,7 +77,7 @@ def scan_status_response(variant_id: str, progress_dict: dict):
     return jsonify(info)
 
 
-def init_progress(progress_dict: dict, vid_str: str, total: int = 0):
+def init_progress(progress_dict: dict, vid_str: str, total: int = 0) -> None:
     """Initialise the progress entry for a scan."""
     progress_dict[vid_str] = {
         "status": "running",
@@ -88,7 +89,7 @@ def init_progress(progress_dict: dict, vid_str: str, total: int = 0):
     }
 
 
-def set_error(progress_dict: dict, vid_str: str, error: str):
+def set_error(progress_dict: dict, vid_str: str, error: str) -> None:
     """Transition a progress entry to error state."""
     old = progress_dict.get(vid_str, {})
     logs = old.get("logs", [])
@@ -107,7 +108,7 @@ def set_error(progress_dict: dict, vid_str: str, error: str):
 # Resolve active packages for a variant
 # ---------------------------------------------------------------------------
 
-def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid_str: str | None = None):
+def resolve_active_packages(variant_uuid: Any, progress_dict: dict | None = None, vid_str: str | None = None) -> tuple:
     """Return the active ``Package`` list for *variant_uuid*.
 
     Looks at the latest **SBOM** scan for the variant, resolves its
@@ -146,13 +147,13 @@ def resolve_active_packages(variant_uuid, progress_dict: dict | None = None, vid
 # ---------------------------------------------------------------------------
 
 def create_observation_and_assessment(
-    finding,
-    scan,
-    variant_uuid,
+    finding: Any,
+    scan: Any,
+    variant_uuid: Any,
     origin: str,
     observation_pairs: set,
     assessed_findings: set,
-):
+) -> None:
     """Create an Observation and (if needed) an initial Assessment.
 
     De-duplicates against *observation_pairs* ``{(finding_id, scan_id)}``

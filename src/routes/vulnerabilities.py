@@ -37,11 +37,12 @@ from ..helpers.vuln_helpers import (
 )
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
+from typing import Any
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 
 
-def _sbom_pkg_filter(pkg_ids):
+def _sbom_pkg_filter(pkg_ids: Any) -> Any:
     """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
 
     Assumes the query already joins ``Finding`` and ``Scan``.  When
@@ -80,7 +81,7 @@ class _Effort:
     likely: int | None
     pessimistic: int | None
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "optimistic": str(Iso8601Duration(f"PT{self.optimistic}H")) if self.optimistic else None,
             "likely": str(Iso8601Duration(f"PT{self.likely}H")) if self.likely else None,
@@ -95,7 +96,7 @@ class _ScopedOverrides:
 
 
 def _variant_scoped_metrics_and_effort_overrides(
-    records: list[Vulnerability], variant_uuid
+    records: list[Vulnerability], variant_uuid: Any
 ) -> dict[str, _ScopedOverrides]:
     """Build response-level overrides for variant-scoped metrics/effort.
 
@@ -189,8 +190,8 @@ def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
 
 def _populate_found_by(
     records: list,
-    variant_uuid=None,
-    project_uuid=None,
+    variant_uuid: Any = None,
+    project_uuid: Any = None,
     active_scan_ids: list | None = None,
 ) -> None:
     """Populate the transient found_by list on each record.
@@ -279,13 +280,13 @@ def _populate_found_by(
             record.add_found_by(scanner)
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
 
     @app.route('/api/vulnerabilities')
-    def index_vulns():
+    def index_vulns() -> Any:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
@@ -309,7 +310,7 @@ def init_app(app):
                 selectinload(Vulnerability.metrics),
             )
 
-            def _vuln_ids_for_scans(scan_ids):
+            def _vuln_ids_for_scans(scan_ids: Any) -> Any:
                 """Vuln IDs from *scan_ids*, filtering tool scans to active packages."""
                 if not scan_ids:
                     return set()
@@ -501,7 +502,7 @@ def init_app(app):
                     if te:
                         opti, like, pess = te
 
-                        def _h(v):
+                        def _h(v: Any) -> Any:
                             if v is None:
                                 return None
                             return Iso8601Duration(f"PT{v}H")
@@ -625,7 +626,7 @@ def init_app(app):
                 raise ValueError("Unknown format", fmt)
 
     @app.get('/api/vulnerabilities/<id>')
-    def get_vuln(id):
+    def get_vuln(id: str) -> Any:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -651,7 +652,7 @@ def init_app(app):
         return response
 
     @app.patch('/api/vulnerabilities/<id>')
-    def patch_vuln(id):
+    def patch_vuln(id: str) -> Any:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -679,6 +680,7 @@ def init_app(app):
                     target_variant_ids = [None]
 
             for target_variant_id in target_variant_ids:
+                assert opt is not None and lik is not None and pes is not None
                 _apply_effort(record, target_variant_id, opt, lik, pes,
                               log_prefix=f"PATCH /api/vulnerabilities/{record.id}")
 
@@ -725,7 +727,7 @@ def init_app(app):
         return response
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
-    def update_vulns_batch():
+    def update_vulns_batch() -> Any:
         payload_data = request.get_json()
         if (not payload_data
                 or "vulnerabilities" not in payload_data
@@ -767,6 +769,7 @@ def init_app(app):
                         target_variant_ids = [None]
 
                 for target_variant_id in target_variant_ids:
+                    assert opt is not None and lik is not None and pes is not None
                     _apply_effort(record, target_variant_id, opt, lik, pes,
                                   log_prefix=f"PATCH /api/vulnerabilities/batch {item['id']!r}")
 
@@ -830,7 +833,7 @@ def init_app(app):
         return response, 200 if results else 400
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
-    def refresh_single_cve(cve_id):
+    def refresh_single_cve(cve_id: str) -> Any:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -924,7 +927,7 @@ def init_app(app):
         return jsonify({"vulnerabilities": [data]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
-    def refresh_single_cve_epss(cve_id):
+    def refresh_single_cve_epss(cve_id: str) -> Any:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:

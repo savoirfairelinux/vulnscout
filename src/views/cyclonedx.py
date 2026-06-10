@@ -16,7 +16,7 @@ from cyclonedx.model.impact_analysis import ImpactAnalysisState, ImpactAnalysisJ
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from packageurl import PackageURL
-from typing import Optional
+from typing import Optional, Any
 
 
 class CycloneDx:
@@ -25,11 +25,11 @@ class CycloneDx:
     Also support output to CycloneDx SBOM format.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
-        self.ref_dict = {}
+        self.ref_dict: dict[str, Any] = {}
 
     _SEVERITY_MAP = {
         "low": cyclonedx.model.vulnerability.VulnerabilitySeverity.LOW,
@@ -96,7 +96,7 @@ class CycloneDx:
         return cyclonedx.model.vulnerability.VulnerabilityScoreSource.get_from_vector(cvss.vector_string)
 
     # Add function to delete the "justification:"null" from the cyclonedx files
-    def clean_sbom(self, cyclonedx):
+    def clean_sbom(self, cyclonedx: Any) -> Any:
         if isinstance(cyclonedx, dict):
             new_dict = {}
             for k, v in cyclonedx.items():
@@ -113,7 +113,7 @@ class CycloneDx:
         else:
             return cyclonedx
 
-    def load_from_dict(self, cyclonedx: dict):
+    def load_from_dict(self, cyclonedx: dict) -> None:
         """Read data from CycloneDx json parsed format."""
         try:
             cyclonedx = self.clean_sbom(cyclonedx)
@@ -121,7 +121,7 @@ class CycloneDx:
         except Exception as e:
             print(f"Error parsing CycloneDx format: {e}")
 
-    def merge_components_into_controller(self):
+    def merge_components_into_controller(self) -> None:
         """
         Internal method.
         Merge components from SBOM into controller.
@@ -143,7 +143,7 @@ class CycloneDx:
 
             self.packagesCtrl.add(package)
 
-    def merge_vulnerabilities_into_controller(self):
+    def merge_vulnerabilities_into_controller(self) -> None:
         """
         Internal method.
         Merge components from SBOM into controller.
@@ -224,7 +224,7 @@ class CycloneDx:
         self,
         vulnerability: cyclonedx.model.vulnerability.Vulnerability,
         pkgs: list
-    ):
+    ) -> None:
         """
         Internal method.
         Merge assessments from SBOM into controller.
@@ -265,25 +265,26 @@ class CycloneDx:
                         break
             self.assessmentsCtrl.add(assess)
 
-    def parse_and_merge(self):
+    def parse_and_merge(self) -> None:
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
         self.merge_vulnerabilities_into_controller()
 
-    def register_components(self):
+    def register_components(self) -> None:
         """
         Internal method.
         Copy components from controller into SBOM.
         """
         for pkg in self.packagesCtrl:
-            if len(pkg.cpe) < 1:
+            if not pkg.cpe:
                 pkg.generate_generic_cpe()
-            if len(pkg.purl) < 1:
+            if not pkg.purl:
                 pkg.generate_generic_purl()
+            assert pkg.cpe and pkg.purl, f"No CPE/PURL for {pkg}"
             group = pkg.cpe[0].split(":")[3]
             cmp = Component(
                 type=cyclonedx.model.component.ComponentType.LIBRARY,
-                name=pkg.name,
+                name=pkg.name or "",
                 version=pkg.version,
                 bom_ref=pkg.purl[0],
                 group=group if group != '*' else None,
@@ -292,7 +293,7 @@ class CycloneDx:
             )
             self.sbom.components.add(cmp)
 
-    def register_vulnerabilities(self):
+    def register_vulnerabilities(self) -> None:
         """
         Internal method.
         Copy vulnerabilities from controller into SBOM.
@@ -303,7 +304,7 @@ class CycloneDx:
                 bom_ref=vuln.id,
                 source=cyclonedx.model.vulnerability.VulnerabilitySource(
                     name=vuln.namespace,
-                    url=vuln.datasource
+                    url=cyclonedx.model.XsUri(uri=vuln.datasource) if vuln.datasource else None
                 ),
                 description=vuln.description,
             )
@@ -351,8 +352,11 @@ class CycloneDx:
                 )
             for pkg in vuln.packages:
                 package = self.packagesCtrl.get(pkg)
-                if len(package.purl) < 1:
+                if package is None:
+                    continue
+                if not package.purl:
                     package.generate_generic_purl()
+                assert package.purl, f"No PURL for {package}"
                 vuln_obj.affects.add(
                     cyclonedx.model.vulnerability.BomTarget(
                         ref=package.purl[0]
@@ -361,7 +365,7 @@ class CycloneDx:
             self.register_assessment(vuln_obj)
             self.sbom.vulnerabilities.add(vuln_obj)
 
-    def register_assessment(self, vuln_obj: cyclonedx.model.vulnerability.Vulnerability):
+    def register_assessment(self, vuln_obj: cyclonedx.model.vulnerability.Vulnerability) -> None:
         """
         Internal method.
         Copy assessments from controller into SBOM.
@@ -385,7 +389,7 @@ class CycloneDx:
             if assess["workaround"]:
                 vuln_obj.workaround = assess["workaround"]
 
-    def output_as_json(self, version=6, author=None) -> str:
+    def output_as_json(self, version: int = 6, author: Any = None) -> str:
         """Output the SBOM to JSON format."""
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Bom()

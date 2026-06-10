@@ -1,17 +1,18 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+from typing import Any
 from flask import jsonify
 from ..controllers.epss_progress import EPSSProgressTracker
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
     """
     Initialize EPSS progress routes.
     """
 
     @app.route('/api/epss/progress', methods=['GET'])
-    def get_epss_progress():
+    def get_epss_progress() -> Any:
         """
         Get the current progress of EPSS score enrichment.
 

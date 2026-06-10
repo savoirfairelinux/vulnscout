@@ -11,6 +11,7 @@ Computation helpers live in sibling modules:
 import re
 import uuid as uuid_module
 from datetime import datetime, timezone
+from typing import Any
 
 from flask import jsonify, request as flask_request
 
@@ -69,7 +70,7 @@ def _extract_supplier_name(supplier: str) -> str:
     return re.sub(r'\s*\([^)]*\)$', '', s)
 
 
-def _scan_meta(scan, variant_name=None, project_name=None):
+def _scan_meta(scan: Any, variant_name: Any = None, project_name: Any = None) -> dict:
     """Build scan metadata dict for export."""
     scan_type = scan.scan_type or "sbom"
     ts = scan.timestamp
@@ -145,7 +146,7 @@ def _strip_assessment(entry: dict) -> dict:
     }
 
 
-def _build_diff_export(scan, diff: dict, variant_name=None, project_name=None) -> dict:
+def _build_diff_export(scan: Any, diff: dict, variant_name: Any = None, project_name: Any = None) -> dict:
     """Build the export-ready dict from a scan and its diff response."""
     meta = _scan_meta(scan, variant_name, project_name)
     is_tool = (scan.scan_type or "sbom") == "tool"
@@ -214,7 +215,7 @@ def _build_diff_export(scan, diff: dict, variant_name=None, project_name=None) -
     return base
 
 
-def _build_global_result_export(scan, result: dict, variant_name=None, project_name=None) -> dict:
+def _build_global_result_export(scan: Any, result: dict, variant_name: Any = None, project_name: Any = None) -> dict:
     """Build the export-ready dict from a scan and its global result."""
     meta = _scan_meta(scan, variant_name, project_name)
     return {
@@ -257,7 +258,7 @@ def _sanitize_filename(name: str) -> str:
     return s.strip('_')
 
 
-def _format_timestamp_for_filename(dt=None) -> str:
+def _format_timestamp_for_filename(dt: Any = None) -> str:
     """Format a datetime (or now) as YYYYMMDD_HHmmss for filenames."""
     if dt is None:
         d = datetime.now(timezone.utc)
@@ -268,16 +269,16 @@ def _format_timestamp_for_filename(dt=None) -> str:
     return d.strftime('%Y%m%d_%H%M%S')
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/scans')
-    def list_all_scans():
+    def list_all_scans() -> Any:
         scans = ScanController.get_all()
         result = _serialize_list_with_diff(scans)
         return jsonify(result)
 
     @app.route('/api/projects/<project_id>/scans')
-    def list_scans_by_project(project_id):
+    def list_scans_by_project(project_id: str) -> Any:
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found"}), 404
@@ -286,7 +287,7 @@ def init_app(app):
         return jsonify(result)
 
     @app.route('/api/variants/<variant_id>/scans')
-    def list_scans_by_variant(variant_id):
+    def list_scans_by_variant(variant_id: str) -> Any:
         variant = VariantController.get(variant_id)
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
@@ -295,7 +296,7 @@ def init_app(app):
         return jsonify(result)
 
     @app.route('/api/scans/<scan_id>', methods=['PATCH'])
-    def update_scan(scan_id):
+    def update_scan(scan_id: str) -> Any:
         from flask import request as req
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -314,7 +315,7 @@ def init_app(app):
         return jsonify(ScanController.serialize(updated))
 
     @app.route('/api/scans/<scan_id>', methods=['DELETE'])
-    def delete_scan(scan_id):
+    def delete_scan(scan_id: str) -> Any:
         """Delete a scan and its observations.
 
         Findings that are no longer referenced by any observation are
@@ -360,7 +361,7 @@ def init_app(app):
         })
 
     @app.route('/api/scans/<scan_id>/diff')
-    def get_scan_diff(scan_id):
+    def get_scan_diff(scan_id: str) -> Any:
         try:
             scan_uuid = uuid_module.UUID(scan_id)
         except ValueError:
@@ -423,7 +424,7 @@ def init_app(app):
     # ------------------------------------------------------------------
 
     @app.route('/api/scans/<scan_id>/global-result')
-    def get_scan_global_result(scan_id):
+    def get_scan_global_result(scan_id: str) -> Any:
         """Return every active finding, vulnerability, and package at the
         time of *scan_id* together with their source (SBOM document name /
         format or scan source label).
@@ -447,7 +448,7 @@ def init_app(app):
     # Export endpoints — server-side data transformation for downloads
     # ------------------------------------------------------------------
 
-    def _compute_diff_dict(scan):
+    def _compute_diff_dict(scan: Any) -> Any:
         """Compute the diff dict for a scan (same logic as get_scan_diff)."""
         all_variant_scans = ScanController.get_by_variant(scan.variant_id)
         scan_type = scan.scan_type or "sbom"
@@ -574,7 +575,7 @@ def init_app(app):
             upgraded_old_ids_set = {old_pkg.id for old_pkg, _ in upgraded_pairs_list}  # noqa: F841
             upgraded_new_ids_set = {new_pkg.id for _, new_pkg in upgraded_pairs_list}
             upgraded_old_to_new = {old_pkg.id: (old_pkg, new_pkg) for old_pkg, new_pkg in upgraded_pairs_list}
-            _rem_by_vuln = {}
+            _rem_by_vuln: dict[Any, list] = {}
             for fid in sr_gone_fids:
                 info = fid_info.get(fid)
                 if info and info[0] in upgraded_old_ids_set:
@@ -703,7 +704,7 @@ def init_app(app):
         }
 
     @app.route('/api/scans/<scan_id>/export-diff')
-    def export_scan_diff(scan_id):
+    def export_scan_diff(scan_id: str) -> Any:
         """Export a single scan's diff as a cleaned JSON download."""
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -730,7 +731,7 @@ def init_app(app):
         return response
 
     @app.route('/api/scans/<scan_id>/export-result')
-    def export_scan_result(scan_id):
+    def export_scan_result(scan_id: str) -> Any:
         """Export a single scan's global result as a cleaned JSON download."""
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -758,7 +759,7 @@ def init_app(app):
         return response
 
     @app.route('/api/scans/export')
-    def export_all_scans():
+    def export_all_scans() -> Any:
         """Export all visible scans (optionally filtered by variant/project).
 
         Query params:

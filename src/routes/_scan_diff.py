@@ -16,6 +16,7 @@ from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage
 from ..models.package import Package
 from ..extensions import db
+from typing import Any
 
 from ._scan_queries import (
     _findings_by_scan_ids,
@@ -78,7 +79,9 @@ def _classify_package_changes(added_pkg_ids: set, removed_pkg_ids: set, pkg_look
 # Finding-change classification
 # ---------------------------------------------------------------------------
 
-def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
+def _classify_finding_changes(
+    findings_added: Any, findings_removed: Any, upgraded_pairs: Any
+) -> Any:
     """Separate findings into truly-added, truly-removed, and upgraded.
 
     A finding is "upgraded" when the same vulnerability_id appears in both
@@ -102,7 +105,7 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
         new_to_old_pkg[str(new_pkg.id)] = old_pkg
 
     # Index removed findings by (vuln_id, old_pkg_id) for matching
-    removed_by_key = {}
+    removed_by_key: dict[tuple, list] = {}
     for f in findings_removed:
         key = (f["vulnerability_id"], f["package_id"])
         removed_by_key.setdefault(key, []).append(f)
@@ -185,7 +188,7 @@ def _sbom_scans_by_variant(scans: list[Scan]) -> dict:
     return by_variant
 
 
-def _sbom_active_at(sbom_list: list, timestamp) -> "Scan | None":
+def _sbom_active_at(sbom_list: list, timestamp: Any) -> "Scan | None":
     """Return the most recent SBOM scan whose timestamp <= *timestamp*.
 
     *sbom_list* must be sorted ascending by timestamp.
@@ -243,7 +246,7 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
 
 
 def _global_result_id_sets(
-    sbom_scan,
+    sbom_scan: Any,
     tool_scans: dict,
     *,
     filter_tool_by_sbom_pkgs: bool = False,
@@ -308,7 +311,7 @@ def _global_result_id_sets(
 
 
 def _global_assessment_ids_for(
-    sbom_scan,
+    sbom_scan: Any,
     latest_tool: dict,
 ) -> set:
     """Return the set of unique Assessment IDs visible in the global result.

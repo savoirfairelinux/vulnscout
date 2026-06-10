@@ -7,6 +7,7 @@ import uuid
 import time
 import tempfile
 import threading
+from typing import Any
 
 from flask import jsonify, request
 from sqlalchemy.exc import OperationalError
@@ -29,7 +30,7 @@ _upload_status: dict[str, dict] = {}
 _UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
 
 
-def _prune_upload_status():
+def _prune_upload_status() -> None:
     """Remove completed/errored entries older than _UPLOAD_STATUS_TTL."""
     now = time.time()
     stale = [
@@ -41,7 +42,7 @@ def _prune_upload_status():
         _upload_status.pop(uid, None)
 
 
-def _retry_on_lock(fn, max_retries=5, delay=0.5):
+def _retry_on_lock(fn: Any, max_retries: int = 5, delay: float = 0.5) -> Any:
     """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'.
 
     Between retries the session is removed (not just rolled back) so the next
@@ -82,7 +83,10 @@ def _detect_format(filename: str, data: dict) -> str:
     return "unknown"
 
 
-def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
+def _process_sbom_background(
+    app: Any, upload_id: str, file_paths: list[str],
+    scan_id: Any, variant_id: Any,
+) -> None:
     """Run SBOM parsing in a background thread for one or more files."""
     with app.app_context():
         try:
@@ -142,9 +146,9 @@ def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id
                     pass
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
-    def _validate_name_from_request(entity_label: str):
+    def _validate_name_from_request(entity_label: str) -> Any:
         """Parse and validate the ``name`` field from a JSON request body.
 
         Returns ``(name, None)`` on success or ``(None, Response)`` on failure.
@@ -157,7 +161,9 @@ def init_app(app):
             return None, (jsonify({"error": f"{entity_label} name must not be empty."}), 400)
         return name, None
 
-    def _delete_entity(entity_id, controller, id_label, entity_label):
+    def _delete_entity(
+        entity_id: Any, controller: Any, id_label: Any, entity_label: Any
+    ) -> Any:
         """Validate, look up and delete an entity by UUID.
 
         Returns a Flask response tuple.
@@ -170,7 +176,7 @@ def init_app(app):
         if entity is None:
             return jsonify({"error": f"{entity_label} not found."}), 404
 
-        def _do_delete():
+        def _do_delete() -> None:
             e = controller.get(entity_id)
             if e is not None:
                 controller.delete(e)
@@ -182,7 +188,7 @@ def init_app(app):
     # Rename project
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/rename', methods=['PATCH'])
-    def rename_project(project_id):
+    def rename_project(project_id: str) -> Any:
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
@@ -201,19 +207,21 @@ def init_app(app):
             if p.name == new_name and str(p.id) != project_id:
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
-        def _do_rename():
+        def _do_rename() -> Any:
             p = ProjectController.get(project_id)
+            assert p is not None
             p.update(new_name)
             return p
 
         project = _retry_on_lock(_do_rename)
+        assert project is not None
         return jsonify(ProjectController.serialize(project))
 
     # ------------------------------------------------------------------
     # Rename variant
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>/rename', methods=['PATCH'])
-    def rename_variant(variant_id):
+    def rename_variant(variant_id: str) -> Any:
         new_name, err = _validate_name_from_request("Variant")
         if err:
             return err
@@ -232,19 +240,21 @@ def init_app(app):
             if v.name == new_name and str(v.id) != variant_id:
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
-        def _do_rename():
+        def _do_rename() -> Any:
             v = VariantController.get(variant_id)
+            assert v is not None
             VariantController.update(v, new_name)
             return v
 
         variant = _retry_on_lock(_do_rename)
+        assert variant is not None
         return jsonify(VariantController.serialize(variant))
 
     # ------------------------------------------------------------------
     # Create project
     # ------------------------------------------------------------------
     @app.route('/api/projects', methods=['POST'])
-    def create_project():
+    def create_project() -> Any:
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
@@ -262,7 +272,7 @@ def init_app(app):
     # Create variant
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/variants', methods=['POST'])
-    def create_variant(project_id):
+    def create_variant(project_id: str) -> Any:
         _, err = parse_uuid_or_400(project_id, "project ID")
         if err:
             return err
@@ -288,21 +298,21 @@ def init_app(app):
     # Delete project
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
-    def delete_project(project_id):
+    def delete_project(project_id: str) -> Any:
         return _delete_entity(project_id, ProjectController, "project ID", "Project")
 
     # ------------------------------------------------------------------
     # Delete variant
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
-    def delete_variant(variant_id):
+    def delete_variant(variant_id: str) -> Any:
         return _delete_entity(variant_id, VariantController, "variant ID", "Variant")
 
     # ------------------------------------------------------------------
     # Upload SBOM
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload', methods=['POST'])
-    def upload_sbom():
+    def upload_sbom() -> Any:
         """Upload one or more SBOM files and process them asynchronously.
 
         All files are registered under a single scan so they are treated as
@@ -420,7 +430,7 @@ def init_app(app):
     # Upload SBOM status
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload/<upload_id>/status')
-    def upload_sbom_status(upload_id):
+    def upload_sbom_status(upload_id: str) -> Any:
         status = _upload_status.get(upload_id)
         if status is None:
             return jsonify({"error": "Unknown upload ID."}), 404

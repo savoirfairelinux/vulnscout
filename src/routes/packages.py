@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
+from typing import Any
 
 from ..models.package import Package
 from ..models.scan import Scan
@@ -17,10 +18,10 @@ from ._scan_queries import _packages_by_scan_ids, _package_rows
 from ._scan_helpers import parse_uuid_or_400
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/packages')
-    def index_pkg():
+    def index_pkg() -> Any:
         from flask import request
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
@@ -34,7 +35,7 @@ def init_app(app):
                 return err
             operation = request.args.get('operation', 'difference')
 
-            def _pkg_ids_for_variant(variant_uuid):
+            def _pkg_ids_for_variant(variant_uuid: Any) -> Any:
                 return set(db.session.execute(
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)

@@ -19,7 +19,7 @@ from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.openvex import OpenVex
-from typing import Dict, List
+from typing import Dict, List, Any
 
 
 # You can associate specific files to specific categories
@@ -27,7 +27,7 @@ from typing import Dict, List
 CategoriesDictionary: Dict[str, List[str]] = {}
 
 
-def guess_mime_type(doc_name):
+def guess_mime_type(doc_name: Any) -> Any:
     if doc_name is None:
         return None
     if "." not in doc_name:
@@ -40,9 +40,9 @@ def guess_mime_type(doc_name):
     return "application/octet-stream"
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
-    def get_all_datas():
+    def get_all_datas() -> dict:
         # Controllers are now DB-backed; gets_by_* queries DB automatically.
         pkgCtrl = PackagesController()
         pkgCtrl._preload_cache()
@@ -59,7 +59,7 @@ def init_app(app):
         }
 
     @app.route('/api/documents', methods=['GET'])
-    def index_docs():
+    def index_docs() -> Any:
         templ = Templates({
             "packages": [], "vulnerabilities": [], "assessments": [],
             "projects": None, "variants": None, "scans": None, "sbom_documents": None,
@@ -94,7 +94,7 @@ def init_app(app):
             return {"error": str(e)}, 500
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
-    def doc_by_name(doc_name):
+    def doc_by_name(doc_name: str) -> Any:
         ctrls = get_all_datas()
         templ = Templates(ctrls)
         try:
@@ -149,7 +149,7 @@ def init_app(app):
             return {"error": str(e)}, 500
 
 
-def handle_sbom_exports(doc_name, ctrls, expected_mime, metadata):
+def handle_sbom_exports(doc_name: str, ctrls: Any, expected_mime: str, metadata: Any) -> Any:
     if doc_name.startswith("CycloneDX"):
         cdx = CycloneDx(ctrls)
         if expected_mime == "application/json":

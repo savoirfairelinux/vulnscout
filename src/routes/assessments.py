@@ -4,6 +4,7 @@
 import re
 from datetime import datetime
 from uuid import UUID
+from typing import Any
 
 from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
@@ -64,7 +65,9 @@ def _resolve_package(pkg_string_id: str) -> "Package":
     return Package.find_or_create(name, version, supplier=_supplier)
 
 
-def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None):
+def _create_assessment_record(
+    assessment: Any, finding_id: Any, variant_id: Any, timestamp: Any = None
+) -> Any:
     """Create a single DBAssessment row from a validated DTO.
 
     Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
@@ -87,15 +90,15 @@ def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None
     return DBAssessment.create(**kwargs)
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     if "OPENVEX_FILE" not in app.config:
         app.config["OPENVEX_FILE"] = OPENVEX_FILE
 
-    def _get_all_db_assessments():
+    def _get_all_db_assessments() -> Any:
         return DBAssessment.get_all()
 
-    def _save_openvex():
+    def _save_openvex() -> None:
         """Re-generate and save the OpenVEX file from current DB state."""
         try:
             import json
@@ -113,7 +116,7 @@ def init_app(app):
             verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
-    def index_assess():
+    def index_assess() -> Any:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         if variant_id:
@@ -141,7 +144,7 @@ def init_app(app):
         return assessments
 
     @app.route('/api/assessments/review')
-    def review_assessments():
+    def review_assessments() -> Any:
         """Return assessments not linked to any scan (handmade via the web UI).
 
         Each assessment dict is enriched with a ``vuln_texts`` key mapping to the
@@ -181,7 +184,7 @@ def init_app(app):
         return assessments_serialized
 
     @app.route('/api/assessments/review/export')
-    def export_review_openvex():
+    def export_review_openvex() -> Any:
         """Export handmade (review) assessments as a .tar.gz containing one
         OpenVEX JSON file per variant (``<variant_name>.json``).
         Assessments without a variant are placed in ``unassigned.json``.
@@ -202,7 +205,7 @@ def init_app(app):
         }
 
     @app.route('/api/assessments/review/import', methods=['POST'])
-    def import_review_openvex():
+    def import_review_openvex() -> Any:
         """Import OpenVEX review assessments from a ``.json`` or ``.tar.gz`` file.
 
         * **Single .json file** – the filename (without extension) must match
@@ -294,7 +297,7 @@ def init_app(app):
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
 
     @app.route('/api/assessments/review/time-estimates')
-    def review_time_estimates():
+    def review_time_estimates() -> Any:
         """Return vulnerabilities that have non-zero time estimates.
 
         Each entry contains the vulnerability ID and its three-point estimate
@@ -312,7 +315,7 @@ def init_app(app):
         query = (
             db.select(TimeEstimate)
             .join(Finding, TimeEstimate.finding_id == Finding.id)
-            .options(joinedload(TimeEstimate.finding))
+            .options(joinedload(TimeEstimate.finding))  # type: ignore[arg-type]
             .where(
                 db.or_(
                     TimeEstimate.optimistic > 0,
@@ -354,7 +357,7 @@ def init_app(app):
         vuln_ids_for_te = {te.finding.vulnerability_id for te in all_te}
         vuln_texts: dict[str, list[VulnerabilityText]]
         if vuln_ids_for_te:
-            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids_filter)
+            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids=variant_ids_filter)
         else:
             vuln_texts = {}
 
@@ -384,7 +387,7 @@ def init_app(app):
         return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
 
     @app.route('/api/assessments/review/custom-cvss')
-    def review_custom_cvss():
+    def review_custom_cvss() -> Any:
         """Return vulnerabilities that have custom CVSS scores.
 
         A custom CVSS score is identified by ``origin == 'custom'``.
@@ -436,7 +439,7 @@ def init_app(app):
         return result
 
     @app.route('/api/assessments/review/export-custom-data')
-    def export_review_custom_data():
+    def export_review_custom_data() -> Any:
         """Export handmade (review) assessments, custom CVSS scores and time
         estimates as a single JSON file.
 
@@ -486,7 +489,7 @@ def init_app(app):
         }
 
     @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
-    def import_review_custom_data():
+    def import_review_custom_data() -> Any:
         """Import assessments, CVSS scores and time estimates from a custom-data
         JSON file.
 
@@ -537,14 +540,14 @@ def init_app(app):
         return result, status_code
 
     @app.route('/api/assessments/<assessment_id>')
-    def assess_by_id(assessment_id: str):
+    def assess_by_id(assessment_id: str) -> Any:
         item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
         return item.to_dict(), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
-    def list_assess_by_vuln(vuln_id: str):
+    def list_assess_by_vuln(vuln_id: str) -> Any:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         assessments = []
@@ -556,7 +559,7 @@ def init_app(app):
         return assessments, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
-    def list_variants_by_vuln(vuln_id: str):
+    def list_variants_by_vuln(vuln_id: str) -> Any:
         """Return all distinct variants that have a finding for this vulnerability
         (via the Observation → Scan → Variant chain)."""
         from ..models.observation import Observation
@@ -583,7 +586,7 @@ def init_app(app):
         return variants_out, 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
-    def add_assessment(vuln_id: str):
+    def add_assessment(vuln_id: str) -> Any:
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -638,7 +641,7 @@ def init_app(app):
         return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
-    def add_assessments_batch():
+    def add_assessments_batch() -> Any:
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
@@ -712,7 +715,7 @@ def init_app(app):
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
-    def update_assessment(assessment_id: str):
+    def update_assessment(assessment_id: str) -> Any:
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -764,7 +767,7 @@ def init_app(app):
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
-    def delete_assessment(assessment_id: str):
+    def delete_assessment(assessment_id: str) -> Any:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
@@ -772,7 +775,7 @@ def init_app(app):
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 
-def payload_to_assessment(data):
+def payload_to_assessment(data: dict) -> Any:
     """
     Take an object in input and try to convert it to an Assessment DTO.
     Return either (Assessment, 200) or (error_dict, http_code).

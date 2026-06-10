@@ -25,6 +25,7 @@ from io import StringIO
 from os import getenv
 import json
 import re
+from typing import Any
 
 
 def _normalize_spdx_dict(doc_dict: dict) -> None:
@@ -54,19 +55,19 @@ class SPDX:
     Also support output to SPDX SBOM format.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl = controllers["packages"]
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
-        self.ref_dict = {}
-        self.pkg_to_ref = {}
+        self.ref_dict: dict[str, Any] = {}
+        self.pkg_to_ref: dict[str, Any] = {}
 
-    def load_from_dict(self, spdx: dict):
+    def load_from_dict(self, spdx: dict) -> None:
         """Read data from SPDX json parsed format."""
         parser = JsonLikeDictParser()
         self.sbom = parser.parse(spdx)
 
-    def load_from_file(self, spdx_file: str):
+    def load_from_file(self, spdx_file: str) -> None:
         """Read data from SPDX file, detecting format automatically."""
         try:
             try_reading = parse_file(spdx_file)
@@ -84,7 +85,7 @@ class SPDX:
         else:
             raise Exception("Invalid SPDX file")
 
-    def merge_components_into_controller(self):
+    def merge_components_into_controller(self) -> None:
         """
         Internal method.
         Merge components from SBOM into controller.
@@ -122,11 +123,11 @@ class SPDX:
 
             self.packagesCtrl.add(pkg)
 
-    def parse_and_merge(self):
+    def parse_and_merge(self) -> None:
         """Parse the SBOM and merge it into the controller."""
         self.merge_components_into_controller()
 
-    def register_components(self, with_cpe=False):
+    def register_components(self, with_cpe: bool = False) -> None:
         """
         Internal method.
         Copy components from controller into SBOM.
@@ -166,7 +167,7 @@ class SPDX:
                     Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, newid)
                 ]
 
-    def create_shell_document(self, author=None):
+    def create_shell_document(self, author: Any = None) -> None:
         if "sbom" not in self.__dict__ or not self.sbom:
             self.sbom = Document(
                 creation_info=CreationInfo(
@@ -194,7 +195,7 @@ class SPDX:
                 packages=[]
             )
 
-    def _output_generic(self, writer, validate=True, author=None, with_cpe=True) -> str:
+    def _output_generic(self, writer: Any, validate: bool = True, author: Any = None, with_cpe: bool = True) -> str:
         self.create_shell_document(author)
         self.register_components(with_cpe=with_cpe)
 
@@ -211,10 +212,10 @@ class SPDX:
         # Replace is here until patch are applied upstream: https://github.com/spdx/tools-python/pull/828
         return stream.getvalue().replace("OPERATING_SYSTEM", "OPERATING-SYSTEM")
 
-    def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:
+    def output_as_json(self, validate: bool = True, author: Any = None, with_cpe: bool = False) -> str:
         """Output the SBOM to JSON format."""
         return self._output_generic(write_document_to_json_stream, validate=validate, author=author, with_cpe=with_cpe)
 
-    def output_as_xml(self, validate=True, author=None, with_cpe=False) -> str:
+    def output_as_xml(self, validate: bool = True, author: Any = None, with_cpe: bool = False) -> str:
         """Output the SBOM to XML format."""
         return self._output_generic(write_document_to_xml_stream, validate=validate, author=author, with_cpe=with_cpe)
