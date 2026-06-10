@@ -25,6 +25,8 @@ from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_progress import NVDProgressTracker
 from ..controllers.epss_progress import EPSSProgressTracker
 
+from typing import Any
+
 _EPSS_BATCH_SIZE = 100
 _NVD_COMMIT_EVERY = 50
 # HIGH: cap prevents unbounded background threads (no API key = 6 s/CVE × N seconds of work)
@@ -60,10 +62,10 @@ def _safe_commit(label: str) -> None:
         db.session.expunge_all()
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/vulnerabilities/bulk-nvd-refresh', methods=['POST'])
-    def bulk_nvd_refresh():
+    def bulk_nvd_refresh() -> Any:
         """Trigger a bulk NVD refresh for a list of CVE IDs.
 
         Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
@@ -89,7 +91,7 @@ def init_app(app):
             return jsonify({"error": "A bulk NVD refresh is already in progress"}), 409
         NVDProgressTracker.update("bulk_nvd_refresh", 0, total, f"Starting bulk NVD refresh: 0/{total}")
 
-        def _run():
+        def _run() -> None:
             with app.app_context():
                 sleep_between = _nvd_sleep_interval()
                 nvd_api_key = os.getenv("NVD_API_KEY")
@@ -141,7 +143,7 @@ def init_app(app):
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-nvd-refresh', methods=['POST'])
-    def cancel_nvd_refresh():
+    def cancel_nvd_refresh() -> Any:
         """Request cancellation of an in-progress bulk NVD refresh.
 
         Returns 200 when the cancellation was accepted (refresh was running).
@@ -152,7 +154,7 @@ def init_app(app):
         return jsonify({"error": "No bulk NVD refresh is currently in progress"}), 409
 
     @app.route('/api/vulnerabilities/bulk-epss-refresh', methods=['POST'])
-    def bulk_epss_refresh():
+    def bulk_epss_refresh() -> Any:
         """Trigger a bulk EPSS refresh for a list of CVE IDs.
 
         Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
@@ -178,7 +180,7 @@ def init_app(app):
             return jsonify({"error": "A bulk EPSS refresh is already in progress"}), 409
         EPSSProgressTracker.update("bulk_epss_refresh", 0, total, f"Starting bulk EPSS refresh: 0/{total}")
 
-        def _run():
+        def _run() -> None:
             with app.app_context():
                 epss = EPSS_DB()
                 now = datetime.datetime.now(datetime.timezone.utc)
@@ -238,7 +240,7 @@ def init_app(app):
         return jsonify({"status": "started", "total": total}), 202
 
     @app.route('/api/vulnerabilities/cancel-epss-refresh', methods=['POST'])
-    def cancel_epss_refresh():
+    def cancel_epss_refresh() -> Any:
         """Request cancellation of an in-progress bulk EPSS refresh.
 
         Returns 200 when the cancellation was accepted (refresh was running).

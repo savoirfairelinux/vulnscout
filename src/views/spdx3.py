@@ -88,7 +88,7 @@ class SPDX3:
             "@graph": [creation_info, spdx_document]
         }
 
-    def generate_package_element(self, pkg) -> Dict[str, Any]:
+    def generate_package_element(self, pkg: Any) -> Dict[str, Any]:
         """Generate SPDX 3.0 package element from Package object."""
 
         spdx_id = self._get_spdx_id(pkg.string_id, self.pkg_to_ref)
@@ -115,7 +115,7 @@ class SPDX3:
 
         return element
 
-    def generate_vulnerability_element(self, vuln_id: str, vuln) -> Dict[str, Any]:
+    def generate_vulnerability_element(self, vuln_id: str, vuln: Any) -> Dict[str, Any]:
         """Generate SPDX 3.0 vulnerability element."""
 
         spdx_id = self._get_spdx_id(vuln_id, self.vuln_to_ref)

@@ -18,7 +18,10 @@ from .settings import init_app as init_settings_app
 from .frontpage import init_app as init_front_app
 
 
-def init_app(app):
+from typing import Any
+
+
+def init_app(app: Any) -> None:
     init_pkg_app(app)
     init_vuln_app(app)
     init_assess_app(app)

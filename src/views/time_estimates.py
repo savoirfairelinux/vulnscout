@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 from ..models.finding import Finding
 from ..helpers.verbose import verbose
 from ..models.time_estimate import TimeEstimate
@@ -26,7 +26,7 @@ class TimeEstimates:
       are persisted to the :class:`~src.models.time_estimate.TimeEstimate` table.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl = controllers["packages"]
         self.vulnerabilitiesCtrl = controllers["vulnerabilities"]
         self.assessmentsCtrl = controllers["assessments"]
@@ -85,7 +85,7 @@ class TimeEstimates:
     # Public interface
     # ------------------------------------------------------------------
 
-    def load_from_dict(self, data: dict):
+    def load_from_dict(self, data: dict) -> None:
         """Parse a time-estimates JSON payload.
 
         The payload must contain a ``"tasks"`` mapping where each key is either:

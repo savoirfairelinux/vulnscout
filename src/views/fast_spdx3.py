@@ -79,7 +79,7 @@ class FastSPDX3:
         version = self.find_spdx_version(spdx)
         return bool(version and version.startswith("3"))
 
-    def merge_components_into_controller(self, components_dict: Dict[str, Any]):
+    def merge_components_into_controller(self, components_dict: Dict[str, Any]) -> None:
         """
         Extract package information from components objects and create Package objects.
         """
@@ -179,7 +179,7 @@ class FastSPDX3:
 
         return cpe_identifiers
 
-    def merge_vulnerabilities_into_controller(self, vuln_dict: Dict[str, Any]):
+    def merge_vulnerabilities_into_controller(self, vuln_dict: Dict[str, Any]) -> None:
         """
         Extract Vulnerability objects from SPDX graph elements.
         """
@@ -207,7 +207,7 @@ class FastSPDX3:
 
         self._remove_vulnerabilities_without_packages()
 
-    def _remove_vulnerabilities_without_packages(self):
+    def _remove_vulnerabilities_without_packages(self) -> None:
         """
         Remove vulnerabilities that don't have any packages.
         """
@@ -267,7 +267,7 @@ class FastSPDX3:
         return dict(result)
 
     def _extract_explicit_vulnerabilities(self, graph: List[Dict],
-                                          cvss_by_vuln: Optional[Dict[str, List["CVSS"]]] = None):
+                                          cvss_by_vuln: Optional[Dict[str, List["CVSS"]]] = None) -> None:
         """
         Extract vulnerabilities explicitly defined as security_Vulnerability elements.
 
@@ -329,7 +329,7 @@ class FastSPDX3:
 
     CVSS_PATTERN = re.compile(r'CVSS:([\d.]+)')
 
-    def _extract_vulnerabilities_cvss(self, graph: List[Dict]):
+    def _extract_vulnerabilities_cvss(self, graph: List[Dict]) -> None:
         """
         Extract CVSS explicitly defined as security_CvssVXVulnAssessmentRelationship elements.
 
@@ -390,7 +390,7 @@ class FastSPDX3:
             ))
             modified_vulns.add(vuln_id)
 
-    def _process_package_vulnerability_relationships(self, graph: List[Dict]):
+    def _process_package_vulnerability_relationships(self, graph: List[Dict]) -> None:
         """
         Process relationships that link packages to vulnerabilities, to update the Vulnerability objects.
 
@@ -455,7 +455,7 @@ class FastSPDX3:
         rel_type = rel.get("type", "")
         return rel_type in self.ASSESSMENT_TYPES
 
-    def process_vex_relationships(self, spdx_dict: Dict[str, Any]):
+    def process_vex_relationships(self, spdx_dict: Dict[str, Any]) -> None:
         """
         Process VEX relationships from the SPDX document to create vulnerability assessments.
         """
@@ -544,7 +544,7 @@ class FastSPDX3:
 
         return assessment
 
-    def _remove_vulnerabilities_without_assessments(self):
+    def _remove_vulnerabilities_without_assessments(self) -> None:
         """
         Remove vulnerabilities that don't have any assessments.
         Because report generation fails for vulnerabilities without assessments.
@@ -560,13 +560,13 @@ class FastSPDX3:
         for vuln_id in vulnerabilities_to_remove:
             self.vulnerabilitiesCtrl.remove(vuln_id)
 
-    def parse_controllers_from_dict(self, spdx: Dict[str, Any]):
+    def parse_controllers_from_dict(self, spdx: Dict[str, Any]) -> None:
         """
         Parse only packages from SPDX 3 document.
         """
         self.merge_components_into_controller(spdx)
 
-    def parse_from_dict(self, spdx: Dict[str, Any]):
+    def parse_from_dict(self, spdx: Dict[str, Any]) -> None:
         """
         Read data from SPDX 3 format and populate controllers.
         """

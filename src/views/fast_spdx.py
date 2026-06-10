@@ -5,6 +5,7 @@ from ..models.package import Package
 from ..controllers.packages import PackagesController
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.assessments import AssessmentsController
+from typing import Any
 
 
 class FastSPDX ():
@@ -13,18 +14,18 @@ class FastSPDX ():
     Also support output to SPDX SBOM format.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
-    def _check_spdx_version(self, sbom: dict):
+    def _check_spdx_version(self, sbom: dict) -> None:
         """Check if the SPDX version is supported."""
         self.version = _get_field(sbom, ["spdxVersion", "SPDXVersion", "spdxversion"])
         if self.version not in ("SPDX-2.3", "SPDX-2.2"):
             raise ValueError("Unsupported SPDX version")
 
-    def _merge_packages(self, sbom: dict):
+    def _merge_packages(self, sbom: dict) -> None:
         """Merge packages from SPDX SBOM."""
         for pkg in _get_field(sbom, ["packages", "Packages"]) or []:
             parsed_package = self._parse_package(pkg)
@@ -56,13 +57,13 @@ class FastSPDX ():
 
         return package
 
-    def parse_from_dict(self, spdx: dict):
+    def parse_from_dict(self, spdx: dict) -> None:
         """Read data from SPDX json parsed format."""
         self._check_spdx_version(spdx)
         self._merge_packages(spdx)
 
 
-def _get_field(obj: dict, field: list[str]):
+def _get_field(obj: dict, field: list[str]) -> Any:
     """Get field from dict or return None."""
     for f in field:
         if f in obj:

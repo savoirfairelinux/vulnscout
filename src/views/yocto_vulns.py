@@ -6,21 +6,22 @@ from ..models import Package, Vulnerability, Assessment, CVSS
 from ..extensions import batch_session
 from ..helpers.env_vars import get_bool_env
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
+from typing import Any
 
 
 class YoctoVulns:
     """GrypeVulns class to handle grype vulnerabilities and parse it"""
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
 
-    def get_last_assessment(self, assessments):
+    def get_last_assessment(self, assessments: Any) -> Any:
         if not assessments:
             return None
         return max(assessments, key=lambda a: normalize_timestamp_for_sort(a.timestamp))
 
-    def load_from_dict(self, data: dict):
+    def load_from_dict(self, data: dict) -> None:
         """Load the yoctoVulns object from a dictionary."""
 
         skip_patched = get_bool_env('CVE_CHECK_EXCLUDE_PATCHED')

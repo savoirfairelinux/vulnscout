@@ -9,7 +9,7 @@ from ..helpers.verbose import verbose
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 import re
-from typing import Optional
+from typing import Optional, Any
 
 
 class OpenVex:
@@ -18,7 +18,7 @@ class OpenVex:
     Support reading, parsing and writing from/to JSON format.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
@@ -46,7 +46,7 @@ class OpenVex:
                 pkg = Package(match.group(1), match.group(2), [], [])
         return pkg
 
-    def load_from_dict(self, data: dict, found_by=["openvex"]):
+    def load_from_dict(self, data: dict, found_by: list = ["openvex"]) -> None:
         if "statements" in data:
             for statement in data["statements"]:
                 if "vulnerability" not in statement or "name" not in statement["vulnerability"]:
@@ -107,7 +107,7 @@ class OpenVex:
             verbose(f"[OpenVex._get_all_assessments] {e}")
         return list(seen.values())
 
-    def to_dict(self, strict_export=False, author=None) -> dict:
+    def to_dict(self, strict_export: bool = False, author: Any = None) -> dict:
         output = {
             "@context": "https://openvex.dev/ns/v0.2.0",
             "@id": "https://savoirfairelinux.com/sbom/openvex/{}".format(uuid7(as_type='str')),

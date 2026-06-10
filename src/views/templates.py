@@ -22,7 +22,7 @@ from ..controllers import (
 
 
 class Templates:
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
@@ -53,7 +53,7 @@ class Templates:
         self.env.globals['env'] = TemplatesExtensions.get_env_var
         self.extensions = TemplatesExtensions(self.env)
 
-    def render(self, template_name, **kwargs):
+    def render(self, template_name: str, **kwargs: Any) -> str:
         template = self.env.get_template(template_name)
         kwargs["packages"] = self.packagesCtrl.to_dict()
         kwargs["unfiltered_vulnerabilities"] = self.vulnerabilitiesCtrl.to_dict()
@@ -239,7 +239,7 @@ class Templates:
     def adoc_to_html(self, adoc: str) -> bytes:
         return self._run_asciidoctor(adoc, ["asciidoctor"], "html")
 
-    def list_documents(self):
+    def list_documents(self) -> list:
         docs = []
         try:
             internal = self.internal_loader.list_templates()
@@ -252,7 +252,7 @@ class Templates:
 
 
 class TemplatesExtensions:
-    def __init__(self, jinjaEnv):
+    def __init__(self, jinjaEnv: Any) -> None:
         jinjaEnv.filters["status"] = TemplatesExtensions.filter_status
         jinjaEnv.filters["status_pending"] = lambda value: TemplatesExtensions.filter_status(
             value,
@@ -331,7 +331,7 @@ class TemplatesExtensions:
         return value[:limit]
 
     @staticmethod
-    def _generic_sort(value: dict | list, key_getter, reverse: bool = True) -> list[dict]:
+    def _generic_sort(value: dict | list, key_getter: Any, reverse: bool = True) -> list[dict]:
         """Normalise *value* to a list and sort by *key_getter*."""
         return sorted(TemplatesExtensions._to_list(value), key=key_getter, reverse=reverse)
 

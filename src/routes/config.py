@@ -10,6 +10,7 @@ from ..controllers.projects import ProjectController
 from ..controllers.variants import VariantController
 from ..controllers.nvd_db import NVD_DB
 from ..helpers.verbose import verbose
+from typing import Any
 
 _CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -58,10 +59,10 @@ def _write_config_key(key: str, value: str | None) -> bool:
         return False
 
 
-def init_app(app):
+def init_app(app: Any) -> None:
 
     @app.route('/api/config', methods=['GET'])
-    def get_config():
+    def get_config() -> Any:
         project_name = os.environ.get('PROJECT_NAME', '')
         variant_name = os.environ.get('VARIANT_NAME', 'default')
         author_name = os.environ.get('AUTHOR_NAME', 'vulnscout')
@@ -93,7 +94,7 @@ def init_app(app):
         })
 
     @app.route('/api/config', methods=['PATCH'])
-    def patch_config():
+    def patch_config() -> Any:
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return jsonify({"error": "Expected a JSON object body."}), 400
@@ -156,14 +157,14 @@ def init_app(app):
         return get_config()
 
     @app.route('/api/config/nvd-api-key', methods=['GET'])
-    def get_nvd_api_key():
+    def get_nvd_api_key() -> Any:
         key = os.environ.get('NVD_API_KEY', '')
         if not key:
             return jsonify({"has_key": False, "masked_key": ""})
         return jsonify({"has_key": True, "masked_key": _mask_nvd_api_key(key)})
 
     @app.route('/api/config/nvd-api-key', methods=['PUT'])
-    def set_nvd_api_key():
+    def set_nvd_api_key() -> Any:
         data = request.get_json(silent=True)
         if data is None or "api_key" not in data:
             return {"error": "Missing 'api_key' field"}, 400

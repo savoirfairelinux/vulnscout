@@ -8,7 +8,7 @@ from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.assessment import Assessment
 from ..models.cvss import CVSS
-from typing import Optional
+from typing import Optional, Any
 
 
 _logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ class GrypeVulns:
     Support only reading and parsing from JSON format.
     """
 
-    def __init__(self, controllers):
+    def __init__(self, controllers: Any) -> None:
         self.packagesCtrl: PackagesController = controllers["packages"]
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers["vulnerabilities"]
         self.assessmentsCtrl: AssessmentsController = controllers["assessments"]
@@ -152,7 +152,7 @@ class GrypeVulns:
         vuln_data.severity_without_cvss(vulnerability.get("severity", "unknown").lower(), None, False)
         return vuln_data
 
-    def load_from_dict(self, data: dict):
+    def load_from_dict(self, data: dict) -> None:
         """Load the GrypeVulns object from a dictionary."""
         matches = data.get("matches", [])
 
