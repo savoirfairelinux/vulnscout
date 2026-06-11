@@ -415,6 +415,7 @@ export {
     SEVERITY_ORDER,
     STATUS_SORT_ORDER,
     asVulnerability,
+    asCVSS,
     buildStatusSummary,
     getStatusSortIndex,
     getTopStatusSummaryLabel,

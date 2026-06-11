@@ -726,6 +726,49 @@ def init_app(app):
 
         return response
 
+    @app.get('/api/vulnerabilities/<id>/variant-snapshots')
+    def get_vuln_variant_snapshots(id):
+        """Return variant-scoped effort and custom CVSS for every variant that
+        observes this vulnerability, in a single response.
+
+        Replaces the previous per-variant N+1 fetch performed by the modal.
+        """
+        record = Vulnerability.get_by_id(id)
+        if not record:
+            return "Not found", 404
+
+        variant_uuids = _variant_ids_for_vulnerability(record.id)
+
+        project_id = request.args.get("project_id")
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            allowed = set(db.session.execute(
+                db.select(Variant.id).where(Variant.project_id == project_uuid)
+            ).scalars().all())
+            variant_uuids = [v for v in variant_uuids if v in allowed]
+
+        snapshots = []
+        for variant_uuid in variant_uuids:
+            if variant_uuid is None:
+                continue
+            overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
+            scoped = overrides.get(str(record.id))
+            if scoped is None:
+                continue
+            custom_cvss = [
+                m.to_dict() for m in scoped.cvss
+                if (m.origin or "scanner") == "custom"
+            ]
+            snapshots.append({
+                "variant_id": str(variant_uuid),
+                "effort": scoped.effort.to_dict(),
+                "custom_cvss": custom_cvss,
+            })
+
+        return jsonify(snapshots)
+
     @app.patch('/api/vulnerabilities/<id>')
     def patch_vuln(id):
         record = Vulnerability.get_by_id(id)

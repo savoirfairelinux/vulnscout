@@ -895,3 +895,84 @@ def test_get_vulns_global_no_scope(client):
     vuln = data[0]
     assert "variants" in vuln
     assert "first_scan_date" in vuln
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities/<id>/variant-snapshots — single batched call
+# ---------------------------------------------------------------------------
+
+def test_variant_snapshots_returns_effort_and_custom_cvss(app, client):
+    """The batch endpoint returns per-variant effort and custom CVSS in one call."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.metrics import Metrics
+    from src.models.time_estimate import TimeEstimate
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("SnapshotProject")
+        variant = Variant.create("snapshot-variant", project.id)
+        pkg = Package.find_or_create("snapshot-pkg", "1.0.0", [], [], "")
+        db.session.commit()
+        Vulnerability.create_record(
+            id="CVE-SNAP-0001",
+            description="Test vuln for variant snapshots",
+            status="high",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, "CVE-SNAP-0001")
+
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=variant.id,
+            timestamp=datetime(2021, 1, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+
+        # Variant-scoped custom CVSS and time estimate
+        Metrics.create(
+            vulnerability_id="CVE-SNAP-0001",
+            variant_id=variant.id,
+            version="3.1",
+            score=7.5,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author="tester",
+            origin="custom",
+        )
+        TimeEstimate.create(
+            finding_id=finding.id,
+            variant_id=variant.id,
+            optimistic=1,
+            likely=2,
+            pessimistic=4,
+        )
+        db.session.commit()
+        pid = str(project.id)
+        vid = str(variant.id)
+
+    response = client.get(f"/api/vulnerabilities/CVE-SNAP-0001/variant-snapshots?project_id={pid}")
+    assert response.status_code == 200
+    snapshots = json.loads(response.data)
+    assert isinstance(snapshots, list)
+    snap = next((s for s in snapshots if s["variant_id"] == vid), None)
+    assert snap is not None
+    assert snap["effort"]["optimistic"] is not None
+    assert len(snap["custom_cvss"]) == 1
+    assert snap["custom_cvss"][0]["origin"] == "custom"
+    assert snap["custom_cvss"][0]["base_score"] == 7.5
+
+
+def test_variant_snapshots_unknown_vuln_returns_404(client):
+    """The batch endpoint returns 404 for an unknown vulnerability id."""
+    response = client.get("/api/vulnerabilities/CVE-DOES-NOT-EXIST/variant-snapshots")
+    assert response.status_code == 404
+
+
