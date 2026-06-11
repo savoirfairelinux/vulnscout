@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState } from '@tanstack/react-table'
+import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState, PaginationState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
@@ -40,8 +40,9 @@ function TableGeneric<DataType> ({
     onFilteredDataChange,
     onFocusedRowChange
 }: Readonly<Props<DataType>>) {
-    const [pageIndex, setPageIndex] = useState(0)
-    const [itemsPerPage, setItemsPerPage] = useState(50)
+    const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 })
+    const pageIndex = pagination.pageIndex
+    const itemsPerPage = pagination.pageSize
     const [sorting, setSorting] = useState<SortingState>([])
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
@@ -101,47 +102,6 @@ function TableGeneric<DataType> ({
         return data;
     }, [search, fuse, data, fuseKeys]);
 
-    // Notify parent component when filtered data changes
-    useEffect(() => {
-        if (onFilteredDataChange) {
-            onFilteredDataChange(filteredData);
-        }
-    }, [filteredData, onFilteredDataChange]);
-
-    const sortedData = useMemo(() => {
-        if (sorting.length === 0) return filteredData;
-        const sorted = [...filteredData];
-        const { id, desc } = sorting[0];
-        const column = columns.find(col => col.id === id);
-        if (!column) return sorted;
-        sorted.sort((a, b) => {
-            if (column.sortingFn) {
-                const result = column.sortingFn({ original: a } as any, { original: b } as any, id);
-                return desc ? -result : result;
-            }
-            let aVal: any, bVal: any;
-            if (typeof column.accessorFn === 'function') {
-                aVal = column.accessorFn(a, 0);
-                bVal = column.accessorFn(b, 0);
-            } else if (column.accessorKey) {
-                const keys = String(column.accessorKey).split('.');
-                aVal = keys.reduce((obj, key) => obj?.[key], a as any);
-                bVal = keys.reduce((obj, key) => obj?.[key], b as any);
-            } else return 0;
-            if (aVal === bVal) return 0;
-            if (aVal == null) return 1;
-            if (bVal == null) return -1;
-            const result = aVal > bVal ? 1 : -1;
-            return desc ? -result : result;
-        });
-        return sorted;
-    }, [filteredData, sorting, columns]);
-
-    const paginatedData = useMemo(() => {
-        const start = pageIndex * itemsPerPage
-        return sortedData.slice(start, start + itemsPerPage)
-    }, [sortedData, pageIndex, itemsPerPage])
-
     const paginationSizes = useMemo(() => {
         const total = filteredData.length;
 
@@ -164,18 +124,40 @@ function TableGeneric<DataType> ({
 
     const table = useReactTable({
         columns,
-        data: paginatedData,
+        data: filteredData,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
+        getPaginationRowModel: getPaginationRowModel(),
+        autoResetPageIndex: false,
         enableRowSelection: selected !== undefined,
         enableMultiRowSelection: selected !== undefined,
         // @ts-expect-error: Row ID might not always be present in the data
         getRowId: row => row?.id,
         onRowSelectionChange: updateSelected,
         onSortingChange: setSorting,
-        state: { rowSelection: selected ?? {}, sorting }
+        onPaginationChange: setPagination,
+        state: { rowSelection: selected ?? {}, sorting, pagination }
     });
+
+    // Notify parent component with the fully filtered + sorted rows (across all
+    // pages, in the exact order the table displays them). Consumers that rely on
+    // row order — e.g. modal/keyboard navigation — must see the same order the
+    // table renders. Derived from the table's own sorted row model so it can
+    // never diverge from what is displayed. Depends only on data + sorting (not
+    // on the columns array, which would create a render loop with parents that
+    // rebuild columns from this callback's result).
+    const sortedOriginals = useMemo(
+        () => table.getSortedRowModel().rows.map(row => row.original),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [table, filteredData, sorting]
+    );
+
+    useEffect(() => {
+        if (onFilteredDataChange) {
+            onFilteredDataChange(sortedOriginals);
+        }
+    }, [sortedOriginals, onFilteredDataChange]);
 
     const { rows } = table.getRowModel()
     //The virtualizer needs to know the scrollable container element
@@ -478,8 +460,7 @@ function TableGeneric<DataType> ({
                 <select
                 value={itemsPerPage}
                 onChange={(e) => {
-                    setPageIndex(0)
-                    setItemsPerPage(Number(e.target.value))
+                    setPagination({ pageIndex: 0, pageSize: Number(e.target.value) })
                 }}
                 className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
                 >
@@ -495,14 +476,14 @@ function TableGeneric<DataType> ({
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
                 disabled={pageIndex === 0}
-                onClick={() => setPageIndex(0)}
+                onClick={() => setPagination(prev => ({ ...prev, pageIndex: 0 }))}
                 >
                 First
                 </button>
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
                 disabled={pageIndex === 0}
-                onClick={() => setPageIndex(prev => Math.max(prev - 1, 0))}
+                onClick={() => setPagination(prev => ({ ...prev, pageIndex: Math.max(prev.pageIndex - 1, 0) }))}
                 >
                 Previous
                 </button>
@@ -516,7 +497,7 @@ function TableGeneric<DataType> ({
                         'px-2 py-1 rounded',
                         p === pageIndex ? 'bg-blue-600' : 'bg-slate-600'
                     ].join(' ')}
-                    onClick={() => setPageIndex(p)}
+                    onClick={() => setPagination(prev => ({ ...prev, pageIndex: p }))}
                     >
                     {p + 1}
                     </button>
@@ -525,14 +506,14 @@ function TableGeneric<DataType> ({
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
                 disabled={pageIndex + 1 >= pageCount}
-                onClick={() => setPageIndex(prev => prev + 1)}
+                onClick={() => setPagination(prev => ({ ...prev, pageIndex: prev.pageIndex + 1 }))}
                 >
                 Next
                 </button>
                 <button
                 className="px-2 py-1 bg-slate-600 rounded disabled:opacity-50"
                 disabled={pageIndex + 1 >= pageCount}
-                onClick={() => setPageIndex(pageCount - 1)}
+                onClick={() => setPagination(prev => ({ ...prev, pageIndex: pageCount - 1 }))}
                 >
                 Last
                 </button>

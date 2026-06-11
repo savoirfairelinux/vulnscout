@@ -386,4 +386,52 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     expect(await screen.findByRole('cell', { name: /^row0$/ })).toBeInTheDocument();  // passes group1
     expect(await screen.findByRole('cell', { name: /^row5$/ })).toBeInTheDocument();  // rescued by group2
   });
+
+  test('onFilteredDataChange reports rows in the displayed sorted order across all pages (modal/keyboard navigation)', async () => {
+    // Regression: the callback used to receive the raw filtered data (unsorted),
+    // while the table displayed a sorted + paginated view. Consumers relying on
+    // row order — e.g. next/prev navigation in VulnModal — then jumped to the
+    // wrong row. The callback must mirror the table's sorted row model, spanning
+    // every page, not just the current one.
+    const captured: RowType[][] = [];
+    const onFilteredDataChange = jest.fn((d: RowType[]) => { captured.push(d); });
+
+    // value mirrors the id index so the initial (unsorted) order is ascending
+    // by value, which differs from the sorted order produced below.
+    const N = 120; // > default page size (50) to prove it spans all pages
+    const data: RowType[] = Array.from({ length: N }, (_v, i) => ({
+      id: `row${i}`,
+      value: i,
+      descriptions: [{ content: `Description ${i}` }],
+    }));
+
+    render(
+      <TableGeneric
+        columns={columns}
+        data={data}
+        tableHeight="auto"
+        hasPagination={true}
+        onFilteredDataChange={onFilteredDataChange}
+      />
+    );
+
+    // Initially the callback fires with the full data set in its natural order.
+    await waitFor(() => {
+      expect(captured.length).toBeGreaterThan(0);
+    });
+    const initial = captured[captured.length - 1];
+    expect(initial).toHaveLength(N);
+    expect(initial.map(r => r.value)).toEqual(data.map(r => r.value)); // unsorted/original order
+
+    // Sort by Value (numeric columns sort descending on first click).
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('Value'));
+
+    await waitFor(() => {
+      const last = captured[captured.length - 1];
+      // Still every row (all pages), now in the exact order the table displays.
+      expect(last).toHaveLength(N);
+      expect(last.map(r => r.value)).toEqual(Array.from({ length: N }, (_v, i) => N - 1 - i));
+    });
+  }, 10000);
 });

@@ -1849,8 +1849,7 @@ describe('Vulnerability Modal', () => {
             { id: 'v2', name: 'Variant Beta', project_id: 'proj1' }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v1
-        fetchMock.mockResponseOnce(JSON.stringify(vulnerability)); // variant snapshot for v2
+        fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
         // Two POST responses for two variants
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
