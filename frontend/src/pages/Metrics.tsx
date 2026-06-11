@@ -13,6 +13,41 @@ import { useMemo, useState, useCallback } from "react";
 
         ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale);
 
+        // Rank active vulnerabilities for the "Most critical unfixed" table.
+        // Sort by the displayed severity label first (so the ranking always
+        // matches the Severity column even after an nvd-refresh changes a
+        // vulnerability's severity), then preserve the incoming order as a
+        // tiebreaker so vulnerabilities of equal severity keep the same order
+        // as the Vulnerability tab (which sorts by severity label and leaves
+        // the backend CVE-id order within each severity).
+        function rankTopVulns(vulnerabilities: Vulnerability[]) {
+            return [...vulnerabilities]
+                .filter((vuln) => isVulnerabilityActive(vuln))
+                .map((vuln, index) => {
+                    return {
+                        id: index + 1,
+                        rank: 0,
+                        cve: vuln.id,
+                        package: vuln.packages_current.join(", "),
+                        severity: vuln.severity.severity,
+                        texts: vuln.texts,
+                        original: vuln,
+                    };
+                })
+                .sort((a, b) => {
+                    const severityDiff =
+                        SEVERITY_ORDER.indexOf(b.severity.toUpperCase())
+                        - SEVERITY_ORDER.indexOf(a.severity.toUpperCase());
+                    if (severityDiff !== 0) return severityDiff;
+                    return a.id - b.id;
+                })
+                .slice(0, 5)
+                .map((vuln, idx) => ({
+                    ...vuln,
+                    rank: idx + 1,
+                }));
+        }
+
         type Props = {
             packages: Package[];
             vulnerabilities: Vulnerability[];
@@ -183,28 +218,7 @@ const vulnColumns = useMemo(
               className="bg-slate-800 hover:bg-slate-700 px-2 rounded-lg"
               onClick={() => {
                 // Get the current TopVulns list and find the index
-                const currentTopVulns = [...vulnerabilities]
-                  .map((v, index) => {
-                    const maxCvss = v.severity.cvss?.length
-                      ? Math.max(...v.severity.cvss.map((cvss) => cvss.base_score || 0))
-                      : 0;
-                    return {
-                      id: index + 1,
-                      rank: 0,
-                      cve: v.id,
-                      package: v.packages_current.join(", "),
-                      severity: v.severity.severity,
-                      maxCvss,
-                      texts: v.texts,
-                      original: v,
-                    };
-                  })
-                  .sort((a, b) => b.maxCvss - a.maxCvss)
-                  .slice(0, 5)
-                  .map((v, idx) => ({
-                    ...v,
-                    rank: idx + 1,
-                  }));
+                const currentTopVulns = rankTopVulns(vulnerabilities);
 
                 const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
                 setModalVuln(vuln);
@@ -433,29 +447,7 @@ const packageColumns = [
   }, [vulnerabilities]);
 
   const TopVulns = useMemo(() => {
-    return [...vulnerabilities]
-      .filter((vuln) => isVulnerabilityActive(vuln))
-      .map((vuln, index) => {
-        const maxCvss = vuln.severity.cvss?.length
-          ? Math.max(...vuln.severity.cvss.map((cvss) => cvss.base_score || 0))
-          : 0;
-        return {
-          id: index + 1,
-          rank: 0,
-          cve: vuln.id,
-          package: vuln.packages_current.join(", "),
-          severity: vuln.severity.severity,
-          maxCvss,
-          texts: vuln.texts,
-          original: vuln,
-        };
-      })
-      .sort((a, b) => b.maxCvss - a.maxCvss)
-      .slice(0, 5)
-      .map((vuln, idx) => ({
-        ...vuln,
-        rank: idx + 1,
-        }));
+    return rankTopVulns(vulnerabilities);
     }, [vulnerabilities]);
 
     const handleModalNavigation = (newIndex: number) => {

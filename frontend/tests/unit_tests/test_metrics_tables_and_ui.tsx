@@ -270,6 +270,51 @@ describe('Metrics — TopVulns and topVulnerablePackages', () => {
         expect(vulnTableRows.length).toBeLessThanOrEqual(5);
     });
 
+    test('TopVulns ranks by severity label, not a stale CVSS score', async () => {
+        // Reproduces the bug where an nvd-refresh lowered a vulnerability to
+        // "medium" but a stale high CVSS score kept it ranked above criticals.
+        const medium = makeVuln('CVE-MEDIUM', [makeAssessment('var-1', 'Exploitable')], ['pkgM@1.0'], 'medium', 9.8);
+        medium.simplified_status = 'Exploitable';
+        medium.status_summary = { counts: { 'Exploitable': 1 }, ordered: [{ status: 'Exploitable', count: 1 }], total_assessments: 1, dominant_status: 'Exploitable', has_active_status: true };
+
+        const critical = makeVuln('CVE-CRITICAL', [makeAssessment('var-1', 'Exploitable')], ['pkgC@1.0'], 'critical', 9.0);
+        critical.simplified_status = 'Exploitable';
+        critical.status_summary = { counts: { 'Exploitable': 1 }, ordered: [{ status: 'Exploitable', count: 1 }], total_assessments: 1, dominant_status: 'Exploitable', has_active_status: true };
+
+        render(<Metrics {...DEFAULT_PROPS} vulnerabilities={[medium, critical]} />);
+        await waitForRender();
+        const tables = screen.getAllByTestId('mock-table');
+        const vulnTableRows = tables[0].querySelectorAll('[data-testid="mock-table-row"]');
+        const rowTexts = Array.from(vulnTableRows).map(r => r.textContent);
+        // The critical vulnerability must rank above the medium one despite its
+        // lower CVSS score.
+        expect(rowTexts[0]).toContain('CVE-CRITICAL');
+        expect(rowTexts[1]).toContain('CVE-MEDIUM');
+    });
+
+    test('TopVulns keeps incoming order for equal-severity vulns (matches Vulnerability tab)', async () => {
+        // Within the same severity, the ranking must follow the same order as
+        // the Vulnerability tab (which keeps the backend CVE-id order within a
+        // severity) instead of re-sorting by the raw CVSS score.
+        const first = makeVuln('CVE-2000-0001', [makeAssessment('var-1', 'Exploitable')], ['pkg1@1.0'], 'critical', 9.0);
+        first.simplified_status = 'Exploitable';
+        first.status_summary = { counts: { 'Exploitable': 1 }, ordered: [{ status: 'Exploitable', count: 1 }], total_assessments: 1, dominant_status: 'Exploitable', has_active_status: true };
+
+        const second = makeVuln('CVE-2000-0002', [makeAssessment('var-1', 'Exploitable')], ['pkg2@1.0'], 'critical', 10.0);
+        second.simplified_status = 'Exploitable';
+        second.status_summary = { counts: { 'Exploitable': 1 }, ordered: [{ status: 'Exploitable', count: 1 }], total_assessments: 1, dominant_status: 'Exploitable', has_active_status: true };
+
+        // `second` has the higher CVSS score but comes later in the incoming
+        // order; the incoming order must win.
+        render(<Metrics {...DEFAULT_PROPS} vulnerabilities={[first, second]} />);
+        await waitForRender();
+        const tables = screen.getAllByTestId('mock-table');
+        const vulnTableRows = tables[0].querySelectorAll('[data-testid="mock-table-row"]');
+        const rowTexts = Array.from(vulnTableRows).map(r => r.textContent);
+        expect(rowTexts[0]).toContain('CVE-2000-0001');
+        expect(rowTexts[1]).toContain('CVE-2000-0002');
+    });
+
     test('topVulnerablePackages aggregates by package name', async () => {
         const vuln1 = makeVuln('CVE-A', [makeAssessment('var-1', 'Exploitable')], ['openssl@3.0', 'zlib@1.2'], 'HIGH', 8.0);
         const vuln2 = makeVuln('CVE-B', [makeAssessment('var-1', 'Exploitable')], ['openssl@3.0'], 'HIGH', 7.0);
