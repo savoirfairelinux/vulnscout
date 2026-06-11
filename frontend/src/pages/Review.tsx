@@ -1111,6 +1111,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         columns={teColumns as any}
                         data={timeEstimates.map(te => ({
                             ...te,
+                            id: `${te.vuln_id}::${te.variant_id ?? 'none'}`,
                             texts: vulnDescriptions[te.vuln_id] ?? [],
                         }))}
                         search={search}
@@ -1136,6 +1137,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         columns={cvssColumns as any}
                         data={customCvss.map(c => ({
                             ...c,
+                            id: `${c.vuln_id}::${c.variant_id ?? 'none'}::${c.author}`,
                             texts: vulnDescriptions[c.vuln_id] ?? [],
                         }))}
                         search={search}

@@ -358,20 +358,18 @@ def init_app(app):
         else:
             vuln_texts = {}
 
-        vuln_map: dict[str, dict] = {}
+        # Key by (vuln_id, variant_id) so each variant keeps its own estimate
+        # instead of variants overwriting each other for the same vulnerability.
+        vuln_map: dict[tuple[str, str | None], dict] = {}
         for te in all_te:
             vid = te.finding.vulnerability_id
-            current = vuln_map.get(vid)
-            is_scoped = te.variant_id is not None
-            # Prefer variant-scoped entries over unscoped ones for the same vuln
-            if current is not None and current.get("variant_id") and not is_scoped:
-                continue
+            scoped_variant = str(te.variant_id) if te.variant_id else None
             opt = te.optimistic or 0
             lik = te.likely or 0
             pes = te.pessimistic or 0
-            vuln_map[vid] = {
+            vuln_map[(vid, scoped_variant)] = {
                 "vuln_id": vid,
-                "variant_id": str(te.variant_id) if te.variant_id else None,
+                "variant_id": scoped_variant,
                 "optimistic": opt,
                 "likely": lik,
                 "pessimistic": pes,
@@ -381,7 +379,15 @@ def init_app(app):
                 "vuln_texts": list(map(VulnerabilityText.to_dict, vuln_texts.get(vid, []))),
             }
 
-        return sorted(vuln_map.values(), key=lambda x: x["vuln_id"])
+        # Prefer variant-scoped entries: when a vuln has at least one
+        # variant-scoped estimate, drop its unscoped (variant-less) entry.
+        vulns_with_scoped = {vid for (vid, variant) in vuln_map if variant is not None}
+        result = [
+            entry for (vid, variant), entry in vuln_map.items()
+            if variant is not None or vid not in vulns_with_scoped
+        ]
+
+        return sorted(result, key=lambda x: (x["vuln_id"], x["variant_id"] or ""))
 
     @app.route('/api/assessments/review/custom-cvss')
     def review_custom_cvss():

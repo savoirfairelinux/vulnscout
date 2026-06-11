@@ -738,6 +738,94 @@ def test_review_time_estimates_by_project(client):
     assert isinstance(json.loads(resp.data), list)
 
 
+def test_review_time_estimates_one_row_per_variant(app, client):
+    """Each variant with its own estimate yields a distinct row (not merged)."""
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.variant import Variant
+    from src.models.time_estimate import TimeEstimate
+
+    second_variant_id = uuid.UUID("22222222-2222-2222-2222-222222222223")
+    with app.app_context():
+        # Add a second variant in the same project.
+        db.session.add(Variant(
+            id=second_variant_id,
+            name="second",
+            project_id=PROJECT_UUID,
+        ))
+        finding = Finding.get_by_vulnerability("CVE-2020-35492")[0]
+        # One estimate per variant on the same finding.
+        TimeEstimate.create(finding_id=finding.id, variant_id=VARIANT_UUID,
+                            optimistic=5, likely=5, pessimistic=5)
+        TimeEstimate.create(finding_id=finding.id, variant_id=second_variant_id,
+                            optimistic=8, likely=8, pessimistic=8)
+        db.session.commit()
+
+    resp = client.get(f"/api/assessments/review/time-estimates?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    rows = [e for e in data if e["vuln_id"] == "CVE-2020-35492"]
+    assert len(rows) == 2
+    variants = {e["variant_id"] for e in rows}
+    assert str(VARIANT_UUID) in variants
+    assert str(second_variant_id) in variants
+    by_variant = {e["variant_id"]: e for e in rows}
+    assert by_variant[str(VARIANT_UUID)]["optimistic"] == 5
+    assert by_variant[str(second_variant_id)]["optimistic"] == 8
+
+
+def test_review_time_estimates_matches_export_via_patch_flow(app, client):
+    """Reproduce the real UI flow: set effort per variant through PATCH, then
+    verify the review endpoint AND the export endpoint both expose one entry
+    per variant (project scope and unscoped)."""
+    from src.extensions import db
+    from src.models.variant import Variant
+
+    second_variant_id = uuid.UUID("22222222-2222-2222-2222-222222222224")
+    with app.app_context():
+        db.session.add(Variant(
+            id=second_variant_id,
+            name="second-patch",
+            project_id=PROJECT_UUID,
+        ))
+        db.session.commit()
+
+    # Set a different estimate for each variant exactly like the web UI does.
+    r1 = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "variant_id": str(VARIANT_UUID),
+        "effort": {"optimistic": "PT5H", "likely": "PT5H", "pessimistic": "PT5H"},
+    })
+    assert r1.status_code == 200
+    r2 = client.patch("/api/vulnerabilities/CVE-2020-35492", json={
+        "variant_id": str(second_variant_id),
+        "effort": {"optimistic": "PT8H", "likely": "PT8H", "pessimistic": "PT8H"},
+    })
+    assert r2.status_code == 200
+
+    # Review endpoint (project scope) → two distinct rows.
+    resp = client.get(f"/api/assessments/review/time-estimates?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    rows = [e for e in json.loads(resp.data) if e["vuln_id"] == "CVE-2020-35492"]
+    by_variant = {e["variant_id"]: e for e in rows}
+    assert by_variant.get(str(VARIANT_UUID), {}).get("optimistic") == 5
+    assert by_variant.get(str(second_variant_id), {}).get("optimistic") == 8
+    assert len(rows) == 2
+
+    # Review endpoint (no scope / all variants) → still two rows.
+    resp_all = client.get("/api/assessments/review/time-estimates")
+    assert resp_all.status_code == 200
+    rows_all = [e for e in json.loads(resp_all.data) if e["vuln_id"] == "CVE-2020-35492"]
+    assert len({e["variant_id"] for e in rows_all}) == 2
+
+    # Export endpoint (project scope) → two time-estimate entries, matching.
+    exp = client.get(f"/api/assessments/review/export-custom-data?project_id={PROJECT_UUID}")
+    assert exp.status_code == 200
+    exported = json.loads(exp.data)["time_estimates"]
+    exp_rows = [e for e in exported if e["vuln_id"] == "CVE-2020-35492"]
+    assert len(exp_rows) == 2
+
+
+
 # ── GET /api/assessments/review/custom-cvss ──────────────────────────────
 
 def test_review_custom_cvss_empty(client):
