@@ -281,6 +281,25 @@ class Vulnerabilities {
         return data.flatMap(asVulnerability);
     }
 
+    // Re-fetch a single vulnerability in the given (project) scope and return
+    // its CVSS list. Used after saving a custom score in all-variants mode,
+    // where the PATCH response is variant-scoped and cannot populate the union
+    // gauges. Returns null when the request fails or the payload is invalid.
+    static async fetchScopedCvss(vulnId: string, projectId?: string): Promise<CVSS[] | null> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}`,
+            window.location.href,
+        );
+        if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: 'cors' });
+        if (!response.ok) return null;
+        const refreshedVuln = asVulnerability(await response.json());
+        if (!Array.isArray(refreshedVuln) && Array.isArray(refreshedVuln.severity?.cvss)) {
+            return refreshedVuln.severity.cvss;
+        }
+        return null;
+    }
+
     static enrich_with_assessments(vulns: Vulnerability[], assessments: Assessment[]): Vulnerability[] {
         const assessments_per_vuln = assessments.reduce((acc, assessment: Assessment) => {
             if (!acc[assessment.vuln_id]) {

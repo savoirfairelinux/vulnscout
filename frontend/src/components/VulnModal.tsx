@@ -1,6 +1,6 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
-import { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
+import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -830,10 +830,24 @@ type VariantScopedSnapshot = {
                 : data?.severity?.cvss;
 
             if (Array.isArray(updatedSeverity) && variantId) {
-                // Only update the local vuln object when viewing a specific variant.
-                // In all-variants mode the snapshot refresh below handles the display.
-                vuln.severity.cvss = updatedSeverity;
-                patchVuln(vuln.id, vuln);
+                // Only use the response severity directly when viewing a specific
+                // variant: the PATCH response is already variant-scoped.
+                const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: updatedSeverity } };
+                patchVuln(vuln.id, updatedVuln);
+            } else if (!variantId) {
+                // All-variants mode: the PATCH response is variant-scoped, so it
+                // can't populate the union gauge view. Re-fetch the vulnerability
+                // in the current (project) scope so the CVSS gauges reflect the new
+                // custom score immediately, mirroring a page reload.
+                try {
+                    const refreshedCvss = await Vulnerabilities.fetchScopedCvss(vuln.id, projectId);
+                    if (refreshedCvss) {
+                        const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: refreshedCvss } };
+                        patchVuln(vuln.id, updatedVuln);
+                    }
+                } catch (e) {
+                    console.error("Failed to refresh vulnerability after CVSS save:", e);
+                }
             }
 
             // Refresh per-variant snapshots immediately so the panel reflects the
@@ -1137,7 +1151,7 @@ type VariantScopedSnapshot = {
                                     {vuln.severity.cvss.map((cvss) => (
                                     <div
                                         key={encodeURIComponent(
-                                        `${cvss.author}-${cvss.version}-${cvss.base_score}`
+                                        `${cvss.variant_id ?? 'global'}-${cvss.author}-${cvss.version}-${cvss.base_score}`
                                         )}
                                         className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >

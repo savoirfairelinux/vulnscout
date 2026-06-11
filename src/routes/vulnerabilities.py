@@ -491,9 +491,11 @@ def init_app(app):
                 _custom_metric_keys: dict[str, set] = {}
                 for m in metric_rows:
                     if m.variant_id is not None:
-                        # Dedupe identical custom metrics across the project's
-                        # variants so the same score isn't listed once per variant.
+                        # Keep one custom metric per variant so each variant's
+                        # score gets its own gauge, while still collapsing exact
+                        # duplicates within the same variant.
                         key = (
+                            m.variant_id,
                             m.version,
                             float(m.score) if m.score is not None else None,
                             m.vector,

@@ -402,6 +402,83 @@ describe('Vulnerability Modal', () => {
         expect(successBanner).toBeInTheDocument();
     });
 
+    test('custom CVSS in all-variants mode re-fetches the union scope to refresh gauges', async () => {
+        // In all-variants mode the PATCH response is variant-scoped and cannot
+        // populate the union CVSS gauges, so the modal re-fetches the
+        // vulnerability in the current (project) scope. This guards that
+        // refresh path (commit "fix CVSS refresh").
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+
+        const closeCb = jest.fn();
+        const patchVuln = jest.fn();
+        const appendCVSS = jest.fn().mockReturnValue({
+            author: 'tester',
+            version: '3.1',
+            base_score: 7.5,
+            origin: 'custom',
+        });
+
+        // PATCH response: variant-scoped, only the custom score.
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({
+                    id: 'CVE-2010-1234',
+                    severity: { cvss: [{ author: 'tester', version: '3.1', base_score: 7.5, origin: 'custom' }] }
+                })
+            } as Response)
+        );
+
+        // Re-fetch (union scope): scanner score + custom score.
+        const refetchUnion = [
+            { author: 'nvd', version: '3.1', base_score: 3.0, origin: 'scanner' },
+            { author: 'tester', version: '3.1', base_score: 7.5, origin: 'custom' },
+        ];
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({
+                    id: 'CVE-2010-1234',
+                    severity: { cvss: refetchUnion }
+                })
+            } as Response)
+        );
+
+        const vulnCopy = { ...vulnerability, severity: { ...vulnerability.severity, cvss: [] } };
+
+        render(<VulnModal vuln={vulnCopy} onClose={closeCb} appendAssessment={() => {}} appendCVSS={appendCVSS} patchVuln={patchVuln} isEditing={true} projectId="proj-1" />);
+
+        const user = userEvent.setup();
+        await user.click(await screen.getByRole('button', { name: /add custom cvss vector/i }));
+        const vectorInput = await screen.getByPlaceholderText(/CVSS:3\.1/i);
+        await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+        await user.click(await screen.getByRole('button', { name: /^add$/i }));
+
+        // A re-fetch in project scope must have been issued.
+        await waitFor(() => {
+            const calledRefetch = fetchMock.mock.calls.some(call => {
+                const url = String(call[0]);
+                return url.includes('/api/vulnerabilities/CVE-2010-1234') && url.includes('project_id=proj-1');
+            });
+            expect(calledRefetch).toBe(true);
+        });
+
+        // patchVuln must be called with the union cvss from the re-fetch, not
+        // the single variant-scoped score from the PATCH response.
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalled();
+            const lastCall = patchVuln.mock.calls[patchVuln.mock.calls.length - 1];
+            expect(lastCall[1].severity.cvss).toHaveLength(2);
+        });
+
+        const successBanner = await screen.findByText(/successfully added custom cvss/i);
+        expect(successBanner).toBeInTheDocument();
+    });
+
     test('ESC key closes modal without unsaved changes', async () => {
         const closeCb = jest.fn();
         render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
