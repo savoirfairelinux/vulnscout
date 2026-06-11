@@ -75,7 +75,10 @@ def _apply_effort(record, variant_id, opt, lik, pes, log_prefix: str = ""):
             if variant_id is not None:
                 existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
             else:
-                existing = finding.time_estimate
+                existing = next(
+                    (te for te in finding.time_estimates if te.variant_id is None),
+                    None,
+                )
             if existing is not None:
                 existing.update(optimistic=opt, likely=lik, pessimistic=pes)
             else:

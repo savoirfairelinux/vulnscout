@@ -310,7 +310,7 @@ def init_app(app):
             _scope_project = None
             opts = (
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
-                selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
+                selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
             )
 
@@ -385,7 +385,7 @@ def init_app(app):
                     select(Vulnerability)
                     .options(
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
-                        selectinload(Vulnerability.findings).selectinload(Finding.time_estimate),
+                        selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                         selectinload(Vulnerability.metrics),
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)

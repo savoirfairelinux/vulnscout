@@ -36,8 +36,8 @@ class Finding(Base):
         back_populates="finding", cascade="all, delete-orphan")
     assessments: Mapped[list["Assessment"]] = relationship(
         back_populates="finding", cascade="all, delete-orphan")
-    time_estimate: Mapped[Optional["TimeEstimate"]] = relationship(
-        back_populates="finding", uselist=False, cascade="all, delete-orphan")
+    time_estimates: Mapped[list["TimeEstimate"]] = relationship(
+        back_populates="finding", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return (
