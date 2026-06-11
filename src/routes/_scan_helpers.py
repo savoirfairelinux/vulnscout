@@ -34,6 +34,36 @@ def parse_uuid_or_400(value: str, label: str = "id"):
 
 
 # ---------------------------------------------------------------------------
+# Source / format naming
+# ---------------------------------------------------------------------------
+
+# Formats that are exclusively vulnerability scanners (never pure package BOMs)
+DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
+
+# Mapping from SBOMDocument.format to the canonical source name exposed by the
+# API. This keeps package "sources" and vulnerability "found_by" consistent
+# (e.g. an SPDX document has format "spdx" but is surfaced as "spdx3").
+FORMAT_TO_FOUND_BY: dict[str, str] = {
+    "grype": "grype",
+    "spdx": "spdx3",
+    "cdx": "cyclonedx",
+    "openvex": "openvex",
+}
+
+# Mapping from Scan.scan_source to the canonical source name for tool scans
+TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
+    "nvd": "nvd_cpe",
+    "osv": "osv",
+}
+
+
+def format_to_found_by(doc_format: str) -> str:
+    """Map an SBOMDocument.format to its canonical source name."""
+    return FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
+
+
+
+# ---------------------------------------------------------------------------
 # Scan-trigger boilerplate
 # ---------------------------------------------------------------------------
 

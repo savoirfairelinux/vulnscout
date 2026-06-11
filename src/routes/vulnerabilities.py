@@ -35,7 +35,12 @@ from ..helpers.vuln_helpers import (
     _validate_and_apply_cvss,
     _apply_effort,
 )
-from ._scan_helpers import parse_uuid_or_400
+from ._scan_helpers import (
+    parse_uuid_or_400,
+    DEDICATED_SCANNER_FORMATS,
+    FORMAT_TO_FOUND_BY,
+    TOOL_SOURCE_TO_FOUND_BY,
+)
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
@@ -57,21 +62,13 @@ def _sbom_pkg_filter(pkg_ids):
 
 
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
-_DEDICATED_SCANNER_FORMATS = frozenset({"grype", "yocto_cve_check"})
+_DEDICATED_SCANNER_FORMATS = DEDICATED_SCANNER_FORMATS
 
 # Mapping from SBOMDocument.format to the found_by string exposed by the API
-_FORMAT_TO_FOUND_BY: dict[str, str] = {
-    "grype": "grype",
-    "spdx": "spdx3",
-    "cdx": "cyclonedx",
-    "openvex": "openvex",
-}
+_FORMAT_TO_FOUND_BY = FORMAT_TO_FOUND_BY
 
 # Mapping from Scan.scan_source to the found_by string for tool scans
-_TOOL_SOURCE_TO_FOUND_BY: dict[str, str] = {
-    "nvd": "nvd_cpe",
-    "osv": "osv",
-}
+_TOOL_SOURCE_TO_FOUND_BY = TOOL_SOURCE_TO_FOUND_BY
 
 
 @dataclasses.dataclass

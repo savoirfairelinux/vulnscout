@@ -14,7 +14,7 @@ from ..helpers.active_scans import (
     active_sbom_scan_ids_for_project,
 )
 from ._scan_queries import _packages_by_scan_ids, _package_rows
-from ._scan_helpers import parse_uuid_or_400
+from ._scan_helpers import parse_uuid_or_400, format_to_found_by
 
 
 def init_app(app):
@@ -154,7 +154,10 @@ def init_app(app):
                 if row.variant_name:
                     meta[key]["variants"].add(row.variant_name)
                 if row.doc_format:
-                    meta[key]["sources"].add(row.doc_format)
+                    # Map to the canonical source name so package "sources" stay
+                    # consistent with vulnerability "found_by" (e.g. an SPDX doc
+                    # has format "spdx" but is surfaced as "spdx3").
+                    meta[key]["sources"].add(format_to_found_by(row.doc_format))
                 if row.doc_source_name:
                     meta[key]["sbom_documents"].add(row.doc_source_name)
 
