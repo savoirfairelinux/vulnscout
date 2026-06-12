@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.16.2] - 2026-06-12
+
+### Fixed
+- Custom Time Estimates appear correctly in Review.
+- Rank top vulnerabilities by severity label.
+- Replace asserts in code to gracefully exit.
+- Modal navigation in sync with table order.
+- Refresh CVSS gauges after saving custom score.
+
+---
+
 ## [0.16.1] - 2026-06-10
 
 ### Fixed
