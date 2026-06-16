@@ -409,20 +409,22 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
-  // ---- Styles matching Metrics.tsx (zinc-700 dark cards) ----
+  // ---- Styles ----
   const inputClass =
-    "w-full rounded px-2 py-1.5 text-sm bg-zinc-800 border border-zinc-600 text-white focus:outline-none focus:border-cyan-400";
+    "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400";
   const selectClass = inputClass;
   const btnPrimary =
     "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
+  // ---- Card styles: gradient header + slate body with ring & shadow ----
+  const cardHeader =
+    "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
+  const cardBody =
+    "bg-slate-800/60 p-4 rounded-b-lg ring-1 ring-slate-700/70 shadow-lg shadow-black/20";
 
   return (
-    <div className="w-full flex justify-center pt-8">
-      <div className="w-full max-w-3xl space-y-6">
+    <div className="w-full">
+      <div className="w-full space-y-6">
         <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
-        <p className="text-zinc-400 mb-4">
-          Manage projects, variants, and import SBOM files.
-        </p>
 
         {/* ======== Category tabs ======== */}
         <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
@@ -463,11 +465,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         <>
         {/* ======== Report Metadata ======== */}
         <div>
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faFileLines} className="text-cyan-400" />
             <h2 className="text-xl font-bold text-white">Report Metadata</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+          <div className={cardBody + " space-y-3"}>
             <div>
               <label className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
               <input
@@ -554,11 +556,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
         {/* ======== NVD API Key ======== */}
         <section aria-labelledby="settings-heading-nvd">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+          <div className={cardBody + " space-y-4"}>
             <p id="nvd-key-description" className="text-zinc-400 text-sm">
               An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
               Get a free key at{" "}
@@ -587,7 +589,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 {/* -- Key is set: show masked key + modify / remove buttons -- */}
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-zinc-300">NVD API key:</span>
-                  <code className="text-sm text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                  <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
                 </div>
 
                 <div className="flex items-center gap-3 pt-1">
@@ -646,7 +648,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   {nvdEditing && (
                     <button
                       onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
-                      className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
+                      className="px-4 py-2 rounded-lg bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium transition-colors duration-150"
                     >
                       <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
                       Cancel
@@ -665,11 +667,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         <>
         {/* ======== Manage Projects ======== */}
         <section aria-labelledby="settings-heading-projects">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-projects" className="text-xl font-bold text-white">Manage Projects</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+          <div className={cardBody + " space-y-4"}>
 
             {/* -- Create project -- */}
             <div className="space-y-2">
@@ -702,7 +704,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
 
             {/* -- Rename project -- */}
-            <div className="border-t border-zinc-600 pt-4 space-y-2">
+            <div className="border-t border-slate-600/60 pt-4 space-y-2">
               <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
               <select
                 id="rename-project-select"
@@ -751,7 +753,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
 
             {/* -- Delete project -- */}
-            <div className="border-t border-zinc-600 pt-4 space-y-2">
+            <div className="border-t border-slate-600/60 pt-4 space-y-2">
               <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
               <div className="flex gap-2">
                 <select
@@ -793,11 +795,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         <>
         {/* ======== Manage Variants ======== */}
         <section aria-labelledby="settings-heading-variants">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-variants" className="text-xl font-bold text-white">Manage Variants</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+          <div className={cardBody + " space-y-4"}>
 
             {/* -- Project picker -- */}
             <div>
@@ -856,7 +858,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Rename variant -- */}
             {variantProjectId && (
-              <div className="border-t border-zinc-600 pt-4 space-y-2">
+              <div className="border-t border-slate-600/60 pt-4 space-y-2">
                 <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
                 <select
                   id="rename-variant-select"
@@ -907,7 +909,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
             {/* -- Delete variant -- */}
             {variantProjectId && (
-              <div className="border-t border-zinc-600 pt-4 space-y-2">
+              <div className="border-t border-slate-600/60 pt-4 space-y-2">
                 <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
                 <div className="flex gap-2">
                   <select
@@ -945,11 +947,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
         {/* ======== Import SBOM ======== */}
         <section aria-labelledby="settings-heading-import">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+          <div className={cardHeader}>
             <FontAwesomeIcon icon={faFileImport} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-import" className="text-xl font-bold text-white">Import SBOM</h2>
           </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-3">
+          <div className={cardBody + " space-y-3"}>
 
             {/* ---- Project selector ---- */}
             <div>
@@ -994,14 +996,14 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               {/* Existing files */}
               {importFiles.map((file, idx) => (
                 <div key={idx} className="flex items-center gap-2">
-                  <span className="flex-1 truncate text-sm text-zinc-200 bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5">
+                  <span className="flex-1 truncate text-sm text-zinc-200 bg-slate-900/60 border border-slate-600 rounded px-2 py-1.5">
                     {file.name}
                   </span>
                   <button
                     type="button"
                     onClick={() => handleRemoveFile(idx)}
                     disabled={importBusy}
-                    className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+                    className="p-1.5 rounded text-zinc-400 hover:text-red-400 hover:bg-slate-600 disabled:opacity-40 transition-colors"
                     aria-label={`Remove file ${file.name}`}
                   >
                     <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
