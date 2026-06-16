@@ -674,7 +674,7 @@ describe('Vulnerability Table', () => {
         const selected_checkbox = await screen.getByTitle(/unselect/i);
         expect(selected_checkbox).toBeInTheDocument();
 
-        const bulkeditbar = await screen.getByText(/selected vulnerabilities: 1/i);
+        const bulkeditbar = await screen.getByText(/selected vulnerabilities/i);
         expect(bulkeditbar).toBeInTheDocument();
 
         const reset_btn = await screen.getByRole('button', {name: /reset selection/i});

@@ -116,9 +116,12 @@ describe('MultiEditBar', () => {
         fetchMock.resetMocks();
     });
 
-    test('renders nothing when no selection', () => {
-        const { container } = render(<MultiEditBar {...mockProps} />);
-        expect(container.firstChild).toBeNull();
+    test('renders the action bar with disabled buttons when no selection', () => {
+        const { getByText } = render(<MultiEditBar {...mockProps} />);
+        expect(getByText('Selected vulnerabilities')).toBeInTheDocument();
+        expect(getByText('Reset selection').closest('button')).toBeDisabled();
+        expect(getByText('Change status').closest('button')).toBeDisabled();
+        expect(getByText('Change estimated time').closest('button')).toBeDisabled();
     });
 
     test('renders with selection', () => {
@@ -135,14 +138,14 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-2']
         };
 
-        const { getByText } = render(<MultiEditBar {...props} />);
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
 
         await act(async () => { getByText('Change status').click(); });
         await act(async () => { getByText('Add assessment').click(); });
 
         await waitFor(() => {
             expect(getByText('Editing selected CVE...')).toBeInTheDocument();
-            expect(getByText('Selected vulnerabilities: 1')).toBeInTheDocument();
+            expect(getByTestId('selected-vulns-count')).toHaveTextContent('1');
         });
     });
 
@@ -154,14 +157,14 @@ describe('MultiEditBar', () => {
             selectedVulns: ['vuln-1', 'vuln-2']
         };
 
-        const { getByText } = render(<MultiEditBar {...props} />);
+        const { getByText, getByTestId } = render(<MultiEditBar {...props} />);
 
         await act(async () => { getByText('Change status').click(); });
         await act(async () => { getByText('Add assessment').click(); });
 
         await waitFor(() => {
             expect(getByText('Editing selected CVEs...')).toBeInTheDocument();
-            expect(getByText('Selected vulnerabilities: 2')).toBeInTheDocument();
+            expect(getByTestId('selected-vulns-count')).toHaveTextContent('2');
         });
     });
 

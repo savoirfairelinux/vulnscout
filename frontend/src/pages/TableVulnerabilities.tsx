@@ -1563,13 +1563,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             search={search}
             columns={columns}
             tableHeight={
-                selectedVulns.length >= 1 ?
-                (bannerVisible ?
+                bannerVisible ?
                     'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - 64px)' :
-                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)') :
-                (bannerVisible ?
-                    'calc(100vh - 44px - 64px - 48px - 16px - 8px - 64px)' :
-                    'calc(100vh - 44px - 64px - 48px - 16px - 8px)')
+                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)'
             }
             data={dataToDisplay}
             estimateRowHeight={66}

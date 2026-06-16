@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faXmark, faPenToSquare, faClock, faArrowsRotate, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { buildStatusSummary } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
@@ -44,6 +46,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa'>>(new Set(['nvd', 'epss', 'ghsa']))
     const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
+    const hasSelection = selectedVulns.length >= 1
     const closePanel = () => {
         if (!isLoading) setPanelOpened(0)
     }
@@ -414,51 +417,103 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     }
 
     return (<>
-        {selectedVulns.length >= 1 && <>
-            {panelOpened > 0 && (
-                <div
-                    data-testid="multi-edit-backdrop"
-                    className="fixed inset-0 z-30 bg-black/40"
-                    onMouseDown={closePanel}
-                ></div>
-            )}
+        {panelOpened > 0 && (
+            <div
+                data-testid="multi-edit-backdrop"
+                className="fixed inset-0 z-30 bg-black/40"
+                onMouseDown={closePanel}
+            ></div>
+        )}
 
-            {isLoading && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="flex flex-col items-center gap-3 text-white">
-                        <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-sm font-semibold">{loadingLabel}</span>
-                    </div>
+        {isLoading && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="flex flex-col items-center gap-3 text-white">
+                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm font-semibold">{loadingLabel}</span>
                 </div>
-            )}
+            </div>
+        )}
 
-            <div className="relative mb-4 z-40 w-full">
-                <div className="bg-slate-600/70 text-white w-full">
-                    <div className="p-2 flex flex-row items-center gap-2">
-                        <div>Selected vulnerabilities: {selectedVulns.length}</div>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); resetVulns(); }}>Reset selection</button>
+        <div className="relative mb-4 z-40 w-full">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-cyan-600/40 bg-gradient-to-r from-cyan-800 via-sky-800 to-sky-900 px-3 py-2 shadow-lg ring-1 ring-black/10">
 
-                        <button className="bg-sky-900 p-1 px-2" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}>Change status</button>
-                        <button className="bg-sky-900 p-1 px-2 mr-4" onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}>Change estimated time</button>
+                {/* Selection summary */}
+                <div className="flex items-center gap-2 pr-3 mr-1 border-r border-white/15">
+                    <span className={[
+                        "inline-flex items-center justify-center min-w-[1.75rem] h-7 px-2 rounded-full text-sm font-bold transition-colors",
+                        hasSelection ? "bg-cyan-400 text-cyan-950" : "bg-white/15 text-white/70"
+                    ].join(' ')} data-testid="selected-vulns-count">
+                        {selectedVulns.length}
+                    </span>
+                    <span className="text-sm font-medium text-cyan-50 whitespace-nowrap">
+                        Selected vulnerabilities
+                    </span>
+                </div>
 
-                        {/* Refresh dropdown */}
-                        <div className="relative" ref={refreshMenuRef}>
-                            <button
-                                data-testid="refresh-dropdown-toggle"
-                                className="bg-sky-900 p-1 px-2 flex items-center gap-1"
-                                onClick={() => setRefreshMenuOpen(o => !o)}
-                                title="Select databases to fetch latest vulnerability data from"
-                            >
-                                Refresh Vulnerability Data
-                                {(nvdInProgress || epssInProgress || ghsaInProgress) && (
-                                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-400 animate-pulse ml-1" title="Refresh in progress" />
-                                )}
-                                <span className="ml-1">▾</span>
-                            </button>
+                {/* Reset selection */}
+                <button
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
+                    disabled={!hasSelection}
+                    onClick={() => { hideBanner(); resetVulns(); }}
+                >
+                    <FontAwesomeIcon icon={faXmark} />
+                    Reset selection
+                </button>
 
-                            {refreshMenuOpen && (
-                                <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
+                <div className="w-px h-6 bg-white/15 mx-1"></div>
+
+                {/* Change status */}
+                <button
+                    className={[
+                        "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                        panelOpened === 1
+                            ? "bg-cyan-400 text-cyan-950 hover:bg-cyan-300"
+                            : "text-white bg-white/10 hover:bg-white/20 disabled:hover:bg-white/10"
+                    ].join(' ')}
+                    disabled={!hasSelection}
+                    onClick={() => { hideBanner(); setPanelOpened(panelOpened == 1 ? 0 : 1); }}
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} />
+                    Change status
+                </button>
+
+                {/* Change estimated time */}
+                <button
+                    className={[
+                        "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                        panelOpened === 2
+                            ? "bg-cyan-400 text-cyan-950 hover:bg-cyan-300"
+                            : "text-white bg-white/10 hover:bg-white/20 disabled:hover:bg-white/10"
+                    ].join(' ')}
+                    disabled={!hasSelection}
+                    onClick={() => { hideBanner(); setPanelOpened(panelOpened == 2 ? 0 : 2); }}
+                >
+                    <FontAwesomeIcon icon={faClock} />
+                    Change estimated time
+                </button>
+
+                <div className="w-px h-6 bg-white/15 mx-1"></div>
+
+                {/* Refresh dropdown */}
+                <div className="relative" ref={refreshMenuRef}>
+                    <button
+                        data-testid="refresh-dropdown-toggle"
+                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
+                        disabled={!hasSelection && !(nvdInProgress || epssInProgress || ghsaInProgress)}
+                        onClick={() => setRefreshMenuOpen(o => !o)}
+                        title="Select databases to fetch latest vulnerability data from"
+                    >
+                        <FontAwesomeIcon icon={faArrowsRotate} className={(nvdInProgress || epssInProgress || ghsaInProgress) ? 'animate-spin' : ''} />
+                        Refresh Vulnerability Data
+                        {(nvdInProgress || epssInProgress || ghsaInProgress) && (
+                            <span className="inline-block w-2 h-2 rounded-full bg-cyan-300 animate-pulse ml-0.5" title="Refresh in progress" />
+                        )}
+                        <FontAwesomeIcon icon={faChevronDown} className="ml-0.5 text-xs" />
+                    </button>
+
+                    {refreshMenuOpen && (
+                        <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
+                            <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
 
                                     {/* NVD row */}
                                     <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
@@ -583,7 +638,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                         </div>
                     </div>
                 </div>
-            </div>
 
             <div className={[
                 'absolute z-40 p-4 bg-slate-700 shadow-md shadow-slate-400/40 top-48 left-32 w-1/2',
@@ -628,7 +682,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     actualEstimate={{optimistic: '', likely: '', pessimistic: ''}}
                 />
             </div>
-        </>}
     </>);
 }
 
