@@ -828,11 +828,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         {/* ======== Variants Settings tab ======== */}
         {activeTab === "variants" && (
         <>
-        {/* ======== Manage Variants ======== */}
-        <section aria-labelledby="settings-heading-variants">
+        {/* ======== Select Project ======== */}
+        <section aria-labelledby="settings-heading-variant-project">
           <div className={cardHeader}>
             <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-variants" className="text-xl font-bold text-white">Manage Variants</h2>
+            <h2 id="settings-heading-variant-project" className="text-xl font-bold text-white">Select Project</h2>
           </div>
           <div className={cardBody + " space-y-4"}>
 
@@ -857,118 +857,172 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
+              {!variantProjectId && (
+                <p className="text-zinc-400 text-sm mt-2">
+                  Select a project to manage its variants.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ======== Add Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-add"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-add" className="text-xl font-bold text-white">Add Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
+              <div className="flex gap-2">
+                <input
+                  id="new-variant-name"
+                  type="text"
+                  value={newVariantName}
+                  onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
+                  placeholder="New variant name"
+                  className={inputClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
+                />
+                <button
+                  onClick={handleCreateVariant}
+                  disabled={!variantProjectId || createVariantBusy || !newVariantName.trim()}
+                  className={btnPrimary}
+                  aria-busy={createVariantBusy}
+                >
+                  {createVariantBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
+                  )}
+                  Add
+                </button>
+              </div>
             </div>
 
-            {/* -- Create variant -- */}
-            {variantProjectId && (
-              <div className="space-y-2">
-                <label htmlFor="new-variant-name" className="block text-sm text-zinc-300 font-semibold">Add Variant</label>
-                <div className="flex gap-2">
-                  <input
-                    id="new-variant-name"
-                    type="text"
-                    value={newVariantName}
-                    onChange={(e) => { setNewVariantName(e.target.value); setVariantMsg(null); }}
-                    placeholder="New variant name"
-                    className={inputClass + " flex-1"}
-                    aria-required="true"
-                    onKeyDown={(e) => e.key === "Enter" && handleCreateVariant()}
-                  />
-                  <button
-                    onClick={handleCreateVariant}
-                    disabled={createVariantBusy || !newVariantName.trim()}
-                    className={btnPrimary}
-                    aria-busy={createVariantBusy}
-                  >
-                    {createVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                    ) : (
-                      <FontAwesomeIcon icon={faPlus} className="mr-1" aria-hidden="true" />
-                    )}
-                    Add
-                  </button>
-                </div>
-              </div>
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {variantMsg}
+              </span>
             )}
+          </div>
+        </section>
 
-            {/* -- Rename variant -- */}
-            {variantProjectId && (
-              <div className="border-t border-slate-600/60 pt-4 space-y-2">
-                <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+        {/* ======== Rename Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-rename"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-rename" className="text-xl font-bold text-white">Rename Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="rename-variant-select" className="block text-sm text-zinc-300 font-semibold">Rename Variant</label>
+              <select
+                id="rename-variant-select"
+                value={renameVariantId}
+                onChange={(e) => {
+                  setRenameVariantId(e.target.value);
+                  setVariantMsg(null);
+                  const v = variantProjectVariants.find((x) => x.id === e.target.value);
+                  setRenameVariantName(v?.name ?? "");
+                }}
+                className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                disabled={!variantProjectId}
+              >
+                <option value="">— select a variant —</option>
+                {variantProjectVariants.map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+
+              <div className="flex gap-2">
+                <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
+                <input
+                  id="rename-variant-name"
+                  type="text"
+                  value={renameVariantName}
+                  onChange={(e) => setRenameVariantName(e.target.value)}
+                  placeholder="Enter new name"
+                  className={inputClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId || !renameVariantId}
+                  aria-required="true"
+                  onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
+                />
+                <button
+                  onClick={handleRenameVariant}
+                  disabled={!variantProjectId || renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
+                  className={btnPrimary}
+                  aria-busy={renameVariantBusy}
+                >
+                  {renameVariantBusy ? (
+                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  ) : (
+                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                  )}
+                  Rename
+                </button>
+              </div>
+            </div>
+
+            {/* -- Feedback -- */}
+            {variantMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {variantMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Delete Variant ======== */}
+        <section
+          aria-labelledby="settings-heading-variant-delete"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faTrash} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-variant-delete" className="text-xl font-bold text-white">Delete Variant</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div className="space-y-2">
+              <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
+              <div className="flex gap-2">
                 <select
-                  id="rename-variant-select"
-                  value={renameVariantId}
-                  onChange={(e) => {
-                    setRenameVariantId(e.target.value);
-                    setVariantMsg(null);
-                    const v = variantProjectVariants.find((x) => x.id === e.target.value);
-                    setRenameVariantName(v?.name ?? "");
-                  }}
-                  className={selectClass}
+                  id="delete-variant-select"
+                  value={deleteVariantId}
+                  onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
+                  className={selectClass + " flex-1 disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
                 >
                   <option value="">— select a variant —</option>
                   {variantProjectVariants.map((v) => (
                     <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
-
-                <div className="flex gap-2">
-                  <label htmlFor="rename-variant-name" className="sr-only">New variant name</label>
-                  <input
-                    id="rename-variant-name"
-                    type="text"
-                    value={renameVariantName}
-                    onChange={(e) => setRenameVariantName(e.target.value)}
-                    placeholder="Enter new name"
-                    className={inputClass + " flex-1"}
-                    disabled={!renameVariantId}
-                    aria-required="true"
-                    onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
-                  />
-                  <button
-                    onClick={handleRenameVariant}
-                    disabled={renameVariantBusy || !renameVariantId || !renameVariantName.trim()}
-                    className={btnPrimary}
-                    aria-busy={renameVariantBusy}
-                  >
-                    {renameVariantBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                    ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                    )}
-                    Rename
-                  </button>
-                </div>
+                <button
+                  onClick={() => setConfirmDeleteVariant(true)}
+                  disabled={!variantProjectId || !deleteVariantId}
+                  className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                >
+                  <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                  Delete
+                </button>
               </div>
-            )}
-
-            {/* -- Delete variant -- */}
-            {variantProjectId && (
-              <div className="border-t border-slate-600/60 pt-4 space-y-2">
-                <label htmlFor="delete-variant-select" className="block text-sm text-zinc-300 font-semibold">Delete Variant</label>
-                <div className="flex gap-2">
-                  <select
-                    id="delete-variant-select"
-                    value={deleteVariantId}
-                    onChange={(e) => { setDeleteVariantId(e.target.value); setVariantMsg(null); }}
-                    className={selectClass + " flex-1"}
-                  >
-                    <option value="">— select a variant —</option>
-                    {variantProjectVariants.map((v) => (
-                      <option key={v.id} value={v.id}>{v.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setConfirmDeleteVariant(true)}
-                    disabled={!deleteVariantId}
-                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                    Delete
-                  </button>
-                </div>
-              </div>
-            )}
+            </div>
 
             {/* -- Feedback -- */}
             {variantMsg && (
