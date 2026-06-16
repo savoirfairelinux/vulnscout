@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import typing
 from functools import cached_property
 
 from . import (
@@ -14,19 +17,31 @@ from . import (
     VariantController,
 )
 
+if typing.TYPE_CHECKING:
+    from ..helpers.export_scope import ExportScope
+
 
 class ControllersCache:
+    def __init__(self, scope: "ExportScope | None" = None):
+        """Create a cache of controllers.
+
+        When *scope* is provided the package/vulnerability/assessment
+        controllers only expose the in-scope data, so every view built from
+        this cache produces an export restricted to that project/variant.
+        """
+        self._scope = scope
+
     @cached_property
     def packages(self) -> PackagesController:
-        return PackagesController()
+        return PackagesController(scope=self._scope)
 
     @cached_property
     def assessments(self) -> AssessmentsController:
-        return AssessmentsController(self.packages)
+        return AssessmentsController(self.packages, scope=self._scope)
 
     @cached_property
     def vulnerabilities(self) -> VulnerabilitiesController:
-        return VulnerabilitiesController(self.packages)
+        return VulnerabilitiesController(self.packages, scope=self._scope)
 
     @cached_property
     def conditions_parser(self) -> ConditionParser:

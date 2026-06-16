@@ -13,6 +13,8 @@ from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.openvex import OpenVex
+from ..helpers.export_scope import compute_export_scope
+from ._scan_helpers import parse_uuid_or_400
 from typing import Dict, List
 
 
@@ -97,7 +99,29 @@ def init_app(app):
                 or doc_name == "OpenVex"
                 or doc_name.startswith("SPDX")
             ):
-                return handle_sbom_exports(doc_name, ctrls, expected_mime, metadata)
+                # SBOM/VEX exports are scoped to the current project/variant
+                # when the frontend passes variant_id / project_id.  Reports
+                # (templates) keep their global, unscoped data.
+                variant_id = request.args.get("variant_id")
+                project_id = request.args.get("project_id")
+                scope = None
+                if variant_id:
+                    variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+                    if err is not None:
+                        return err
+                    scope = compute_export_scope(variant_id=variant_uuid)
+                elif project_id:
+                    project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+                    if err is not None:
+                        return err
+                    scope = compute_export_scope(project_id=project_uuid)
+
+                if scope is not None:
+                    scoped_ctrls = ControllersCache(scope=scope)
+                    scoped_ctrls.packages._preload_cache()
+                else:
+                    scoped_ctrls = ctrls
+                return handle_sbom_exports(doc_name, scoped_ctrls, expected_mime, metadata)
 
             content = templ.render(doc_name, **metadata)
 

@@ -10,12 +10,19 @@ const documentTypes: { [key: string]: string | undefined } = {
 type Props = {
   name: string;
   extension: string;
+  variantId?: string;
+  projectId?: string;
   opened?: boolean;
   onOpen?: () => void;
 };
 
-function FileTag({ name, extension, opened, onOpen }: Readonly<Props>) {
+function FileTag({ name, extension, variantId, projectId, opened, onOpen }: Readonly<Props>) {
   const formats = extension.split(' | ');
+
+  // SBOM/VEX exports are scoped to the current variant (preferred) or project.
+  const scopeQuery = variantId
+    ? `&variant_id=${encodeURIComponent(variantId)}`
+    : (projectId ? `&project_id=${encodeURIComponent(projectId)}` : '');
 
   return (
     <div className="relative inline-block">
@@ -39,7 +46,7 @@ function FileTag({ name, extension, opened, onOpen }: Readonly<Props>) {
             <a
               href={`${import.meta.env.VITE_API_URL}/api/documents/${encodeURIComponent(
                 name
-              )}?ext=${encodeURIComponent(value)}`}
+              )}?ext=${encodeURIComponent(value)}${scopeQuery}`}
               target="_blank"
               className="flex items-left justify-left gap-2 rounded-xl bg-sfl-dark text-white py-2 px-4"
             >

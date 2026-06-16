@@ -17,7 +17,8 @@ class PackagesController:
     directly; the session cache may be empty.
     """
 
-    def __init__(self):
+    def __init__(self, scope=None):
+        self._scope = scope
         self._cache: dict[str, Package] = {}
         self._current_sbom_document: SBOMDocument | None = None
         # Fast PK lookup: string_id → DB UUID.  Avoids SELECT in
@@ -39,9 +40,16 @@ class PackagesController:
         Also pre-populates ``_finding_cache`` so that
         :func:`Finding.get_or_create` avoids a SELECT on the first lookup
         for every known (package, vulnerability) pair.
+
+        When an export *scope* is set only the in-scope packages (and their
+        findings) are loaded, so every view built from this controller is
+        restricted to the scoped project/variant.
         """
+        allowed = self._scope.package_ids if self._scope is not None else None
         try:
             for pkg in Package.get_all():
+                if allowed is not None and pkg.id not in allowed:
+                    continue
                 sid = pkg.string_id
                 self._cache[sid] = pkg
                 self._db_id_cache[sid] = pkg.id
@@ -49,6 +57,8 @@ class PackagesController:
             verbose(f"[PackagesController._preload_cache packages] {e}")
         try:
             for f in Finding.get_all():
+                if allowed is not None and f.package_id not in allowed:
+                    continue
                 self._finding_cache[(f.package_id, f.vulnerability_id)] = f
         except Exception as e:
             verbose(f"[PackagesController._preload_cache findings] {e}")
@@ -156,6 +166,8 @@ class PackagesController:
             return self._cache[package_id]
         try:
             pkg = Package.get_by_string_id(package_id)
+            if pkg is not None and self._scope is not None and pkg.id not in self._scope.package_ids:
+                return None  # out of the export scope
             if pkg:
                 self._cache[package_id] = pkg
             return pkg
@@ -199,7 +211,12 @@ class PackagesController:
             if item in self._cache:
                 return True
             try:
-                return Package.get_by_string_id(item) is not None
+                pkg = Package.get_by_string_id(item)
+                if pkg is None:
+                    return False
+                if self._scope is not None and pkg.id not in self._scope.package_ids:
+                    return False
+                return True
             except Exception as e:
                 verbose(f"[PackagesController.__contains__ {item!r}] {e}")
                 return False
@@ -224,6 +241,9 @@ class PackagesController:
         """
         if self._cache:
             yield from self._cache.values()
+            return
+        if self._scope is not None:
+            # Scoped export: never fall back to the global package set.
             return
         try:
             yield from Package.get_all()

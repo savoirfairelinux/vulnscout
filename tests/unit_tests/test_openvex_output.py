@@ -5,7 +5,7 @@
 
 """Tests for supplier-qualified OpenVEX product @id generation."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from src.views.openvex import OpenVex
 from src.models.package import Package
 from src.models.assessment import Assessment
@@ -34,10 +34,9 @@ def _run_to_dict(pkgs, assessments):
     ctrl.vulnerabilities = MagicMock()
     ctrl.vulnerabilities.get = MagicMock(return_value=None)
     ctrl.assessments = MagicMock()
-    ctrl.assessments.assessments = {a.vuln_id: a for a in assessments}
-    with patch('src.views.openvex.Assessment.get_all', return_value=[]):
-        view = OpenVex(ctrl)
-        return view.to_dict()
+    ctrl.assessments.get_all = MagicMock(return_value=list(assessments))
+    view = OpenVex(ctrl)
+    return view.to_dict()
 
 
 def test_openvex_no_supplier_uses_generic_purl():

@@ -67,12 +67,13 @@ class AssessmentsController:
     Assessments can be added, removed, retrieved and exported or imported as dictionaries.
     """
 
-    def __init__(self, pkgCtrl: "PackagesController"):
+    def __init__(self, pkgCtrl: "PackagesController", scope=None):
         """
         Take an instance of PackagesController and VulnerabilitiesController.
         They are used to resolve package and vulnerabilities by their id.
         """
         self.packagesCtrl: "PackagesController" = pkgCtrl
+        self._scope = scope
         self.assessments: dict[str, Assessment] = {}
         self.current_variant_id: uuid.UUID | None = None
         """A dictionary of assessments, indexed by their id."""
@@ -113,7 +114,27 @@ class AssessmentsController:
                     results[str(a.id)] = a
         except Exception as e:
             verbose(f"[AssessmentsController.gets_by_vuln {vuln_str!r}] {e}")
-        return list(results.values())
+        return self._apply_scope(list(results.values()))
+
+    def _apply_scope(self, assessments: list) -> list:
+        """Restrict *assessments* to the in-scope variants for a scoped export."""
+        if self._scope is None:
+            return assessments
+        allowed = self._scope.variant_ids
+        return [a for a in assessments if getattr(a, "variant_id", None) in allowed]
+
+    def get_all(self) -> list:
+        """Return all assessments (in-memory + DB), de-duped, honouring export scope."""
+        seen: dict = {}
+        for key, a in self.assessments.items():
+            seen[str(key)] = a
+        try:
+            for a in Assessment.get_all():
+                if str(a.id) not in seen:
+                    seen[str(a.id)] = a
+        except Exception as e:
+            verbose(f"[AssessmentsController.get_all] {e}")
+        return self._apply_scope(list(seen.values()))
 
     def gets_by_pkg(self, pkg_id) -> list:
         """Return assessments for a package, querying DB then supplementing with in-memory."""

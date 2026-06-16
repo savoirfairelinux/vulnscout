@@ -292,7 +292,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
-                {tab === 'exports' && <Exports />}
+                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} />}
                 {tab === 'settings' && <Settings onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});

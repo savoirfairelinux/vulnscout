@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 from ..controllers import ControllersCache, VulnerabilitiesController
+from ..controllers.projects import ProjectController
+from ..models.variant import Variant as DBVariant
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
 from ..views.cyclonedx import CycloneDx
@@ -12,6 +14,7 @@ from ..views.openvex import OpenVex
 from ..views.templates import Templates
 from .cmd_process import evaluate_condition
 from ._common import get_default_author
+from ..helpers.export_scope import compute_export_scope
 from datetime import date as _date
 import click
 import json
@@ -25,10 +28,36 @@ from flask.cli import with_appcontext
               show_default=True, help="Output format.")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
+@click.option("--project", "-p", default=None,
+              help="Project name. When set, the export is scoped to this project.")
+@click.option("--variant", "-v", default=None,
+              help="Variant name. When omitted, all variants of the project are exported.")
 @with_appcontext
-def export_command(export_format: str, output_dir: str) -> None:
+def export_command(export_format: str, output_dir: str, project: str | None, variant: str | None) -> None:
     """Export the current project data as an SBOM (SPDX, CycloneDX, or OpenVEX)."""
-    ctrls = ControllersCache()
+    # Resolve the optional project/variant scope so the export only contains
+    # the packages/vulnerabilities/assessments of the selected variant (or all
+    # variants of the project when only --project is given).  A missing
+    # project/variant is non-fatal: we warn and fall back to a global export so
+    # existing pipelines keep working.
+    scope = None
+    if project:
+        project_obj = ProjectController.get_by_name(project)
+        if project_obj is None:
+            click.echo(f"Warning: project '{project}' not found; exporting all data.", err=True)
+        elif variant:
+            variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+            if variant_obj is None:
+                click.echo(
+                    f"Warning: variant '{variant}' not found in project '{project}'; "
+                    f"exporting the whole project.", err=True)
+                scope = compute_export_scope(project_id=project_obj.id)
+            else:
+                scope = compute_export_scope(variant_id=variant_obj.id)
+        else:
+            scope = compute_export_scope(project_id=project_obj.id)
+
+    ctrls = ControllersCache(scope=scope)
     ctrls.packages._preload_cache()
     author = get_default_author()
 
