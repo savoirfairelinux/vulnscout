@@ -95,14 +95,18 @@ def init_app(app):
                 )
                 grype_tmp = tempfile.mkdtemp(prefix="vulnscout_grype_")
                 try:
-                    # 1. Export current DB as CycloneDX
+                    # 1. Export this variant's DB packages as CycloneDX.
+                    #    The export is scoped to the project/variant so it only
+                    #    emits this variant's packages — Grype never sees the
+                    #    other projects'/variants' components.
                     _grype_scans_in_progress[vid_str]["progress"] = "1/4 Exporting CycloneDX"
                     _grype_scans_in_progress[vid_str]["logs"].append(
-                        "[1/4] Exporting current DB as CycloneDX…"
+                        "[1/4] Exporting variant packages as CycloneDX…"
                     )
                     subprocess.run(
                         ["flask", "--app", "src.bin.webapp", "export",
-                         "--format", "cdx16", "--output-dir", grype_tmp],
+                         "--format", "cdx16", "--output-dir", grype_tmp,
+                         "--variant-id", vid_str],
                         cwd=base_dir, check=True, capture_output=True, text=True,
                         timeout=120,
                     )
@@ -116,6 +120,53 @@ def init_app(app):
                     _grype_scans_in_progress[vid_str]["logs"].append(
                         "[1/4] CycloneDX export complete"
                     )
+
+                    # 1.5 De-duplicate components that share the same
+                    #     name@version before running Grype.  Even when scoped
+                    #     to a single variant, the export emits one row per
+                    #     package, so a package appears multiple times when it
+                    #     differs only by supplier (the supplier-less
+                    #     Grype/NOASSERTION base alongside the SBOM-declared
+                    #     supplier).  Grype only needs one, and feeding
+                    #     duplicates just multiplies its work and produces
+                    #     duplicate matches.  Key on the *raw* name@version:
+                    #     supplier duplicates carry an identical raw name,
+                    #     whereas normalising would over-collapse genuinely
+                    #     distinct packages that happen to share a normalised
+                    #     name.
+                    if sbom_pkg_set:
+                        import json as _json
+                        with open(exported_cdx, "r") as cf:
+                            cdx_data = _json.load(cf)
+                        components = cdx_data.get("components", [])
+                        orig_components = len(components)
+                        kept = []
+                        kept_refs = set()
+                        seen_nv: set = set()
+                        for comp in components:
+                            name = comp.get("name", "")
+                            version = comp.get("version", "")
+                            nv = (name, version)
+                            if nv in seen_nv:
+                                continue
+                            seen_nv.add(nv)
+                            kept.append(comp)
+                            ref = comp.get("bom-ref")
+                            if ref:
+                                kept_refs.add(ref)
+                        cdx_data["components"] = kept
+                        # Prune dependency edges that reference dropped components.
+                        if isinstance(cdx_data.get("dependencies"), list):
+                            cdx_data["dependencies"] = [
+                                dep for dep in cdx_data["dependencies"]
+                                if dep.get("ref") in kept_refs
+                            ]
+                        with open(exported_cdx, "w") as cf:
+                            _json.dump(cdx_data, cf)
+                        _grype_scans_in_progress[vid_str]["logs"].append(
+                            f"[1/4] De-duplicated components: "
+                            f"{len(kept)}/{orig_components} kept"
+                        )
 
                     # 2. Run grype on the exported SBOM
                     _grype_scans_in_progress[vid_str]["progress"] = "2/4 Running Grype"
@@ -141,11 +192,11 @@ def init_app(app):
                         "[2/4] Grype scan complete"
                     )
 
-                    # 2.5 Filter grype output to only keep matches for
+                    # 2.5 Defensive filter: keep only grype matches for
                     #     packages present in this variant's SBOM.  The
-                    #     CycloneDX export is global (all variants), so
-                    #     grype may report vulnerabilities for packages
-                    #     that do not belong to this variant.
+                    #     CycloneDX input is already scoped to the variant, so
+                    #     this is normally a no-op, but it guards against any
+                    #     stray artifact grype might synthesise.
                     if sbom_pkg_set:
                         import json as _json
                         with open(grype_out, "r") as gf:

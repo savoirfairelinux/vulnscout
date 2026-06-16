@@ -108,7 +108,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         <div className="text-lg font-medium">No documents found</div>
         {tab === 'custom' && (
           <div className="mt-2 text-sm">
-            You can upload your own templates in 
+            You can upload your own templates in
             <code className="p-1 mx-1 bg-white/10 rounded">.vulnscout/templates</code>
           </div>
         )}

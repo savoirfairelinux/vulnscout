@@ -19,6 +19,7 @@ from datetime import date as _date
 import click
 import json
 import os
+import uuid
 from flask.cli import with_appcontext
 
 
@@ -32,8 +33,18 @@ from flask.cli import with_appcontext
               help="Project name. When set, the export is scoped to this project.")
 @click.option("--variant", "-v", default=None,
               help="Variant name. When omitted, all variants of the project are exported.")
+@click.option("--variant-id", "variant_id", default=None,
+              help="Variant UUID. Takes precedence over --project/--variant and "
+                   "resolves the variant unambiguously (use when variant names "
+                   "are not unique within a project).")
 @with_appcontext
-def export_command(export_format: str, output_dir: str, project: str | None, variant: str | None) -> None:
+def export_command(
+    export_format: str,
+    output_dir: str,
+    project: str | None,
+    variant: str | None,
+    variant_id: str | None,
+) -> None:
     """Export the current project data as an SBOM (SPDX, CycloneDX, or OpenVEX)."""
     # Resolve the optional project/variant scope so the export only contains
     # the packages/vulnerabilities/assessments of the selected variant (or all
@@ -41,7 +52,20 @@ def export_command(export_format: str, output_dir: str, project: str | None, var
     # project/variant is non-fatal: we warn and fall back to a global export so
     # existing pipelines keep working.
     scope = None
-    if project:
+    if variant_id:
+        # Exact-UUID scoping (used by the Grype trigger).  Avoids the ambiguity
+        # of resolving a variant by name when several variants share the same
+        # name within a project.
+        try:
+            vid = uuid.UUID(str(variant_id))
+        except (ValueError, TypeError):
+            click.echo(f"Warning: invalid variant id '{variant_id}'; exporting all data.", err=True)
+        else:
+            if DBVariant.get_by_id(vid) is None:
+                click.echo(f"Warning: variant id '{variant_id}' not found; exporting all data.", err=True)
+            else:
+                scope = compute_export_scope(variant_id=vid)
+    elif project:
         project_obj = ProjectController.get_by_name(project)
         if project_obj is None:
             click.echo(f"Warning: project '{project}' not found; exporting all data.", err=True)
