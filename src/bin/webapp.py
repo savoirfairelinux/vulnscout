@@ -36,11 +36,9 @@ def _launch_enrichment(app):
             # the lock is only held during commit() itself (milliseconds).
             db.session.autoflush = False
             try:
-                from ..controllers.packages import PackagesController
-                from ..controllers.vulnerabilities import VulnerabilitiesController
-                pkgCtrl = PackagesController()
-                vulnCtrl = VulnerabilitiesController(pkgCtrl)
-                post_treatment({"vulnerabilities": vulnCtrl, "packages": pkgCtrl})
+                from ..controllers import ControllersCache
+                controllers = ControllersCache()
+                post_treatment(controllers)
             except Exception as e:
                 print(f"[enrichment/epss] {e}", flush=True)
 
