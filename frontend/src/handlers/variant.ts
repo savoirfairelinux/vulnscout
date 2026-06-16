@@ -133,6 +133,29 @@ class Variants {
         }
         return response.json();
     }
+
+    static async copyAssessments(
+        sourceVariantId: string,
+        targetVariantId: string,
+    ): Promise<{ copied: number; skipped: number; message: string }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + "/api/variants/copy-assessments",
+            {
+                mode: "cors",
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    source_variant_id: sourceVariantId,
+                    target_variant_id: targetVariantId,
+                }),
+            }
+        );
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Copy failed (${response.status})`);
+        }
+        return response.json();
+    }
 }
 
 export default Variants;

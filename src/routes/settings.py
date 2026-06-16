@@ -23,7 +23,6 @@ from ..models.scan import Scan as ScanModel
 from ..helpers.verbose import verbose
 from ._scan_helpers import parse_uuid_or_400
 
-
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
 _UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
@@ -39,6 +38,22 @@ def _prune_upload_status():
     ]
     for uid in stale:
         _upload_status.pop(uid, None)
+
+
+def _regenerate_openvex(app):
+    """Re-generate and save the OpenVEX file from current DB state."""
+    try:
+        from ..views.openvex import OpenVex
+        from ..controllers import ControllersCache
+
+        openvex_file = app.config.get("OPENVEX_FILE", "/scan/outputs/openvex.json")
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
+        vex = OpenVex(ctrls)
+        with open(openvex_file, "w") as f:
+            f.write(json.dumps(vex.to_dict(), indent=2))
+    except Exception as e:
+        verbose(f"[_regenerate_openvex] {e}")
 
 
 def _retry_on_lock(fn, max_retries=5, delay=0.5):
@@ -278,6 +293,97 @@ def init_app(app):
 
         variant = _retry_on_lock(lambda: VariantController.create(new_name, project_id))
         return jsonify(VariantController.serialize(variant)), 201
+
+    # ------------------------------------------------------------------
+    # Copy custom assessments between two variants
+    # ------------------------------------------------------------------
+    @app.route('/api/variants/copy-assessments', methods=['POST'])
+    def copy_variant_assessments():
+        from ..models.assessment import Assessment as DBAssessment
+        from ..helpers.active_scans import (
+            active_sbom_scan_ids_for_variant,
+            active_package_ids_for_scans,
+        )
+
+        payload = request.get_json(silent=True) or {}
+        source_id = payload.get("source_variant_id")
+        target_id = payload.get("target_variant_id")
+
+        source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
+        if err:
+            return err
+        target_uuid, err = parse_uuid_or_400(target_id, "target_variant_id")
+        if err:
+            return err
+
+        if source_uuid == target_uuid:
+            return jsonify({"error": "Source and target variants must be different."}), 400
+
+        source = VariantController.get(source_id)
+        target = VariantController.get(target_id)
+        if source is None or target is None:
+            return jsonify({"error": "Variant not found."}), 404
+        if source.project_id != target.project_id:
+            return jsonify({"error": "Both variants must belong to the same project."}), 400
+
+        # Resolve the package set of each variant (SBOM elements).
+        source_pkg_ids = active_package_ids_for_scans(
+            active_sbom_scan_ids_for_variant(source_uuid))
+        target_pkg_ids = active_package_ids_for_scans(
+            active_sbom_scan_ids_for_variant(target_uuid))
+        common_pkg_ids = source_pkg_ids & target_pkg_ids
+
+        if not common_pkg_ids:
+            return jsonify({
+                "copied": 0,
+                "skipped": 0,
+                "message": "No packages in common between the two variants.",
+            }), 200
+
+        # Custom (handmade) assessments belonging to the source variant.
+        source_assessments = DBAssessment.get_handmade([source_uuid])
+
+        copied = 0
+        skipped = 0
+        with batch_session():
+            for a in source_assessments:
+                finding_id = a.finding_id
+                finding = a.finding
+                if finding is None or finding.package_id not in common_pkg_ids:
+                    continue
+                # Skip if the target already has a custom assessment for this finding.
+                existing = DBAssessment.get_by_finding_and_variant(finding_id, target_uuid)
+                if any(e.origin == "custom" for e in existing):
+                    skipped += 1
+                    continue
+                DBAssessment.create(
+                    status=a.status or "under_investigation",
+                    finding_id=finding_id,
+                    variant_id=target_uuid,
+                    source=a.source,
+                    origin="custom",
+                    simplified_status=a.simplified_status,
+                    status_notes=a.status_notes,
+                    justification=a.justification,
+                    impact_statement=a.impact_statement,
+                    workaround=a.workaround,
+                    responses=list(a.responses) if a.responses else [],
+                    commit=False,
+                )
+                copied += 1
+
+        if copied:
+            _regenerate_openvex(app)
+
+        return jsonify({
+            "copied": copied,
+            "skipped": skipped,
+            "message": (
+                f"Copied {copied} assessment{'s' if copied != 1 else ''} to "
+                f"'{target.name}'."
+                + (f" Skipped {skipped} already present." if skipped else "")
+            ),
+        }), 200
 
     # ------------------------------------------------------------------
     # Delete project

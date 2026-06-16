@@ -12,6 +12,7 @@ import {
   faXmark,
   faKey,
   faPenToSquare,
+  faCopy,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -197,6 +198,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
 
+  // ---- Copy Custom Assessments ----
+  const [copySourceId, setCopySourceId] = useState<string>("");
+  const [copyTargetId, setCopyTargetId] = useState<string>("");
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
     Variants.list(projectId)
@@ -258,6 +265,25 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       setConfirmDeleteVariant(false);
     } finally {
       setDeleteVariantBusy(false);
+    }
+  };
+
+  const handleCopyAssessments = async () => {
+    if (!copySourceId || !copyTargetId || copyBusy) return;
+    if (copySourceId === copyTargetId) {
+      setCopyMsg("Source and target variants must be different.");
+      return;
+    }
+    setCopyBusy(true);
+    setCopyMsg(null);
+    try {
+      const result = await Variants.copyAssessments(copySourceId, copyTargetId);
+      setCopyMsg(result.message);
+      onDataChanged?.("Copying assessments...");
+    } catch (e: any) {
+      setCopyMsg(e.message);
+    } finally {
+      setCopyBusy(false);
     }
   };
 
@@ -1029,6 +1055,76 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               <span role="alert" className="text-red-400 text-sm">
                 <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
                 {variantMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Copy Custom Assessments ======== */}
+        <section
+          aria-labelledby="settings-heading-copy-assessments"
+          aria-disabled={!variantProjectId}
+          className={!variantProjectId ? "opacity-50" : ""}
+        >
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-copy-assessments" className="text-xl font-bold text-white">Copy Custom Assessments</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <p className="text-sm text-zinc-400">
+              Copy every custom assessment from a source variant onto a target variant,
+              for all packages they have in common. Avoids re-entering assessments on a new variant.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
+                <select
+                  id="copy-source-select"
+                  value={copySourceId}
+                  onChange={(e) => { setCopySourceId(e.target.value); setCopyMsg(null); }}
+                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
+                >
+                  <option value="">— select a variant —</option>
+                  {variantProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Copy to</label>
+                <select
+                  id="copy-target-select"
+                  value={copyTargetId}
+                  onChange={(e) => { setCopyTargetId(e.target.value); setCopyMsg(null); }}
+                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                  disabled={!variantProjectId}
+                >
+                  <option value="">— select a variant —</option>
+                  {variantProjectVariants.map((v) => (
+                    <option key={v.id} value={v.id}>{v.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <button
+              onClick={handleCopyAssessments}
+              disabled={!variantProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId || copyBusy}
+              className={btnPrimary}
+            >
+              {copyBusy ? (
+                <FontAwesomeIcon icon={faSpinner} spin className="mr-2" aria-hidden="true" />
+              ) : (
+                <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
+              )}
+              Copy Assessments
+            </button>
+
+            {/* -- Feedback -- */}
+            {copyMsg && (
+              <span role="alert" className="block text-sm text-cyan-300">
+                <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                {copyMsg}
               </span>
             )}
           </div>
