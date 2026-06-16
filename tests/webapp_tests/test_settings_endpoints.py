@@ -9,6 +9,7 @@ import io
 import json
 import os
 import uuid
+import tarfile
 import pytest
 from unittest.mock import patch, MagicMock
 from werkzeug.datastructures import MultiDict
@@ -272,6 +273,18 @@ def _make_spdx_json(name="test-pkg", version="1.0.0"):
     return json.dumps(doc).encode("utf-8")
 
 
+def _make_spdx_tar_archive(member_name="archive.spdx.json", package_name="archive-pkg"):
+    """Return bytes for a tar archive containing one SPDX JSON document."""
+    archive = io.BytesIO()
+    payload = _make_spdx_json(package_name, "1.0.0")
+    with tarfile.open(fileobj=archive, mode="w") as tar:
+        info = tarfile.TarInfo(name=member_name)
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    archive.seek(0)
+    return archive.getvalue()
+
+
 class TestSBOMUpload:
     """Tests for POST /api/sbom/upload (multi-file support)."""
 
@@ -430,6 +443,78 @@ class TestSBOMUpload:
         assert resp.status_code == 400
         assert "Could not parse" in resp.get_json()["error"]
 
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_tar_archive_is_extracted(self, mock_thread, client):
+        """A tar archive containing SPDX JSON files is accepted and extracted."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(_make_spdx_tar_archive()), "sbom.tar"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 202
+        assert "upload_id" in resp.get_json()
+        mock_thread.return_value.start.assert_called_once()
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_empty_tar_archive_rejected(self, mock_thread, client):
+        """A tar archive without SPDX JSON files is rejected."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        empty_archive = io.BytesIO()
+        with tarfile.open(fileobj=empty_archive, mode="w"):
+            pass
+        empty_archive.seek(0)
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (empty_archive, "empty.tar"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert "No .spdx.json files" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    @patch("src.routes.settings.subprocess.run")
+    def test_upload_tar_zst_archive_is_extracted(self, mock_run, mock_thread, client):
+        """A .tar.zst archive is decompressed and extracted like a normal tar."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+
+        payload = _make_spdx_json("zst-pkg", "1.2.3")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            info = tarfile.TarInfo(name="inner.spdx.json")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        archive.seek(0)
+
+        def _fake_run(cmd, check=True, **kwargs):
+            if cmd and cmd[0] == "unzstd":
+                out_path = cmd[cmd.index("-o") + 1]
+                with open(cmd[-1], "rb") as src, open(out_path, "wb") as dst:
+                    dst.write(src.read())
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _fake_run
+
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(archive.getvalue()), "sbom.tar.zst"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 202
+        mock_thread.return_value.start.assert_called_once()
+
 
 class TestUploadStatus:
 
@@ -455,6 +540,34 @@ class TestUploadStatus:
         status_resp = client.get(f"/api/sbom/upload/{upload_id}/status")
         assert status_resp.status_code == 200
         assert status_resp.get_json()["status"] == "processing"
+
+
+class TestUploadHelpers:
+
+    def test_prune_upload_status_removes_stale_entries(self):
+        from src.routes.settings import _prune_upload_status, _upload_status, _UPLOAD_STATUS_TTL
+
+        original = dict(_upload_status)
+        try:
+            now = 10_000.0
+            _upload_status.clear()
+            _upload_status.update({
+                "keep": {"status": "processing", "ts": now},
+                "done-old": {"status": "done", "ts": now - _UPLOAD_STATUS_TTL - 1},
+                "error-old": {"status": "error", "ts": now - _UPLOAD_STATUS_TTL - 1},
+                "done-fresh": {"status": "done", "ts": now},
+            })
+
+            with patch("src.routes.settings.time.time", return_value=now):
+                _prune_upload_status()
+
+            assert "keep" in _upload_status
+            assert "done-fresh" in _upload_status
+            assert "done-old" not in _upload_status
+            assert "error-old" not in _upload_status
+        finally:
+            _upload_status.clear()
+            _upload_status.update(original)
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +789,44 @@ class TestProcessSBOMBackground:
             status = _upload_status[upload_id]
             # Should either succeed (no docs to parse) or fail gracefully
             assert status["status"] in ("done", "error")
+
+    def test_process_read_inputs_failure_sets_error_status(self, app, monkeypatch, tmp_path):
+        """A processing failure inside read_inputs is converted to an error status."""
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        with app.app_context():
+            project = Project.create("BgReadErrProject")
+            variant = Variant.create("BgReadErrVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            sbom_path = tmp_path / "input.spdx.json"
+            sbom_path.write_text("{}")
+
+            monkeypatch.setattr(
+                "src.bin.cmd_process.read_inputs",
+                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            )
+
+            upload_id = "bg-test-read-inputs-fail"
+            _process_sbom_background(app, upload_id, [str(sbom_path)], scan.id, variant.id)
+
+            assert _upload_status[upload_id]["status"] == "error"
+
+    def test_regenerate_openvex_handles_exception(self, app, tmp_path):
+        """_regenerate_openvex() must swallow OpenVEX generation failures."""
+        from src.routes.settings import _regenerate_openvex
+
+        out_file = tmp_path / "openvex.json"
+        app.config["OPENVEX_FILE"] = str(out_file)
+
+        with patch("src.views.openvex.OpenVex.to_dict", side_effect=RuntimeError("boom")):
+            _regenerate_openvex(app)
+
+        assert out_file.exists()
+        assert out_file.stat().st_size == 0
 
 
 # ---------------------------------------------------------------------------

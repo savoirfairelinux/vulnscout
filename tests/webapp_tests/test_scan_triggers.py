@@ -12,6 +12,20 @@ from src.bin.webapp import create_app
 from src.extensions import db as _db
 
 
+def _sync_thread_patch():
+    """Run background scan threads synchronously in tests."""
+    return patch(
+        "threading.Thread",
+        side_effect=lambda **kwargs: type(
+            "SyncThread", (), {
+                "_target": kwargs.get("target"),
+                "start": lambda self: kwargs.get("target")(),
+                "daemon": True,
+            }
+        )(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -139,6 +153,49 @@ class TestTriggerGrypeScan:
         assert resp2.status_code == 409
         assert b"already in progress" in resp2.data
 
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    @patch("subprocess.run")
+    def test_scan_filters_matches_to_variant_sbom(self, mock_run, mock_which, client, ids):
+        """The grype worker filters matches to packages present in the variant SBOM."""
+        import json as _json
+        from src.models.vulnerability import Vulnerability
+        from src.models.package import Package
+
+        with client.application.app_context():
+            Vulnerability.create_record(id="CVE-GRYPE-0001", description="seed")
+            Package.find_or_create("openssl", "1.1.1")
+            _db.session.commit()
+
+        def _fake_run(cmd, **kwargs):
+            if isinstance(cmd, list) and "export" in cmd:
+                out_dir = cmd[cmd.index("--output-dir") + 1]
+                with open(f"{out_dir}/sbom_cyclonedx_v1_6.cdx.json", "w") as f:
+                    f.write("{}")
+            elif isinstance(cmd, list) and "grype" in cmd:
+                stdout_file = kwargs.get("stdout")
+                if stdout_file is not None:
+                    stdout_file.write(_json.dumps({
+                        "matches": [{
+                            "artifact": {
+                                "name": "openssl",
+                                "version": "1.1.1",
+                            }
+                        }]
+                    }))
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _fake_run
+
+        with _sync_thread_patch():
+            resp = client.post(f"/api/variants/{ids['variant_id']}/grype-scan")
+
+        assert resp.status_code == 202
+
+        resp_s = client.get(f"/api/variants/{ids['variant_id']}/grype-scan/status")
+        data = json.loads(resp_s.data)
+        assert data["status"] == "done"
+        assert any("Filtered: 1/1 matches kept" in line for line in data["logs"])
+
 
 # ---------------------------------------------------------------------------
 # Grype scan — status
@@ -209,6 +266,65 @@ class TestTriggerNvdScan:
         resp2 = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
         assert resp2.status_code == 409
         assert b"already in progress" in resp2.data
+
+    @patch("src.controllers.nvd_db.NVD_DB")
+    def test_scan_updates_existing_vuln_and_handles_missing_cve_id(self, mock_nvd, client, ids):
+        """The worker skips empty CVE ids and updates an existing vulnerability in place."""
+        mock_db = mock_nvd.return_value
+        mock_db.api_get_cves_by_cpe.return_value = [
+            {"cve": {}},
+            {"cve": {"id": "CVE-TRIGGER-0001"}},
+        ]
+        mock_nvd.extract_cve_details.return_value = {
+            "description": "updated desc",
+            "status": "high",
+            "publish_date": "2025-01-01",
+            "attack_vector": "NETWORK",
+            "links": ["https://example.org"],
+            "weaknesses": ["CWE-79"],
+            "nvd_last_modified": "2025-01-02",
+            "base_score": 7.5,
+            "cvss_version": "3.1",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "cvss_exploitability": 3.2,
+            "cvss_impact": 4.3,
+        }
+
+        class _ExistingVuln:
+            def __init__(self):
+                self.id = "CVE-TRIGGER-0001"
+                self.description = None
+                self.status = None
+                self.publish_date = None
+                self.attack_vector = None
+                self.links = None
+                self.weaknesses = None
+                self.update_record = MagicMock()
+                self.add_found_by = MagicMock()
+
+        fake_vuln = _ExistingVuln()
+        original_get = _db.session.get
+
+        def _fake_get(model, identity):
+            if getattr(model, "__name__", "") == "Vulnerability" and str(identity) == "CVE-TRIGGER-0001":
+                return fake_vuln
+            return original_get(model, identity)
+
+        with patch.object(_db.session, "get", side_effect=_fake_get):
+            with patch("src.models.metrics.Metrics.from_cvss", side_effect=Exception("boom")):
+                with _sync_thread_patch():
+                    resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+
+        assert resp.status_code == 202
+
+        fake_vuln.update_record.assert_called_once()
+        kwargs = fake_vuln.update_record.call_args.kwargs
+        assert kwargs["description"] == "updated desc"
+        assert kwargs["status"] == "high"
+
+        resp_s = client.get(f"/api/variants/{ids['variant_id']}/nvd-scan/status")
+        data = json.loads(resp_s.data)
+        assert data["status"] == "done"
 
 
 # ---------------------------------------------------------------------------

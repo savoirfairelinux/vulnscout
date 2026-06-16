@@ -101,6 +101,71 @@ def ids(app):
 
 
 # ---------------------------------------------------------------------------
+# Export helper unit tests
+# ---------------------------------------------------------------------------
+
+class TestExportHelpers:
+
+    def test_extract_supplier_name_strips_prefix_and_suffix(self):
+        from src.routes.scans import _extract_supplier_name
+
+        assert _extract_supplier_name("SPDX: Example Corp (contact@example.com)") == "Example Corp"
+
+    def test_strip_helpers_include_supplier_when_present(self):
+        from src.routes.scans import (
+            _strip_finding,
+            _strip_package,
+            _strip_package_upgrade,
+            _strip_finding_upgrade,
+            _strip_assessment,
+        )
+
+        finding = _strip_finding({
+            "vulnerability_id": "CVE-1",
+            "package_name": "pkg",
+            "package_version": "1.0",
+            "package_supplier": "SPDX: Vendor (x)",
+        })
+        package = _strip_package({
+            "package_name": "pkg",
+            "package_version": "1.0",
+            "package_supplier": "SPDX: Vendor (x)",
+        })
+        package_upgrade = _strip_package_upgrade({
+            "package_name": "pkg",
+            "old_version": "1.0",
+            "new_version": "2.0",
+            "package_supplier": "SPDX: Vendor (x)",
+        })
+        finding_upgrade = _strip_finding_upgrade({
+            "vulnerability_id": "CVE-1",
+            "package_name": "pkg",
+            "old_version": "1.0",
+            "new_version": "2.0",
+            "package_supplier": "SPDX: Vendor (x)",
+        })
+        assessment = _strip_assessment({
+            "vulnerability_id": "CVE-1",
+            "status": "fixed",
+            "simplified_status": "Done",
+            "justification": "mitigated",
+            "impact_statement": "none",
+            "status_notes": "ok",
+        })
+
+        assert finding["supplier"] == "Vendor"
+        assert package["supplier"] == "Vendor"
+        assert package_upgrade["supplier"] == "Vendor"
+        assert finding_upgrade["supplier"] == "Vendor"
+        assert assessment["status"] == "fixed"
+
+    def test_format_timestamp_for_filename_accepts_string(self):
+        from src.routes.scans import _format_timestamp_for_filename
+
+        assert _format_timestamp_for_filename("2025-01-02T03:04:05+00:00") == "20250102_030405"
+
+
+# ---------------------------------------------------------------------------
 # GET /api/scans/<scan_id>/export-diff
 # ---------------------------------------------------------------------------
 

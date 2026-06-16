@@ -28,7 +28,7 @@ type Props = {
   onLoadingMessage?: (message: string | null) => void;
 };
 
-type SettingsTab = "general" | "projects" | "variants";
+type SettingsTab = "general" | "projects" | "variants" | "scan";
 
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Active category tab ----
@@ -482,6 +482,16 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             onClick={() => setActiveTab("variants")}
           >
             Variants Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "scan"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("scan")}
+          >
+            Scan Settings
           </button>
         </div>
 
@@ -1129,7 +1139,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             )}
           </div>
         </section>
+        </>
+        )}
 
+        {/* ======== Scan Settings tab ======== */}
+        {activeTab === "scan" && (
+        <>
         {/* ======== Import SBOM ======== */}
         <section aria-labelledby="settings-heading-import">
           <div className={cardHeader}>
@@ -1199,7 +1214,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               <input
                 key={importFiles.length}
                 type="file"
-                accept=".json,.spdx,.cdx,.xml"
+                accept=".json,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
                 onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                 disabled={importBusy}
                 aria-labelledby="sbom-files-label"
@@ -1208,6 +1223,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   " file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-cyan-900 file:text-cyan-300 hover:file:bg-cyan-800"
                 }
               />
+              <p className="text-xs text-zinc-400">
+                Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto) or tar archives
+                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tar.zst</code>) used for SPDX2.
+              </p>
             </div>
 
             {/* ---- Submit ---- */}

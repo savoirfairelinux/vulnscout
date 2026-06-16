@@ -612,6 +612,82 @@ def test_get_vulnerabilities_compare_difference_no_scan(client):
     assert data == []
 
 
+def test_get_vulnerabilities_compare_with_data(app, client):
+    """GET with real compare data exercises the populated compare branch."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("CompareProject")
+        base_variant = Variant.create("BaseVariant", project.id)
+        compare_variant = Variant.create("CompareVariant", project.id)
+        pkg = Package.find_or_create("compare-pkg", "1.0.0", [], [], "")
+        db.session.commit()
+        vuln = Vulnerability.create_record(
+            id="CVE-COMPARE-0001",
+            description="Compare branch vuln",
+            status="medium",
+        )
+        db.session.commit()
+        base_finding = Finding.get_or_create(pkg.id, vuln.id)
+        compare_finding = Finding.get_or_create(pkg.id, vuln.id)
+
+        base_scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=base_variant.id,
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+        compare_scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=compare_variant.id,
+            timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        )
+        db.session.add(base_scan)
+        db.session.add(compare_scan)
+
+        base_doc = SBOMDocument(
+            id=_uuid.uuid4(),
+            path="/demo/base.spdx.json",
+            source_name="base.spdx.json",
+            format="spdx",
+            scan_id=base_scan.id,
+        )
+        compare_doc = SBOMDocument(
+            id=_uuid.uuid4(),
+            path="/demo/compare.spdx.json",
+            source_name="compare.spdx.json",
+            format="spdx",
+            scan_id=compare_scan.id,
+        )
+        db.session.add(base_doc)
+        db.session.add(compare_doc)
+        db.session.add(SBOMPackage(sbom_document_id=base_doc.id, package_id=pkg.id))
+        db.session.add(SBOMPackage(sbom_document_id=compare_doc.id, package_id=pkg.id))
+        db.session.add(Observation(finding_id=base_finding.id, scan_id=base_scan.id))
+        db.session.add(Observation(finding_id=compare_finding.id, scan_id=compare_scan.id))
+        db.session.commit()
+
+        base_id = str(base_variant.id)
+        compare_id = str(compare_variant.id)
+
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert any(v["id"] == "CVE-COMPARE-0001" for v in data)
+
+
 # ---------------------------------------------------------------------------
 # GET /api/vulnerabilities — invalid variant_id/project_id (lines 140, 162)
 # ---------------------------------------------------------------------------
@@ -630,6 +706,97 @@ def test_get_vulnerabilities_invalid_project_id(client):
     assert response.status_code == 400
     data = json.loads(response.data)
     assert "invalid" in data["error"].lower() or "project" in data["error"].lower()
+
+
+def test_get_vulnerability_by_id_with_variant_scope(app, client):
+    """GET /api/vulnerabilities/<id>?variant_id=... applies scoped effort/CVSS."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.metrics import Metrics
+    from src.models.time_estimate import TimeEstimate
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("DetailScopeProject")
+        variant = Variant.create("DetailScopeVariant", project.id)
+        pkg = Package.find_or_create("detail-scope-pkg", "1.0.0", [], [], "")
+        db.session.commit()
+        vuln = Vulnerability.create_record(
+            id="CVE-DETAIL-0001",
+            description="Detail branch vuln",
+            status="high",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, vuln.id)
+
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=variant.id,
+            timestamp=datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        doc = SBOMDocument(
+            id=_uuid.uuid4(),
+            path="/demo/detail.spdx.json",
+            source_name="detail.spdx.json",
+            format="spdx",
+            scan_id=scan.id,
+        )
+        db.session.add(doc)
+        db.session.add(SBOMPackage(sbom_document_id=doc.id, package_id=pkg.id))
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+
+        Metrics.create(
+            vulnerability_id=vuln.id,
+            variant_id=None,
+            version="3.1",
+            score=5.0,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            author="scanner",
+            origin="scanner",
+        )
+        Metrics.create(
+            vulnerability_id=vuln.id,
+            variant_id=variant.id,
+            version="3.1",
+            score=8.5,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            author="tester",
+            origin="custom",
+        )
+        TimeEstimate.create(
+            finding_id=finding.id,
+            variant_id=None,
+            optimistic=1,
+            likely=2,
+            pessimistic=3,
+        )
+        TimeEstimate.create(
+            finding_id=finding.id,
+            variant_id=variant.id,
+            optimistic=4,
+            likely=5,
+            pessimistic=6,
+        )
+        db.session.commit()
+
+        variant_id = str(variant.id)
+
+    response = client.get(f"/api/vulnerabilities/CVE-DETAIL-0001?variant_id={variant_id}")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["id"] == "CVE-DETAIL-0001"
+    assert data["effort"]["likely"] == "PT5H"
+    assert any(cvss["origin"] == "custom" for cvss in data["severity"]["cvss"])
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +839,62 @@ def test_patch_batch_vulnerability_effort_invalid_variant_id(client):
     assert data["error_count"] >= 1
     assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
                for e in data["errors"])
+
+
+def test_apply_variant_scoped_overrides_skips_missing_vuln():
+    """Missing vuln keys in the overrides map are ignored."""
+    from src.routes.vulnerabilities import _apply_variant_scoped_overrides_to_vuln_dicts, _ScopedOverrides
+    from src.models.metrics import Metrics
+    from src.helpers.vuln_helpers import Effort
+
+    vulns = {
+        "keep": {"id": "keep", "severity": {"cvss": []}, "effort": None},
+        "skip": {"id": "skip", "severity": {"cvss": []}, "effort": None},
+    }
+    override = _ScopedOverrides(
+        cvss=[Metrics(vulnerability_id="keep", variant_id=None, version="3.1", score=7.0, vector="x", author="a")],
+        effort=Effort(1, 2, 3),
+    )
+
+    _apply_variant_scoped_overrides_to_vuln_dicts(vulns, {"keep": override})
+
+    assert vulns["keep"]["effort"]["likely"] == "PT2H"
+    assert vulns["skip"]["effort"] is None
+
+
+def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
+    """Non-string doc formats are skipped and tool scan sources are mapped."""
+    from src.routes.vulnerabilities import _populate_found_by
+
+    class _Record:
+        def __init__(self, vuln_id):
+            self.id = vuln_id
+            self.found_by = []
+
+        def add_found_by(self, scanner):
+            self.found_by.append(scanner)
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    rows = [
+        ("v1", "tool", "nvd", 123),
+        ("v2", "tool", "nvd", None),
+    ]
+    monkeypatch.setattr(
+        "src.routes.vulnerabilities.db.session.execute",
+        lambda *args, **kwargs: _Result(rows),
+    )
+
+    records = [_Record("v1"), _Record("v2")]
+    _populate_found_by(records)
+
+    assert records[0].found_by == []
+    assert records[1].found_by == ["nvd_cpe"]
 
 
 # ---------------------------------------------------------------------------

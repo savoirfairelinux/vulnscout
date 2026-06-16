@@ -7,6 +7,9 @@ import uuid
 import time
 import tempfile
 import threading
+import tarfile
+import subprocess
+import shutil
 
 from flask import jsonify, request
 from sqlalchemy.exc import OperationalError
@@ -95,6 +98,60 @@ def _detect_format(filename: str, data: dict) -> str:
     if "@context" in data or "spdxDocument" in str(data.get("type", "")):
         return "spdx"
     return "unknown"
+
+
+def _is_archive(filename: str) -> bool:
+    """True when *filename* looks like a tar archive (optionally compressed)."""
+    lower = filename.lower()
+    return lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.zst"))
+
+
+def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, str]]:
+    """Extract an SPDX archive (.tar / .tar.gz / .tar.zst) and return the
+    contained ``*.spdx.json`` files as a list of ``(tmp_path, member_name)``.
+
+    Used for SPDX2 inputs which are commonly shipped as tar archives.
+    """
+    lower = filename.lower()
+    extract_dir = tempfile.mkdtemp(prefix="vulnscout_archive_")
+    tar_path = archive_path
+    decompressed: str | None = None
+    try:
+        if lower.endswith(".tar.zst"):
+            # No zstandard python module bundled — use the unzstd CLI.
+            decompressed = os.path.join(extract_dir, "archive.tar")
+            subprocess.run(
+                ["unzstd", "-q", "-f", "-o", decompressed, archive_path],
+                check=True,
+            )
+            tar_path = decompressed
+
+        with tarfile.open(tar_path, "r:*") as tar:
+            results: list[tuple[str, str]] = []
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                if not member.name.lower().endswith(".spdx.json"):
+                    continue
+                src = tar.extractfile(member)
+                if src is None:
+                    continue
+                base = os.path.basename(member.name)
+                fd, out_path = tempfile.mkstemp(suffix=".spdx.json", prefix="vulnscout_upload_")
+                with os.fdopen(fd, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                results.append((out_path, base))
+            return results
+    finally:
+        if decompressed and os.path.exists(decompressed):
+            try:
+                os.unlink(decompressed)
+            except OSError:
+                pass
+        try:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
@@ -442,6 +499,13 @@ def init_app(app):
         # Validate all files and detect formats before creating the scan
         validated_files: list[tuple[str, str, str]] = []  # (tmp_path, filename, fmt)
 
+        def _cleanup_validated():
+            for p, _, _ in validated_files:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
         for uploaded in uploaded_files:
             if not uploaded.filename:
                 continue
@@ -459,6 +523,27 @@ def init_app(app):
                 os.unlink(tmp_path)
                 raise
 
+            # Tar archives (commonly used for SPDX2) — extract the contained
+            # .spdx.json documents and register each one individually.
+            if _is_archive(filename):
+                try:
+                    members = _extract_spdx_archive(tmp_path, filename)
+                except (subprocess.CalledProcessError, tarfile.TarError, OSError) as e:
+                    os.unlink(tmp_path)
+                    _cleanup_validated()
+                    return jsonify({
+                        "error": f"Could not extract archive '{filename}': {e}",
+                    }), 400
+                os.unlink(tmp_path)
+                if not members:
+                    _cleanup_validated()
+                    return jsonify({
+                        "error": f"No .spdx.json files found inside archive '{filename}'.",
+                    }), 400
+                for member_path, member_name in members:
+                    validated_files.append((member_path, member_name, "spdx"))
+                continue
+
             # Auto-detect format if not provided
             if not fmt:
                 try:
@@ -466,22 +551,14 @@ def init_app(app):
                         data = json.load(f)
                     fmt = _detect_format(filename, data)
                     if fmt == "unknown":
-                        for p, _, _ in validated_files:
-                            try:
-                                os.unlink(p)
-                            except OSError:
-                                pass
+                        _cleanup_validated()
                         os.unlink(tmp_path)
                         return jsonify({
                             "error": f"Unrecognized SBOM format for '{filename}'.",
                         }), 400
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     # Clean up all temp files saved so far
-                    for p, _, _ in validated_files:
-                        try:
-                            os.unlink(p)
-                        except OSError:
-                            pass
+                    _cleanup_validated()
                     os.unlink(tmp_path)
                     return jsonify({"error": f"Could not parse '{filename}' as JSON."}), 400
 
