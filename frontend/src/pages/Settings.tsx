@@ -28,7 +28,12 @@ type Props = {
   onLoadingMessage?: (message: string | null) => void;
 };
 
+type SettingsTab = "general" | "projects" | "variants";
+
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
+  // ---- Active category tab ----
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+
   // ---- Unmount guard for async operations ----
   const unmountedRef = useRef(false);
   useEffect(() => {
@@ -419,6 +424,43 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           Manage projects, variants, and import SBOM files.
         </p>
 
+        {/* ======== Category tabs ======== */}
+        <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "general"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("general")}
+          >
+            General Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "projects"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("projects")}
+          >
+            Projects Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "variants"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("variants")}
+          >
+            Variants Settings
+          </button>
+        </div>
+
+        {/* ======== General Settings tab ======== */}
+        {activeTab === "general" && (
+        <>
         {/* ======== Report Metadata ======== */}
         <div>
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
@@ -510,6 +552,117 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </div>
 
+        {/* ======== NVD API Key ======== */}
+        <section aria-labelledby="settings-heading-nvd">
+          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
+            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
+          </div>
+          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
+            <p id="nvd-key-description" className="text-zinc-400 text-sm">
+              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
+              Get a free key at{" "}
+              <a
+                href="https://nvd.nist.gov/developers/request-an-api-key"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-400 hover:text-cyan-300 underline"
+              >
+                nvd.nist.gov
+              </a>.
+            </p>
+
+            {/* -- Feedback -- */}
+            {nvdMsg && (
+              <MessageBanner
+                type={nvdMsg.type}
+                message={nvdMsg.text}
+                isVisible={true}
+                onClose={() => setNvdMsg(null)}
+              />
+            )}
+
+            {nvdHasKey && !nvdEditing ? (
+              <>
+                {/* -- Key is set: show masked key + modify / remove buttons -- */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-zinc-300">NVD API key:</span>
+                  <code className="text-sm text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
+                    className={btnPrimary}
+                  >
+                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
+                    Modify
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteNvdKey(true)}
+                    disabled={nvdBusy}
+                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                  >
+                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
+                    Remove
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* -- No key or editing: show input field -- */}
+                <div className="space-y-2">
+                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
+                    {nvdEditing ? "New API Key" : "API Key"}
+                  </label>
+                  <input
+                    id="nvd-api-key-input"
+                    type="password"
+                    value={nvdKeyInput}
+                    onChange={e => setNvdKeyInput(e.target.value)}
+                    placeholder="Paste your NVD API key..."
+                    className={inputClass}
+                    disabled={nvdBusy}
+                    autoComplete="off"
+                    aria-required="true"
+                    aria-describedby="nvd-key-description"
+                  />
+                </div>
+
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={handleSaveNvdKey}
+                    disabled={nvdBusy || !nvdKeyInput.trim()}
+                    className={btnPrimary}
+                    aria-busy={nvdBusy}
+                  >
+                    {nvdBusy ? (
+                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                    ) : (
+                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                    )}
+                    Save
+                  </button>
+                  {nvdEditing && (
+                    <button
+                      onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
+                      className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
+                    >
+                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+        </>
+        )}
+
+        {/* ======== Projects Settings tab ======== */}
+        {activeTab === "projects" && (
+        <>
         {/* ======== Manage Projects ======== */}
         <section aria-labelledby="settings-heading-projects">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
@@ -632,7 +785,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             )}
           </div>
         </section>
+        </>
+        )}
 
+        {/* ======== Variants Settings tab ======== */}
+        {activeTab === "variants" && (
+        <>
         {/* ======== Manage Variants ======== */}
         <section aria-labelledby="settings-heading-variants">
           <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
@@ -889,112 +1047,8 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
           </div>
         </section>
-
-        {/* ======== NVD API Key ======== */}
-        <section aria-labelledby="settings-heading-nvd">
-          <div className="bg-zinc-700 px-4 py-2 flex items-center gap-2 rounded-t-md">
-            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
-          </div>
-          <div className="bg-zinc-700 p-4 rounded-b-md space-y-4">
-            <p id="nvd-key-description" className="text-zinc-400 text-sm">
-              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
-              Get a free key at{" "}
-              <a
-                href="https://nvd.nist.gov/developers/request-an-api-key"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:text-cyan-300 underline"
-              >
-                nvd.nist.gov
-              </a>.
-            </p>
-
-            {/* -- Feedback -- */}
-            {nvdMsg && (
-              <MessageBanner
-                type={nvdMsg.type}
-                message={nvdMsg.text}
-                isVisible={true}
-                onClose={() => setNvdMsg(null)}
-              />
-            )}
-
-            {nvdHasKey && !nvdEditing ? (
-              <>
-                {/* -- Key is set: show masked key + modify / remove buttons -- */}
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-zinc-300">NVD API key:</span>
-                  <code className="text-sm text-zinc-300 bg-zinc-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
-                    className={btnPrimary}
-                  >
-                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
-                    Modify
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteNvdKey(true)}
-                    disabled={nvdBusy}
-                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                    Remove
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                {/* -- No key or editing: show input field -- */}
-                <div className="space-y-2">
-                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
-                    {nvdEditing ? "New API Key" : "API Key"}
-                  </label>
-                  <input
-                    id="nvd-api-key-input"
-                    type="password"
-                    value={nvdKeyInput}
-                    onChange={e => setNvdKeyInput(e.target.value)}
-                    placeholder="Paste your NVD API key..."
-                    className={inputClass}
-                    disabled={nvdBusy}
-                    autoComplete="off"
-                    aria-required="true"
-                    aria-describedby="nvd-key-description"
-                  />
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={handleSaveNvdKey}
-                    disabled={nvdBusy || !nvdKeyInput.trim()}
-                    className={btnPrimary}
-                    aria-busy={nvdBusy}
-                  >
-                    {nvdBusy ? (
-                      <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                    ) : (
-                      <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                    )}
-                    Save
-                  </button>
-                  {nvdEditing && (
-                    <button
-                      onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
-                      className="px-4 py-2 rounded-lg bg-zinc-600 hover:bg-zinc-500 text-white text-sm font-medium transition-colors duration-150"
-                    >
-                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </section>
+        </>
+        )}
       </div>
 
       {/* ======== Confirmation Modals ======== */}
