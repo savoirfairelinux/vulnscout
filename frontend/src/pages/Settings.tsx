@@ -9,7 +9,6 @@ import {
   faSpinner,
   faTriangleExclamation,
   faTrash,
-  faLayerGroup,
   faXmark,
   faKey,
   faPenToSquare,
@@ -665,11 +664,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         {/* ======== Projects Settings tab ======== */}
         {activeTab === "projects" && (
         <>
-        {/* ======== Manage Projects ======== */}
-        <section aria-labelledby="settings-heading-projects">
+        {/* ======== Add Project ======== */}
+        <section aria-labelledby="settings-heading-project-add">
           <div className={cardHeader}>
-            <FontAwesomeIcon icon={faLayerGroup} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-projects" className="text-xl font-bold text-white">Manage Projects</h2>
+            <FontAwesomeIcon icon={faPlus} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-add" className="text-xl font-bold text-white">Add Project</h2>
           </div>
           <div className={cardBody + " space-y-4"}>
 
@@ -703,8 +702,26 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </div>
             </div>
 
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {projectMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Rename Project ======== */}
+        <section aria-labelledby="settings-heading-project-rename">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-rename" className="text-xl font-bold text-white">Rename Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
             {/* -- Rename project -- */}
-            <div className="border-t border-slate-600/60 pt-4 space-y-2">
+            <div className="space-y-2">
               <label htmlFor="rename-project-select" className="block text-sm text-zinc-300 font-semibold">Rename Project</label>
               <select
                 id="rename-project-select"
@@ -752,8 +769,26 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </div>
             </div>
 
+            {/* -- Feedback -- */}
+            {projectMsg && (
+              <span role="alert" className="text-red-400 text-sm">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                {projectMsg}
+              </span>
+            )}
+          </div>
+        </section>
+
+        {/* ======== Delete Project ======== */}
+        <section aria-labelledby="settings-heading-project-delete">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faTrash} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-project-delete" className="text-xl font-bold text-white">Delete Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
             {/* -- Delete project -- */}
-            <div className="border-t border-slate-600/60 pt-4 space-y-2">
+            <div className="space-y-2">
               <label htmlFor="delete-project-select" className="block text-sm text-zinc-300 font-semibold">Delete Project</label>
               <div className="flex gap-2">
                 <select
