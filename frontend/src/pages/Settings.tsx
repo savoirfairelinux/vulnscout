@@ -13,11 +13,16 @@ import {
   faKey,
   faPenToSquare,
   faCopy,
+  faRightLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
-import type { Variant } from "../handlers/variant";
+import type {
+  Variant,
+  CopyAssessmentsPreview,
+  CopyAssessmentsPreviewUnsupported,
+} from "../handlers/variant";
 import Config from "../handlers/config";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
@@ -28,7 +33,7 @@ type Props = {
   onLoadingMessage?: (message: string | null) => void;
 };
 
-type SettingsTab = "general" | "projects" | "variants" | "scan";
+type SettingsTab = "general" | "projects" | "variants" | "customData" | "scan";
 
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Active category tab ----
@@ -173,6 +178,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         setRenameProjectId("");
         setRenameProjectName("");
       }
+      if (customProjectId === deleteProjectId) {
+        setCustomProjectId("");
+        setCustomProjectVariants([]);
+        setCopySourceId("");
+        setCopyTargetId("");
+      }
       setDeleteProjectId("");
       setConfirmDeleteProject(false);
       loadProjects();
@@ -199,10 +210,17 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
 
   // ---- Copy Custom Assessments ----
+  const [customProjectId, setCustomProjectId] = useState<string>("");
+  const [customProjectVariants, setCustomProjectVariants] = useState<Variant[]>([]);
   const [copySourceId, setCopySourceId] = useState<string>("");
   const [copyTargetId, setCopyTargetId] = useState<string>("");
+  const [copyIgnorePackageVersion, setCopyIgnorePackageVersion] = useState(false);
   const [copyBusy, setCopyBusy] = useState(false);
   const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const [copyPreviewBusy, setCopyPreviewBusy] = useState(false);
+  const [copyPreviewError, setCopyPreviewError] = useState<string | null>(null);
+  const [copyPreview, setCopyPreview] = useState<CopyAssessmentsPreview | null>(null);
+  const [copyPreviewUnavailableMsg, setCopyPreviewUnavailableMsg] = useState<string | null>(null);
 
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
@@ -222,6 +240,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     try {
       await Variants.rename(renameVariantId, renameVariantName.trim());
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Renaming variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -238,6 +261,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       await Variants.create(variantProjectId, newVariantName.trim());
       setNewVariantName("");
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Creating variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -255,10 +283,18 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       if (renameVariantId === deleteVariantId) {
         setRenameVariantId("");
         setRenameVariantName("");
+        setCopyPreview(null);
+        setCopyPreviewError(null);
+        setCopyPreviewBusy(false);
       }
       setDeleteVariantId("");
       setConfirmDeleteVariant(false);
       reloadVariants(variantProjectId);
+      if (customProjectId === variantProjectId) {
+        Variants.list(customProjectId)
+          .then(setCustomProjectVariants)
+          .catch(() => setCustomProjectVariants([]));
+      }
       onDataChanged?.("Deleting variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -277,7 +313,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     setCopyBusy(true);
     setCopyMsg(null);
     try {
-      const result = await Variants.copyAssessments(copySourceId, copyTargetId);
+      const result = await Variants.copyAssessments(
+        copySourceId,
+        copyTargetId,
+        copyIgnorePackageVersion,
+      );
       setCopyMsg(result.message);
       onDataChanged?.("Copying assessments...");
     } catch (e: any) {
@@ -286,6 +326,62 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       setCopyBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!customProjectId) {
+      setCustomProjectVariants([]);
+      setCopySourceId("");
+      setCopyTargetId("");
+      setCopyPreview(null);
+      setCopyPreviewError(null);
+      setCopyPreviewUnavailableMsg(null);
+      setCopyPreviewBusy(false);
+      return;
+    }
+    Variants.list(customProjectId)
+      .then(setCustomProjectVariants)
+      .catch(() => setCustomProjectVariants([]));
+  }, [customProjectId]);
+
+  useEffect(() => {
+    if (!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId) {
+      setCopyPreview(null);
+      setCopyPreviewError(null);
+      setCopyPreviewUnavailableMsg(null);
+      setCopyPreviewBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCopyPreviewBusy(true);
+    setCopyPreviewError(null);
+    setCopyPreviewUnavailableMsg(null);
+
+    Variants.previewCopyAssessments(copySourceId, copyTargetId, copyIgnorePackageVersion)
+      .then((data) => {
+        if (cancelled || unmountedRef.current) return;
+        if ((data as CopyAssessmentsPreviewUnsupported).unsupported) {
+          setCopyPreview(null);
+          setCopyPreviewUnavailableMsg(data.message);
+          return;
+        }
+        setCopyPreview(data as CopyAssessmentsPreview);
+      })
+      .catch((e: any) => {
+        if (cancelled || unmountedRef.current) return;
+        setCopyPreview(null);
+        setCopyPreviewUnavailableMsg(null);
+        setCopyPreviewError(e?.message || "Failed to generate preview.");
+      })
+      .finally(() => {
+        if (cancelled || unmountedRef.current) return;
+        setCopyPreviewBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customProjectId, copySourceId, copyTargetId, copyIgnorePackageVersion]);
 
   // ---- Import SBOM ----
   const [importProjectId, setImportProjectId] = useState<string>("");
@@ -492,6 +588,16 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             onClick={() => setActiveTab("scan")}
           >
             Scan Settings
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+              activeTab === "customData"
+                ? "bg-sky-800 text-white border-b-2 border-sky-400"
+                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+            }`}
+            onClick={() => setActiveTab("customData")}
+          >
+            Custom Data Settings
           </button>
         </div>
 
@@ -1070,11 +1176,52 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </section>
 
+        </>
+        )}
+
+        {/* ======== Custom Data Settings tab ======== */}
+        {activeTab === "customData" && (
+        <>
+        {/* ======== Select Project ======== */}
+        <section aria-labelledby="settings-heading-custom-project">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-custom-project" className="text-xl font-bold text-white">Select Project</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+            <div>
+              <label htmlFor="custom-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
+              <select
+                id="custom-project-select"
+                value={customProjectId}
+                onChange={(e) => {
+                  setCustomProjectId(e.target.value);
+                  setCopyMsg(null);
+                  setCopyPreview(null);
+                  setCopyPreviewError(null);
+                  setCopyPreviewUnavailableMsg(null);
+                }}
+                className={selectClass}
+              >
+                <option value="">— select a project —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {!customProjectId && (
+                <p className="text-zinc-400 text-sm mt-2">
+                  Select a project to manage custom data operations.
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
         {/* ======== Copy Custom Assessments ======== */}
         <section
           aria-labelledby="settings-heading-copy-assessments"
-          aria-disabled={!variantProjectId}
-          className={!variantProjectId ? "opacity-50" : ""}
+          aria-disabled={!customProjectId}
+          className={!customProjectId ? "opacity-50" : ""}
         >
           <div className={cardHeader}>
             <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
@@ -1082,8 +1229,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
           <div className={cardBody + " space-y-4"}>
             <p className="text-sm text-zinc-400">
-              Copy every custom assessment from a source variant onto a target variant,
-              for all packages they have in common. Avoids re-entering assessments on a new variant.
+              Copy custom assessments from a source variant to a target variant in the selected project.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -1091,35 +1237,141 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 <select
                   id="copy-source-select"
                   value={copySourceId}
-                  onChange={(e) => { setCopySourceId(e.target.value); setCopyMsg(null); }}
+                  onChange={(e) => {
+                    setCopySourceId(e.target.value);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
                   className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-                  disabled={!variantProjectId}
+                  disabled={!customProjectId}
                 >
                   <option value="">— select a variant —</option>
-                  {variantProjectVariants.map((v) => (
+                  {customProjectVariants.map((v) => (
                     <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
+              </div>
+              <div className="flex items-end justify-center sm:justify-start">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!customProjectId || copyBusy) return;
+                    setCopySourceId(copyTargetId);
+                    setCopyTargetId(copySourceId);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
+                  disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
+                  className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                  title="Swap source and target variants"
+                  aria-label="Swap source and target variants"
+                >
+                  <FontAwesomeIcon icon={faRightLeft} className="mr-2" aria-hidden="true" />
+                  Swap
+                </button>
               </div>
               <div className="space-y-2">
                 <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Copy to</label>
                 <select
                   id="copy-target-select"
                   value={copyTargetId}
-                  onChange={(e) => { setCopyTargetId(e.target.value); setCopyMsg(null); }}
+                  onChange={(e) => {
+                    setCopyTargetId(e.target.value);
+                    setCopyMsg(null);
+                    setCopyPreviewError(null);
+                    setCopyPreviewUnavailableMsg(null);
+                  }}
                   className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-                  disabled={!variantProjectId}
+                  disabled={!customProjectId}
                 >
                   <option value="">— select a variant —</option>
-                  {variantProjectVariants.map((v) => (
+                  {customProjectVariants.map((v) => (
                     <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
               </div>
             </div>
+
+            <label className="inline-flex items-center gap-2 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                checked={copyIgnorePackageVersion}
+                onChange={(e) => {
+                  setCopyIgnorePackageVersion(e.target.checked);
+                  setCopyMsg(null);
+                  setCopyPreviewError(null);
+                  setCopyPreviewUnavailableMsg(null);
+                }}
+                disabled={!customProjectId || copyBusy}
+                className="rounded border-slate-500 bg-slate-900"
+              />
+              Ignore packages version
+            </label>
+
+            <p className="text-xs text-zinc-400">
+              When enabled, copy by vulnerabilities in common, regardless of package name/version differences.
+            </p>
+
+            <div className="rounded-md border border-slate-600/70 bg-slate-900/40 p-3 space-y-2">
+              <h3 className="text-sm font-semibold text-zinc-200">Preview</h3>
+              {(!customProjectId || !copySourceId || !copyTargetId) && (
+                <p className="text-xs text-zinc-400">Select a source and a target variant to generate a preview.</p>
+              )}
+              {copySourceId && copyTargetId && copySourceId === copyTargetId && (
+                <p className="text-xs text-amber-300">Source and target variants must be different.</p>
+              )}
+              {copyPreviewBusy && (
+                <p className="text-xs text-zinc-300">
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                  Computing preview...
+                </p>
+              )}
+              {copyPreviewError && (
+                <p className="text-xs text-red-300">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                  {copyPreviewError}
+                </p>
+              )}
+              {copyPreviewUnavailableMsg && (
+                <p className="text-xs text-amber-300">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
+                  {copyPreviewUnavailableMsg}
+                </p>
+              )}
+              {!copyPreviewBusy && !copyPreviewError && copyPreview && (
+                <>
+                  <p className="text-xs text-cyan-300">{copyPreview.message}</p>
+                  {copyPreview.entries.length > 0 && (
+                    <div className="max-h-56 overflow-auto rounded border border-slate-700/80">
+                      <table className="min-w-full text-xs text-zinc-200">
+                        <thead className="bg-slate-800/80 text-zinc-300">
+                          <tr>
+                            <th className="px-2 py-1 text-left">Vulnerability</th>
+                            <th className="px-2 py-1 text-left">Source package</th>
+                            <th className="px-2 py-1 text-left">Target package</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {copyPreview.entries.map((entry) => (
+                            <tr key={`${entry.source_assessment_id}-${entry.target_finding_id}`} className="border-t border-slate-700/70">
+                              <td className="px-2 py-1 font-mono">{entry.vulnerability_id}</td>
+                              <td className="px-2 py-1">{entry.source_package || "-"}</td>
+                              <td className="px-2 py-1">{entry.target_package || "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             <button
               onClick={handleCopyAssessments}
-              disabled={!variantProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId || copyBusy}
+              disabled={!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId || copyBusy}
               className={btnPrimary}
             >
               {copyBusy ? (
@@ -1130,7 +1382,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               Copy Assessments
             </button>
 
-            {/* -- Feedback -- */}
             {copyMsg && (
               <span role="alert" className="block text-sm text-cyan-300">
                 <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />

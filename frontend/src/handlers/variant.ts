@@ -4,7 +4,34 @@ type Variant = {
     project_id: string;
 };
 
-export type { Variant };
+type CopyAssessmentsPreviewEntry = {
+    source_assessment_id: string;
+    source_finding_id: string;
+    target_finding_id: string;
+    vulnerability_id: string;
+    source_package: string;
+    target_package: string;
+};
+
+type CopyAssessmentsPreview = {
+    count: number;
+    skipped: number;
+    message: string;
+    entries: CopyAssessmentsPreviewEntry[];
+};
+
+type CopyAssessmentsPreviewUnsupported = {
+    unsupported: true;
+    status: number;
+    message: string;
+};
+
+export type {
+    Variant,
+    CopyAssessmentsPreview,
+    CopyAssessmentsPreviewEntry,
+    CopyAssessmentsPreviewUnsupported,
+};
 
 class Variants {
     static async list(projectId: string): Promise<Variant[]> {
@@ -137,6 +164,7 @@ class Variants {
     static async copyAssessments(
         sourceVariantId: string,
         targetVariantId: string,
+        ignorePackageVersion = false,
     ): Promise<{ copied: number; skipped: number; message: string }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/variants/copy-assessments",
@@ -147,12 +175,45 @@ class Variants {
                 body: JSON.stringify({
                     source_variant_id: sourceVariantId,
                     target_variant_id: targetVariantId,
+                    ignore_package_version: ignorePackageVersion,
                 }),
             }
         );
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `Copy failed (${response.status})`);
+        }
+        return response.json();
+    }
+
+    static async previewCopyAssessments(
+        sourceVariantId: string,
+        targetVariantId: string,
+        ignorePackageVersion = false,
+    ): Promise<CopyAssessmentsPreview | CopyAssessmentsPreviewUnsupported> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + "/api/variants/copy-assessments/preview",
+            {
+                mode: "cors",
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    source_variant_id: sourceVariantId,
+                    target_variant_id: targetVariantId,
+                    ignore_package_version: ignorePackageVersion,
+                }),
+            }
+        );
+        if (!response.ok) {
+            if (response.status === 404 || response.status === 405) {
+                return {
+                    unsupported: true,
+                    status: response.status,
+                    message: "Preview is unavailable on the current backend. Restart or redeploy the server to load the new preview endpoint.",
+                };
+            }
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Preview failed (${response.status})`);
         }
         return response.json();
     }

@@ -354,69 +354,194 @@ def init_app(app):
     # ------------------------------------------------------------------
     # Copy custom assessments between two variants
     # ------------------------------------------------------------------
-    @app.route('/api/variants/copy-assessments', methods=['POST'])
-    def copy_variant_assessments():
+    def _compute_copy_assessment_operations(source_id, target_id, ignore_package_version):
         from ..models.assessment import Assessment as DBAssessment
+        from ..models.finding import Finding
         from ..helpers.active_scans import (
             active_sbom_scan_ids_for_variant,
             active_package_ids_for_scans,
         )
 
-        payload = request.get_json(silent=True) or {}
-        source_id = payload.get("source_variant_id")
-        target_id = payload.get("target_variant_id")
-
         source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
         if err:
-            return err
+            return None, err
         target_uuid, err = parse_uuid_or_400(target_id, "target_variant_id")
         if err:
-            return err
+            return None, err
 
         if source_uuid == target_uuid:
-            return jsonify({"error": "Source and target variants must be different."}), 400
+            return None, (jsonify({"error": "Source and target variants must be different."}), 400)
 
         source = VariantController.get(source_id)
         target = VariantController.get(target_id)
         if source is None or target is None:
-            return jsonify({"error": "Variant not found."}), 404
+            return None, (jsonify({"error": "Variant not found."}), 404)
         if source.project_id != target.project_id:
-            return jsonify({"error": "Both variants must belong to the same project."}), 400
+            return None, (jsonify({"error": "Both variants must belong to the same project."}), 400)
 
-        # Resolve the package set of each variant (SBOM elements).
         source_pkg_ids = active_package_ids_for_scans(
             active_sbom_scan_ids_for_variant(source_uuid))
         target_pkg_ids = active_package_ids_for_scans(
             active_sbom_scan_ids_for_variant(target_uuid))
         common_pkg_ids = source_pkg_ids & target_pkg_ids
 
-        if not common_pkg_ids:
-            return jsonify({
-                "copied": 0,
-                "skipped": 0,
-                "message": "No packages in common between the two variants.",
-            }), 200
-
-        # Custom (handmade) assessments belonging to the source variant.
         source_assessments = DBAssessment.get_handmade([source_uuid])
 
-        copied = 0
+        source_vuln_ids: set[str] = set()
+        target_findings_by_vuln: dict[str, list[Finding]] = {}
+
+        if ignore_package_version:
+            source_vuln_ids = {
+                a.finding.vulnerability_id
+                for a in source_assessments
+                if a.finding is not None and a.finding.package_id in source_pkg_ids
+            }
+
+            if source_vuln_ids:
+                target_findings = list(db.session.execute(
+                    db.select(Finding).where(
+                        Finding.package_id.in_(target_pkg_ids),
+                        Finding.vulnerability_id.in_(source_vuln_ids),
+                    )
+                ).scalars().all())
+            else:
+                target_findings = []
+
+            for f in target_findings:
+                target_findings_by_vuln.setdefault(f.vulnerability_id, []).append(f)
+
+            if not target_findings_by_vuln:
+                return {
+                    "source": source,
+                    "target": target,
+                    "operations": [],
+                    "skipped": 0,
+                    "empty_message": "No vulnerabilities in common between the two variants.",
+                }, None
+        else:
+            if not common_pkg_ids:
+                return {
+                    "source": source,
+                    "target": target,
+                    "operations": [],
+                    "skipped": 0,
+                    "empty_message": "No packages in common between the two variants.",
+                }, None
+
+        operations = []
         skipped = 0
-        with batch_session():
-            for a in source_assessments:
-                finding_id = a.finding_id
-                finding = a.finding
-                if finding is None or finding.package_id not in common_pkg_ids:
+        processed_target_finding_ids: set = set()
+
+        for assessment in source_assessments:
+            source_finding = assessment.finding
+            if source_finding is None:
+                continue
+
+            if ignore_package_version:
+                target_findings = target_findings_by_vuln.get(source_finding.vulnerability_id, [])
+            else:
+                if source_finding.package_id not in common_pkg_ids:
                     continue
-                # Skip if the target already has a custom assessment for this finding.
-                existing = DBAssessment.get_by_finding_and_variant(finding_id, target_uuid)
+                target_findings = [source_finding]
+
+            for target_finding in target_findings:
+                if target_finding.id in processed_target_finding_ids:
+                    continue
+                processed_target_finding_ids.add(target_finding.id)
+
+                existing = DBAssessment.get_by_finding_and_variant(target_finding.id, target_uuid)
                 if any(e.origin == "custom" for e in existing):
                     skipped += 1
                     continue
+
+                operations.append((assessment, source_finding, target_finding))
+
+        return {
+            "source": source,
+            "target": target,
+            "operations": operations,
+            "skipped": skipped,
+            "empty_message": None,
+        }, None
+
+    @app.route('/api/variants/copy-assessments/preview', methods=['POST'])
+    def preview_copy_variant_assessments():
+        payload = request.get_json(silent=True) or {}
+        source_id = payload.get("source_variant_id")
+        target_id = payload.get("target_variant_id")
+        ignore_package_version = bool(payload.get("ignore_package_version", False))
+
+        result, err = _compute_copy_assessment_operations(
+            source_id,
+            target_id,
+            ignore_package_version,
+        )
+        if err:
+            return err
+        assert result is not None
+
+        operations = result["operations"]
+        preview_rows = []
+        for assessment, source_finding, target_finding in operations:
+            preview_rows.append({
+                "source_assessment_id": str(assessment.id),
+                "source_finding_id": str(source_finding.id),
+                "target_finding_id": str(target_finding.id),
+                "vulnerability_id": source_finding.vulnerability_id,
+                "source_package": source_finding.package.string_id if source_finding.package else "",
+                "target_package": target_finding.package.string_id if target_finding.package else "",
+            })
+
+        message = result["empty_message"]
+        if message is None:
+            message = (
+                f"{len(preview_rows)} assessment{'s' if len(preview_rows) != 1 else ''} "
+                "would be copied."
+                + (f" {result['skipped']} already present would be skipped." if result["skipped"] else "")
+            )
+
+        return jsonify({
+            "count": len(preview_rows),
+            "skipped": result["skipped"],
+            "message": message,
+            "entries": preview_rows,
+        }), 200
+
+    @app.route('/api/variants/copy-assessments', methods=['POST'])
+    def copy_variant_assessments():
+        from ..models.assessment import Assessment as DBAssessment
+
+        payload = request.get_json(silent=True) or {}
+        source_id = payload.get("source_variant_id")
+        target_id = payload.get("target_variant_id")
+        ignore_package_version = bool(payload.get("ignore_package_version", False))
+
+        result, err = _compute_copy_assessment_operations(
+            source_id,
+            target_id,
+            ignore_package_version,
+        )
+        if err:
+            return err
+        assert result is not None
+
+        target = result["target"]
+        operations = result["operations"]
+        skipped = result["skipped"]
+        if not operations and result["empty_message"]:
+            return jsonify({
+                "copied": 0,
+                "skipped": skipped,
+                "message": result["empty_message"],
+            }), 200
+
+        copied = 0
+        with batch_session():
+            for a, _source_finding, target_finding in operations:
                 DBAssessment.create(
                     status=a.status or "under_investigation",
-                    finding_id=finding_id,
-                    variant_id=target_uuid,
+                    finding_id=target_finding.id,
+                    variant_id=target.id,
                     source=a.source,
                     origin="custom",
                     simplified_status=a.simplified_status,

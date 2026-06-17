@@ -249,6 +249,133 @@ class TestDeleteVariant:
         assert resp.status_code == 404
 
 
+class TestCopyCustomAssessments:
+
+    def _seed_copy_data(self, app):
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("CopyDataProject")
+            source = Variant.create("SourceVariant", project.id)
+            target = Variant.create("TargetVariant", project.id)
+
+            source_scan = Scan.create("source sbom", source.id, scan_type="sbom")
+            target_scan = Scan.create("target sbom", target.id, scan_type="sbom")
+
+            source_pkg = Package.find_or_create("openssl", "1.1.1")
+            target_pkg = Package.find_or_create("openssl", "3.0.0")
+            vuln = Vulnerability.create_record(id="CVE-COPY-0001", description="Copy me")
+            db.session.commit()
+
+            source_finding = Finding.get_or_create(source_pkg.id, vuln.id)
+            target_finding = Finding.get_or_create(target_pkg.id, vuln.id)
+
+            source_doc = SBOMDocument.create("/tmp/source.spdx.json", "spdx", source_scan.id)
+            target_doc = SBOMDocument.create("/tmp/target.spdx.json", "spdx", target_scan.id)
+            SBOMPackage.create(source_doc.id, source_pkg.id)
+            SBOMPackage.create(target_doc.id, target_pkg.id)
+
+            Assessment.create(
+                status="affected",
+                origin="custom",
+                finding_id=source_finding.id,
+                variant_id=source.id,
+                source="manual",
+            )
+            db.session.commit()
+
+            return {
+                "source_variant_id": str(source.id),
+                "target_variant_id": str(target.id),
+                "target_finding_id": str(target_finding.id),
+            }
+
+    def test_copy_assessments_default_requires_common_packages(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No packages in common" in data["message"]
+
+    def test_copy_assessments_ignore_package_version_copies_by_vuln(self, app, client):
+        from src.models.assessment import Assessment
+
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 1
+
+        with app.app_context():
+            target_assessments = Assessment.get_by_finding_and_variant(
+                ids["target_finding_id"],
+                ids["target_variant_id"],
+            )
+            assert any(a.origin == "custom" for a in target_assessments)
+
+    def test_copy_assessments_preview_default_no_common_packages(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 0
+        assert data["skipped"] == 0
+        assert data["entries"] == []
+        assert "No packages in common" in data["message"]
+
+    def test_copy_assessments_preview_ignore_package_version_lists_candidates(self, app, client):
+        ids = self._seed_copy_data(app)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "ignore_package_version": True,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 1
+        assert data["skipped"] == 0
+        assert len(data["entries"]) == 1
+        assert data["entries"][0]["vulnerability_id"] == "CVE-COPY-0001"
+        assert data["entries"][0]["source_package"] == "openssl@1.1.1"
+        assert data["entries"][0]["target_package"] == "openssl@3.0.0"
+
+
 # ---------------------------------------------------------------------------
 # SBOM Upload (multi-file)
 # ---------------------------------------------------------------------------
