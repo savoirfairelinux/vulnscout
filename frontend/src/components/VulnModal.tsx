@@ -761,6 +761,8 @@ type VariantScopedSnapshot = {
 
         let successCount = 0;
         let lastCasted: Assessment | null = null;
+        const touchedVariantIds = new Set<string>();
+        const touchedPackages = new Set<string>();
 
         setSubmittingMessage('Adding assessment...');
         try {
@@ -783,6 +785,8 @@ type VariantScopedSnapshot = {
                     if (!Array.isArray(casted) && typeof casted === 'object') {
                         successCount++;
                         lastCasted = casted;
+                        if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
+                        for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
 
                         // Highlight the very first created assessment
                         if (successCount === 1) {
@@ -817,9 +821,26 @@ type VariantScopedSnapshot = {
                 simplified_status: statusSummary.dominant_status,
                 status_summary: statusSummary,
             });
-            const msg = successCount > 1
-                ? `Successfully added assessment to ${successCount} variants.`
-                : 'Successfully added assessment.';
+
+            const variantCount = touchedVariantIds.size;
+            const packageCount = touchedPackages.size;
+            const variantPart = variantCount > 0
+                ? `${variantCount} variant${variantCount === 1 ? '' : 's'}`
+                : '';
+            const packagePart = packageCount > 0
+                ? `${packageCount} package${packageCount === 1 ? '' : 's'}`
+                : '';
+
+            let msg = 'Successfully added assessment.';
+            if (packagePart && variantPart) {
+                msg = `Successfully added assessment to ${packagePart} across ${variantPart}.`;
+            } else if (packagePart) {
+                msg = `Successfully added assessment to ${packagePart}.`;
+            } else if (variantPart) {
+                msg = `Successfully added assessment to ${variantPart}.`;
+            } else if (successCount > 1) {
+                msg = `Successfully added ${successCount} assessments.`;
+            }
             showMessage(msg, 'success');
             setClearAssessmentFields(true);
             setTimeout(() => setClearAssessmentFields(false), 100);

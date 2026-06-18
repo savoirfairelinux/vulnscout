@@ -217,7 +217,90 @@ describe('Vulnerability Modal', () => {
         alertSpy.mockRestore();
     })
 
+    /**
+     * Success-toast wording: the message must report the variants and packages
+     * actually touched by the created assessments, with correct pluralisation.
+     */
+    const submitAssessment = async (postResponse: object) => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify(postResponse)); // POST assessment
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const selects = await screen.getAllByRole('combobox');
+        const selectStatus = selects.find((el) => el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectStatus, 'fixed');
+        const btn = await screen.getByText(/add assessment/i);
+        await user.click(btn);
+    };
+
+    test('success message reports both variants and packages', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v2', packages: ['pkgB@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 2 packages across 2 variants.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message uses singular wording for one variant and one package', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: ['pkgA@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 1 package across 1 variant.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to package-only when no variant touched', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: ['pkgA@1.0', 'pkgB@1.0'] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 2 packages.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to variant-only when no package touched', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', variant_id: 'v1', packages: [] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added assessment to 1 variant.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
+    test('success message falls back to a plain count with neither variant nor package', async () => {
+        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        await submitAssessment({
+            status: 'success',
+            assessments: [
+                { id: 'a1', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+                { id: 'a2', vuln_id: vulnerability.id, status: 'fixed', timestamp: '2021-01-02T00:00:00Z', packages: [] },
+            ],
+        });
+        expect(await screen.findByText('Successfully added 2 assessments.')).toBeInTheDocument();
+        alertSpy.mockRestore();
+    })
+
     test('help button for time estimates', async () => {
+
         // ARRANGE
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} isEditing={true} />);
 
@@ -1992,7 +2075,7 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // Should show multi-variant success message
-        const successMsg = await screen.findByText(/successfully added assessment to 2 variants/i);
+        const successMsg = await screen.findByText(/successfully added assessment to 1 package across 2 variants/i);
         expect(successMsg).toBeInTheDocument();
         expect(appendCb).toHaveBeenCalledTimes(2);
         expect(patchCb).toHaveBeenCalledTimes(1);
