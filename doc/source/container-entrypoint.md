@@ -46,6 +46,9 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
 | `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back |
+| `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
+| `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
+| `--perform-scc-scan` | Run a fully offline CVE scan using local sbom-cve-check databases |
 | `--clear-inputs` | Remove all staged input files |
 
 ### Scan & Output Commands
@@ -108,6 +111,9 @@ When multiple flags are provided in a single invocation, the entrypoint processe
    - Web server started in background (if `--serve`)
    - Input files merged into the database
    - Grype scan (if `--perform-grype-scan`)
+   - NVD CPE scan (if `--perform-nvd-scan`)
+   - OSV PURL scan (if `--perform-osv-scan`)
+   - sbom-cve-check offline scan (if `--perform-scc-scan`)
    - Vulnerability processing (NVD enrichment, EPSS scoring)
    - Input files cleaned up after processing
 3. **Reports** — Templates specified with `--report` are generated
@@ -130,6 +136,7 @@ The following paths inside the container are relevant:
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |
+| `/scc_databases/` | Mount point for the local sbom-cve-check advisory database clones (host path: `$VULNSCOUT_SCC_DB_DIR`, default: `~/.cache/sbom_cve_check/databases`) |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 
 ---
@@ -161,6 +168,16 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --report all_assessments.adoc \
   --export-spdx --export-cdx
 ```
+
+**Run a fully offline sbom-cve-check scan:**
+```bash
+docker exec vulnscout /scan/src/entrypoint.sh \
+  --project demo --variant x86 \
+  --add-spdx /scan/inputs/sbom.spdx.json \
+  --perform-scc-scan
+```
+
+> The container must have the sbom-cve-check databases mounted at `/scc_databases` (see the `VULNSCOUT_SCC_DB_DIR` note below). The databases are cloned automatically on first use when `SCC_AUTO_UPDATE=1` is set in the environment.
 
 **Set persistent configuration:**
 ```bash
