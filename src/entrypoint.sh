@@ -20,6 +20,12 @@ if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
 fi
 
+# The launcher always mounts the host SCC databases at /scc_databases.
+# Default SCC_DATABASES_DIR to that mount point so the engine finds them
+# without requiring an explicit env var; config.env (sourced above) may
+# still override this.
+export SCC_DATABASES_DIR="${SCC_DATABASES_DIR:-/scc_databases}"
+
 show_help() {
     cat <<EOF
 VulnScout Entrypoint
@@ -38,6 +44,7 @@ Input commands:
   --perform-grype-scan      Perform a Grype scan on the added inputs
   --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
   --perform-osv-scan        Run an OSV PURL-based vulnerability scan
+  --perform-scc-scan        Run a local sbom-cve-check vulnerability scan
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
@@ -304,7 +311,7 @@ cmd_scan() {
     local _cmd_scan_exit=0
     [[ -n "${MATCH_CONDITION:-}" ]]       && has_condition=true
 
-    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
+    if [[ "$has_inputs" == "true" ]] || [[ "$has_condition" == "true" ]] || [[ "${GRYPE_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${NVD_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]] || [[ "${SCC_SCAN_REQUESTED:-false}" == "true" ]]; then
         if [[ "$has_inputs" == "true" ]]; then
             if [[ "${INTERACTIVE_MODE}" == "true" ]]; then
                 set_status "1" "Merging inputs and processing vulnerabilities"
@@ -347,6 +354,13 @@ cmd_scan() {
         if [[ "${OSV_SCAN_REQUESTED:-false}" == "true" ]]; then
             echo "Running OSV scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
             (cd "$BASE_DIR" && flask --app src.bin.webapp osv-scan \
+                --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+        fi
+
+        # If an SCC scan was requested, run it synchronously via the flask CLI.
+        if [[ "${SCC_SCAN_REQUESTED:-false}" == "true" ]]; then
+            echo "Running sbom-cve-check scan for project '$PROJECT_NAME' variant '$VARIANT_NAME'..."
+            (cd "$BASE_DIR" && flask --app src.bin.webapp scc-scan \
                 --project "$PROJECT_NAME" --variant "$VARIANT_NAME")
         fi
 
@@ -548,6 +562,7 @@ SERVE_REQUESTED=false
 GRYPE_SCAN_REQUESTED=false
 NVD_SCAN_REQUESTED=false
 OSV_SCAN_REQUESTED=false
+SCC_SCAN_REQUESTED=false
 REPORT_TEMPLATES=()
 EXPORT_FORMATS=()
 SCAN_REQUIRED=false
@@ -646,6 +661,8 @@ while [[ $# -gt 0 ]]; do
             NVD_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-osv-scan)
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
+        --perform-scc-scan)
+            SCC_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --clear-inputs)
             cmd_clear_inputs; shift ;;
         --delete-scan)

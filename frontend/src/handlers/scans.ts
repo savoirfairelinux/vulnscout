@@ -270,6 +270,25 @@ class ScansHandler {
         return await response.json();
     }
 
+    static async triggerSccScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scc-scan`,
+            { method: 'POST', mode: 'cors' }
+        );
+        if (response.ok || response.status === 202) return { ok: true };
+        const data = await response.json().catch(() => ({}));
+        return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+    }
+
+    static async getSccScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scc-scan/status`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return { status: 'unknown' };
+        return await response.json();
+    }
+
     static async deleteScan(scanId: string): Promise<{ ok: boolean; error?: string; orphaned_findings_removed?: number }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/scans/${encodeURIComponent(scanId)}`,

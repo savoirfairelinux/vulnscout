@@ -7,7 +7,9 @@ export const SOURCE_DISPLAY_NAMES: Record<string, string> = {
     cyclonedx: 'CycloneDx',
     spdx3: 'SPDX3',
     nvd_cpe: 'NVD CPE',
+    nvd: 'NVD CPE',
     osv: 'OSV',
+    scc: 'sbom-cve-check',
 };
 
 /** Reverse mapping: display name → backend key. */

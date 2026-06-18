@@ -726,3 +726,173 @@ def init_app(app: Flask) -> None:
     def osv_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running OSV scan for the given variant."""
         return scan_status_response(variant_id, _osv_scans_in_progress)
+
+    # ------------------------------------------------------------------
+    # SCC (sbom-cve-check) Scan — local NVD-FKIE + CVEList with VEX
+    # ------------------------------------------------------------------
+
+    _scc_scans_in_progress: dict = {}
+
+    @app.route('/api/variants/<variant_id>/scc-scan', methods=['POST'])
+    def trigger_scc_scan(variant_id):
+        """Trigger a local CVE-database scan (NVD-FKIE + CVEList V5) for the given variant.
+
+        Matches every active package against locally-cloned advisory databases,
+        applies product-name aliasing and semantic version-range analysis, and
+        records each engine VEX verdict.  Works fully offline once the databases
+        are cloned.
+        """
+        variant_uuid, variant, err = validate_trigger(
+            variant_id, _scc_scans_in_progress, "sbom-cve-check scan")
+        if err is not None:
+            return err
+
+        vid_str = str(variant_uuid)
+        init_progress(_scc_scans_in_progress, vid_str)
+
+        def _run_scc_scan():
+            with app.app_context():
+                _do_scc_scan(vid_str, variant_uuid)
+
+        def _do_scc_scan(vid_str, variant_uuid):
+            try:
+                from ..controllers.scc_engine import get_engine
+                from ..bin.cmd_vuln_scan import (
+                    _SccBulkWriter,
+                )
+
+                # 1. Resolve active packages
+                _scc_scans_in_progress[vid_str]["logs"].append(
+                    "Resolving active packages…"
+                )
+                packages, pkg_err = resolve_active_packages(
+                    variant_uuid, _scc_scans_in_progress, vid_str)
+                if pkg_err:
+                    return
+
+                total_pkgs = len(packages)
+                _scc_scans_in_progress[vid_str]["total"] = total_pkgs
+                _scc_scans_in_progress[vid_str]["logs"].append(
+                    f"Resolved {total_pkgs} active packages"
+                )
+
+                # 2. Load (or reuse cached) engine index — expensive on first call.
+                # Forward sbom_cve_check library log records (git clone/fetch
+                # progress, indexing steps) directly into the scan log so the
+                # UI shows live progress instead of a frozen spinner.
+                import logging
+
+                class _SccLogForwarder(logging.Handler):
+                    def __init__(self, logs: list) -> None:
+                        super().__init__(logging.INFO)
+                        self._logs = logs
+
+                    def emit(self, record: logging.LogRecord) -> None:
+                        self._logs.append(self.format(record))
+
+                _forwarder = _SccLogForwarder(
+                    _scc_scans_in_progress[vid_str]["logs"]
+                )
+                _forwarder.setFormatter(logging.Formatter("%(message)s"))
+                _scc_logger = logging.getLogger("sbom_cve_check")
+                _scc_logger.addHandler(_forwarder)
+                try:
+                    engine = get_engine()
+                except Exception as e:
+                    set_error(_scc_scans_in_progress, vid_str,
+                              f"Failed to load CVE databases: {str(e)[:300]}")
+                    return
+                finally:
+                    _scc_logger.removeHandler(_forwarder)
+                _scc_scans_in_progress[vid_str]["logs"].append(
+                    "Index ready — scanning packages"
+                )
+
+                # 3. Create a tool scan
+                scan = Scan.create(
+                    description="empty description",
+                    variant_id=variant_uuid,
+                    scan_type="tool",
+                    scan_source="scc",
+                )
+                writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+
+                for idx, pkg in enumerate(packages, 1):
+                    pkg_label = (
+                        f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
+                    )
+                    _scc_scans_in_progress[vid_str]["progress"] = (
+                        f"{idx}/{total_pkgs} packages"
+                    )
+
+                    persisted_ids: list = []
+                    seen_keys: set = set()
+                    try:
+                        for computed, status in engine.applicable_vulns(pkg):
+                            cve_id = writer.add(pkg, computed, status, seen_keys)
+                            if cve_id is not None:
+                                persisted_ids.append(cve_id)
+                    except Exception as e:
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] ERROR "
+                            f"{pkg_label}: {str(e)[:200]}"
+                        )
+                        _scc_scans_in_progress[vid_str]["logs"].append(log_entry)
+                        _scc_scans_in_progress[vid_str]["done_count"] = idx
+                        print(f"[SCC Scan] Error scanning {pkg_label}: {e}", flush=True)
+                        continue
+
+                    if persisted_ids:
+                        ids_str = ', '.join(persisted_ids[:10])
+                        ellip = '…' if len(persisted_ids) > 10 else ''
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] {pkg_label} → "
+                            f"{len(persisted_ids)} vuln(s): {ids_str}{ellip}"
+                        )
+                    else:
+                        log_entry = (
+                            f"[{idx}/{total_pkgs}] {pkg_label} → no vulnerabilities"
+                        )
+                    _scc_scans_in_progress[vid_str]["logs"].append(log_entry)
+                    _scc_scans_in_progress[vid_str]["done_count"] = idx
+
+                    # Flush in large bulk-inserted chunks to bound transaction size.
+                    writer.maybe_flush()
+
+                writer.flush()
+                cves_found = writer.cves_found
+
+                done_logs = _scc_scans_in_progress[vid_str].get("logs", [])
+                done_logs.append(
+                    f"✓ Scan complete — found {len(cves_found)} "
+                    f"unique vulnerabilities across {total_pkgs} packages"
+                )
+                _scc_scans_in_progress[vid_str] = {
+                    "status": "done",
+                    "error": None,
+                    "progress": (
+                        f"Found {len(cves_found)} vulnerabilities "
+                        f"across {total_pkgs} packages"
+                    ),
+                    "logs": done_logs,
+                    "total": total_pkgs,
+                    "done_count": total_pkgs,
+                }
+
+            except Exception as e:
+                db.session.rollback()
+                set_error(_scc_scans_in_progress, vid_str, str(e)[:500])
+
+        thread = threading.Thread(
+            target=_run_scc_scan,
+            name=f"scc-scan-{vid_str}",
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({"status": "started", "variant_id": vid_str}), 202
+
+    @app.route('/api/variants/<variant_id>/scc-scan/status')
+    def scc_scan_status(variant_id):
+        """Check the status of a running SCC scan for the given variant."""
+        return scan_status_response(variant_id, _scc_scans_in_progress)

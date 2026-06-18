@@ -280,6 +280,7 @@ export class ScanStateManager {
                             status: "error",
                             error: status.error ?? `${this.label} scan failed`,
                             progress: null,
+                            logs: status.logs ?? current.logs,
                         });
                         anyChanged = true;
                         anyJustFinished = true;
@@ -295,10 +296,10 @@ export class ScanStateManager {
                         });
                         anyChanged = true;
                         anyJustFinished = true;
-                    } else if (status.status === "running" && status.progress) {
+                    } else if (status.status === "running") {
                         this.states.set(vid, {
                             ...current,
-                            progress: status.progress,
+                            progress: status.progress ?? current.progress,
                             logs: status.logs ?? current.logs,
                             total: status.total ?? current.total,
                             doneCount: status.done_count ?? current.doneCount,

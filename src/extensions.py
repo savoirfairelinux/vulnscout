@@ -143,6 +143,34 @@ def setup_write_serialization(session_factory: object) -> None:
 
 
 @contextmanager
+def write_lock() -> Generator[None, None, None]:
+    """Hold the priority write lock for a block of manual/bulk writes.
+
+    The ``before_flush`` listener only serialises unit-of-work flushes; bulk
+    operations (``bulk_insert_mappings`` / ``executemany``) bypass it and would
+    otherwise collide with concurrent SQLite writers (enrichment threads,
+    request handlers).  Wrapping a bulk-insert-then-commit block in this context
+    manager serialises it the same way a normal flush would.
+
+    No-op when write serialisation is inactive (non-SQLite engines) or when the
+    current thread already holds the lock (reentrant).  The ``after_commit`` /
+    ``after_soft_rollback`` listeners release the lock at commit/rollback time;
+    the ``finally`` here is an idempotent safety net.
+    """
+    if not _write_serialization_initialized or getattr(_write_lock_state, "held", False):
+        yield
+        return
+    _db_write_lock.acquire()
+    _write_lock_state.held = True
+    try:
+        yield
+    finally:
+        if getattr(_write_lock_state, "held", False):
+            _write_lock_state.held = False
+            _db_write_lock.release()
+
+
+@contextmanager
 def batch_session() -> Generator[object, None, None]:
     """Context manager that defers all ``db.session.commit()`` calls to a single
     commit at the end of the block.  Inside the block every ``commit()`` is

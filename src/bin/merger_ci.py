@@ -37,7 +37,7 @@ from .cmd_scans import (
     list_scans_command,
     delete_scan_command,
 )
-from .cmd_vuln_scan import nvd_scan_command, osv_scan_command
+from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, scc_scan_command
 
 
 def init_app(app) -> None:
@@ -53,6 +53,7 @@ def init_app(app) -> None:
     app.cli.add_command(delete_scan_command)
     app.cli.add_command(nvd_scan_command)
     app.cli.add_command(osv_scan_command)
+    app.cli.add_command(scc_scan_command)
 
 
 def main() -> ControllersCache:

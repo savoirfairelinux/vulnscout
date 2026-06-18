@@ -10,13 +10,17 @@ from ..models.observation import Observation
 from ..models.vulnerability import Vulnerability as VulnModel
 from ..models.metrics import Metrics as MetricsModel
 from ..models.cvss import CVSS
-from ..models.assessment import Assessment
+from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.package import Package
 from ..extensions import db as _db
+from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import os
+import uuid
+from datetime import datetime, timezone
+from sqlalchemy import inspect as sa_inspect
 from flask.cli import with_appcontext
 
 
@@ -343,5 +347,371 @@ def osv_scan_command(project: str, variant: str | None) -> None:
     _db.session.commit()
     click.echo(
         f"✓ Scan complete — found {len(vulns_found)} unique vulnerabilities "
+        f"across {total_pkgs} packages"
+    )
+
+
+# ---------------------------------------------------------------------------
+# scc-scan: local NVD-FKIE + CVEList engine with version-range evaluation
+# ---------------------------------------------------------------------------
+
+# OpenVEX status → human-readable simplified label (mirrors Assessment model).
+def _simplified_label(status: str | None) -> str:
+    """Canonical simplified label for a status, collapsing OpenVEX/CDX synonyms.
+
+    Both an engine OpenVEX verdict (``affected``) and a CDX-VEX status carrying
+    the same meaning (``exploitable``) map to the same label (``Exploitable``),
+    so a finding's recorded state can be compared regardless of which vocabulary
+    produced it.
+    """
+    return STATUS_TO_SIMPLIFIED.get(status or "", "Pending Assessment")
+
+
+def _ts_key(ts) -> str:
+    """Normalise a timestamp (str, datetime or None) to a comparable string."""
+    if ts is None:
+        return ""
+    if isinstance(ts, str):
+        return ts
+    try:
+        return ts.isoformat()
+    except Exception:
+        return str(ts)
+
+
+def _scc_cvss_version(metric) -> str:
+    """Render an engine ``CvssMetric.cvss_ver`` tuple as a ``"major.minor"`` string."""
+    value = getattr(metric.cvss_ver, "value", (0, 0))
+    try:
+        major, minor = value
+    except (TypeError, ValueError):
+        return ""
+    if not major:
+        return ""
+    return f"{major}.{minor}"
+
+
+class _SccBulkWriter:
+    """Buffered bulk persister for scc-scan findings.
+
+    The previous implementation persisted every engine finding with its own
+    ``get_or_create`` round-trips (vuln SELECT, finding SELECT + savepoint INSERT,
+    observation INSERT, assessment SELECT + INSERT) and committed once per
+    package.  A Yocto kernel recipe expands into hundreds of ``kernel-module-*``
+    sub-packages that each carry the full ``linux_kernel`` CVE set, so the scan
+    produced millions of findings and the row-at-a-time persistence dominated the
+    runtime (hours).
+
+    This writer instead accumulates plain row dictionaries and flushes them with
+    ``bulk_insert_mappings`` in foreign-key order (vulnerabilities → metrics →
+    findings → observations → assessments), committing once per chunk.  Duplicate
+    work is avoided in memory:
+
+    * ``(package_id, cve)`` pairs that already have a finding (from a prior
+      nvd/osv scan) are pre-loaded so existing findings are reused, never
+      re-inserted;
+    * a fresh scan owns brand-new finding UUIDs, so newly created findings are
+      globally unique and need no run-internal dedup tracking (kept out of the
+      in-memory index to bound memory on the kernel explosion);
+    * metrics are inserted only alongside a newly created vulnerability, deduped
+      by ``(version, score)``;
+    * an assessment is recorded only when the engine verdict changes a finding's
+      most recent state: every finding's latest assessment (for this variant) is
+      pre-loaded as a simplified label, and a new assessment is appended only
+      when the engine's verdict maps to a different label (a finding with no
+      prior assessment always counts as a change).  Every verdict the engine
+      emits is considered — ``affected``, ``under_investigation``,
+      ``not_affected`` and ``fixed`` — so the full VEX state is captured;
+    * ``found_by`` is a transient (non-persisted) attribute, so dropping the
+      per-vuln ``add_found_by``/enrichment updates changes nothing on disk.
+    """
+
+    FLUSH_THRESHOLD = 5000
+    _SELECT_CHUNK = 500
+
+    def __init__(self, scan_id, variant_uuid, packages):
+        self._scan_id = scan_id
+        self._variant_uuid = variant_uuid
+        self.cves_found: set[str] = set()
+
+        # Confirmed-present (existing or already-inserted) vulnerability ids.
+        self._known_vuln_ids: set[str] = set()
+        # cve_id -> (vuln_row, [metric_row, ...]) awaiting existence resolution.
+        self._pending_vulns: dict[str, tuple[dict, list[dict]]] = {}
+
+        # Pre-loaded existing findings, plus the simplified status (and its
+        # timestamp key) of each finding's most recent assessment for this
+        # variant.  This lets a re-scan record a fresh assessment only when the
+        # engine verdict actually changes the finding's state.
+        self._finding_index: dict[tuple, uuid.UUID] = {}
+        self._last_simplified: dict[uuid.UUID, str] = {}
+        self._last_ts: dict[uuid.UUID, str] = {}
+
+        # Row buffers for the current chunk.
+        self._vuln_rows: list[dict] = []
+        self._metric_rows: list[dict] = []
+        self._finding_rows: list[dict] = []
+        self._obs_rows: list[dict] = []
+        self._assess_rows: list[dict] = []
+        self._buffered_findings = 0
+
+        self._preload(packages)
+
+    # ------------------------------------------------------------------
+    # Pre-loading
+    # ------------------------------------------------------------------
+
+    def _preload(self, packages) -> None:
+        """Load existing findings and each one's most recent assessment status."""
+        pkg_ids = [pkg.id for pkg in packages]
+        for i in range(0, len(pkg_ids), self._SELECT_CHUNK):
+            chunk = pkg_ids[i:i + self._SELECT_CHUNK]
+            rows = _db.session.execute(
+                _db.select(
+                    FindingModel.id,
+                    FindingModel.package_id,
+                    FindingModel.vulnerability_id,
+                ).where(FindingModel.package_id.in_(chunk))
+            ).all()
+            for fid, package_id, vuln_id in rows:
+                self._finding_index[(package_id, vuln_id.upper())] = fid
+
+        # For every pre-existing finding remember the simplified status of its
+        # most recent assessment for this variant, so the writer only records a
+        # new assessment when the engine verdict changes that state.
+        finding_ids = list(self._finding_index.values())
+        for i in range(0, len(finding_ids), self._SELECT_CHUNK):
+            chunk = finding_ids[i:i + self._SELECT_CHUNK]
+            rows = _db.session.execute(
+                _db.select(
+                    Assessment.finding_id,
+                    Assessment.status,
+                    Assessment.timestamp,
+                ).where(
+                    Assessment.finding_id.in_(chunk),
+                    Assessment.variant_id == self._variant_uuid,
+                )
+            ).all()
+            for fid, status, ts in rows:
+                ts_key = _ts_key(ts)
+                if ts_key >= self._last_ts.get(fid, ""):
+                    self._last_ts[fid] = ts_key
+                    self._last_simplified[fid] = _simplified_label(status)
+
+    # ------------------------------------------------------------------
+    # Row building
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_vuln(cve_id: str, computed) -> tuple[dict, list[dict]]:
+        publish_date = (
+            computed.date_published.date() if computed.date_published is not None else None
+        )
+        links = sorted({ref.url for ref in computed.external_refs if getattr(ref, "url", None)})
+        nvd_last_modified = (
+            computed.date_modified.isoformat() if computed.date_modified is not None else None
+        )
+        vuln_row = {
+            "id": cve_id,
+            "description": computed.description,
+            "publish_date": publish_date,
+            "links": links or None,
+            "nvd_last_modified": nvd_last_modified,
+        }
+
+        metric_rows: list[dict] = []
+        seen_metric: set[tuple] = set()
+        for metric in computed.cvss_metrics:
+            if metric.score is None:
+                continue
+            version = _scc_cvss_version(metric)
+            score = float(metric.score)
+            dk = (version, score)
+            if dk in seen_metric:
+                continue
+            seen_metric.add(dk)
+            metric_rows.append({
+                "id": uuid.uuid4(),
+                "vulnerability_id": cve_id,
+                "variant_id": None,
+                "version": version,
+                "score": score,
+                "vector": metric.vector_str or "",
+                "author": metric.source or "sbom-cve-check",
+                "origin": None,
+            })
+        return vuln_row, metric_rows
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def add(self, pkg, computed, status, seen_keys: set) -> str | None:
+        """Queue one engine finding for bulk insertion.
+
+        Returns the CVE id when the finding was queued, or ``None`` if it was a
+        duplicate already handled for this package in the current run.
+        """
+        cve_id = str(computed.identifier).upper()
+        key = (pkg.id, cve_id)
+        if key in seen_keys:
+            return None
+        seen_keys.add(key)
+        self.cves_found.add(cve_id)
+
+        # Ensure the vulnerability exists (or is queued) before its finding.
+        if cve_id not in self._known_vuln_ids and cve_id not in self._pending_vulns:
+            self._pending_vulns[cve_id] = self._build_vuln(cve_id, computed)
+
+        finding_id = self._finding_index.get(key)
+        is_new_finding = finding_id is None
+        if is_new_finding:
+            finding_id = uuid.uuid4()
+            self._finding_rows.append({
+                "id": finding_id,
+                "package_id": pkg.id,
+                "vulnerability_id": cve_id,
+            })
+            self._buffered_findings += 1
+
+        # The scan is freshly created, so every finding gets one observation.
+        self._obs_rows.append({
+            "id": uuid.uuid4(),
+            "finding_id": finding_id,
+            "scan_id": self._scan_id,
+        })
+
+        # Only record an initial "Pending Assessment" for brand-new findings
+        # (not already in the pool).  Pre-existing findings keep whatever
+        # assessment they already have, even if they have none yet.
+        assert finding_id is not None
+        if is_new_finding:
+            self._last_simplified[finding_id] = "Pending Assessment"
+            self._assess_rows.append({
+                "id": uuid.uuid4(),
+                "status": "under_investigation",
+                "simplified_status": "Pending Assessment",
+                "finding_id": finding_id,
+                "variant_id": self._variant_uuid,
+                "origin": "scc",
+                "status_notes": None,
+                "timestamp": datetime.now(timezone.utc),
+                "responses": [],
+            })
+
+        return cve_id
+
+    def maybe_flush(self) -> None:
+        if self._buffered_findings >= self.FLUSH_THRESHOLD:
+            self.flush()
+
+    def flush(self) -> None:
+        """Resolve pending vulnerabilities and bulk-insert the buffered chunk."""
+        if self._pending_vulns:
+            pending_ids = list(self._pending_vulns.keys())
+            existing = self._existing_vuln_ids(pending_ids)
+            for cid in pending_ids:
+                vuln_row, metric_rows = self._pending_vulns.pop(cid)
+                self._known_vuln_ids.add(cid)
+                if cid in existing:
+                    continue
+                self._vuln_rows.append(vuln_row)
+                self._metric_rows.extend(metric_rows)
+
+        if not (self._vuln_rows or self._metric_rows or self._finding_rows
+                or self._obs_rows or self._assess_rows):
+            return
+
+        # Insert in foreign-key dependency order.  Bulk operations bypass the
+        # before_flush write-lock hook, so serialise explicitly for SQLite.
+        with _write_lock():
+            if self._vuln_rows:
+                _db.session.bulk_insert_mappings(sa_inspect(VulnModel), self._vuln_rows)
+            if self._metric_rows:
+                _db.session.bulk_insert_mappings(sa_inspect(MetricsModel), self._metric_rows)
+            if self._finding_rows:
+                _db.session.bulk_insert_mappings(sa_inspect(FindingModel), self._finding_rows)
+            if self._obs_rows:
+                _db.session.bulk_insert_mappings(sa_inspect(Observation), self._obs_rows)
+            if self._assess_rows:
+                _db.session.bulk_insert_mappings(sa_inspect(Assessment), self._assess_rows)
+            _db.session.commit()
+
+        self._vuln_rows.clear()
+        self._metric_rows.clear()
+        self._finding_rows.clear()
+        self._obs_rows.clear()
+        self._assess_rows.clear()
+        self._buffered_findings = 0
+
+    def _existing_vuln_ids(self, ids: list[str]) -> set[str]:
+        found: set[str] = set()
+        for i in range(0, len(ids), self._SELECT_CHUNK):
+            chunk = [x.upper() for x in ids[i:i + self._SELECT_CHUNK]]
+            rows = _db.session.execute(
+                _db.select(VulnModel.id).where(VulnModel.id.in_(chunk))
+            ).all()
+            found.update(r[0] for r in rows)
+        return found
+
+
+@click.command("scc-scan")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", default=None,
+              help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@with_appcontext
+def scc_scan_command(project: str, variant: str | None) -> None:
+    """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
+
+    Unlike the live ``nvd-scan`` / ``osv-scan`` paths, this command matches every
+    active package against locally-cloned advisory databases, applies product-name
+    aliasing and semantic version-range analysis, and records the engine's VEX
+    verdict.  It detects vulnerabilities the CPE/PURL API scans miss (notably the
+    Linux kernel) and works fully offline against the existing clones.
+
+    Every verdict is recorded — including ``not_affected`` and ``fixed`` — so the
+    full VEX picture is captured.  A new assessment is written only when the
+    verdict changes a finding's most recent state.
+    """
+    from ..controllers.scc_engine import get_engine
+
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
+    variant_uuid = variant_obj.id
+
+    packages = _resolve_active_packages(variant_uuid)
+    click.echo(f"Resolved {len(packages)} active packages")
+
+    click.echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…")
+    engine = get_engine()
+    click.echo("Index ready — scanning packages")
+
+    scan = _create_tool_scan(variant_uuid, "scc")
+    total_pkgs = len(packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+
+    for idx, pkg in enumerate(packages, 1):
+        pkg_label = f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
+        persisted_ids: list[str] = []
+        seen_keys: set = set()
+        try:
+            for computed, status in engine.applicable_vulns(pkg):
+                cve_id = writer.add(pkg, computed, status, seen_keys)
+                if cve_id is not None:
+                    persisted_ids.append(cve_id)
+        except Exception as e:
+            click.echo(
+                f"[{idx}/{total_pkgs}] ERROR {pkg_label}: {str(e)[:200]}",
+                err=True,
+            )
+            continue
+
+        _echo_query_results(idx, total_pkgs, pkg_label, persisted_ids,
+                            "vuln(s)", "no vulnerabilities")
+        # Flush in large bulk-inserted chunks to bound memory/transaction size.
+        writer.maybe_flush()
+
+    writer.flush()
+    click.echo(
+        f"✓ Scan complete — found {len(writer.cves_found)} unique vulnerabilities "
         f"across {total_pkgs} packages"
     )

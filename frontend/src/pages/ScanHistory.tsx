@@ -17,6 +17,13 @@ import {
     triggerScan as osvTriggerScan,
     dismiss as osvDismiss,
 } from "../handlers/osvScanState";
+import {
+    subscribe as sccSubscribe,
+    getSnapshot as sccGetSnapshot,
+    setOnDone as sccSetOnDone,
+    triggerScan as sccTriggerScan,
+    dismiss as sccDismiss,
+} from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -1096,6 +1103,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [showGrype, setShowGrype] = useState(true);
     const [showOsv, setShowOsv] = useState(true);
     const [showNvd, setShowNvd] = useState(true);
+    const [showScc, setShowScc] = useState(true);
 
     // Export state
     const [exportMenuScanId, setExportMenuScanId] = useState<string | null>(null);
@@ -1109,7 +1117,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [scanMenuOpen, setScanMenuOpen] = useState(false);
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
-    const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv']));
+    const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
     const scanMenuRef = useRef<HTMLDivElement>(null);
 
     // Global Grype scan state — survives tab switches (per-variant)
@@ -1123,6 +1131,10 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Global OSV scan state — survives tab switches (per-variant)
     const osvEntries: ScanManagerSnapshot = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const osvRunning = osvEntries.some(e => e.status === "running");
+
+    // Global SCC scan state — survives tab switches (per-variant)
+    const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
+    const sccRunning = sccEntries.some(e => e.status === "running");
 
     const refreshScans = useCallback(() => {
         ScansHandler.list(variantId, projectId)
@@ -1195,11 +1207,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return () => osvSetOnDone(null);
     }, [refreshScans, onScanComplete]);
 
+    useEffect(() => {
+        sccSetOnDone(() => { refreshScans(); onScanComplete?.(); });
+        return () => sccSetOnDone(null);
+    }, [refreshScans, onScanComplete]);
+
     // If a scan finished while we were away, refresh the list on mount
     useEffect(() => {
         if (grypeEntries.some(e => e.status === 'done')) refreshScans();
         if (nvdEntries.some(e => e.status === 'done')) refreshScans();
         if (osvEntries.some(e => e.status === 'done')) refreshScans();
+        if (sccEntries.some(e => e.status === 'done')) refreshScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -1284,6 +1302,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants));
         if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants));
         if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants));
+        if (selectedScanTypes.has('scc')) promises.push(sccTriggerScan(variants));
         await Promise.all(promises);
     }
 
@@ -1303,7 +1322,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Build the scan-trigger button (always visible when there are variant(s) to scan)
     const canTriggerScan = effectiveVariantIds.length > 0 || variantId;
-    const allRunning = grypeRunning || nvdRunning || osvRunning;
+    const allRunning = grypeRunning || nvdRunning || osvRunning || sccRunning;
 
     // Filter out "empty" scans (no changes) when toggle is active
     const displayedScans = hideEmptyScans
@@ -1331,6 +1350,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (src === 'grype' && !showGrype) return false;
         if (src === 'osv' && !showOsv) return false;
         if (src === 'nvd' && !showNvd) return false;
+        if (src === 'scc' && !showScc) return false;
         return true;
     });
 
@@ -1357,6 +1377,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         grype: "bg-purple-400",
         osv: "bg-green-400",
         nvd: "bg-orange-400",
+        scc: "bg-sky-400",
     };
 
     // Column sizing — single lane
@@ -1417,6 +1438,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             >
                 <FontAwesomeIcon icon={faShieldHalved} />
                 NVD
+            </button>
+            <button
+                onClick={() => setShowScc(v => !v)}
+                className={[
+                    "py-1 px-2 rounded flex items-center gap-1 text-xs font-semibold transition-colors",
+                    showScc ? "bg-sky-600 text-white" : "bg-sky-900/60 text-sky-400 line-through",
+                ].join(' ')}
+                title={showScc ? "sbom-cve-check scans visible" : "sbom-cve-check scans hidden"}
+            >
+                <FontAwesomeIcon icon={faCrosshairs} />
+                sbom-cve-check
             </button>
 
             {/* Right side: doc link + export + scan menu */}
@@ -1496,6 +1528,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         { key: 'grype', label: 'Grype', icon: faBug, color: 'purple' },
                                         { key: 'nvd', label: 'NVD CPE', icon: faShieldHalved, color: 'orange' },
                                         { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
+                                        { key: 'scc', label: 'sbom-cve-check (offline)', icon: faCrosshairs, color: 'sky' },
                                     ] as const).map(({ key, label, icon, color }) => (
                                         <label
                                             key={key}
@@ -1575,6 +1608,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const grypeColors = { border: "border-purple-700/60", headerBg: "bg-purple-900/40", iconText: "text-purple-400", titleText: "text-purple-200", subtitleText: "text-purple-300/80", bar: "bg-purple-500" };
     const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40", iconText: "text-orange-400", titleText: "text-orange-200", subtitleText: "text-orange-300/80", bar: "bg-orange-500" };
     const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
+    const sccColors = { border: "border-sky-700/60", headerBg: "bg-sky-900/40", iconText: "text-sky-400", titleText: "text-sky-200", subtitleText: "text-sky-300/80", bar: "bg-sky-500" };
 
     const progressPanels = (
         <>
@@ -1594,6 +1628,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
                 .map(entry => (
                     <ScanProgressPanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
+                ))
+            }
+            {sccEntries
+                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .map(entry => (
+                    <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
                 ))
             }
         </>
@@ -1774,6 +1814,17 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
                                             <FontAwesomeIcon icon={faShieldHalved} className="mr-1" />
                                             NVD CPE Scan
+                                        </span>
+                                        </>
+                                    ) : (scan.scan_type || 'sbom') === 'tool' && scan.scan_source === 'scc' ? (
+                                        <>
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                                            <FontAwesomeIcon icon={faCrosshairs} className="mr-1" />
+                                            Vulnerability Scan
+                                        </span>
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+                                            <FontAwesomeIcon icon={faBook} className="mr-1" />
+                                            sbom-cve-check Scan
                                         </span>
                                         </>
                                     ) : (scan.scan_type || 'sbom') === 'tool' ? (
