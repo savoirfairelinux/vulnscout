@@ -648,3 +648,143 @@ class TestOsvScanCoverage:
             from src.models.vulnerability import Vulnerability
             updated = _db.session.get(Vulnerability, "CVE-BARE-001")
             assert updated.description == "enriched from osv scan"
+
+
+# ---------------------------------------------------------------------------
+# SCC scan CLI tests
+# ---------------------------------------------------------------------------
+
+class TestSccScanCLI:
+    """flask scc-scan CLI command (engine is fully mocked)."""
+
+    @patch("src.controllers.scc_engine.get_engine")
+    def test_scc_scan_creates_findings(self, mock_get_engine, app, ids):
+        """scc-scan records findings and assessments via the bulk writer."""
+        from src.bin.cmd_vuln_scan import _SccBulkWriter
+        from unittest.mock import MagicMock
+
+        class _FakeComputed:
+            _id = "CVE-2024-SCC-001"
+            description = "scc vuln"
+            date_published = None
+            date_modified = None
+            external_refs = []
+            cvss_metrics = []
+
+            class _FakeAssessment:
+                status_notes = "engine note"
+
+            vex_assessment = _FakeAssessment()
+
+            @property
+            def identifier(self):
+                return self._id
+
+        fake_engine = MagicMock()
+        fake_engine.applicable_vulns.return_value = [
+            (_FakeComputed(), "affected")
+        ]
+        mock_get_engine.return_value = fake_engine
+
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "scc-scan",
+            "--project", ids["project_name"],
+            "--variant", ids["variant_name"],
+        ])
+        assert result.exit_code == 0, result.output
+        assert "Scan complete" in result.output
+
+        with app.app_context():
+            from src.models.scan import Scan
+            scans = _db.session.execute(
+                _db.select(Scan).where(Scan.scan_source == "scc")
+            ).scalars().all()
+            assert len(scans) >= 1
+
+    @patch("src.controllers.scc_engine.get_engine")
+    def test_scc_scan_no_vulns(self, mock_get_engine, app, ids):
+        """scc-scan with an engine that returns nothing completes without error."""
+        fake_engine = MagicMock()
+        fake_engine.applicable_vulns.return_value = []
+        mock_get_engine.return_value = fake_engine
+
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "scc-scan",
+            "--project", ids["project_name"],
+            "--variant", ids["variant_name"],
+        ])
+        assert result.exit_code == 0, result.output
+        assert "0 unique vulnerabilities" in result.output
+
+    @patch("src.controllers.scc_engine.get_engine")
+    def test_scc_scan_engine_exception_per_package(self, mock_get_engine, app, ids):
+        """Exception from applicable_vulns for one package is logged and scan continues."""
+        fake_engine = MagicMock()
+        fake_engine.applicable_vulns.side_effect = RuntimeError("engine exploded")
+        mock_get_engine.return_value = fake_engine
+
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "scc-scan",
+            "--project", ids["project_name"],
+            "--variant", ids["variant_name"],
+        ])
+        assert result.exit_code == 0, result.output
+        assert "ERROR" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Export scope helper tests
+# ---------------------------------------------------------------------------
+
+class TestExportScope:
+    """Cover helpers/export_scope.py (lines 49, 58-73)."""
+
+    def test_as_uuid_with_uuid_object(self, app):
+        import uuid
+        with app.app_context():
+            from src.helpers.export_scope import _as_uuid
+            uid = uuid.uuid4()
+            assert _as_uuid(uid) is uid
+
+    def test_as_uuid_with_string(self, app):
+        import uuid
+        with app.app_context():
+            from src.helpers.export_scope import _as_uuid
+            uid = uuid.uuid4()
+            result = _as_uuid(str(uid))
+            assert result == uid
+            assert isinstance(result, uuid.UUID)
+
+    def test_compute_export_scope_neither_returns_none(self, app):
+        with app.app_context():
+            from src.helpers.export_scope import compute_export_scope
+            assert compute_export_scope() is None
+
+    def test_compute_export_scope_by_variant(self, app):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        with app.app_context():
+            project = Project.create("ScopeProj")
+            variant = Variant.create("ScopeVar", project.id)
+            _db.session.commit()
+
+            from src.helpers.export_scope import compute_export_scope, ExportScope
+            scope = compute_export_scope(variant_id=variant.id)
+            assert isinstance(scope, ExportScope)
+            assert variant.id in scope.variant_ids
+
+    def test_compute_export_scope_by_project(self, app):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        with app.app_context():
+            project = Project.create("ScopeProjP")
+            variant = Variant.create("ScopeVarP", project.id)
+            _db.session.commit()
+
+            from src.helpers.export_scope import compute_export_scope, ExportScope
+            scope = compute_export_scope(project_id=project.id)
+            assert isinstance(scope, ExportScope)
+            assert variant.id in scope.variant_ids

@@ -405,3 +405,29 @@ def test_documents_list_categories_enrichment(monkeypatch, client):
     # "vex" should have been appended, "misc" was already present (not duplicated)
     assert "vex" in item["category"]
     assert item["category"].count("misc") == 1
+
+
+def test_packages_variant_no_active_scans(app, client):
+    """packages.py line 80: variant with no active sbom scans returns empty list."""
+    from src.models.project import Project
+    from src.models.variant import Variant
+    with app.app_context():
+        project = Project.create("PkgEmptyProj1")
+        variant = Variant.create("PkgEmptyVar1", project.id)
+        variant_id = str(variant.id)
+    response = client.get(f"/api/packages?variant_id={variant_id}&format=list")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
+
+
+def test_packages_project_no_active_scans(app, client):
+    """packages.py line 93: project with no active sbom scans returns empty list."""
+    from src.models.project import Project
+    with app.app_context():
+        project = Project.create("PkgEmptyProj2")
+        project_id = str(project.id)
+    response = client.get(f"/api/packages?project_id={project_id}&format=list")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert isinstance(data, list)
