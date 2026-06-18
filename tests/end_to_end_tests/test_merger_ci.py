@@ -261,9 +261,9 @@ def test_yocto_description(app, init_files):
     _run_main()
 
     observations = SBOMObservation.get_by_vuln("CVE-2007-3152")
-    assert len(observations) == 1
-    assert observations[0].key == "Yocto Description"
-    assert observations[0].description == "Yocto-specfic description"
+    yocto_observations = [obs for obs in observations if obs.key == "Yocto Description"]
+    assert len(yocto_observations) == 1
+    assert yocto_observations[0].description == "Yocto-specfic description"
 
 
 # ---------------------------------------------------------------------------

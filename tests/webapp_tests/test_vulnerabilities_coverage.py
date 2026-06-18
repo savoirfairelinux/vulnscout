@@ -863,7 +863,8 @@ def test_apply_variant_scoped_overrides_skips_missing_vuln():
 
 
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
-    """Non-string doc formats are skipped and tool scan sources are mapped."""
+    """In the legacy fallback, non-string doc formats are skipped and tool
+    scan sources are mapped."""
     from src.routes.vulnerabilities import _populate_found_by
 
     class _Record:
@@ -881,20 +882,31 @@ def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
         def all(self):
             return self._rows
 
-    rows = [
-        ("v1", "tool", "nvd", 123),
-        ("v2", "tool", "nvd", None),
+    # The function runs two queries: (1) provenance markers, (2) legacy
+    # fallback. Return no provenance markers so both vulns fall through to the
+    # fallback, then return fallback rows shaped (vuln_id, scan_source,
+    # doc_format).
+    fallback_rows = [
+        ("v1", "nvd", None),      # non-string doc format -> use scan_source
+        ("v2", None, 12345),      # both non-string -> nothing added
     ]
+    calls = {"n": 0}
+
+    def _fake_execute(*args, **kwargs):
+        calls["n"] += 1
+        # 1st call: provenance query (empty), 2nd call: fallback query
+        return _Result([] if calls["n"] == 1 else fallback_rows)
+
     monkeypatch.setattr(
         "src.routes.vulnerabilities.db.session.execute",
-        lambda *args, **kwargs: _Result(rows),
+        _fake_execute,
     )
 
     records = [_Record("v1"), _Record("v2")]
     _populate_found_by(records)
 
-    assert records[0].found_by == []
-    assert records[1].found_by == ["nvd_cpe"]
+    assert records[0].found_by == ["nvd_cpe"]
+    assert records[1].found_by == []
 
 
 # ---------------------------------------------------------------------------
@@ -993,8 +1005,10 @@ def test_found_by_tool_scan_nvd(app, client):
     assert "nvd_cpe" in nvd_vuln["found_by"]
 
 
-def test_found_by_mixed_formats_prefers_non_dedicated(app, client):
-    """When a scan has both spdx + grype docs, found_by should prefer the non-dedicated (spdx) format."""
+def test_found_by_mixed_formats_reports_all(app, client):
+    """When a scan has both spdx + grype docs (legacy rows without provenance
+    markers), found_by reports all observed formats — the old preference
+    heuristic was dropped."""
     from src.extensions import db
     from src.models.scan import Scan
     from src.models.sbom_document import SBOMDocument
@@ -1010,7 +1024,7 @@ def test_found_by_mixed_formats_prefers_non_dedicated(app, client):
         db.session.commit()
         vuln = Vulnerability.create_record(
             id="CVE-MIXED-0001",
-            description="Test vuln for mixed format preference",
+            description="Test vuln for mixed format reporting",
             status="high",
         )
         db.session.commit()
@@ -1043,9 +1057,56 @@ def test_found_by_mixed_formats_prefers_non_dedicated(app, client):
     data = json.loads(response.data)
     mixed_vuln = next((v for v in data if v["id"] == "CVE-MIXED-0001"), None)
     assert mixed_vuln is not None
-    # Should prefer spdx (non-dedicated) over grype (dedicated)
+    # No preference heuristic: both formats are reported.
     assert "spdx3" in mixed_vuln["found_by"]
-    assert "grype" not in mixed_vuln["found_by"]
+    assert "grype" in mixed_vuln["found_by"]
+
+
+def test_found_by_yocto_cve_check_mapping(app, client):
+    """A vuln observed in a yocto_cve_check document maps found_by to
+    'yocto_cve_check' via the observing-scan derivation."""
+    from src.extensions import db
+    from src.models.scan import Scan
+    from src.models.sbom_document import SBOMDocument
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_package import SBOMPackage
+    from datetime import datetime, timezone
+
+    with app.app_context():
+        pkg = Package.find_or_create("yocto-test-pkg", "6.0.0", [], [], "")
+        db.session.commit()
+        Vulnerability.create_record(
+            id="CVE-YOCTO-0001",
+            description="Test vuln for yocto_cve_check mapping",
+            status="medium",
+        )
+        db.session.commit()
+        finding = Finding.get_or_create(pkg.id, "CVE-YOCTO-0001")
+
+        import uuid as _uuid
+        scan = Scan(
+            id=_uuid.uuid4(),
+            variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            timestamp=datetime(2016, 1, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(scan)
+        yocto_doc = SBOMDocument(
+            id=_uuid.uuid4(), path="/demo/yocto.json", source_name="yocto.json",
+            format="yocto_cve_check", scan_id=scan.id,
+        )
+        db.session.add(yocto_doc)
+        db.session.add(SBOMPackage(sbom_document_id=yocto_doc.id, package_id=pkg.id))
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+
+    response = client.get("/api/vulnerabilities")
+    data = json.loads(response.data)
+    yocto_vuln = next((v for v in data if v["id"] == "CVE-YOCTO-0001"), None)
+    assert yocto_vuln is not None
+    assert "yocto_cve_check" in yocto_vuln["found_by"]
 
 
 # ---------------------------------------------------------------------------
