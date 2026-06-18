@@ -434,6 +434,11 @@ class _SccBulkWriter:
         self._variant_uuid = variant_uuid
         self.cves_found: set[str] = set()
 
+        # CVE ids already observed in this variant across any previous scan.
+        self._variant_existing_cves: set[str] = set()
+        # CVE ids first seen in this run for this variant.
+        self._variant_new_cves: set[str] = set()
+
         # Confirmed-present (existing or already-inserted) vulnerability ids.
         self._known_vuln_ids: set[str] = set()
         # cve_id -> (vuln_row, [metric_row, ...]) awaiting existence resolution.
@@ -475,6 +480,20 @@ class _SccBulkWriter:
             ).all()
             for fid, package_id, vuln_id in rows:
                 self._finding_index[(package_id, vuln_id.upper())] = fid
+
+        # CVEs already present in this variant (via any finding observed by any
+        # scan tied to the variant). Pending assessment must only be added for
+        # truly new CVEs, not for existing CVEs appearing on additional packages.
+        existing_variant_cves = _db.session.execute(
+            _db.select(FindingModel.vulnerability_id)
+            .join(Observation, Observation.finding_id == FindingModel.id)
+            .join(ScanModel, ScanModel.id == Observation.scan_id)
+            .where(ScanModel.variant_id == self._variant_uuid)
+            .distinct()
+        ).all()
+        self._variant_existing_cves = {
+            vuln_id.upper() for (vuln_id,) in existing_variant_cves if vuln_id
+        }
 
         # For every pre-existing finding remember the simplified status of its
         # most recent assessment for this variant, so the writer only records a
@@ -581,11 +600,12 @@ class _SccBulkWriter:
             "scan_id": self._scan_id,
         })
 
-        # Only record an initial "Pending Assessment" for brand-new findings
-        # (not already in the pool).  Pre-existing findings keep whatever
-        # assessment they already have, even if they have none yet.
+        # Only record an initial "Pending Assessment" for brand-new CVEs in the
+        # variant. Existing CVEs must not be modified, even if this scan creates
+        # a new finding for a different package.
         assert finding_id is not None
-        if is_new_finding:
+        if is_new_finding and cve_id not in self._variant_existing_cves and cve_id not in self._variant_new_cves:
+            self._variant_new_cves.add(cve_id)
             self._last_simplified[finding_id] = "Pending Assessment"
             self._assess_rows.append({
                 "id": uuid.uuid4(),

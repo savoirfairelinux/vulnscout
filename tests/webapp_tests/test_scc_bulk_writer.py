@@ -116,7 +116,8 @@ class TestSccBulkWriter:
 
     def test_kernel_explosion_persists_once_per_package_cve(self, app):
         """Many sibling packages sharing the same CVE set each get their own
-        finding/observation/assessment, while each CVE row is inserted once."""
+        finding/observation, while pending assessments are only created once per
+        new CVE in the variant."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
@@ -142,10 +143,11 @@ class TestSccBulkWriter:
             assert _db.session.query(Vulnerability).count() == 2
             assert _db.session.query(Metrics).count() == 2
 
-            # 5 packages x 2 CVEs = 10 findings / observations / assessments.
+            # 5 packages x 2 CVEs = 10 findings / observations.
             assert _db.session.query(Finding).count() == 10
             assert _db.session.query(Observation).count() == 10
-            assert _db.session.query(Assessment).count() == 10
+            # Only two assessments: one pending row for each new CVE.
+            assert _db.session.query(Assessment).count() == 2
 
             # Every observation belongs to this scan; every assessment to variant.
             assert all(o.scan_id == scan.id
@@ -215,8 +217,51 @@ class TestSccBulkWriter:
             assert _db.session.query(Finding).filter_by(
                 package_id=pkg.id, vulnerability_id="CVE-2023-0001").count() == 1
 
-    def test_not_affected_and_fixed_are_persisted(self, app):
-        """Every engine verdict — including not_affected and fixed — is recorded."""
+    def test_existing_variant_cve_gets_no_pending_on_new_package_finding(self, app):
+        """When a CVE already exists in the variant, new findings for that same
+        CVE on other packages must not get a fresh pending assessment."""
+        with app.app_context():
+            project = Project.create("P")
+            variant = Variant.create("V", project.id)
+
+            old_scan = Scan.create("old", variant.id, scan_type="tool")
+            new_scan = Scan.create("scc", variant.id, scan_type="tool")
+            pkg_old, pkg_new = _make_packages([
+                ("openssl", "1.1.1"),
+                ("openssl", "3.0.0"),
+            ])
+
+            # Existing CVE already present in this variant via an older package.
+            old_finding = Finding.create(pkg_old.id, "CVE-2023-0001", commit=False)
+            Observation.create(finding_id=old_finding.id, scan_id=old_scan.id, commit=False)
+            Assessment.create(
+                status="not_affected",
+                finding_id=old_finding.id,
+                variant_id=variant.id,
+                origin="manual",
+                commit=False,
+            )
+            _db.session.commit()
+
+            writer = _SccBulkWriter(new_scan.id, variant.id, [pkg_new])
+            _scan_pkg(writer, pkg_new, [(_Computed("CVE-2023-0001"), "affected")])
+            writer.flush()
+
+            # New finding for the second package exists.
+            new_finding = _db.session.query(Finding).filter_by(
+                package_id=pkg_new.id,
+                vulnerability_id="CVE-2023-0001",
+            ).one()
+
+            # No assessment was added for the existing-variant CVE.
+            assert _db.session.query(Assessment).filter_by(
+                finding_id=new_finding.id,
+                variant_id=variant.id,
+            ).count() == 0
+
+    def test_not_affected_and_fixed_are_persisted_as_pending_for_new_cves(self, app):
+        """For new CVEs, one pending assessment is created per new vulnerability
+        regardless of the engine verdict."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
