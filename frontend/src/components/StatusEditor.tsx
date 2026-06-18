@@ -24,12 +24,18 @@ type Props = {
     variants?: Variant[];
     availablePackages?: string[];
     defaultSelectedPackages?: string[];
+    /** variant_id -> packages that exist for this CVE in that variant */
+    variantPackageMap?: Record<string, string[]>;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages}: Readonly<Props>) {
-    const initialPackages = useMemo(() =>
-        (defaultSelectedPackages && defaultSelectedPackages.length > 0) ? defaultSelectedPackages : (availablePackages ?? [])
-    , [defaultSelectedPackages, availablePackages]);
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap}: Readonly<Props>) {
+    // When multiple choices exist, start fully unchecked so the user makes an
+    // explicit selection; when exactly one exists auto-select it.
+    const initialPackages = useMemo(() => {
+        if (availablePackages && availablePackages.length === 1) return availablePackages;
+        if (defaultSelectedPackages && defaultSelectedPackages.length === 1) return defaultSelectedPackages;
+        return [];
+    }, [defaultSelectedPackages, availablePackages]);
 
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
@@ -40,6 +46,54 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         variants?.length === 1 ? [variants[0].id] : []
     );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(initialPackages);
+
+    // Derived: which packages are reachable from the currently selected variants,
+    // and which variants are reachable from the currently selected packages.
+    const allowedPackages = useMemo<Set<string> | null>(() => {
+        if (!variantPackageMap) return null;
+
+        // Use selected variant IDs if any are checked; otherwise derive from selected packages.
+        let effectiveVariantIds: string[];
+        if (selectedVariantIds.length > 0) {
+            effectiveVariantIds = selectedVariantIds;
+        } else if (selectedPackages.length > 0) {
+            effectiveVariantIds = Object.entries(variantPackageMap)
+                .filter(([, pkgs]) => selectedPackages.some(p => pkgs.includes(p)))
+                .map(([vid]) => vid);
+        } else {
+            return null;
+        }
+
+        const union = new Set<string>();
+        for (const vid of effectiveVariantIds) {
+            for (const pkg of variantPackageMap[vid] ?? []) union.add(pkg);
+        }
+        return union.size > 0 ? union : null;
+    }, [variantPackageMap, selectedVariantIds, selectedPackages]);
+
+    const allowedVariants = useMemo<Set<string> | null>(() => {
+        if (!variantPackageMap) return null;
+
+        // Use selected packages if any are checked; otherwise derive from selected variants.
+        let effectivePackages: string[];
+        if (selectedPackages.length > 0) {
+            effectivePackages = selectedPackages;
+        } else if (selectedVariantIds.length > 0) {
+            const union = new Set<string>();
+            for (const vid of selectedVariantIds) {
+                for (const pkg of variantPackageMap[vid] ?? []) union.add(pkg);
+            }
+            effectivePackages = [...union];
+        } else {
+            return null;
+        }
+
+        const allowed = new Set<string>();
+        for (const [vid, pkgs] of Object.entries(variantPackageMap)) {
+            if (effectivePackages.some(p => pkgs.includes(p))) allowed.add(vid);
+        }
+        return allowed.size > 0 ? allowed : null;
+    }, [variantPackageMap, selectedPackages, selectedVariantIds]);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -63,6 +117,44 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     useEffect(() => {
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
     }, [variants]);
+
+    // When a variant is unchecked, drop packages that are no longer reachable.
+    const handleVariantToggle = (variantId: string, checked: boolean) => {
+        const nextVariants = checked
+            ? [...selectedVariantIds, variantId]
+            : selectedVariantIds.filter(id => id !== variantId);
+        setSelectedVariantIds(nextVariants);
+
+        if (!checked && variantPackageMap) {
+            const stillAllowed = new Set<string>();
+            for (const vid of nextVariants) {
+                for (const pkg of variantPackageMap[vid] ?? []) stillAllowed.add(pkg);
+            }
+            if (stillAllowed.size > 0) {
+                setSelectedPackages(prev => prev.filter(p => stillAllowed.has(p)));
+            } else {
+                setSelectedPackages([]);
+            }
+        }
+    };
+
+    // When a package is toggled, drop variants that are no longer compatible.
+    // Runs on both check and uncheck so a variant that was selected before a
+    // conflicting package is checked gets automatically deselected.
+    const handlePackageToggle = (pkg: string, checked: boolean) => {
+        const nextPackages = checked
+            ? [...selectedPackages, pkg]
+            : selectedPackages.filter(p => p !== pkg);
+        setSelectedPackages(nextPackages);
+
+        if (variantPackageMap && nextPackages.length > 0) {
+            setSelectedVariantIds(prev =>
+                prev.filter(vid =>
+                    nextPackages.some(p => (variantPackageMap[vid] ?? []).includes(p))
+                )
+            );
+        }
+    };
 
     // Update status when defaultStatus prop changes
     useEffect(() => {
@@ -134,8 +226,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setWorkaround("");
         setImpact("");
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
-        setSelectedPackages(initialPackages);
-    }, [defaultStatus, initialPackages, variants]);
+        setSelectedPackages(
+            (availablePackages?.length === 1 ? availablePackages :
+            defaultSelectedPackages?.length === 1 ? defaultSelectedPackages : [])
+        );
+    }, [defaultStatus, defaultSelectedPackages, availablePackages, variants]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -189,23 +284,25 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             <div className="mt-2 mb-2 ml-1">
                 <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    {variants.map(v => (
-                        <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                    {variants.map(v => {
+                        const incompatible = allowedVariants !== null && !allowedVariants.has(v.id);
+                        return (
+                        <label
+                            key={v.id}
+                            className={['flex items-center gap-1.5 text-sm select-none', incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'].join(' ')}
+                            title={incompatible ? 'No selected package is present in this variant' : undefined}
+                        >
                             <input
                                 type="checkbox"
                                 checked={selectedVariantIds.includes(v.id)}
-                                onChange={(e) => {
-                                    if (e.target.checked) {
-                                        setSelectedVariantIds(prev => [...prev, v.id]);
-                                    } else {
-                                        setSelectedVariantIds(prev => prev.filter(id => id !== v.id));
-                                    }
-                                }}
+                                disabled={incompatible}
+                                onChange={(e) => handleVariantToggle(v.id, e.target.checked)}
                                 className="accent-blue-500"
                             />
                             <span className="text-gray-200">{v.name}</span>
                         </label>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
         )}
@@ -215,22 +312,21 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {availablePackages.map(pkg => {
                         const isActive = !defaultSelectedPackages || defaultSelectedPackages.length === 0 || defaultSelectedPackages.includes(pkg);
+                        const incompatible = allowedPackages !== null && !allowedPackages.has(pkg);
                         return (
-                        <label key={pkg} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                        <label
+                            key={pkg}
+                            className={['flex items-center gap-1.5 text-sm select-none', incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'].join(' ')}
+                            title={incompatible ? 'Package is not present in selected variants' : (isActive ? undefined : 'Not in active SBOM')}
+                        >
                             <input
                                 type="checkbox"
                                 checked={selectedPackages.includes(pkg)}
-                                onChange={(e) => {
-                                    if (e.target.checked) {
-                                        setSelectedPackages(prev => [...prev, pkg]);
-                                    } else {
-                                        setSelectedPackages(prev => prev.filter(p => p !== pkg));
-                                    }
-                                }}
+                                disabled={incompatible}
+                                onChange={(e) => handlePackageToggle(pkg, e.target.checked)}
                                 className="accent-blue-400"
                             />
-                            <span className={`font-mono ${isActive ? 'text-gray-200' : 'text-gray-500 italic'}`}
-                                  title={isActive ? undefined : 'Not in active SBOM'}>{formatPkgId(pkg)}</span>
+                            <span className={`font-mono ${incompatible ? 'text-gray-500' : isActive ? 'text-gray-200' : 'text-gray-500 italic'}`}>{formatPkgId(pkg)}</span>
                         </label>
                         );
                     })}

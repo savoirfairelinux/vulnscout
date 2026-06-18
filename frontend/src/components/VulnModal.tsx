@@ -19,6 +19,7 @@ import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
+import Packages from '../handlers/packages';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
@@ -90,6 +91,7 @@ type VariantScopedSnapshot = {
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
+    const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
@@ -205,6 +207,35 @@ type VariantScopedSnapshot = {
 
         return () => { cancelled = true; };
     }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
+
+    // Build variant -> package compatibility map using the same source as the
+    // SBOM tab: GET /api/packages?variant_id=<id> returns the active SBOM
+    // packages for that variant, whose ids match vuln.packages entries.
+    useEffect(() => {
+        let cancelled = false;
+        if (availableVariants.length === 0) {
+            setVariantPackageMap({});
+            return;
+        }
+        (async () => {
+            const entries: [string, string[]][] = await Promise.all(
+                availableVariants.map(async (variant): Promise<[string, string[]]> => {
+                    try {
+                        const pkgs = await Packages.list(variant.id);
+                        // Build the same key format as vuln.packages:
+                        // "name@version::supplier" when supplier present, else "name@version"
+                        return [variant.id, pkgs.map(p =>
+                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
+                        )];
+                    } catch {
+                        return [variant.id, []];
+                    }
+                })
+            );
+            if (!cancelled) setVariantPackageMap(Object.fromEntries(entries));
+        })();
+        return () => { cancelled = true; };
+    }, [availableVariants]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -1278,6 +1309,7 @@ type VariantScopedSnapshot = {
                                             variants={availableVariants}
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
+                                            variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                         />
                                     </li>
                                 )}

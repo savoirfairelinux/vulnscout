@@ -425,10 +425,9 @@ describe('StatusEditor', () => {
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);
 
         const checkboxes = screen.getAllByRole('checkbox');
-        // Uncheck one package
+        // With multiple packages and no incompatibility map, all start unchecked.
         await user.click(checkboxes[0]);
-        // Re-check it
-        await user.click(checkboxes[0]);
+        await user.click(checkboxes[1]);
 
         const statusSelect = screen.getByRole('combobox');
         await user.selectOptions(statusSelect, 'affected');
@@ -464,5 +463,234 @@ describe('StatusEditor', () => {
         expect(defaultProps.onAddAssessment).toHaveBeenCalledWith(
             expect.objectContaining({ variant_ids: ['v2'] })
         );
+    });
+
+    test('should leave multiple packages unchecked by default', () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        render(<StatusEditor {...defaultProps} availablePackages={packages} />);
+
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        expect(checkboxes).toHaveLength(2);
+        expect(checkboxes[0].checked).toBe(false);
+        expect(checkboxes[1].checked).toBe(false);
+    });
+
+    test('should auto-select the package when only one is available', () => {
+        const packages = ['only-pkg@1.0.0'];
+        render(<StatusEditor {...defaultProps} availablePackages={packages} />);
+
+        const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+        expect(checkbox.checked).toBe(true);
+    });
+
+    test('should auto-select the package when a single defaultSelectedPackages is provided', () => {
+        const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
+        render(
+            <StatusEditor
+                {...defaultProps}
+                availablePackages={packages}
+                defaultSelectedPackages={['pkg2@2.0.0']}
+            />
+        );
+
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Order matches availablePackages: pkg1, pkg2
+        expect(checkboxes[0].checked).toBe(false);
+        expect(checkboxes[1].checked).toBe(true);
+    });
+
+    test('should disable variants that lack the selected package', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0'],
+            v2: ['pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Select pkgA (only present in v1)
+        await user.click(checkboxes[2]);
+
+        // v2 has no selected package → disabled; v1 stays enabled
+        expect(checkboxes[1].disabled).toBe(true);
+        expect(checkboxes[0].disabled).toBe(false);
+    });
+
+    test('should disable packages absent from the selected variant', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0'],
+            v2: ['pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Select v1 (only contains pkgA)
+        await user.click(checkboxes[0]);
+
+        // pkgB is not in v1 → disabled; pkgA stays enabled
+        expect(checkboxes[3].disabled).toBe(true);
+        expect(checkboxes[2].disabled).toBe(false);
+    });
+
+    test('should deselect an incompatible variant when a conflicting package is checked', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        // v1 and v2 share pkgA so both variants can be selected together;
+        // pkgB exists only in v2.
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0'],
+            v2: ['pkgA@1.0.0', 'pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Select v2 first (reaches both packages), then v1 (shares pkgA so it
+        // stays enabled). Both variants end up selected.
+        await user.click(checkboxes[1]);
+        await user.click(checkboxes[0]);
+        expect(checkboxes[0].checked).toBe(true);
+        expect(checkboxes[1].checked).toBe(true);
+
+        // Check pkgB, which only exists in v2.
+        await user.click(checkboxes[3]);
+
+        // v1 is no longer compatible with the selected package → auto-deselected
+        expect(checkboxes[0].checked).toBe(false);
+        expect(checkboxes[1].checked).toBe(true);
+    });
+
+    test('should drop now-unreachable packages when a variant is unchecked', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0'],
+            v2: ['pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Select v1 then its package pkgA
+        await user.click(checkboxes[0]);
+        await user.click(checkboxes[2]);
+        expect(checkboxes[2].checked).toBe(true);
+
+        // Unchecking v1 removes pkgA since no other selected variant reaches it
+        await user.click(checkboxes[0]);
+        expect(checkboxes[2].checked).toBe(false);
+    });
+
+    test('should keep packages reachable from a remaining variant when another variant is unchecked', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+            { id: 'v2', name: 'release', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        // v1 is a subset of v2: both share pkgA, only v2 also has pkgB.
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0'],
+            v2: ['pkgA@1.0.0', 'pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // checkbox order: v1, v2, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Select both variants (shared pkgA keeps them compatible).
+        await user.click(checkboxes[1]);
+        await user.click(checkboxes[0]);
+        // Check the shared package, which both variants provide.
+        await user.click(checkboxes[2]);
+        expect(checkboxes[2].checked).toBe(true);
+
+        // Uncheck v2; v1 still provides pkgA, so it must remain selected.
+        await user.click(checkboxes[1]);
+        expect(checkboxes[1].checked).toBe(false);
+        expect(checkboxes[0].checked).toBe(true);
+        expect(checkboxes[2].checked).toBe(true);
+    });
+
+    test('should clear a package selection when its checkbox is unchecked', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            { id: 'v1', name: 'default', project_id: 'p1' },
+        ];
+        const packages = ['pkgA@1.0.0', 'pkgB@1.0.0'];
+        const variantPackageMap = {
+            v1: ['pkgA@1.0.0', 'pkgB@1.0.0'],
+        };
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={packages}
+                variantPackageMap={variantPackageMap}
+            />
+        );
+
+        // Single variant auto-selects; checkbox order: v1, pkgA, pkgB
+        const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+        // Check then uncheck pkgA.
+        await user.click(checkboxes[1]);
+        expect(checkboxes[1].checked).toBe(true);
+        await user.click(checkboxes[1]);
+        expect(checkboxes[1].checked).toBe(false);
     });
 });
