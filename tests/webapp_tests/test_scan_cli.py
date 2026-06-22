@@ -651,15 +651,15 @@ class TestOsvScanCoverage:
 
 
 # ---------------------------------------------------------------------------
-# SCC scan CLI tests
+# sbom-cve-check scan CLI tests
 # ---------------------------------------------------------------------------
 
 class TestSccScanCLI:
-    """flask scc-scan CLI command (engine is fully mocked)."""
+    """flask sbom-cve-check-scan CLI command (engine is fully mocked)."""
 
     @patch("src.controllers.scc_engine.get_engine")
     def test_scc_scan_creates_findings(self, mock_get_engine, app, ids):
-        """scc-scan records findings and assessments via the bulk writer."""
+        """sbom-cve-check-scan records findings and assessments via the bulk writer."""
         from src.bin.cmd_vuln_scan import _SccBulkWriter
         from unittest.mock import MagicMock
 
@@ -688,7 +688,7 @@ class TestSccScanCLI:
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "scc-scan",
+            "sbom-cve-check-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
         ])
@@ -704,14 +704,14 @@ class TestSccScanCLI:
 
     @patch("src.controllers.scc_engine.get_engine")
     def test_scc_scan_no_vulns(self, mock_get_engine, app, ids):
-        """scc-scan with an engine that returns nothing completes without error."""
+        """sbom-cve-check-scan with an engine that returns nothing completes without error."""
         fake_engine = MagicMock()
         fake_engine.applicable_vulns.return_value = []
         mock_get_engine.return_value = fake_engine
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "scc-scan",
+            "sbom-cve-check-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
         ])
@@ -727,7 +727,7 @@ class TestSccScanCLI:
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "scc-scan",
+            "sbom-cve-check-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
         ])

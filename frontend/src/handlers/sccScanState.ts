@@ -1,5 +1,5 @@
 /**
- * SCC (sbom-cve-check) scan state — per-variant progress tracking.
+ * sbom-cve-check scan state — per-variant progress tracking.
  *
  * Thin wrapper around the generic ScanStateManager.
  * Lives at module scope so state survives component unmounts.
@@ -10,8 +10,8 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as SccState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid) => ScansHandler.triggerSccScan(vid),
-    (vid) => ScansHandler.getSccScanStatus(vid),
+    (vid) => ScansHandler.triggerSbomCveCheckScan(vid),
+    (vid) => ScansHandler.getSbomCveCheckScanStatus(vid),
     "sbom-cve-check",
 );
 

@@ -728,33 +728,32 @@ def init_app(app: Flask) -> None:
         return scan_status_response(variant_id, _osv_scans_in_progress)
 
     # ------------------------------------------------------------------
-    # SCC (sbom-cve-check) Scan — local NVD-FKIE + CVEList with VEX
+    # sbom-cve-check Scan — local NVD-FKIE + CVEList with VEX
     # ------------------------------------------------------------------
 
-    _scc_scans_in_progress: dict = {}
+    _sbom_cve_check_scans_in_progress: dict = {}
 
-    @app.route('/api/variants/<variant_id>/scc-scan', methods=['POST'])
-    def trigger_scc_scan(variant_id):
+    @app.route('/api/variants/<variant_id>/sbom-cve-check-scan', methods=['POST'])
+    def trigger_sbom_cve_check_scan(variant_id):
         """Trigger a local CVE-database scan (NVD-FKIE + CVEList V5) for the given variant.
 
         Matches every active package against locally-cloned advisory databases,
         applies product-name aliasing and semantic version-range analysis, and
-        records each engine VEX verdict.  Works fully offline once the databases
-        are cloned.
+        records each engine VEX verdict.  Works once the databases are cloned.
         """
         variant_uuid, variant, err = validate_trigger(
-            variant_id, _scc_scans_in_progress, "sbom-cve-check scan")
+            variant_id, _sbom_cve_check_scans_in_progress, "sbom-cve-check scan")
         if err is not None:
             return err
 
         vid_str = str(variant_uuid)
-        init_progress(_scc_scans_in_progress, vid_str)
+        init_progress(_sbom_cve_check_scans_in_progress, vid_str)
 
-        def _run_scc_scan():
+        def _run_sbom_cve_check_scan():
             with app.app_context():
-                _do_scc_scan(vid_str, variant_uuid)
+                _do_sbom_cve_check_scan(vid_str, variant_uuid)
 
-        def _do_scc_scan(vid_str, variant_uuid):
+        def _do_sbom_cve_check_scan(vid_str, variant_uuid):
             try:
                 from ..controllers.scc_engine import get_engine
                 from ..bin.cmd_vuln_scan import (
@@ -762,17 +761,17 @@ def init_app(app: Flask) -> None:
                 )
 
                 # 1. Resolve active packages
-                _scc_scans_in_progress[vid_str]["logs"].append(
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _scc_scans_in_progress, vid_str)
+                    variant_uuid, _sbom_cve_check_scans_in_progress, vid_str)
                 if pkg_err:
                     return
 
                 total_pkgs = len(packages)
-                _scc_scans_in_progress[vid_str]["total"] = total_pkgs
-                _scc_scans_in_progress[vid_str]["logs"].append(
+                _sbom_cve_check_scans_in_progress[vid_str]["total"] = total_pkgs
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
                     f"Resolved {total_pkgs} active packages"
                 )
 
@@ -791,7 +790,7 @@ def init_app(app: Flask) -> None:
                         self._logs.append(self.format(record))
 
                 _forwarder = _SccLogForwarder(
-                    _scc_scans_in_progress[vid_str]["logs"]
+                    _sbom_cve_check_scans_in_progress[vid_str]["logs"]
                 )
                 _forwarder.setFormatter(logging.Formatter("%(message)s"))
                 _scc_logger = logging.getLogger("sbom_cve_check")
@@ -799,12 +798,12 @@ def init_app(app: Flask) -> None:
                 try:
                     engine = get_engine()
                 except Exception as e:
-                    set_error(_scc_scans_in_progress, vid_str,
+                    set_error(_sbom_cve_check_scans_in_progress, vid_str,
                               f"Failed to load CVE databases: {str(e)[:300]}")
                     return
                 finally:
                     _scc_logger.removeHandler(_forwarder)
-                _scc_scans_in_progress[vid_str]["logs"].append(
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
                     "Index ready — scanning packages"
                 )
 
@@ -821,7 +820,7 @@ def init_app(app: Flask) -> None:
                     pkg_label = (
                         f"{pkg.name}@{pkg.version}" if pkg.name else str(pkg.id)
                     )
-                    _scc_scans_in_progress[vid_str]["progress"] = (
+                    _sbom_cve_check_scans_in_progress[vid_str]["progress"] = (
                         f"{idx}/{total_pkgs} packages"
                     )
 
@@ -837,9 +836,9 @@ def init_app(app: Flask) -> None:
                             f"[{idx}/{total_pkgs}] ERROR "
                             f"{pkg_label}: {str(e)[:200]}"
                         )
-                        _scc_scans_in_progress[vid_str]["logs"].append(log_entry)
-                        _scc_scans_in_progress[vid_str]["done_count"] = idx
-                        print(f"[SCC Scan] Error scanning {pkg_label}: {e}", flush=True)
+                        _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(log_entry)
+                        _sbom_cve_check_scans_in_progress[vid_str]["done_count"] = idx
+                        print(f"[sbom-cve-check Scan] Error scanning {pkg_label}: {e}", flush=True)
                         continue
 
                     if persisted_ids:
@@ -853,8 +852,8 @@ def init_app(app: Flask) -> None:
                         log_entry = (
                             f"[{idx}/{total_pkgs}] {pkg_label} → no vulnerabilities"
                         )
-                    _scc_scans_in_progress[vid_str]["logs"].append(log_entry)
-                    _scc_scans_in_progress[vid_str]["done_count"] = idx
+                    _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(log_entry)
+                    _sbom_cve_check_scans_in_progress[vid_str]["done_count"] = idx
 
                     # Flush in large bulk-inserted chunks to bound transaction size.
                     writer.maybe_flush()
@@ -862,12 +861,12 @@ def init_app(app: Flask) -> None:
                 writer.flush()
                 cves_found = writer.cves_found
 
-                done_logs = _scc_scans_in_progress[vid_str].get("logs", [])
+                done_logs = _sbom_cve_check_scans_in_progress[vid_str].get("logs", [])
                 done_logs.append(
                     f"✓ Scan complete — found {len(cves_found)} "
                     f"unique vulnerabilities across {total_pkgs} packages"
                 )
-                _scc_scans_in_progress[vid_str] = {
+                _sbom_cve_check_scans_in_progress[vid_str] = {
                     "status": "done",
                     "error": None,
                     "progress": (
@@ -881,18 +880,18 @@ def init_app(app: Flask) -> None:
 
             except Exception as e:
                 db.session.rollback()
-                set_error(_scc_scans_in_progress, vid_str, str(e)[:500])
+                set_error(_sbom_cve_check_scans_in_progress, vid_str, str(e)[:500])
 
         thread = threading.Thread(
-            target=_run_scc_scan,
-            name=f"scc-scan-{vid_str}",
+            target=_run_sbom_cve_check_scan,
+            name=f"sbom-cve-check-scan-{vid_str}",
             daemon=True,
         )
         thread.start()
 
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
-    @app.route('/api/variants/<variant_id>/scc-scan/status')
-    def scc_scan_status(variant_id):
-        """Check the status of a running SCC scan for the given variant."""
-        return scan_status_response(variant_id, _scc_scans_in_progress)
+    @app.route('/api/variants/<variant_id>/sbom-cve-check-scan/status')
+    def sbom_cve_check_scan_status(variant_id):
+        """Check the status of a running sbom-cve-check scan for the given variant."""
+        return scan_status_response(variant_id, _sbom_cve_check_scans_in_progress)

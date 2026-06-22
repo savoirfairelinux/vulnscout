@@ -846,12 +846,12 @@ Same response shape as Grype status. `total` is the number of unique PURLs to qu
 ### Trigger sbom-cve-check Scan
 
 ```
-POST /api/variants/<variant_id>/scc-scan
+POST /api/variants/<variant_id>/sbom-cve-check-scan
 ```
 
-Runs a fully offline CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
+Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
 
-The databases must be present at `SCC_DATABASES_DIR` inside the container (default: `/scc_databases`, mounted from the host path `$VULNSCOUT_SCC_DB_DIR` or `~/.cache/sbom_cve_check/databases`). Set `SCC_AUTO_UPDATE=1` to let the engine clone or update them on startup.
+The databases must be present at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/sbom_cve_check_databases`, mounted from the host path `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` or `~/.cache/sbom_cve_check/databases`). Set `sbom_cve_check_AUTO_UPDATE=1` to let the engine clone or update them on startup.
 
 **Response:** `202 Accepted`
 ```json
@@ -863,7 +863,7 @@ The databases must be present at `SCC_DATABASES_DIR` inside the container (defau
 ### Check sbom-cve-check Scan Status
 
 ```
-GET /api/variants/<variant_id>/scc-scan/status
+GET /api/variants/<variant_id>/sbom-cve-check-scan/status
 ```
 
 Same response shape as Grype status. `total` is the number of active packages being scanned, `done_count` advances per package.

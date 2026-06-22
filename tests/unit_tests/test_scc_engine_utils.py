@@ -40,28 +40,28 @@ class TestTruthy:
 class TestDatabasesDir:
 
     def test_uses_env_var_when_set(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("SCC_DATABASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
         assert result == tmp_path.expanduser().resolve()
 
     def test_uses_xdg_cache_home_when_env_set(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("SCC_DATABASES_DIR", raising=False)
+        monkeypatch.delenv("SBOM_CVE_CHECK_DATABASES_DIR", raising=False)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
         assert result == tmp_path.joinpath("sbom_cve_check", "databases").resolve()
 
     def test_falls_back_to_home_cache(self, monkeypatch):
-        monkeypatch.delenv("SCC_DATABASES_DIR", raising=False)
+        monkeypatch.delenv("SBOM_CVE_CHECK_DATABASES_DIR", raising=False)
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
         assert "sbom_cve_check" in str(result)
 
     def test_blank_env_var_falls_back(self, monkeypatch):
-        monkeypatch.setenv("SCC_DATABASES_DIR", "   ")
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", "   ")
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
@@ -490,9 +490,9 @@ class TestGetAndResetEngine:
         mod._ENGINE = None
 
     def test_get_engine_creates_once(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SCC_DATABASES_DIR", str(tmp_path))
-        monkeypatch.delenv("SCC_GIT_FETCH_DEPTH", raising=False)
-        monkeypatch.delenv("SCC_AUTO_UPDATE", raising=False)
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        monkeypatch.delenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH", raising=False)
+        monkeypatch.delenv("SBOM_CVE_CHECK_AUTO_UPDATE", raising=False)
 
         nvd = tmp_path / "nvd-fkie"
         nvd.mkdir()
@@ -515,9 +515,9 @@ class TestGetAndResetEngine:
         assert e1 is e2  # cached — not rebuilt on second call
 
     def test_get_engine_respects_fetch_depth_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SCC_DATABASES_DIR", str(tmp_path))
-        monkeypatch.setenv("SCC_GIT_FETCH_DEPTH", "5")
-        monkeypatch.delenv("SCC_AUTO_UPDATE", raising=False)
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH", "5")
+        monkeypatch.delenv("SBOM_CVE_CHECK_AUTO_UPDATE", raising=False)
 
         nvd = tmp_path / "nvd-fkie"
         nvd.mkdir()
@@ -550,9 +550,9 @@ class TestGetAndResetEngine:
         assert captured["fetch_depth"] == 5
 
     def test_get_engine_invalid_depth_defaults_to_1(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SCC_DATABASES_DIR", str(tmp_path))
-        monkeypatch.setenv("SCC_GIT_FETCH_DEPTH", "notanint")
-        monkeypatch.delenv("SCC_AUTO_UPDATE", raising=False)
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH", "notanint")
+        monkeypatch.delenv("SBOM_CVE_CHECK_AUTO_UPDATE", raising=False)
 
         nvd = tmp_path / "nvd-fkie"
         nvd.mkdir()
@@ -583,9 +583,9 @@ class TestGetAndResetEngine:
         assert captured["fetch_depth"] == 1
 
     def test_reset_engine_clears_cache(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SCC_DATABASES_DIR", str(tmp_path))
-        monkeypatch.delenv("SCC_GIT_FETCH_DEPTH", raising=False)
-        monkeypatch.delenv("SCC_AUTO_UPDATE", raising=False)
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        monkeypatch.delenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH", raising=False)
+        monkeypatch.delenv("SBOM_CVE_CHECK_AUTO_UPDATE", raising=False)
 
         nvd = tmp_path / "nvd-fkie"
         nvd.mkdir()

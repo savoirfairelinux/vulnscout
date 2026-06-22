@@ -1528,7 +1528,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         { key: 'grype', label: 'Grype', icon: faBug, color: 'purple' },
                                         { key: 'nvd', label: 'NVD CPE', icon: faShieldHalved, color: 'orange' },
                                         { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
-                                        { key: 'scc', label: 'sbom-cve-check (offline)', icon: faCrosshairs, color: 'sky' },
+                                        { key: 'scc', label: 'sbom-cve-check', icon: faCrosshairs, color: 'sky' },
                                     ] as const).map(({ key, label, icon, color }) => (
                                         <label
                                             key={key}

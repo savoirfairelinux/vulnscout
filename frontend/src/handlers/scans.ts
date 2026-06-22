@@ -270,9 +270,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerSccScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+    static async triggerSbomCveCheckScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scc-scan`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -280,9 +280,9 @@ class ScansHandler {
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 
-    static async getSccScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
+    static async getSbomCveCheckScanStatus(variantId: string): Promise<{ status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/scc-scan/status`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan/status`,
             { mode: 'cors' }
         );
         if (!response.ok) return { status: 'unknown' };

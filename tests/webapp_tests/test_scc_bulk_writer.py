@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Integration tests for the scc-scan bulk persistence writer.
+"""Integration tests for the sbom-cve-check-scan bulk persistence writer.
 
 These run against a live in-memory SQLite database (the real models, real
 foreign-key relationships and the real priority write lock) — only the engine
@@ -101,7 +101,7 @@ def _scan_pkg(writer, pkg, computed_status_pairs):
     """Feed one package's engine output through the writer.
 
     Every verdict is forwarded — including ``not_affected`` and ``fixed`` — so
-    the full VEX picture reaches persistence, mirroring the scc-scan callers.
+    the full VEX picture reaches persistence, mirroring the sbom-cve-check-scan callers.
     """
     seen = set()
     for computed, status in computed_status_pairs:
@@ -321,7 +321,7 @@ class TestSccBulkWriter:
 
     def test_existing_finding_without_assessment_not_given_pending(self, app):
         """A pre-existing finding that has no assessment must not receive a new
-        'Pending Assessment' from the scc-scan (only brand-new findings should)."""
+        'Pending Assessment' from the sbom-cve-check-scan (only brand-new findings should)."""
         with app.app_context():
             project = Project.create("P")
             variant = Variant.create("V", project.id)
@@ -344,7 +344,7 @@ class TestSccBulkWriter:
             assert findings[0].id == existing_fid
 
             # No assessment added — the pre-existing finding had none and the
-            # scc-scan must not inject a "Pending Assessment" for it.
+            # sbom-cve-check-scan must not inject a "Pending Assessment" for it.
             assert _db.session.query(Assessment).filter_by(
                 finding_id=existing_fid, variant_id=variant.id).count() == 0
             # The scan still recorded the observation.
@@ -352,7 +352,7 @@ class TestSccBulkWriter:
                 finding_id=existing_fid, scan_id=scan.id).count() == 1
 
     def test_changed_status_writes_no_new_assessment_if_one_exists(self, app):
-        """When a finding already has an assessment the scc-scan leaves it
+        """When a finding already has an assessment the sbom-cve-check-scan leaves it
         untouched, regardless of the engine's current verdict."""
         with app.app_context():
             project = Project.create("P")

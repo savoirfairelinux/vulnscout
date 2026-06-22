@@ -66,7 +66,7 @@ Input commands (can be chained, triggers scan automatically):
   --perform-grype-scan            Run Grype on the current DB content (after merging any added inputs)
   --perform-nvd-scan              Run an NVD CPE-based vulnerability scan
   --perform-osv-scan              Run an OSV PURL-based vulnerability scan
-  --perform-scc-scan              Run a local sbom-cve-check vulnerability scan
+  --perform-sbom-cve-check-scan          Run a sbom-cve-check vulnerability scan
 
 Scan & output commands:
   --match-condition <expr>        Run vulnerability scan
@@ -209,9 +209,9 @@ REFRESH_REMOTE_DELAY=2w
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
-    # Resolve SCC databases host path before config.env is sourced into env_args
-    # so that the host path is not overridden by SCC_DATABASES_DIR from config.env.
-    local _scc_host_db="${VULNSCOUT_SCC_DB_DIR:-${HOME}/.cache/sbom_cve_check/databases}"
+    # Resolve sbom-cve-check databases host path before config.env is sourced into env_args
+    # so that the host path is not overridden by SBOM_CVE_CHECK_DATABASES_DIR from config.env.
+    local _sbom_cve_check_host_db="${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-${HOME}/.cache/sbom_cve_check/databases}"
 
     local -a env_args=()
     _detect_legacy
@@ -221,15 +221,15 @@ EOF
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
     [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
-    # Pass SCC_AUTO_UPDATE from the host environment if the operator exported it,
+    # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment if the operator exported it,
     # since it is not a launcher-level variable (unlike VULNSCOUT_IMAGE) and
     # therefore does not appear in config.env.
-    [[ -n "${SCC_AUTO_UPDATE:-}" ]] && env_args+=(-e "SCC_AUTO_UPDATE=$SCC_AUTO_UPDATE")
+    [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
         -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:Z"
-        -v "$_scc_host_db:/scc_databases:Z"
+        -v "$_sbom_cve_check_host_db:/sbom_cve_check_databases:Z"
     )
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
@@ -324,8 +324,8 @@ parse_and_run() {
                 ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
             perform-osv-scan|--perform-osv-scan)
                 ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
-            perform-scc-scan|--perform-scc-scan|scc-scan|--scc-scan)
-                ensure_running; PENDING_ARGS+=(--perform-scc-scan); shift ;;
+            perform-sbom-cve-check-scan|--perform-sbom-cve-check-scan|sbom-cve-check-scan|--sbom-cve-check-scan)
+                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
             export-spdx|--export-spdx)
                 ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
             export-cdx|--export-cdx)

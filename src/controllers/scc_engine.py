@@ -10,13 +10,13 @@ the lifetime of the process.
 
 Configuration (environment variables):
 
-* ``SCC_DATABASES_DIR`` — directory holding the ``nvd-fkie`` and ``cvelist`` git
+* ``SBOM_CVE_CHECK_DATABASES_DIR`` — directory holding the ``nvd-fkie`` and ``cvelist`` git
   clones.  Defaults to ``$XDG_CACHE_HOME/sbom_cve_check/databases`` (i.e.
   ``~/.cache/sbom_cve_check/databases``).
-* ``SCC_GIT_FETCH_DEPTH`` — git fetch/clone depth (default ``1``: shallow clone).
-* ``SCC_AUTO_UPDATE`` — ``"1"``/``"true"`` to allow the engine to fetch fresh
+* ``SBOM_CVE_CHECK_GIT_FETCH_DEPTH`` — git fetch/clone depth (default ``1``: shallow clone).
+* ``SBOM_CVE_CHECK_AUTO_UPDATE`` — ``"1"``/``"true"`` to allow the engine to fetch fresh
   advisories on startup, anything else disables network updates (default
-  disabled, so scans run fully offline against the existing clones).
+  disabled, so scans run against the existing clones).
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _install_cpe_parse_caches() -> None:
 
 def _databases_dir() -> pathlib.Path:
     """Resolve the directory holding the local advisory git clones."""
-    env = os.getenv("SCC_DATABASES_DIR")
+    env = os.getenv("SBOM_CVE_CHECK_DATABASES_DIR")
     if env and env.strip():
         return pathlib.Path(env).expanduser().resolve()
     cache = os.getenv("XDG_CACHE_HOME") or "~/.cache"
@@ -133,8 +133,8 @@ class SccEngine:
             if not path.is_dir() and not auto_update:
                 raise RuntimeError(
                     f"Vulnerability database '{label}' not found at {path}. "
-                    "Clone it (or set SCC_AUTO_UPDATE=1 to let the engine clone it) "
-                    "before running scc-scan."
+                    "Clone it (or set SBOM_CVE_CHECK_AUTO_UPDATE=1 to let the engine clone it) "
+                    "before running sbom-cve-check-scan."
                 )
 
         # Let git read the clones even when the process uid differs from the
@@ -298,7 +298,7 @@ def get_engine() -> SccEngine:
         return _ENGINE
     with _ENGINE_LOCK:
         if _ENGINE is None:
-            depth_env = os.getenv("SCC_GIT_FETCH_DEPTH")
+            depth_env = os.getenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH")
             try:
                 fetch_depth = int(depth_env) if depth_env else 1
             except ValueError:
@@ -306,7 +306,7 @@ def get_engine() -> SccEngine:
             _ENGINE = SccEngine(
                 databases_dir=_databases_dir(),
                 fetch_depth=fetch_depth,
-                auto_update=_truthy(os.getenv("SCC_AUTO_UPDATE")),
+                auto_update=_truthy(os.getenv("SBOM_CVE_CHECK_AUTO_UPDATE")),
             )
     return _ENGINE
 

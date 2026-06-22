@@ -352,7 +352,7 @@ def osv_scan_command(project: str, variant: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# scc-scan: local NVD-FKIE + CVEList engine with version-range evaluation
+# sbom-cve-check-scan: local NVD-FKIE + CVEList engine with version-range evaluation
 # ---------------------------------------------------------------------------
 
 # OpenVEX status → human-readable simplified label (mirrors Assessment model).
@@ -392,7 +392,7 @@ def _scc_cvss_version(metric) -> str:
 
 
 class _SccBulkWriter:
-    """Buffered bulk persister for scc-scan findings.
+    """Buffered bulk persister for sbom-cve-check-scan findings.
 
     The previous implementation persisted every engine finding with its own
     ``get_or_create`` round-trips (vuln SELECT, finding SELECT + savepoint INSERT,
@@ -675,19 +675,19 @@ class _SccBulkWriter:
         return found
 
 
-@click.command("scc-scan")
+@click.command("sbom-cve-check-scan")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
 @with_appcontext
-def scc_scan_command(project: str, variant: str | None) -> None:
+def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
     """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
 
     Unlike the live ``nvd-scan`` / ``osv-scan`` paths, this command matches every
     active package against locally-cloned advisory databases, applies product-name
     aliasing and semantic version-range analysis, and records the engine's VEX
     verdict.  It detects vulnerabilities the CPE/PURL API scans miss (notably the
-    Linux kernel) and works fully offline against the existing clones.
+    Linux kernel) and works against the existing clones.
 
     Every verdict is recorded — including ``not_affected`` and ``fixed`` — so the
     full VEX picture is captured.  A new assessment is written only when the
