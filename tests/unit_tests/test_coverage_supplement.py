@@ -215,3 +215,70 @@ class TestEpssProgressTrackerError:
         assert progress["phase"] == "error"
         assert progress["message"] == "something went wrong"
         assert progress["last_update"] is not None
+
+
+# ===========================================================================
+# SBOMObservation — __repr__ (line 39) and create with commit=True (line 67)
+# ===========================================================================
+
+class TestSBOMObservation:
+    def test_repr(self, app):
+        """Call repr() on a bare SBOMObservation instance — covers __repr__ body."""
+        from src.models.sbom_observation import SBOMObservation
+        obs = SBOMObservation(
+            vulnerability_id="CVE-9999-REPR",
+            sbom_document_id=uuid.uuid4(),
+            key="test-key",
+            description="test-desc",
+        )
+        r = repr(obs)
+        assert "SBOMObservation" in r
+        assert "CVE-9999-REPR" in r
+
+    def test_create_commit_true(self, app, db_vuln):
+        """Call SBOMObservation.create() with default commit=True — covers db.session.commit() branch."""
+        from src.models.sbom_observation import SBOMObservation
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+
+        proj = Project.create("obs-create-proj")
+        variant = Variant.create("main", proj.id)
+        scan = Scan.create("obs-create-scan", variant.id)
+        doc = SBOMDocument.create("/obs/create.spdx", "test-source", scan.id)
+        obs = SBOMObservation.create(
+            vulnerability_id=db_vuln.id,
+            sbom_document_id=doc.id,
+            key="cve-check",
+            description="test description",
+        )
+        assert obs.id is not None
+        assert obs.vulnerability_id == db_vuln.id
+
+
+# ===========================================================================
+# SBOMDocument — get_by_path (lines 63-66)
+# ===========================================================================
+
+class TestSBOMDocumentGetByPath:
+    def test_get_by_path_existing(self, app):
+        """get_by_path returns the most-recently-created document for a given path."""
+        from src.models.sbom_document import SBOMDocument
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        proj = Project.create("doc-path-proj")
+        variant = Variant.create("main", proj.id)
+        scan = Scan.create("doc-path-scan", variant.id)
+        doc = SBOMDocument.create("/unique/path/test.spdx", "src", scan.id)
+        found = SBOMDocument.get_by_path("/unique/path/test.spdx")
+        assert found is not None
+        assert found.id == doc.id
+
+    def test_get_by_path_missing(self, app):
+        """get_by_path returns None when no document matches the path."""
+        from src.models.sbom_document import SBOMDocument
+        result = SBOMDocument.get_by_path("/nonexistent/path.spdx")
+        assert result is None

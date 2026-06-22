@@ -132,7 +132,8 @@ class ConditionParser:
             parsed = self.parse_string(conditions).asList()
             self.cache_parsed = (conditions, parsed)
 
-        assert parsed is not None
+        if parsed is None:
+            raise ValueError("Failed to parse conditions")
         res = self._eval_internal(parsed)
         self.data = {}
         return res

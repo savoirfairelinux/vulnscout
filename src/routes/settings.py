@@ -375,11 +375,13 @@ def init_app(app):
         source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
         if err:
             return None, err
-        assert source_uuid is not None
+        if source_uuid is None:
+            return None, (jsonify({"error": "Invalid source variant ID."}), 400)
         target_uuid, err = parse_uuid_or_400(target_id, "target_variant_id")
         if err:
             return None, err
-        assert target_uuid is not None
+        if target_uuid is None:
+            return None, (jsonify({"error": "Invalid target variant ID."}), 400)
 
         if source_uuid == target_uuid:
             return None, (jsonify({"error": "Source and target variants must be different."}), 400)

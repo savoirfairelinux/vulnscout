@@ -84,6 +84,7 @@ class TestSBOMPackageGet:
 
     def test_get_with_strings(self, app, sbom_doc, pkg):
         from src.models.sbom_package import SBOMPackage
+        SBOMPackage.get_or_create(sbom_doc.id, pkg.id)
         found = SBOMPackage.get(str(sbom_doc.id), str(pkg.id))
         assert found is not None
 
