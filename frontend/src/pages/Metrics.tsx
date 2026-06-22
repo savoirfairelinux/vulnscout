@@ -354,10 +354,13 @@ const packageColumns = [
                         label: '# of Vulnerabilities',
                         data: vulnerabilities.reduce((acc, vuln) => {
                           const summary = getVulnerabilityStatusSummary(vuln);
-                          acc[0] += summary.counts['Not affected'] ?? 0;
-                          acc[1] += summary.counts['Fixed'] ?? 0;
-                          acc[2] += summary.counts['Pending Assessment'] ?? 0;
-                          acc[3] += summary.counts['Exploitable'] ?? 0;
+                          // Count each vulnerability once per status it has (not once per variant).
+                          // A CVE may appear in both "Exploitable" and "Pending Assessment" across
+                          // different variants, but must never be counted more than once per status.
+                          if ((summary.counts['Not affected'] ?? 0) > 0) acc[0] += 1;
+                          if ((summary.counts['Fixed'] ?? 0) > 0) acc[1] += 1;
+                          if ((summary.counts['Pending Assessment'] ?? 0) > 0) acc[2] += 1;
+                          if ((summary.counts['Exploitable'] ?? 0) > 0) acc[3] += 1;
                             return acc;
                         }, [0, 0, 0, 0]),
                         backgroundColor: [
