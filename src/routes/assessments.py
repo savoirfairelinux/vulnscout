@@ -25,7 +25,8 @@ from ..helpers.assessment_io import (
     import_custom_data,
 )
 
-from flask import request
+from flask import request, Flask
+from flask.typing import ResponseReturnValue
 from sqlalchemy import select
 
 OPENVEX_FILE = "/scan/outputs/openvex.json"
@@ -62,14 +63,19 @@ def _resolve_package(pkg_string_id: str) -> "Package":
     return Package.find_or_create(name, version, supplier=_supplier)
 
 
-def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None):
+def _create_assessment_record(
+    assessment: "DBAssessment",
+    finding_id: UUID,
+    variant_id: UUID | None,
+    timestamp: datetime | None = None,
+) -> "DBAssessment":
     """Create a single DBAssessment row from a validated DTO.
 
     Shared between ``add_assessment`` (single) and ``add_assessments_batch``.
     """
-    kwargs = dict(
-        status=assessment.status,
-        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status, "Pending Assessment"),
+    return DBAssessment.create(
+        status=assessment.status or "",
+        simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
         finding_id=finding_id,
         variant_id=variant_id,
         origin="custom",
@@ -79,21 +85,19 @@ def _create_assessment_record(assessment, finding_id, variant_id, timestamp=None
         workaround=getattr(assessment, "workaround", None),
         responses=list(assessment.responses) if assessment.responses else [],
         commit=True,
+        timestamp=timestamp,
     )
-    if timestamp is not None:
-        kwargs["timestamp"] = timestamp
-    return DBAssessment.create(**kwargs)
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     if "OPENVEX_FILE" not in app.config:
         app.config["OPENVEX_FILE"] = OPENVEX_FILE
 
-    def _get_all_db_assessments():
+    def _get_all_db_assessments() -> list["DBAssessment"]:
         return DBAssessment.get_all()
 
-    def _save_openvex():
+    def _save_openvex() -> None:
         """Re-generate and save the OpenVEX file from current DB state."""
         try:
             import json
@@ -108,19 +112,23 @@ def init_app(app):
             verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
-    def index_assess():
+    def index_assess() -> ResponseReturnValue:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
         elif project_id:
             from ..models.variant import Variant as DBVariant
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
             variants = DBVariant.get_by_project(project_uuid)
             variant_ids = [v.id for v in variants]
             if variant_ids:
@@ -136,7 +144,7 @@ def init_app(app):
         return assessments
 
     @app.route('/api/assessments/review')
-    def review_assessments():
+    def review_assessments() -> ResponseReturnValue:
         """Return assessments not linked to any scan (handmade via the web UI).
 
         Each assessment dict is enriched with a ``vuln_texts`` key mapping to the
@@ -151,12 +159,16 @@ def init_app(app):
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if vid is None:
+                return {"error": "Internal error"}, 500
             variant_ids = [vid]
             assessments = DBAssessment.get_handmade([vid])
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if pid is None:
+                return {"error": "Internal error"}, 500
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
             assessments = DBAssessment.get_handmade(variant_ids)
         else:
@@ -176,7 +188,7 @@ def init_app(app):
         return assessments_serialized
 
     @app.route('/api/assessments/review/export')
-    def export_review_openvex():
+    def export_review_openvex() -> ResponseReturnValue:
         """Export handmade (review) assessments as a .tar.gz containing one
         OpenVEX JSON file per variant (``<variant_name>.json``).
         Assessments without a variant are placed in ``unassigned.json``.
@@ -197,7 +209,7 @@ def init_app(app):
         }
 
     @app.route('/api/assessments/review/import', methods=['POST'])
-    def import_review_openvex():
+    def import_review_openvex() -> ResponseReturnValue:
         """Import OpenVEX review assessments from a ``.json`` or ``.tar.gz`` file.
 
         * **Single .json file** – the filename (without extension) must match
@@ -289,7 +301,7 @@ def init_app(app):
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
 
     @app.route('/api/assessments/review/time-estimates')
-    def review_time_estimates():
+    def review_time_estimates() -> ResponseReturnValue:
         """Return vulnerabilities that have non-zero time estimates.
 
         Each entry contains the vulnerability ID and its three-point estimate
@@ -319,14 +331,18 @@ def init_app(app):
 
         variant_ids_filter: list[UUID] | None = None
         if variant_id:
-            vid, err = parse_uuid_or_400(variant_id, "variant_id")
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
-            variant_ids_filter = [vid]
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
+            variant_ids_filter = [variant_uuid]
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if pid is None:
+                return {"error": "Internal error"}, 500
             variant_ids_filter = [v.id for v in DBVariant.get_by_project(pid)]
 
         if variant_ids_filter is not None:
@@ -385,7 +401,7 @@ def init_app(app):
         return sorted(result, key=lambda x: (x["vuln_id"], x["variant_id"] or ""))
 
     @app.route('/api/assessments/review/custom-cvss')
-    def review_custom_cvss():
+    def review_custom_cvss() -> ResponseReturnValue:
         """Return vulnerabilities that have custom CVSS scores.
 
         A custom CVSS score is identified by ``origin == 'custom'``.
@@ -401,12 +417,16 @@ def init_app(app):
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if vid is None:
+                return {"error": "Internal error"}, 500
             variant_ids = [vid]
             query = query.where(db.or_(Metrics.variant_id == vid, Metrics.variant_id.is_(None)))
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if pid is None:
+                return {"error": "Internal error"}, 500
             variant_ids = [v.id for v in DBVariant.get_by_project(pid)]
             if variant_ids:
                 query = query.where(db.or_(Metrics.variant_id.in_(variant_ids), Metrics.variant_id.is_(None)))
@@ -437,7 +457,7 @@ def init_app(app):
         return result
 
     @app.route('/api/assessments/review/export-custom-data')
-    def export_review_custom_data():
+    def export_review_custom_data() -> ResponseReturnValue:
         """Export handmade (review) assessments, custom CVSS scores and time
         estimates as a single JSON file.
 
@@ -451,12 +471,14 @@ def init_app(app):
 
         from ..models.project import Project as DBProject
 
-        variant_ids = None
+        variant_ids: list[UUID] | None = None
         project_name = None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if vid is None:
+                return {"error": "Internal error"}, 500
             variant_ids = [vid]
             variant = DBVariant.get_by_id(vid)
             if variant and variant.project:
@@ -465,6 +487,8 @@ def init_app(app):
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if pid is None:
+                return {"error": "Internal error"}, 500
             project = DBProject.get_by_id(pid)
             if project:
                 project_name = project.name
@@ -487,7 +511,7 @@ def init_app(app):
         }
 
     @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
-    def import_review_custom_data():
+    def import_review_custom_data() -> ResponseReturnValue:
         """Import assessments, CVSS scores and time estimates from a custom-data
         JSON file.
 
@@ -538,14 +562,14 @@ def init_app(app):
         return result, status_code
 
     @app.route('/api/assessments/<assessment_id>')
-    def assess_by_id(assessment_id: str):
+    def assess_by_id(assessment_id: str) -> ResponseReturnValue:
         item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
         return item.to_dict(), 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
-    def list_assess_by_vuln(vuln_id: str):
+    def list_assess_by_vuln(vuln_id: str) -> ResponseReturnValue:
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         assessments = []
@@ -557,7 +581,7 @@ def init_app(app):
         return assessments, 200
 
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
-    def list_variants_by_vuln(vuln_id: str):
+    def list_variants_by_vuln(vuln_id: str) -> ResponseReturnValue:
         """Return all distinct variants that have a finding for this vulnerability
         (via the Observation → Scan → Variant chain)."""
         from ..models.observation import Observation
@@ -584,7 +608,7 @@ def init_app(app):
         return variants_out, 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
-    def add_assessment(vuln_id: str):
+    def add_assessment(vuln_id: str) -> ResponseReturnValue:
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -596,8 +620,11 @@ def init_app(app):
 
         assessment, status = payload_to_assessment(payload_data)
         if status != 200:
+            if not isinstance(assessment, dict):
+                return {"error": "Internal error"}, 500
             return assessment, status
-        assert isinstance(assessment, DBAssessment)
+        if not isinstance(assessment, DBAssessment):
+            return {"error": "Internal error"}, 500
 
         # Resolve variant_id once — same for all packages in this request
         variant_id_raw = payload_data.get('variant_id') or None
@@ -639,7 +666,7 @@ def init_app(app):
         return response_body, 200
 
     @app.route("/api/assessments/batch", methods=["POST"])
-    def add_assessments_batch():
+    def add_assessments_batch() -> ResponseReturnValue:
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
@@ -658,10 +685,14 @@ def init_app(app):
 
                 assessment, status = payload_to_assessment(item)
                 if status != 200:
-                    assert isinstance(assessment, dict)
+                    if not isinstance(assessment, dict):
+                        errors.append({"vuln_id": item.get("vuln_id"), "error": "Internal error"})
+                        continue
                     errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
                     continue
-                assert isinstance(assessment, DBAssessment)
+                if not isinstance(assessment, DBAssessment):
+                    errors.append({"vuln_id": item.get("vuln_id"), "error": "Internal error"})
+                    continue
 
                 vuln_id = assessment.vuln_id
                 # Parse optional variant_id from the raw item
@@ -713,7 +744,7 @@ def init_app(app):
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
-    def update_assessment(assessment_id: str):
+    def update_assessment(assessment_id: str) -> ResponseReturnValue:
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -765,7 +796,7 @@ def init_app(app):
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
-    def delete_assessment(assessment_id: str):
+    def delete_assessment(assessment_id: str) -> ResponseReturnValue:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
@@ -773,7 +804,7 @@ def init_app(app):
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 
-def payload_to_assessment(data):
+def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":
     """
     Take an object in input and try to convert it to an Assessment DTO.
     Return either (Assessment, 200) or (error_dict, http_code).

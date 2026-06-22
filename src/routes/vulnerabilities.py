@@ -302,9 +302,13 @@ def init_app(app):
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if base_uuid is None:
+                return {"error": "Internal error"}, 500
             compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
             if err:
                 return err
+            if compare_uuid is None:
+                return {"error": "Internal error"}, 500
             base_latest_ids = active_scan_ids_for_variant(base_uuid)
             compare_latest_ids = active_scan_ids_for_variant(compare_uuid)
             current_scan_ids = compare_latest_ids
@@ -372,6 +376,8 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             _scope_variant = variant_uuid
             _scope_project = None
             latest_ids = active_scan_ids_for_variant(variant_uuid)
@@ -438,6 +444,8 @@ def init_app(app):
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
             _scope_variant = None
             _scope_project = project_uuid
             latest_ids = active_scan_ids_for_project(project_uuid)
@@ -790,14 +798,17 @@ def init_app(app):
             _updated_effort, err = validate_effort(eff)
             if err:
                 return err, 400
-            assert _updated_effort is not None
+            if _updated_effort is None:
+                return {"error": "Internal error"}, 500
 
             variant_id = payload_data.get("variant_id")
             if variant_id is not None:
-                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                if err:
-                    return err
-                target_variant_ids = [variant_id]
+                variant_uuid, uuid_err = parse_uuid_or_400(variant_id, "variant_id")
+                if uuid_err:
+                    return uuid_err
+                if variant_uuid is None:
+                    return {"error": "Internal error"}, 500
+                target_variant_ids: list[uuid.UUID | None] = [variant_uuid]
             else:
                 target_variant_ids = _variant_ids_for_vulnerability(record.id)
                 if not target_variant_ids:
@@ -817,10 +828,12 @@ def init_app(app):
         if "cvss" in payload_data:
             variant_id = payload_data.get("variant_id")
             if variant_id is not None:
-                variant_id, err = parse_uuid_or_400(variant_id, "variant_id")
-                if err:
-                    return err
-                target_variant_ids = [variant_id]
+                variant_uuid, uuid_err = parse_uuid_or_400(variant_id, "variant_id")
+                if uuid_err:
+                    return uuid_err
+                if variant_uuid is None:
+                    return {"error": "Internal error"}, 500
+                target_variant_ids = [variant_uuid]
             else:
                 target_variant_ids = _variant_ids_for_vulnerability(record.id)
                 if not target_variant_ids:
@@ -878,14 +891,19 @@ def init_app(app):
                 if err:
                     errors.append({"id": item["id"], "error": err})
                     continue
-                assert _updated_effort is not None
+                if _updated_effort is None:
+                    errors.append({"id": item["id"], "error": "Internal error"})
+                    continue
                 item_variant_id = item.get("variant_id")
                 if item_variant_id is not None:
-                    item_variant_id, err = parse_uuid_or_400(item_variant_id, "variant_id")
-                    if err:
+                    item_variant_uuid, uuid_err = parse_uuid_or_400(item_variant_id, "variant_id")
+                    if uuid_err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                    target_variant_ids = [item_variant_id]
+                    if item_variant_uuid is None:
+                        errors.append({"id": item["id"], "error": "Internal error"})
+                        continue
+                    target_variant_ids: list[uuid.UUID | None] = [item_variant_uuid]
                 else:
                     target_variant_ids = _variant_ids_for_vulnerability(record.id)
                     if not target_variant_ids:
@@ -905,11 +923,14 @@ def init_app(app):
             if "cvss" in item:
                 cvss_variant_id = item.get("variant_id")
                 if cvss_variant_id is not None:
-                    cvss_variant_id, err = parse_uuid_or_400(cvss_variant_id, "variant_id")
-                    if err:
+                    cvss_variant_uuid, uuid_err = parse_uuid_or_400(cvss_variant_id, "variant_id")
+                    if uuid_err:
                         errors.append({"id": item["id"], "error": "Invalid variant_id"})
                         continue
-                    target_variant_ids = [cvss_variant_id]
+                    if cvss_variant_uuid is None:
+                        errors.append({"id": item["id"], "error": "Internal error"})
+                        continue
+                    target_variant_ids = [cvss_variant_uuid]
                 else:
                     target_variant_ids = _variant_ids_for_vulnerability(record.id)
                     if not target_variant_ids:

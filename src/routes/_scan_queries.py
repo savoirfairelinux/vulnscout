@@ -9,9 +9,11 @@ dicts/sets without any diff or comparison logic.
 
 import uuid as uuid_module
 from dataclasses import dataclass
+from datetime import datetime
 import typing
+from typing import Dict, List, Optional, Sequence, Tuple, TypeAlias
 
-from sqlalchemy import select
+from sqlalchemy import select, Row
 from sqlalchemy.orm import selectinload
 
 from ..models.scan import Scan
@@ -25,12 +27,26 @@ from ..models.project import Project
 from ..models import SBOMObservation, Vulnerability
 from ..extensions import db
 
+# One row of ``_assessment_rows_for_scans`` (column order matches the query).
+AssessmentRow: TypeAlias = Row[Tuple[
+    uuid_module.UUID,   # scan_id
+    uuid_module.UUID,   # assessment id
+    datetime,           # assessment timestamp
+    Optional[str],      # status
+    Optional[str],      # simplified_status
+    Optional[str],      # justification
+    Optional[str],      # impact_statement
+    Optional[str],      # status_notes
+    str,                # vulnerability_id
+    Optional[str],      # origin
+]]
+
 
 # ---------------------------------------------------------------------------
 # Batch query — findings
 # ---------------------------------------------------------------------------
 
-def _findings_by_scan_ids(scan_ids: list) -> dict:
+def _findings_by_scan_ids(scan_ids: List[uuid_module.UUID]) -> Dict[uuid_module.UUID, set[uuid_module.UUID]]:
     """Return {scan_id: set(finding_id)} using a single DB query."""
     if not scan_ids:
         return {}
@@ -38,7 +54,7 @@ def _findings_by_scan_ids(scan_ids: list) -> dict:
         db.select(Observation.scan_id, Observation.finding_id)
         .where(Observation.scan_id.in_(scan_ids))
     ).all()
-    result: dict = {}
+    result: Dict[uuid_module.UUID, set[uuid_module.UUID]] = {}
     for sid, fid in rows:
         result.setdefault(sid, set()).add(fid)
     return result
@@ -48,7 +64,7 @@ def _findings_by_scan_ids(scan_ids: list) -> dict:
 # Batch query — vulnerabilities
 # ---------------------------------------------------------------------------
 
-def _vulns_by_scan_ids(scan_ids: list) -> dict:
+def _vulns_by_scan_ids(scan_ids: List[uuid_module.UUID]) -> Dict[uuid_module.UUID, set[str]]:
     """Return {scan_id: set(vulnerability_id)} via Observation -> Finding join."""
     if not scan_ids:
         return {}
@@ -57,7 +73,7 @@ def _vulns_by_scan_ids(scan_ids: list) -> dict:
         .join(Finding, Finding.id == Observation.finding_id)
         .where(Observation.scan_id.in_(scan_ids))
     ).all()
-    result: dict = {}
+    result: Dict[uuid_module.UUID, set[str]] = {}
     for sid, vid in rows:
         result.setdefault(sid, set()).add(vid)
     return result
@@ -67,7 +83,7 @@ def _vulns_by_scan_ids(scan_ids: list) -> dict:
 # Batch query — packages
 # ---------------------------------------------------------------------------
 
-def _packages_by_scan_ids(scan_ids: list) -> dict:
+def _packages_by_scan_ids(scan_ids: List[uuid_module.UUID]) -> Dict[uuid_module.UUID, set[uuid_module.UUID]]:
     """Return {scan_id: set(package_id)} via sbom_documents -> sbom_packages, in one query."""
     if not scan_ids:
         return {}
@@ -76,13 +92,13 @@ def _packages_by_scan_ids(scan_ids: list) -> dict:
         .join(SBOMPackage, SBOMPackage.sbom_document_id == SBOMDocument.id)
         .where(SBOMDocument.scan_id.in_(scan_ids))
     ).all()
-    result: dict = {}
+    result: Dict[uuid_module.UUID, set[uuid_module.UUID]] = {}
     for sid, pid in rows:
         result.setdefault(sid, set()).add(pid)
     return result
 
 
-def _package_rows(package_ids: set) -> dict:
+def _package_rows(package_ids: set[uuid_module.UUID]) -> Dict[uuid_module.UUID, Package]:
     """Return {package_id: Package} for the given id set, in one query."""
     if not package_ids:
         return {}
@@ -92,7 +108,7 @@ def _package_rows(package_ids: set) -> dict:
     return {p.id: p for p in pkgs}
 
 
-def _pkg_to_dict(pkg: Package) -> dict:
+def _pkg_to_dict(pkg: Package) -> Dict[str, str]:
     return {
         "package_id": str(pkg.id),
         "package_name": pkg.name or "unknown",
@@ -105,7 +121,7 @@ def _pkg_to_dict(pkg: Package) -> dict:
 # Batch query — variant / project names
 # ---------------------------------------------------------------------------
 
-def _variant_info(variant_ids: list) -> dict:
+def _variant_info(variant_ids: List[uuid_module.UUID]) -> Dict[uuid_module.UUID, Tuple[str, Optional[str]]]:
     """Return {variant_id: (variant_name, project_name)} in two queries."""
     if not variant_ids:
         return {}
@@ -144,13 +160,13 @@ def _load_scan_with_findings(scan_id: uuid_module.UUID) -> Scan | None:
 # Observation / finding serialisation
 # ---------------------------------------------------------------------------
 
-def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> dict:
+def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> Dict[str, str]:
     f = obs.finding
     pkg = f.package
     return {
         "finding_id": str(f.id),
-        "package_name": pkg.name if pkg else "unknown",
-        "package_version": pkg.version if pkg else "",
+        "package_name": (pkg.name or "unknown") if pkg else "unknown",
+        "package_version": (pkg.version or "") if pkg else "",
         "package_supplier": pkg.supplier if pkg else "",
         "package_id": str(f.package_id),
         "vulnerability_id": f.vulnerability_id,
@@ -158,14 +174,14 @@ def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> dict:
     }
 
 
-_TOOL_SOURCE_LABELS: dict = {
+_TOOL_SOURCE_LABELS: Dict[str, str] = {
     "grype": "Grype Scan",
     "nvd": "NVD CPE Scan",
     "osv": "OSV Scan",
 }
 
 
-def _origin_for_scan(scan) -> str:
+def _origin_for_scan(scan: Scan) -> str:
     """Return a human-readable origin label for a scan."""
     if (scan.scan_type or "sbom") == "tool":
         return _TOOL_SOURCE_LABELS.get(scan.scan_source or "", "Vulnerability Scan")
@@ -177,7 +193,7 @@ def _origin_for_scan(scan) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _assessment_rows_for_scans(scan_ids: list):
+def _assessment_rows_for_scans(scan_ids: List[uuid_module.UUID]) -> Sequence[AssessmentRow]:
     """Shared query returning assessment rows linked to the given scan IDs.
 
     Returns a list of tuples:
@@ -222,7 +238,7 @@ def _assessment_rows_for_scans(scan_ids: list):
     ).all()
 
 
-def _assessments_by_scan(scans: list[Scan]) -> dict:
+def _assessments_by_scan(scans: list[Scan]) -> Dict[uuid_module.UUID, Dict[str, int]]:
     """Return {scan_id: {"total": N, "added": N, "unchanged": N}} for each scan.
 
     An assessment is counted for a scan if:
@@ -245,13 +261,13 @@ def _assessments_by_scan(scans: list[Scan]) -> dict:
     scan_map = {s.id: s for s in scans}
 
     # Determine next_scan_ts for each scan (next scan of same variant by timestamp)
-    by_variant: dict = {}  # variant_id -> [scans sorted by timestamp]
+    by_variant: Dict[uuid_module.UUID, List[Scan]] = {}  # variant_id -> [scans sorted by timestamp]
     for s in scans:
         by_variant.setdefault(s.variant_id, []).append(s)
     for v_scans in by_variant.values():
         v_scans.sort(key=lambda s: s.timestamp)
 
-    next_ts_map: dict = {}  # scan_id -> next_scan_timestamp or None
+    next_ts_map: Dict[uuid_module.UUID, Optional[datetime]] = {}  # scan_id -> next_scan_timestamp or None
     for v_scans in by_variant.values():
         for i, s in enumerate(v_scans):
             if i + 1 < len(v_scans):
@@ -266,14 +282,14 @@ def _assessments_by_scan(scans: list[Scan]) -> dict:
     # Group by scan_id, then deduplicate assessment_id.
     # Exclude custom (manually-created) assessments — only automated
     # sources (sbom, grype, osv, nvd, etc.) are shown in scan history.
-    per_scan: dict = {}  # scan_id -> {assess_id: timestamp}
+    per_scan: Dict[uuid_module.UUID, Dict[uuid_module.UUID, datetime]] = {}  # scan_id -> {assess_id: timestamp}
     for row in rows:
         sid, aid, ats, origin = row[0], row[1], row[2], row[9]
         if origin == "custom":
             continue  # skip manually-created assessments
         per_scan.setdefault(sid, {})[aid] = ats
 
-    result: dict = {}
+    result: Dict[uuid_module.UUID, Dict[str, int]] = {}
     for sid, assessments in per_scan.items():
         scan_ts = scan_map[sid].timestamp
         next_scan_ts = next_ts_map.get(sid)
@@ -313,7 +329,7 @@ def _assessments_by_scan(scans: list[Scan]) -> dict:
     # in this scan (e.g. because the associated finding/vulnerability was
     # removed). Compare assessment ID sets between consecutive scans.
     # Build prev_scan_map per (variant, scan_type, scan_source)
-    by_key: dict = {}
+    by_key: Dict[Tuple[uuid_module.UUID, str, Optional[str]], List[Scan]] = {}
     for s in scans:
         stype = s.scan_type or "sbom"
         source = s.scan_source if stype == "tool" else None
@@ -340,7 +356,11 @@ def _assessments_by_scan(scans: list[Scan]) -> dict:
     return result
 
 
-def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) -> dict:
+def _assessments_detail_for_scan(
+    scan: Scan,
+    next_scan_ts: Optional[datetime] = None,
+    prev_scan: Optional[Scan] = None,
+) -> Dict[str, object]:
     """Return assessment details AND counts for a single scan.
 
     Uses the SAME shared query (_assessment_rows_for_scans) as
@@ -368,7 +388,7 @@ def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) 
     # Deduplicate by assessment id (row[1])
     # Exclude custom (manually-created) assessments — only automated
     # sources (sbom, grype, osv, nvd, etc.) are shown in scan diff.
-    seen: dict = {}
+    seen: Dict[uuid_module.UUID, AssessmentRow] = {}
     for row in rows:
         aid = row[1]
         origin = row[9]
@@ -378,8 +398,8 @@ def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) 
             seen[aid] = row
 
     scan_ts = scan.timestamp
-    added = []
-    unchanged_list = []
+    added: List[Dict[str, str]] = []
+    unchanged_list: List[Dict[str, str]] = []
 
     for row in seen.values():
         ats = row[2]  # assessment timestamp
@@ -419,10 +439,10 @@ def _assessments_detail_for_scan(scan: Scan, next_scan_ts=None, prev_scan=None) 
         total = len(seen)
 
     # Removed = assessments in previous scan but not in this scan
-    removed_list = []
+    removed_list: List[Dict[str, str]] = []
     if prev_scan is not None:
         prev_rows = _assessment_rows_for_scans([prev_scan.id])
-        prev_seen: dict = {}
+        prev_seen: Dict[uuid_module.UUID, AssessmentRow] = {}
         for row in prev_rows:
             aid = row[1]
             origin = row[9]
@@ -514,7 +534,8 @@ def fetch_vulnerabilities_texts(
             .join(Package, SBOMObservation.package_id == Package.id, isouter=True) \
             .add_columns(Package.name)
 
-    assert not (variant_ids is not None and scan_ids is not None), "Cannot have both variant_ids and scan_ids"
+    if variant_ids is not None and scan_ids is not None:
+        raise ValueError("Cannot have both variant_ids and scan_ids")
 
     if variant_ids is not None:
         sbom_observation_query = sbom_observation_query \
@@ -534,7 +555,8 @@ def fetch_vulnerabilities_texts(
         texts = vuln_texts[vuln_id]
         if include_packages:
             pkg, = rest
-            assert pkg is None or isinstance(pkg, str)
+            if not (pkg is None or isinstance(pkg, str)):
+                raise TypeError(f"Unexpected package name type: {type(pkg)}")
         else:
             pkg = None
 

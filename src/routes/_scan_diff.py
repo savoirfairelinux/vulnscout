@@ -17,6 +17,10 @@ from ..models.sbom_package import SBOMPackage
 from ..models.package import Package
 from ..extensions import db
 
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 from ._scan_queries import (
     _findings_by_scan_ids,
     _vulns_by_scan_ids,
@@ -33,7 +37,11 @@ from ._scan_queries import (
 # Package-change classification
 # ---------------------------------------------------------------------------
 
-def _classify_package_changes(added_pkg_ids: set, removed_pkg_ids: set, pkg_lookup: dict) -> tuple:
+def _classify_package_changes(
+    added_pkg_ids: set[uuid.UUID],
+    removed_pkg_ids: set[uuid.UUID],
+    pkg_lookup: Dict[uuid.UUID, Package],
+) -> Tuple[set[uuid.UUID], set[uuid.UUID], List[Tuple[Package, Package]]]:
     """Classify package changes into truly-added, truly-removed, and upgraded.
 
     A package is "upgraded" when the same package name appears in both the
@@ -42,21 +50,21 @@ def _classify_package_changes(added_pkg_ids: set, removed_pkg_ids: set, pkg_look
     Returns (truly_added_ids, truly_removed_ids, upgraded_pairs) where
     upgraded_pairs is a list of (old_pkg, new_pkg) Package dicts.
     """
-    added_by_name: dict = {}
+    added_by_name: Dict[str, List[Package]] = {}
     for pid in added_pkg_ids:
         pkg = pkg_lookup.get(pid)
         if pkg:
             added_by_name.setdefault(pkg.name or "unknown", []).append(pkg)
 
-    removed_by_name: dict = {}
+    removed_by_name: Dict[str, List[Package]] = {}
     for pid in removed_pkg_ids:
         pkg = pkg_lookup.get(pid)
         if pkg:
             removed_by_name.setdefault(pkg.name or "unknown", []).append(pkg)
 
-    upgraded_pairs = []
-    matched_added_ids: set = set()
-    matched_removed_ids: set = set()
+    upgraded_pairs: List[Tuple[Package, Package]] = []
+    matched_added_ids: set[uuid.UUID] = set()
+    matched_removed_ids: set[uuid.UUID] = set()
 
     for name in set(added_by_name) & set(removed_by_name):
         new_pkgs = list(added_by_name[name])
@@ -78,7 +86,11 @@ def _classify_package_changes(added_pkg_ids: set, removed_pkg_ids: set, pkg_look
 # Finding-change classification
 # ---------------------------------------------------------------------------
 
-def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
+def _classify_finding_changes(
+    findings_added: List[Dict[str, str]],
+    findings_removed: List[Dict[str, str]],
+    upgraded_pairs: List[Tuple[Package, Package]],
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]], set[Tuple[str, str]]]:
     """Separate findings into truly-added, truly-removed, and upgraded.
 
     A finding is "upgraded" when the same vulnerability_id appears in both
@@ -107,10 +119,10 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
         key = (f["vulnerability_id"], f["package_id"])
         removed_by_key.setdefault(key, []).append(f)
 
-    upgraded_findings = []
+    upgraded_findings: List[Dict[str, str]] = []
     matched_added_ids = set()
     matched_removed_ids = set()
-    matched_upgraded_keys: set = set()  # (vuln_id, old_pkg_id_str)
+    matched_upgraded_keys: set[Tuple[str, str]] = set()  # (vuln_id, old_pkg_id_str)
 
     for f_added in findings_added:
         pkg_id = f_added["package_id"]
@@ -145,20 +157,20 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
 # Scan ordering
 # ---------------------------------------------------------------------------
 
-def _prev_scan_map(scans: list[Scan]) -> dict:
+def _prev_scan_map(scans: list[Scan]) -> Dict[uuid.UUID, Optional[Scan]]:
     """Return {scan.id: previous_scan_or_None} grouped by (variant, scan_type, scan_source), ordered by timestamp.
 
     Tool scans are further grouped by scan_source so that Grype scans only
     compare against previous Grype scans, NVD against NVD, etc.
     SBOM scans are only compared against previous SBOM scans.
     """
-    by_key: dict = {}
+    by_key: Dict[Tuple[uuid.UUID, str, Optional[str]], List[Scan]] = {}
     for s in scans:
         stype = s.scan_type or "sbom"
         source = s.scan_source if stype == "tool" else None
         key = (s.variant_id, stype, source)
         by_key.setdefault(key, []).append(s)
-    mapping: dict = {}
+    mapping: Dict[uuid.UUID, Optional[Scan]] = {}
     for group_scans in by_key.values():
         for i, s in enumerate(group_scans):
             mapping[s.id] = group_scans[i - 1] if i > 0 else None
@@ -169,12 +181,12 @@ def _prev_scan_map(scans: list[Scan]) -> dict:
 # SBOM baseline helpers
 # ---------------------------------------------------------------------------
 
-def _sbom_scans_by_variant(scans: list[Scan]) -> dict:
+def _sbom_scans_by_variant(scans: list[Scan]) -> Dict[uuid.UUID, List[Scan]]:
     """Return {variant_id: [sbom_scan, …]} ordered by timestamp ascending.
 
     Used to look up which SBOM scan was active at any point in time.
     """
-    by_variant: dict = {}
+    by_variant: Dict[uuid.UUID, List[Scan]] = {}
     for s in scans:
         if (s.scan_type or "sbom") != "sbom":
             continue
@@ -185,7 +197,7 @@ def _sbom_scans_by_variant(scans: list[Scan]) -> dict:
     return by_variant
 
 
-def _sbom_active_at(sbom_list: list, timestamp) -> "Scan | None":
+def _sbom_active_at(sbom_list: List[Scan], timestamp: datetime) -> Optional[Scan]:
     """Return the most recent SBOM scan whose timestamp <= *timestamp*.
 
     *sbom_list* must be sorted ascending by timestamp.
@@ -203,7 +215,7 @@ def _sbom_active_at(sbom_list: list, timestamp) -> "Scan | None":
 # Global result — contributing scans at a point in time
 # ---------------------------------------------------------------------------
 
-def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
+def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> Tuple[Optional[Scan], Dict[str, Scan]]:
     """Determine the scans that contribute to the global result at *scan*.
 
     Returns ``(sbom_scan_or_None, tool_scan_dict)`` where *tool_scan_dict*
@@ -225,7 +237,7 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
         sbom_scan = scan  # the scan IS the SBOM
 
     # Latest tool scan per source at scan's timestamp
-    latest_tool: dict = {}  # source -> Scan
+    latest_tool: Dict[str, Scan] = {}  # source -> Scan
     for s in all_variant_scans:
         if (s.scan_type or "sbom") != "tool":
             continue
@@ -243,11 +255,11 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> tuple:
 
 
 def _global_result_id_sets(
-    sbom_scan,
-    tool_scans: dict,
+    sbom_scan: Optional[Scan],
+    tool_scans: Dict[str, Scan],
     *,
     filter_tool_by_sbom_pkgs: bool = False,
-) -> tuple:
+) -> Tuple[set[uuid.UUID], set[str], set[uuid.UUID]]:
     """Return ``(finding_ids, vuln_ids, package_ids)`` for a global result.
 
     *sbom_scan* is the SBOM scan (or ``None``), *tool_scans* is
@@ -279,7 +291,7 @@ def _global_result_id_sets(
     )
 
     if filter_tool_by_sbom_pkgs:
-        tool_scan_ids: set = {s.id for s in tool_scans.values()}
+        tool_scan_ids: set[uuid.UUID] = {s.id for s in tool_scans.values()}
     else:
         tool_scan_ids = set()  # empty → no filtering
 
@@ -294,8 +306,8 @@ def _global_result_id_sets(
         .where(Observation.scan_id.in_(contributing_ids))
     ).all()
 
-    global_fids: set = set()
-    global_vids: set = set()
+    global_fids: set[uuid.UUID] = set()
+    global_vids: set[str] = set()
     for sid, fid, pkg_id, vid in finding_rows:
         # When filtering is enabled, skip tool-scan findings whose
         # package is not in the active SBOM.
@@ -308,9 +320,9 @@ def _global_result_id_sets(
 
 
 def _global_assessment_ids_for(
-    sbom_scan,
-    latest_tool: dict,
-) -> set:
+    sbom_scan: Optional[Scan],
+    latest_tool: Dict[str, Scan],
+) -> set[uuid.UUID]:
     """Return the set of unique Assessment IDs visible in the global result.
 
     Applies the same SBOM-package filter as ``_global_result_id_sets``:
@@ -325,7 +337,7 @@ def _global_assessment_ids_for(
     if not contributing_ids:
         return set()
 
-    tool_scan_ids: set = {s.id for s in latest_tool.values()}
+    tool_scan_ids: set[uuid.UUID] = {s.id for s in latest_tool.values()}
     sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
         sbom_scan.id, set()
     ) if sbom_scan else set()
@@ -343,7 +355,7 @@ def _global_assessment_ids_for(
         )
     ).all()
 
-    result: set = set()
+    result: set[uuid.UUID] = set()
     for aid, sid, pkg_id in rows:
         # Skip tool-scan assessments whose finding's package is not in the SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
@@ -364,7 +376,7 @@ def _global_assessment_count(
 def _contributing_scans_before(
     scan: Scan,
     all_variant_scans: list[Scan],
-) -> tuple:
+) -> Tuple[Optional[Scan], Dict[str, Scan]]:
     """Like ``_contributing_scans_at`` but for the state **before** *scan*.
 
     For a tool scan this means: same SBOM, same other-source tool scans,
@@ -385,7 +397,7 @@ def _contributing_scans_before(
         sbom_scan = scan
 
     # Latest tool scan per source, *excluding* the current scan.
-    latest_tool: dict = {}
+    latest_tool: Dict[str, Scan] = {}
     for s in all_variant_scans:
         if (s.scan_type or "sbom") != "tool":
             continue
@@ -427,7 +439,7 @@ def _global_result_full(
     # IDs of tool scans — used to filter out findings for packages not
     # present in this variant's SBOM (prevents cross-variant leaks when
     # the Grype export includes packages from all variants).
-    tool_scan_ids: set = {s.id for s in latest_tool.values()}
+    tool_scan_ids: set[uuid.UUID] = {s.id for s in latest_tool.values()}
 
     # --- Packages (from SBOM only) ---
     pkg_rows = db.session.execute(
@@ -440,7 +452,7 @@ def _global_result_full(
         .where(SBOMDocument.scan_id == sbom_scan.id)
     ).all()
     pkg_map: dict = {}
-    sbom_pkg_ids: set = set()
+    sbom_pkg_ids: set[uuid.UUID] = set()
     for pid, pname, pversion, psupplier, src_name, src_fmt in pkg_rows:
         sbom_pkg_ids.add(pid)
         source_label = f"{src_name} ({src_fmt})" if src_fmt else src_name
@@ -478,7 +490,6 @@ def _global_result_full(
         scan_source_labels[tool_scan.id] = _TOOL_SOURCE_LABELS.get(
             tool_scan.scan_source or "", "Vulnerability Scan"
         )
-
     # --- Findings & vulns (batch query) ---
     obs_rows = db.session.execute(
         db.select(
@@ -492,7 +503,7 @@ def _global_result_full(
     ).all()
 
     finding_map: dict = {}
-    vuln_set: dict = {}
+    vuln_set: Dict[str, set[str]] = {}
     for sid, fid, pkg_id, vid, pname, pversion, psupplier in obs_rows:
         # Skip tool-scan findings whose package is not in the SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
@@ -567,7 +578,7 @@ def _global_result_full(
         )
     assess_rows = db.session.execute(assess_q).all()
 
-    seen_assess: set = set()
+    seen_assess: set[uuid.UUID] = set()
     for aid, vid, status, simp_status, justification, impact, notes, sid, pkg_id in assess_rows:
         # Skip tool-scan assessments whose finding's package is not in SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
@@ -625,9 +636,9 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
     # First pass: compute package diffs and collect all finding IDs that need
     # package-level info for upgrade classification.
-    scan_data = []
-    all_fids_needing_lookup: set = set()
-    all_pkg_ids_needing_lookup: set = set()
+    scan_data: List[dict] = []
+    all_fids_needing_lookup: set[uuid.UUID] = set()
+    all_pkg_ids_needing_lookup: set[uuid.UUID] = set()
 
     for scan in scans:
         curr_f = findings_map.get(scan.id, set())
@@ -636,7 +647,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         prev = prev_map.get(scan.id)
         is_tool_scan = (scan.scan_type or "sbom") == "tool"
 
-        entry = {
+        entry: dict = {
             "scan": scan,
             "curr_f": curr_f, "curr_p": curr_p, "curr_v": curr_v,
             "prev": prev,
@@ -677,6 +688,8 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
         if upgraded:
             scan = entry["scan"]
             prev = entry["prev"]
+            if prev is None:
+                continue
             curr_f = entry["curr_f"]
             prev_f = findings_map.get(prev.id, set())
             raw_added_f = curr_f - prev_f
@@ -688,13 +701,13 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # Single batch query: finding_id -> (package_id, vulnerability_id)
     # Include all tool-scan finding IDs so we can check which ones belong
     # to removed packages when computing SBOM diff counts.
-    tool_scan_fids: set = set()
+    tool_scan_fids: set[uuid.UUID] = set()
     for scan in scans:
         if (scan.scan_type or "sbom") == "tool":
             tool_scan_fids |= findings_map.get(scan.id, set())
     all_fids_needing_lookup |= tool_scan_fids
 
-    fid_to_info: dict = {}
+    fid_to_info: Dict[uuid.UUID, Tuple[uuid.UUID, str]] = {}
     if all_fids_needing_lookup:
         rows = db.session.execute(
             db.select(Finding.id, Finding.package_id, Finding.vulnerability_id)
@@ -704,7 +717,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
     # Pre-build per-variant scan lists so that contributing-scan helpers
     # only see scans from the same variant (avoids cross-variant leaks).
-    _scans_by_variant: dict = {}  # variant_id -> [Scan, …]
+    _scans_by_variant: Dict[uuid.UUID, List[Scan]] = {}  # variant_id -> [Scan, …]
     for s in scans:
         _scans_by_variant.setdefault(s.variant_id, []).append(s)
 
@@ -714,7 +727,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # (SBOM ∪ all latest sources) at each point in time.
     # Also track the SBOM baseline that was active at each tool scan's
     # timestamp so historical counts stay stable.
-    running_src_findings: dict = {}  # (variant_id, source) -> set
+    running_src_findings: Dict[Tuple[uuid.UUID, Optional[str]], set[uuid.UUID]] = {}  # (variant_id, source) -> set
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -841,11 +854,11 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             sr_gone_f = prev_sr_f - curr_scan_result_f
             sr_unchanged_f = prev_sr_f & curr_scan_result_f
 
-            upgraded_old_ids_set: set = {old_pkg.id for old_pkg, _ in upgraded_pairs}
-            upgraded_new_ids_set: set = {new_pkg.id for _, new_pkg in upgraded_pairs}
+            upgraded_old_ids_set: set[uuid.UUID] = {old_pkg.id for old_pkg, _ in upgraded_pairs}
+            upgraded_new_ids_set: set[uuid.UUID] = {new_pkg.id for _, new_pkg in upgraded_pairs}
 
             # Group gone findings on upgraded-old packages by vuln
-            _rem_by_vuln: dict = {}
+            _rem_by_vuln: Dict[str, List[uuid.UUID]] = {}
             for fid in sr_gone_f:
                 info = fid_to_info.get(fid)
                 if info and info[0] in upgraded_old_ids_set:
@@ -916,6 +929,5 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
                 if doc.format:
                     doc_formats.add(doc.format)
             base["formats"] = sorted(doc_formats)
-
         result.append(base)
     return result

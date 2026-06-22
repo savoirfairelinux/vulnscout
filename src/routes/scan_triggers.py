@@ -9,8 +9,10 @@ endpoint for polling progress.
 
 import os
 import threading
+import uuid
 
-from flask import jsonify
+from flask import Flask, jsonify
+from flask.typing import ResponseReturnValue
 
 from ..models.scan import Scan
 from ..models.finding import Finding
@@ -31,7 +33,7 @@ from ._scan_helpers import (
 )
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     # ------------------------------------------------------------------
     # Grype Scan
@@ -40,7 +42,7 @@ def init_app(app):
     _grype_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
-    def trigger_grype_scan(variant_id):
+    def trigger_grype_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger a Grype vulnerability scan for the given variant.
 
         Exports the variant's packages as CycloneDX, runs ``grype`` on the
@@ -54,6 +56,8 @@ def init_app(app):
             variant_id, _grype_scans_in_progress, "Grype scan")
         if err is not None:
             return err
+        if variant_uuid is None or variant is None:
+            return jsonify({"error": "Internal error"}), 500
 
         # Check that grype is available
         if shutil.which("grype") is None:
@@ -87,7 +91,7 @@ def init_app(app):
 
         init_progress(_grype_scans_in_progress, vid_str, total=4)
 
-        def _run_grype_scan():
+        def _run_grype_scan() -> None:
             try:
                 base_dir = os.environ.get(
                     "BASE_DIR",
@@ -276,7 +280,7 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/grype-scan/status')
-    def grype_scan_status(variant_id):
+    def grype_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running Grype scan for the given variant."""
         return scan_status_response(variant_id, _grype_scans_in_progress)
 
@@ -287,7 +291,7 @@ def init_app(app):
     _nvd_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/nvd-scan', methods=['POST'])
-    def trigger_nvd_scan(variant_id):
+    def trigger_nvd_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger an NVD CPE-based vulnerability scan for the given variant.
 
         For every active package that has CPE identifiers, query the NVD CVE
@@ -298,15 +302,17 @@ def init_app(app):
             variant_id, _nvd_scans_in_progress, "NVD scan")
         if err is not None:
             return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
         init_progress(_nvd_scans_in_progress, vid_str)
 
-        def _run_nvd_scan():
+        def _run_nvd_scan() -> None:
             with app.app_context():
                 _do_nvd_scan(vid_str, variant_uuid)
 
-        def _do_nvd_scan(vid_str, variant_uuid):
+        def _do_nvd_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 from ..controllers.nvd_db import NVD_DB
                 from ..models.vulnerability import Vulnerability as VulnModel
@@ -517,7 +523,7 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/nvd-scan/status')
-    def nvd_scan_status(variant_id):
+    def nvd_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running NVD scan for the given variant."""
         return scan_status_response(variant_id, _nvd_scans_in_progress)
 
@@ -528,7 +534,7 @@ def init_app(app):
     _osv_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/osv-scan', methods=['POST'])
-    def trigger_osv_scan(variant_id):
+    def trigger_osv_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger an OSV PURL-based vulnerability scan for the given variant.
 
         For every active package that has PURL identifiers, query the OSV API
@@ -539,15 +545,17 @@ def init_app(app):
             variant_id, _osv_scans_in_progress, "OSV scan")
         if err is not None:
             return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
         init_progress(_osv_scans_in_progress, vid_str)
 
-        def _run_osv_scan():
+        def _run_osv_scan() -> None:
             with app.app_context():
                 _do_osv_scan(vid_str, variant_uuid)
 
-        def _do_osv_scan(vid_str, variant_uuid):
+        def _do_osv_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 from ..controllers.osv_client import OSVClient
                 from ..models.vulnerability import Vulnerability as VulnModel
@@ -715,6 +723,6 @@ def init_app(app):
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/osv-scan/status')
-    def osv_scan_status(variant_id):
+    def osv_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running OSV scan for the given variant."""
         return scan_status_response(variant_id, _osv_scans_in_progress)
