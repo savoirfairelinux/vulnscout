@@ -851,7 +851,7 @@ POST /api/variants/<variant_id>/sbom-cve-check-scan
 
 Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
 
-The databases must be present at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/sbom_cve_check_databases`, mounted from the host path `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` or `~/.cache/sbom_cve_check/databases`). Set `sbom_cve_check_AUTO_UPDATE=1` to let the engine clone or update them on startup.
+The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/sbom_cve_check_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/sbom_cve_check_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
 
 **Response:** `202 Accepted`
 ```json

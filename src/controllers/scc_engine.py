@@ -11,17 +11,21 @@ the lifetime of the process.
 Configuration (environment variables):
 
 * ``SBOM_CVE_CHECK_DATABASES_DIR`` — directory holding the ``nvd-fkie`` and ``cvelist`` git
-  clones.  Defaults to ``$XDG_CACHE_HOME/sbom_cve_check/databases`` (i.e.
-  ``~/.cache/sbom_cve_check/databases``).
+  clones.  Defaults to a ``sbom_cve_check_databases`` sub-directory of the VulnScout
+  cache directory (``$VULNSCOUT_CACHE_DIR/sbom_cve_check_databases``, i.e.
+  ``/cache/vulnscout/sbom_cve_check_databases`` inside the container), so the advisory
+  clones live next to ``vulnscout.db`` instead of in a separate XDG cache tree.
 * ``SBOM_CVE_CHECK_GIT_FETCH_DEPTH`` — git fetch/clone depth (default ``1``: shallow clone).
-* ``SBOM_CVE_CHECK_AUTO_UPDATE`` — ``"1"``/``"true"`` to allow the engine to fetch fresh
-  advisories on startup, anything else disables network updates (default
-  disabled, so scans run against the existing clones).
+* ``SBOM_CVE_CHECK_AUTO_UPDATE`` — ``"1"``/``"true"`` to let the engine clone/fetch fresh
+  advisories (default ``"1"``).  The databases are refreshed before *every* scan so each
+  run uses up-to-date advisories.  Set to ``"0"`` to run in offline mode against
+  already-cloned databases.
 """
 
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import pathlib
 import threading
@@ -35,6 +39,8 @@ from sbom_cve_check.products.products import init_products_database
 from sbom_cve_check.vuln.cna import init_cna_database
 
 from .scc_adapter import build_comp_build
+
+_logger = logging.getLogger(__name__)
 
 _ENGINE_LOCK = threading.Lock()
 _ENGINE: "SccEngine | None" = None
@@ -80,12 +86,17 @@ def _install_cpe_parse_caches() -> None:
 
 
 def _databases_dir() -> pathlib.Path:
-    """Resolve the directory holding the local advisory git clones."""
+    """Resolve the directory holding the local advisory git clones.
+
+    Defaults to a ``sbom_cve_check_databases`` sub-directory of the VulnScout cache
+    directory so the NVD-FKIE and CVEList clones sit next to ``vulnscout.db`` instead
+    of in a separate ``~/.cache/sbom_cve_check`` tree.
+    """
     env = os.getenv("SBOM_CVE_CHECK_DATABASES_DIR")
     if env and env.strip():
         return pathlib.Path(env).expanduser().resolve()
-    cache = os.getenv("XDG_CACHE_HOME") or "~/.cache"
-    return pathlib.Path(cache).expanduser().joinpath("sbom_cve_check", "databases").resolve()
+    cache = os.getenv("VULNSCOUT_CACHE_DIR") or "/cache/vulnscout"
+    return pathlib.Path(cache).expanduser().joinpath("sbom_cve_check_databases").resolve()
 
 
 def _truthy(value: str | None) -> bool:
@@ -125,6 +136,11 @@ class SccEngine:
     def __init__(self, databases_dir: pathlib.Path, fetch_depth: int,
                  auto_update: bool) -> None:
         self._databases_dir = databases_dir
+        self._fetch_depth = fetch_depth
+        self._auto_update = auto_update
+        # Serialises per-scan database refreshes so two concurrent scans never
+        # fetch / rebuild the index at the same time.
+        self._refresh_lock = threading.Lock()
         self._manager = VulnDbManager()
 
         nvd_dir = databases_dir.joinpath("nvd-fkie")
@@ -133,9 +149,14 @@ class SccEngine:
             if not path.is_dir() and not auto_update:
                 raise RuntimeError(
                     f"Vulnerability database '{label}' not found at {path}. "
-                    "Clone it (or set SBOM_CVE_CHECK_AUTO_UPDATE=1 to let the engine clone it) "
-                    "before running sbom-cve-check-scan."
+                    "Clone it before running sbom-cve-check-scan, or set "
+                    "SBOM_CVE_CHECK_AUTO_UPDATE=1 to let the engine clone it automatically."
                 )
+
+        # When network updates are allowed the clones may not exist yet; make sure
+        # the parent directory is present so git can create them on first fetch.
+        if auto_update:
+            databases_dir.mkdir(parents=True, exist_ok=True)
 
         # Let git read the clones even when the process uid differs from the
         # clone owner, otherwise the engine bypasses its on-disk index cache and
@@ -211,6 +232,70 @@ class SccEngine:
                 if getattr(db.get_vuln, "__wrapped__", None) is not None:
                     continue
                 db.get_vuln = functools.lru_cache(maxsize=65_536)(db.get_vuln)
+
+    def _git_databases(self) -> list:
+        """Return the underlying ``GitDatabase`` objects of every managed DB."""
+        result: list = []
+        databases = getattr(self._manager, "_databases", None)
+        if not databases:
+            return result
+        for dbs in databases.values():
+            for db in dbs:
+                git_db = getattr(db, "git_database", None)
+                if git_db is not None:
+                    result.append(git_db)
+        return result
+
+    def _clear_caches(self) -> None:
+        """Drop every per-scan cache so a refreshed index is never served stale data."""
+        self._applicable_cache.clear()
+        self._verdict_cache.clear()
+        databases = getattr(self._manager, "_databases", None)
+        if databases:
+            for dbs in databases.values():
+                for db in dbs:
+                    clear = getattr(getattr(db, "get_vuln", None), "cache_clear", None)
+                    if callable(clear):
+                        clear()
+
+    def refresh_databases(self) -> bool:
+        """Fetch fresh advisories for each git database before a scan.
+
+        Called once per scan (see :func:`get_engine`).  The process-wide engine is
+        built once and reused, so without this the NVD-FKIE / CVEList clones would
+        only ever be fetched at construction (the first scan of the process).  When
+        ``SBOM_CVE_CHECK_AUTO_UPDATE`` is enabled this force-fetches every clone so
+        each scan runs against up-to-date databases; when it is disabled it is a
+        no-op (offline mode, scans run against the existing clones).
+
+        The expensive in-memory index is only rebuilt when a clone actually advanced
+        to a new commit, in which case the per-scan caches are dropped as well so no
+        stale verdict survives.  Network / git failures are logged and swallowed so a
+        transient fetch error never aborts an otherwise-runnable scan.
+
+        :return: ``True`` if any clone advanced and the index was rebuilt.
+        """
+        if not self._auto_update:
+            return False
+        with self._refresh_lock:
+            changed = False
+            for git_db in self._git_databases():
+                before = git_db.get_date_last_commit()
+                try:
+                    git_db.update(force_update=True)
+                except Exception as exc:  # noqa: BLE001 - never abort a scan on fetch error
+                    _logger.warning(
+                        "sbom-cve-check database refresh failed (using existing clone): %s",
+                        exc,
+                    )
+                    continue
+                after = git_db.get_date_last_commit()
+                if before != after:
+                    changed = True
+            if changed:
+                self._manager.create_index()
+                self._clear_caches()
+            return changed
 
     @staticmethod
     def _vex_status_str(computed: ComputedVulnInfo) -> str:
@@ -292,10 +377,15 @@ class SccEngine:
 
 
 def get_engine() -> SccEngine:
-    """Return the process-wide indexed engine, building it on first use."""
+    """Return the process-wide indexed engine, building it on first use.
+
+    The engine is expensive to build and is cached for the lifetime of the
+    process.  Because that one build would otherwise be the only time the advisory
+    clones are fetched, every call refreshes the databases before returning (a
+    no-op unless ``SBOM_CVE_CHECK_AUTO_UPDATE`` is enabled) so each scan — the
+    first included — runs against up-to-date advisories.
+    """
     global _ENGINE
-    if _ENGINE is not None:
-        return _ENGINE
     with _ENGINE_LOCK:
         if _ENGINE is None:
             depth_env = os.getenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH")
@@ -308,6 +398,7 @@ def get_engine() -> SccEngine:
                 fetch_depth=fetch_depth,
                 auto_update=_truthy(os.getenv("SBOM_CVE_CHECK_AUTO_UPDATE")),
             )
+    _ENGINE.refresh_databases()
     return _ENGINE
 
 

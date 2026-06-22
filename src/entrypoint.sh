@@ -20,11 +20,17 @@ if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
 fi
 
-# The launcher always mounts the host sbom-cve-check databases at /sbom_cve_check_databases.
-# Default SBOM_CVE_CHECK_DATABASES_DIR to that mount point so the engine finds them
-# without requiring an explicit env var; config.env (sourced above) may
-# still override this.
-export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/sbom_cve_check_databases}"
+# The sbom-cve-check advisory databases live inside the VulnScout cache directory
+# (mounted at /cache/vulnscout), in a sbom_cve_check_databases sub-folder next to
+# vulnscout.db.  Default SBOM_CVE_CHECK_DATABASES_DIR to that location so the engine
+# finds (and, with SBOM_CVE_CHECK_AUTO_UPDATE=1, clones) them without an explicit env
+# var; config.env (sourced above) or an explicit override may still change this.
+export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/sbom_cve_check_databases}"
+mkdir -p "$SBOM_CVE_CHECK_DATABASES_DIR" 2>/dev/null || true
+# Auto-update is on by default: the engine will clone/fetch the NVD-FKIE and CVEList
+# databases on first use and keep them current.  Set SBOM_CVE_CHECK_AUTO_UPDATE=0 to
+# run in offline mode against an already-cloned database.
+export SBOM_CVE_CHECK_AUTO_UPDATE="${SBOM_CVE_CHECK_AUTO_UPDATE:-1}"
 
 show_help() {
     cat <<EOF

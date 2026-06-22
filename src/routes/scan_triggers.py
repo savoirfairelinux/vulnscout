@@ -795,6 +795,11 @@ def init_app(app: Flask) -> None:
                 _forwarder.setFormatter(logging.Formatter("%(message)s"))
                 _scc_logger = logging.getLogger("sbom_cve_check")
                 _scc_logger.addHandler(_forwarder)
+                _scc_prev_level = _scc_logger.level
+                _scc_logger.setLevel(logging.INFO)
+                _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
+                    "Loading CVE databases — this might take several minutes on first run…"
+                )
                 try:
                     engine = get_engine()
                 except Exception as e:
@@ -803,6 +808,7 @@ def init_app(app: Flask) -> None:
                     return
                 finally:
                     _scc_logger.removeHandler(_forwarder)
+                    _scc_logger.setLevel(_scc_prev_level)
                 _sbom_cve_check_scans_in_progress[vid_str]["logs"].append(
                     "Index ready — scanning packages"
                 )

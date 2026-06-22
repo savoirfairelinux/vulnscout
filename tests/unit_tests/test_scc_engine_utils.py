@@ -41,31 +41,31 @@ class TestDatabasesDir:
 
     def test_uses_env_var_when_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.delenv("VULNSCOUT_CACHE_DIR", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
         assert result == tmp_path.expanduser().resolve()
 
-    def test_uses_xdg_cache_home_when_env_set(self, monkeypatch, tmp_path):
+    def test_uses_vulnscout_cache_dir_when_env_set(self, monkeypatch, tmp_path):
         monkeypatch.delenv("SBOM_CVE_CHECK_DATABASES_DIR", raising=False)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert result == tmp_path.joinpath("sbom_cve_check", "databases").resolve()
+        assert result == tmp_path.joinpath("sbom_cve_check_databases").resolve()
 
-    def test_falls_back_to_home_cache(self, monkeypatch):
+    def test_falls_back_to_cache_vulnscout(self, monkeypatch):
         monkeypatch.delenv("SBOM_CVE_CHECK_DATABASES_DIR", raising=False)
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.delenv("VULNSCOUT_CACHE_DIR", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert "sbom_cve_check" in str(result)
+        assert str(result).endswith("/cache/vulnscout/sbom_cve_check_databases")
 
     def test_blank_env_var_falls_back(self, monkeypatch):
         monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", "   ")
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.delenv("VULNSCOUT_CACHE_DIR", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert "sbom_cve_check" in str(result)
+        assert "sbom_cve_check_databases" in str(result)
 
 
 class TestTrustGitDirectories:
@@ -536,6 +536,7 @@ class TestGetAndResetEngine:
             self._manager = mock_mgr
             self._applicable_cache = {}
             self._verdict_cache = {}
+            self._auto_update = auto_update
 
         with patch("src.controllers.scc_engine.VulnDbManager", return_value=mock_mgr), \
              patch("src.controllers.scc_engine.init_global_databases_lock"), \
@@ -569,6 +570,7 @@ class TestGetAndResetEngine:
             self._manager = mock_mgr
             self._applicable_cache = {}
             self._verdict_cache = {}
+            self._auto_update = auto_update
 
         with patch("src.controllers.scc_engine.VulnDbManager", return_value=mock_mgr), \
              patch("src.controllers.scc_engine.init_global_databases_lock"), \
@@ -608,3 +610,128 @@ class TestGetAndResetEngine:
             reset_engine()
             import src.controllers.scc_engine as mod
             assert mod._ENGINE is None
+
+
+class _FakeGitDb:
+    """Minimal stand-in for sbom_cve_check's GitDatabase used in refresh tests."""
+
+    def __init__(self, commits):
+        # ``commits`` is the sequence of values returned by successive
+        # get_date_last_commit() calls (before/after each update).
+        self._commits = list(commits)
+        self._idx = 0
+        self.update_calls = []
+        self.raise_on_update = False
+
+    def get_date_last_commit(self):
+        value = self._commits[min(self._idx, len(self._commits) - 1)]
+        self._idx += 1
+        return value
+
+    def update(self, force_update):
+        self.update_calls.append(force_update)
+        if self.raise_on_update:
+            raise RuntimeError("network down")
+
+
+def _attach_git_dbs(engine, git_dbs):
+    """Wire fake git databases into the engine's manager."""
+    wrappers = []
+    for git_db in git_dbs:
+        wrapper = MagicMock()
+        wrapper.git_database = git_db
+        wrappers.append(wrapper)
+    engine._manager._databases = {0: wrappers}
+    return engine
+
+
+class TestRefreshDatabases:
+
+    def test_noop_when_auto_update_disabled(self, tmp_path):
+        engine = _make_mock_engine(tmp_path, auto_update=False)
+        engine._manager.create_index.reset_mock()
+        git_db = _FakeGitDb(["sha-a", "sha-a"])
+        _attach_git_dbs(engine, [git_db])
+
+        assert engine.refresh_databases() is False
+        # No fetch attempted in offline mode.
+        assert git_db.update_calls == []
+        engine._manager.create_index.assert_not_called()
+
+    def test_force_fetches_each_db_without_commit_change(self, tmp_path):
+        engine = _make_mock_engine(tmp_path, auto_update=True)
+        engine._manager.create_index.reset_mock()
+        git_a = _FakeGitDb(["sha-a", "sha-a"])
+        git_b = _FakeGitDb(["sha-b", "sha-b"])
+        _attach_git_dbs(engine, [git_a, git_b])
+
+        changed = engine.refresh_databases()
+
+        assert changed is False
+        assert git_a.update_calls == [True]
+        assert git_b.update_calls == [True]
+        # Unchanged commits → index is not rebuilt.
+        engine._manager.create_index.assert_not_called()
+
+    def test_rebuilds_index_and_clears_caches_on_commit_change(self, tmp_path):
+        engine = _make_mock_engine(tmp_path, auto_update=True)
+        engine._manager.create_index.reset_mock()
+        git_db = _FakeGitDb(["sha-old", "sha-new"])
+        _attach_git_dbs(engine, [git_db])
+
+        engine._applicable_cache[("k",)] = ["x"]
+        engine._verdict_cache[("k",)] = {"CVE-1": "affected"}
+
+        changed = engine.refresh_databases()
+
+        assert changed is True
+        engine._manager.create_index.assert_called_once()
+        assert engine._applicable_cache == {}
+        assert engine._verdict_cache == {}
+
+    def test_swallows_fetch_errors(self, tmp_path):
+        engine = _make_mock_engine(tmp_path, auto_update=True)
+        engine._manager.create_index.reset_mock()
+        git_db = _FakeGitDb(["sha-a", "sha-a"])
+        git_db.raise_on_update = True
+        _attach_git_dbs(engine, [git_db])
+
+        # A failing fetch must not raise and must not rebuild the index.
+        assert engine.refresh_databases() is False
+        engine._manager.create_index.assert_not_called()
+
+
+class TestGetEngineRefresh:
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        import src.controllers.scc_engine as mod
+        mod._ENGINE = None
+        yield
+        mod._ENGINE = None
+
+    def test_refreshes_on_every_call(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        monkeypatch.delenv("SBOM_CVE_CHECK_GIT_FETCH_DEPTH", raising=False)
+        monkeypatch.delenv("SBOM_CVE_CHECK_AUTO_UPDATE", raising=False)
+
+        (tmp_path / "nvd-fkie").mkdir()
+        (tmp_path / "cvelist").mkdir()
+
+        mock_mgr = MagicMock()
+        mock_mgr._databases = {}
+
+        with patch("src.controllers.scc_engine.VulnDbManager", return_value=mock_mgr), \
+             patch("src.controllers.scc_engine.init_global_databases_lock"), \
+             patch("src.controllers.scc_engine.GitDatabase"), \
+             patch("src.controllers.scc_engine.init_products_database"), \
+             patch("src.controllers.scc_engine.init_cna_database"), \
+             patch("src.controllers.scc_engine._install_cpe_parse_caches"), \
+             patch("src.controllers.scc_engine.SccEngine.refresh_databases") as refresh:
+            from src.controllers.scc_engine import get_engine
+            get_engine()
+            # First scan: built then refreshed so even the first scan is fresh.
+            refresh.assert_called_once()
+            get_engine()
+            # Cached engine reused → refreshed again before the next scan.
+            assert refresh.call_count == 2
