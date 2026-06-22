@@ -304,7 +304,7 @@ class CycloneDx:
                 bom_ref=vuln.id,
                 source=cyclonedx.model.vulnerability.VulnerabilitySource(
                     name=vuln.namespace,
-                    url=vuln.datasource
+                    url=cyclonedx.model.XsUri(uri=vuln.datasource)
                 ),
                 description=vuln.description,
             )
@@ -352,13 +352,16 @@ class CycloneDx:
                 )
             for pkg in vuln.packages:
                 package = self.packagesCtrl.get(pkg)
-                if len(package.purl) < 1:
+                if package is None:
+                    continue
+                if not package.purl:
                     package.generate_generic_purl()
-                vuln_obj.affects.add(
-                    cyclonedx.model.vulnerability.BomTarget(
-                        ref=package.purl[0]
+                if package.purl:
+                    vuln_obj.affects.add(
+                        cyclonedx.model.vulnerability.BomTarget(
+                            ref=package.purl[0]
+                        )
                     )
-                )
             self.register_assessment(vuln_obj)
             self.sbom.vulnerabilities.add(vuln_obj)
 

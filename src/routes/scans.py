@@ -574,7 +574,7 @@ def init_app(app):
             upgraded_old_ids_set = {old_pkg.id for old_pkg, _ in upgraded_pairs_list}  # noqa: F841
             upgraded_new_ids_set = {new_pkg.id for _, new_pkg in upgraded_pairs_list}
             upgraded_old_to_new = {old_pkg.id: (old_pkg, new_pkg) for old_pkg, new_pkg in upgraded_pairs_list}
-            _rem_by_vuln = {}
+            _rem_by_vuln: dict[str, list[tuple[uuid_module.UUID, uuid_module.UUID]]] = {}
             for fid in sr_gone_fids:
                 info = fid_info.get(fid)
                 if info and info[0] in upgraded_old_ids_set:

@@ -18,7 +18,7 @@ class ConditionParser:
         """
         self.debug = debug
         self.data = {}
-        self.cache_parsed = ("", None)
+        self.cache_parsed: tuple[str, list | None] = ("", None)
 
         pp.ParserElement.enable_left_recursion()
 
@@ -127,10 +127,12 @@ class ConditionParser:
             raise ValueError("Data must be a dictionary or None")
         self.data = data
 
-        if self.cache_parsed[0] != conditions or self.cache_parsed[1] is None:
-            conds = self.parse_string(conditions).asList()
-            self.cache_parsed = (conditions, conds)
+        parsed = self.cache_parsed[1]
+        if self.cache_parsed[0] != conditions or parsed is None:
+            parsed = self.parse_string(conditions).asList()
+            self.cache_parsed = (conditions, parsed)
 
-        res = self._eval_internal(self.cache_parsed[1])
+        assert parsed is not None
+        res = self._eval_internal(parsed)
         self.data = {}
         return res

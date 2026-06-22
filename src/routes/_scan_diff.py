@@ -102,7 +102,7 @@ def _classify_finding_changes(findings_added, findings_removed, upgraded_pairs):
         new_to_old_pkg[str(new_pkg.id)] = old_pkg
 
     # Index removed findings by (vuln_id, old_pkg_id) for matching
-    removed_by_key = {}
+    removed_by_key: dict[tuple[str, str], list[dict]] = {}
     for f in findings_removed:
         key = (f["vulnerability_id"], f["package_id"])
         removed_by_key.setdefault(key, []).append(f)

@@ -317,7 +317,7 @@ def init_app(app):
             )
         )
 
-        variant_ids_filter: list | None = None
+        variant_ids_filter: list[UUID] | None = None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -349,7 +349,7 @@ def init_app(app):
         vuln_ids_for_te = {te.finding.vulnerability_id for te in all_te}
         vuln_texts: dict[str, list[VulnerabilityText]]
         if vuln_ids_for_te:
-            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids_filter)
+            vuln_texts = fetch_vulnerabilities_texts(vuln_ids_for_te, variant_ids=variant_ids_filter)
         else:
             vuln_texts = {}
 

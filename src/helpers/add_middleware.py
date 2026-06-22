@@ -19,6 +19,7 @@ class FlaskWithMiddleware(Flask):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
 
         self.middlewares: list[tuple[str, MiddlewareCallable]] = []
+        self._INT_SCAN_FINISHED: bool = False
         super().__init__(*args, **kwargs)
 
     def middleware(self, path_prefix: str) -> Callable[[MiddlewareCallable], MiddlewareCallable]:

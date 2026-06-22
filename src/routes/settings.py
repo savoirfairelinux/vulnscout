@@ -10,6 +10,7 @@ import threading
 import tarfile
 import subprocess
 import shutil
+from typing import Callable, TypeVar
 
 from flask import jsonify, request
 from sqlalchemy.exc import OperationalError
@@ -23,8 +24,12 @@ from ..controllers import (
 )
 from ..extensions import db, batch_session
 from ..models.scan import Scan as ScanModel
+from ..models.project import Project
+from ..models.variant import Variant
 from ..helpers.verbose import verbose
 from ._scan_helpers import parse_uuid_or_400
+
+T = TypeVar("T")
 
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
@@ -59,7 +64,7 @@ def _regenerate_openvex(app):
         verbose(f"[_regenerate_openvex] {e}")
 
 
-def _retry_on_lock(fn, max_retries=5, delay=0.5):
+def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5) -> T:
     """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'.
 
     Between retries the session is removed (not just rolled back) so the next
@@ -74,6 +79,7 @@ def _retry_on_lock(fn, max_retries=5, delay=0.5):
                 time.sleep(delay * (attempt + 1))
             else:
                 raise
+    raise RuntimeError("retry loop exhausted without returning")
 
 
 def _detect_format(filename: str, data: dict) -> str:
@@ -268,8 +274,10 @@ def init_app(app):
             if p.name == new_name and str(p.id) != project_id:
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
-        def _do_rename():
+        def _do_rename() -> Project:
             p = ProjectController.get(project_id)
+            if p is None:
+                raise ValueError("Project not found.")
             p.update(new_name)
             return p
 
@@ -299,8 +307,10 @@ def init_app(app):
             if v.name == new_name and str(v.id) != variant_id:
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
-        def _do_rename():
+        def _do_rename() -> Variant:
             v = VariantController.get(variant_id)
+            if v is None:
+                raise ValueError("Variant not found.")
             VariantController.update(v, new_name)
             return v
 

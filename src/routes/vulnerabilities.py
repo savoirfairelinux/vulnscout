@@ -8,6 +8,7 @@ import dataclasses
 import typing
 import re
 import urllib.error
+import uuid
 
 from flask import jsonify, request
 from sqlalchemy import func, select
@@ -649,14 +650,14 @@ def init_app(app):
                     active_scan_ids = active_scan_ids_for_project(_scope_project)
                 else:
                     # All variants across all projects
-                    all_variant_ids = [
+                    all_variant_ids: list[uuid.UUID] = [
                         vid for (vid,) in db.session.execute(
                             db.select(Variant.id)
                         ).all()
                     ]
                     active_scan_ids = []
-                    for vid in all_variant_ids:
-                        active_scan_ids.extend(active_scan_ids_for_variant(vid))
+                    for variant_uuid_item in all_variant_ids:
+                        active_scan_ids.extend(active_scan_ids_for_variant(variant_uuid_item))
             if active_scan_ids:
                 rows = db.session.execute(
                     db.select(Finding.vulnerability_id, Variant.name)
