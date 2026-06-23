@@ -198,6 +198,61 @@ class TestTriggerGrypeScan:
 
 
 # ---------------------------------------------------------------------------
+# Grype scan — kernel module exclusion
+# ---------------------------------------------------------------------------
+
+class TestGrypeKernelModuleExclusion:
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    @patch("subprocess.run")
+    def test_kernel_modules_pruned_from_cdx_before_grype(self, mock_run, mock_which, client, ids):
+        """Kernel-module components are removed from the CDX handed to Grype."""
+        import json as _json
+
+        captured = {}
+
+        def _fake_run(cmd, **kwargs):
+            if isinstance(cmd, list) and "export" in cmd:
+                out_dir = cmd[cmd.index("--output-dir") + 1]
+                with open(f"{out_dir}/sbom_cyclonedx_v1_6.cdx.json", "w") as f:
+                    _json.dump({
+                        "components": [
+                            {"name": "openssl", "version": "1.1.1", "bom-ref": "ref-openssl"},
+                            {"name": "kernel-module-ext4", "version": "6.1", "bom-ref": "ref-km1"},
+                            {"name": "kernel-module-usbcore", "version": "6.1", "bom-ref": "ref-km2"},
+                        ],
+                        "dependencies": [
+                            {"ref": "ref-openssl"},
+                            {"ref": "ref-km1"},
+                        ],
+                    }, f)
+            elif isinstance(cmd, list) and "grype" in cmd:
+                # cmd[2] == "sbom:<path>"
+                sbom_path = cmd[2].split("sbom:", 1)[1]
+                with open(sbom_path) as f:
+                    captured["cdx"] = _json.load(f)
+                stdout_file = kwargs.get("stdout")
+                if stdout_file is not None:
+                    stdout_file.write(_json.dumps({"matches": []}))
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _fake_run
+
+        with _sync_thread_patch():
+            resp = client.post(f"/api/variants/{ids['variant_id']}/grype-scan")
+        assert resp.status_code == 202
+
+        names = {c["name"] for c in captured["cdx"]["components"]}
+        assert names == {"openssl"}
+        # Dependency edges referencing dropped kernel modules are pruned too.
+        dep_refs = {d["ref"] for d in captured["cdx"]["dependencies"]}
+        assert dep_refs == {"ref-openssl"}
+
+        resp_s = client.get(f"/api/variants/{ids['variant_id']}/grype-scan/status")
+        data = json.loads(resp_s.data)
+        assert any("2 kernel modules excluded" in line for line in data["logs"])
+
+
+# ---------------------------------------------------------------------------
 # Grype scan — status
 # ---------------------------------------------------------------------------
 

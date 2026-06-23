@@ -22,6 +22,7 @@ from ..models.sbom_package import SBOMPackage
 from ..models.sbom_document import SBOMDocument
 from ..extensions import db
 from ..views.grype_vulns import GrypeVulns
+from ..helpers.scan_filters import is_kernel_package_name
 
 from ._scan_helpers import (
     validate_trigger,
@@ -147,9 +148,17 @@ def init_app(app: Flask) -> None:
                         kept = []
                         kept_refs = set()
                         seen_nv: set = set()
+                        kernel_modules_dropped = 0
                         for comp in components:
                             name = comp.get("name", "")
                             version = comp.get("version", "")
+                            # Skip kernel companion packages: they expand to
+                            # thousands of entries in SPDX 3 SBOMs and all inherit
+                            # the base kernel CPE, so they make Grype crawl with
+                            # no useful results.
+                            if is_kernel_package_name(name):
+                                kernel_modules_dropped += 1
+                                continue
                             nv = (name, version)
                             if nv in seen_nv:
                                 continue
@@ -170,6 +179,8 @@ def init_app(app: Flask) -> None:
                         _grype_scans_in_progress[vid_str]["logs"].append(
                             f"[1/4] De-duplicated components: "
                             f"{len(kept)}/{orig_components} kept"
+                            + (f" ({kernel_modules_dropped} kernel modules excluded)"
+                               if kernel_modules_dropped else "")
                         )
 
                     # 2. Run grype on the exported SBOM

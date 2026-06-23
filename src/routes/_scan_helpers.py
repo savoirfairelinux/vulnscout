@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple, Union, cast
 
 from ..controllers.variants import VariantController
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
+from ..helpers.scan_filters import filter_scannable_packages
 from ..models.observation import Observation
 from ..models.package import Package
 from ..models.variant import Variant
@@ -137,6 +138,10 @@ def resolve_active_packages(
 
     Returns ``(packages, error_string_or_None)``.  When *progress_dict*
     and *vid_str* are provided the function sets an error state on failure.
+
+    Kernel module packages (``kernel-module-*``) are excluded: they bloat
+    SPDX 3 SBOMs to thousands of entries and make the scanners crawl with
+    no useful results.
     """
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
 
@@ -158,7 +163,7 @@ def resolve_active_packages(
         db.select(Package).where(Package.id.in_(all_pkg_ids))
     ).scalars().all()
 
-    return packages, None
+    return filter_scannable_packages(packages), None
 
 
 # ---------------------------------------------------------------------------

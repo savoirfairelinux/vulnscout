@@ -15,6 +15,7 @@ from ..models.package import Package
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_package_ids_for_scans
+from ..helpers.scan_filters import filter_scannable_packages
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
 import os
@@ -37,9 +38,10 @@ def _resolve_active_packages(variant_uuid):
     all_pkg_ids = active_package_ids_for_scans(latest_ids)
     if not all_pkg_ids:
         raise click.ClickException("No packages found for variant")
-    return _db.session.execute(
+    packages = _db.session.execute(
         _db.select(Package).where(Package.id.in_(all_pkg_ids))
     ).scalars().all()
+    return filter_scannable_packages(packages)
 
 
 def _create_tool_scan(variant_uuid, scan_source: str):
