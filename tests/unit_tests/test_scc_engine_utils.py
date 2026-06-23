@@ -700,6 +700,17 @@ class TestRefreshDatabases:
         assert engine.refresh_databases() is False
         engine._manager.create_index.assert_not_called()
 
+    def test_no_databases_returns_false_without_fetch(self, tmp_path):
+        # _manager._databases is {} (falsy) so _git_databases() returns [] immediately.
+        engine = _make_mock_engine(tmp_path, auto_update=True)
+        engine._manager.create_index.reset_mock()
+        # Do NOT call _attach_git_dbs — leave _databases as the empty dict set by _make_mock_engine.
+
+        changed = engine.refresh_databases()
+
+        assert changed is False
+        engine._manager.create_index.assert_not_called()
+
 
 class TestGetEngineRefresh:
 

@@ -79,3 +79,35 @@ def test_openvex_empty_slug_uses_hash_fallback():
     at_id = result["statements"][0]["products"][0]["@id"]
     assert at_id != "pkg:generic/foo@1.0"   # must NOT collide with no-supplier case
     assert "supplier-" in at_id             # hash-based fallback
+
+
+def test_openvex_with_vuln_description_and_http_datasource():
+    """Line 118+: when vulnerabilitiesCtrl.get returns a vuln the description
+    and @id are embedded in the statement."""
+    pkg = _make_pkg("bar", "2.0")
+    assess = _make_assessment("CVE-2024-VD", pkg)
+
+    fake_vuln = MagicMock()
+    fake_vuln.description = "A serious flaw"
+    fake_vuln.aliases = ["CVE-2024-VD"]
+    fake_vuln.datasource = "https://nvd.nist.gov/vuln/detail/CVE-2024-VD"
+    fake_vuln.found_by = ["grype", "openvex"]
+
+    ctrl = ControllersCache()
+    ctrl.packages = MagicMock()
+    ctrl.packages.get = MagicMock(side_effect=lambda pid: next(
+        (p for p in [pkg] if p.string_id == pid), None
+    ))
+    ctrl.vulnerabilities = MagicMock()
+    ctrl.vulnerabilities.get = MagicMock(return_value=fake_vuln)
+    ctrl.assessments = MagicMock()
+    ctrl.assessments.get_all = MagicMock(return_value=[assess])
+
+    view = OpenVex(ctrl)
+    result = view.to_dict()
+    stmt = result["statements"][0]
+    assert stmt["vulnerability"]["description"] == "A serious flaw"
+    assert stmt["vulnerability"]["@id"] == "https://nvd.nist.gov/vuln/detail/CVE-2024-VD"
+    # strict_export=False → scanners key present, "openvex" filtered out
+    assert "grype" in stmt["scanners"]
+    assert "openvex" not in stmt["scanners"]

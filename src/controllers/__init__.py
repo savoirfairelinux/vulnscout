@@ -11,6 +11,7 @@ from .variants import VariantController
 from .vulnerabilities import VulnerabilitiesController
 
 from .cache import ControllersCache
+from . import scc_engine
 
 __all__ = [
     "AssessmentsController",
