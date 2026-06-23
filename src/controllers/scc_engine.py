@@ -77,7 +77,7 @@ def _install_cpe_parse_caches() -> None:
                 return cached(arg)
             return func(arg)
 
-        wrapper.cache_clear = cached.cache_clear
+        wrapper.cache_clear = cached.cache_clear  # type: ignore[attr-defined]
         return wrapper
 
     Cpe23.parse = staticmethod(_string_keyed(Cpe23.parse, 200_000))  # type: ignore[method-assign]

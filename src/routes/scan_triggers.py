@@ -734,7 +734,7 @@ def init_app(app: Flask) -> None:
     _sbom_cve_check_scans_in_progress: dict = {}
 
     @app.route('/api/variants/<variant_id>/sbom-cve-check-scan', methods=['POST'])
-    def trigger_sbom_cve_check_scan(variant_id):
+    def trigger_sbom_cve_check_scan(variant_id: str) -> ResponseReturnValue:
         """Trigger a local CVE-database scan (NVD-FKIE + CVEList V5) for the given variant.
 
         Matches every active package against locally-cloned advisory databases,
@@ -745,15 +745,17 @@ def init_app(app: Flask) -> None:
             variant_id, _sbom_cve_check_scans_in_progress, "sbom-cve-check scan")
         if err is not None:
             return err
+        if variant_uuid is None:
+            return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
         init_progress(_sbom_cve_check_scans_in_progress, vid_str)
 
-        def _run_sbom_cve_check_scan():
+        def _run_sbom_cve_check_scan() -> None:
             with app.app_context():
                 _do_sbom_cve_check_scan(vid_str, variant_uuid)
 
-        def _do_sbom_cve_check_scan(vid_str, variant_uuid):
+        def _do_sbom_cve_check_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 from ..controllers.scc_engine import get_engine
                 from ..bin.cmd_vuln_scan import (
@@ -898,6 +900,6 @@ def init_app(app: Flask) -> None:
         return jsonify({"status": "started", "variant_id": vid_str}), 202
 
     @app.route('/api/variants/<variant_id>/sbom-cve-check-scan/status')
-    def sbom_cve_check_scan_status(variant_id):
+    def sbom_cve_check_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running sbom-cve-check scan for the given variant."""
         return scan_status_response(variant_id, _sbom_cve_check_scans_in_progress)
