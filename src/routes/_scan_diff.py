@@ -30,6 +30,8 @@ from ._scan_queries import (
     _load_scan_with_findings,
     _assessments_by_scan,
     _TOOL_SOURCE_LABELS,
+    ObsDict,
+    UpgradedFinding,
 )
 
 
@@ -87,10 +89,10 @@ def _classify_package_changes(
 # ---------------------------------------------------------------------------
 
 def _classify_finding_changes(
-    findings_added: List[Dict[str, str]],
-    findings_removed: List[Dict[str, str]],
+    findings_added: List[ObsDict],
+    findings_removed: List[ObsDict],
     upgraded_pairs: List[Tuple[Package, Package]],
-) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]], set[Tuple[str, str]]]:
+) -> Tuple[List[ObsDict], List[ObsDict], List[UpgradedFinding], set[Tuple[str, str]]]:
     """Separate findings into truly-added, truly-removed, and upgraded.
 
     A finding is "upgraded" when the same vulnerability_id appears in both
@@ -114,12 +116,12 @@ def _classify_finding_changes(
         new_to_old_pkg[str(new_pkg.id)] = old_pkg
 
     # Index removed findings by (vuln_id, old_pkg_id) for matching
-    removed_by_key: dict[tuple[str, str], list[dict]] = {}
+    removed_by_key: dict[tuple[str, str], list[ObsDict]] = {}
     for f in findings_removed:
         key = (f["vulnerability_id"], f["package_id"])
         removed_by_key.setdefault(key, []).append(f)
 
-    upgraded_findings: List[Dict[str, str]] = []
+    upgraded_findings: List[UpgradedFinding] = []
     matched_added_ids = set()
     matched_removed_ids = set()
     matched_upgraded_keys: set[Tuple[str, str]] = set()  # (vuln_id, old_pkg_id_str)

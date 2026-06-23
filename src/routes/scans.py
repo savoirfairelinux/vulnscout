@@ -31,6 +31,7 @@ from ._scan_queries import (
     _obs_to_dict,
     _origin_for_scan,
     _assessments_detail_for_scan,
+    ObsDict,
 )
 from ._scan_diff import (
     _classify_package_changes,
@@ -603,11 +604,12 @@ def init_app(app: Flask) -> None:
                         sr_upgraded_fids_new.add(fid)
                         sr_upgraded_fids_gone.add(old_fid)
                         old_pkg, new_pkg = upgraded_old_to_new[old_pkg_id]
-                        obs_dict = fid_obs_map.get(fid, {})
+                        obs_dict: ObsDict | None = fid_obs_map.get(fid)
                         findings_upgraded_list.append({
                             "vulnerability_id": info[1], "package_name": old_pkg.name or "unknown",
                             "old_version": old_pkg.version or "", "new_version": new_pkg.version or "",
-                            "package_supplier": old_pkg.supplier or "", "origin": obs_dict.get("origin", scan_origin),
+                            "package_supplier": old_pkg.supplier or "",
+                            "origin": obs_dict["origin"] if obs_dict else scan_origin,
                         })
             findings_added = [fid_obs_map[fid] for fid in sr_new_fids - sr_upgraded_fids_new if fid in fid_obs_map]
             findings_removed = [fid_obs_map[fid] for fid in sr_gone_fids - sr_upgraded_fids_gone if fid in fid_obs_map]

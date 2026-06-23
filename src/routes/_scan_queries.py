@@ -11,7 +11,7 @@ import uuid as uuid_module
 from dataclasses import dataclass
 from datetime import datetime
 import typing
-from typing import Dict, List, Optional, Sequence, Tuple, TypeAlias
+from typing import Dict, List, Optional, Sequence, Tuple, TypeAlias, TypedDict
 
 from sqlalchemy import select, Row
 from sqlalchemy.orm import selectinload
@@ -160,7 +160,26 @@ def _load_scan_with_findings(scan_id: uuid_module.UUID) -> Scan | None:
 # Observation / finding serialisation
 # ---------------------------------------------------------------------------
 
-def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> Dict[str, str]:
+class ObsDict(TypedDict):
+    """Serialised observation/finding record produced by ``_obs_to_dict``."""
+    finding_id: str
+    package_name: str
+    package_version: str
+    package_supplier: str
+    package_id: str
+    vulnerability_id: str
+    origin: str
+
+
+class UpgradedFinding(TypedDict):
+    """A finding whose package was upgraded between two scans."""
+    vulnerability_id: str
+    package_name: str
+    old_version: str
+    new_version: str
+
+
+def _obs_to_dict(obs: Observation, origin: str = "Imported SBOM") -> ObsDict:
     f = obs.finding
     pkg = f.package
     return {
