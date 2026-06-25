@@ -10,7 +10,8 @@ import threading
 import tarfile
 import subprocess
 import shutil
-from typing import Callable, TypeVar
+from typing import Callable, TypeVar, cast
+import io as _io
 
 from flask import jsonify, request
 from sqlalchemy.exc import OperationalError
@@ -139,9 +140,7 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
                     continue
                 if not member.name.lower().endswith(".spdx.json"):
                     continue
-                src = tar.extractfile(member)
-                if src is None:
-                    continue
+                src = cast(_io.BufferedReader, tar.extractfile(member))
                 base = os.path.basename(member.name)
                 fd, out_path = tempfile.mkstemp(suffix=".spdx.json", prefix="vulnscout_upload_")
                 with os.fdopen(fd, "wb") as dst:
@@ -154,10 +153,7 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
                 os.unlink(decompressed)
             except OSError:
                 pass
-        try:
-            shutil.rmtree(extract_dir, ignore_errors=True)
-        except OSError:
-            pass
+        shutil.rmtree(extract_dir, ignore_errors=True)
 
 
 def _process_sbom_background(app, upload_id: str, file_paths: list[str], scan_id, variant_id):
@@ -275,9 +271,7 @@ def init_app(app):
                 return jsonify({"error": f"A project named '{new_name}' already exists."}), 409
 
         def _do_rename() -> Project:
-            p = ProjectController.get(project_id)
-            if p is None:
-                raise ValueError("Project not found.")
+            p = cast(Project, ProjectController.get(project_id))
             p.update(new_name)
             return p
 
@@ -308,9 +302,7 @@ def init_app(app):
                 return jsonify({"error": f"A variant named '{new_name}' already exists in this project."}), 409
 
         def _do_rename() -> Variant:
-            v = VariantController.get(variant_id)
-            if v is None:
-                raise ValueError("Variant not found.")
+            v = cast(Variant, VariantController.get(variant_id))
             VariantController.update(v, new_name)
             return v
 
@@ -375,13 +367,11 @@ def init_app(app):
         source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
         if err:
             return None, err
-        if source_uuid is None:
-            return None, (jsonify({"error": "Invalid source variant ID."}), 400)
+        source_uuid = cast(uuid.UUID, source_uuid)
         target_uuid, err = parse_uuid_or_400(target_id, "target_variant_id")
         if err:
             return None, err
-        if target_uuid is None:
-            return None, (jsonify({"error": "Invalid target variant ID."}), 400)
+        target_uuid = cast(uuid.UUID, target_uuid)
 
         if source_uuid == target_uuid:
             return None, (jsonify({"error": "Source and target variants must be different."}), 400)
