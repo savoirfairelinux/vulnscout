@@ -10,7 +10,7 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as NvdState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid) => ScansHandler.triggerNvdScan(vid),
+    (vid, opts) => ScansHandler.triggerNvdScan(vid, opts.excludeKernel ?? true),
     (vid) => ScansHandler.getNvdScanStatus(vid),
     "NVD",
 );

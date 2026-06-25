@@ -31,7 +31,7 @@ import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
@@ -1118,6 +1118,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
     const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
+    // Scan options
+    const [excludeKernel, setExcludeKernel] = useState(true);
+    const [showKernelHelp, setShowKernelHelp] = useState(false);
     const scanMenuRef = useRef<HTMLDivElement>(null);
 
     // Global Grype scan state — survives tab switches (per-variant)
@@ -1298,11 +1301,12 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanMenuOpen(false);
+        const opts = { excludeKernel };
         const promises: Promise<void>[] = [];
-        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants));
-        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants));
-        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants));
-        if (selectedScanTypes.has('scc')) promises.push(sccTriggerScan(variants));
+        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants, opts));
+        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants, opts));
+        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants, opts));
+        if (selectedScanTypes.has('scc')) promises.push(sccTriggerScan(variants, opts));
         await Promise.all(promises);
     }
 
@@ -1578,6 +1582,45 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                                 onClick={() => setSelectedVariantIds(new Set())}
                                                 className="text-xs text-sky-400 hover:text-sky-300"
                                             >Select none</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Options */}
+                                <div className="mb-3">
+                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Options</div>
+                                    <div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 text-sm">
+                                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                            <input
+                                                type="checkbox"
+                                                checked={excludeKernel}
+                                                onChange={() => setExcludeKernel(v => !v)}
+                                                className="rounded accent-cyan-500"
+                                            />
+                                            <span className="text-neutral-200 truncate">Deactivate kernel scan</span>
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowKernelHelp(v => !v)}
+                                            className="text-sky-400 hover:text-sky-300 transition-colors shrink-0"
+                                            title="Why deactivate kernel scan?"
+                                            aria-label="Why deactivate kernel scan?"
+                                        >
+                                            <FontAwesomeIcon icon={faCircleQuestion} className="w-3.5" />
+                                        </button>
+                                    </div>
+                                    {showKernelHelp && (
+                                        <div className="mt-1 p-2 rounded bg-sky-900/30 border border-sky-700/40 text-xs text-sky-200 leading-relaxed">
+                                            A Yocto kernel recipe expands into the real kernel package
+                                            (e.g. <span className="font-mono text-sky-100">linux-*</span>) plus many
+                                            companion packages (<span className="font-mono text-sky-100">kernel-6.6.x</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-modules</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-devicetree</span>,
+                                            {' '}<span className="font-mono text-sky-100">kernel-module-*</span> …) that all
+                                            inherit the same kernel CPE. Scanning them attributes the entire kernel CVE set
+                                            to every companion, producing thousands of duplicate findings and slow scans.
+                                            The real kernel package is still scanned, so kernel CVEs remain covered.
+                                            Leave this on unless you specifically need to scan each kernel sub-package.
                                         </div>
                                     )}
                                 </div>

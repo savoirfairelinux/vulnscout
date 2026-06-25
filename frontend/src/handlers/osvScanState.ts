@@ -10,7 +10,7 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as OsvState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid) => ScansHandler.triggerOsvScan(vid),
+    (vid, opts) => ScansHandler.triggerOsvScan(vid, opts.excludeKernel ?? true),
     (vid) => ScansHandler.getOsvScanStatus(vid),
     "OSV",
 );

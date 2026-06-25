@@ -11,7 +11,7 @@ import os
 import threading
 import uuid
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from ..models.scan import Scan
@@ -32,6 +32,15 @@ from ._scan_helpers import (
     resolve_active_packages,
     create_observation_and_assessment,
 )
+
+
+def _read_exclude_kernel() -> bool:
+    """Read the ``exclude_kernel`` request option (defaults to ``True``).
+
+    Kernel companion packages are excluded from scanner inputs by default;
+    the UI can opt back in by sending ``?exclude_kernel=false``.
+    """
+    return request.args.get("exclude_kernel", "true").strip().lower() != "false"
 
 
 def init_app(app: Flask) -> None:
@@ -90,6 +99,7 @@ def init_app(app: Flask) -> None:
             ).all()
             sbom_pkg_set = {(r[0], r[1]) for r in pkg_rows}
 
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_grype_scans_in_progress, vid_str, total=4)
 
         def _run_grype_scan() -> None:
@@ -155,8 +165,9 @@ def init_app(app: Flask) -> None:
                             # Skip kernel companion packages: they expand to
                             # thousands of entries in SPDX 3 SBOMs and all inherit
                             # the base kernel CPE, so they make Grype crawl with
-                            # no useful results.
-                            if is_kernel_package_name(name):
+                            # no useful results.  Skipped only when the kernel
+                            # exclusion option is enabled (the default).
+                            if exclude_kernel and is_kernel_package_name(name):
                                 kernel_modules_dropped += 1
                                 continue
                             nv = (name, version)
@@ -317,6 +328,7 @@ def init_app(app: Flask) -> None:
             return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_nvd_scans_in_progress, vid_str)
 
         def _run_nvd_scan() -> None:
@@ -338,7 +350,8 @@ def init_app(app: Flask) -> None:
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _nvd_scans_in_progress, vid_str)
+                    variant_uuid, _nvd_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
                 if pkg_err:
                     return
 
@@ -560,6 +573,7 @@ def init_app(app: Flask) -> None:
             return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_osv_scans_in_progress, vid_str)
 
         def _run_osv_scan() -> None:
@@ -578,7 +592,8 @@ def init_app(app: Flask) -> None:
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _osv_scans_in_progress, vid_str)
+                    variant_uuid, _osv_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
                 if pkg_err:
                     return
 
@@ -760,6 +775,7 @@ def init_app(app: Flask) -> None:
             return jsonify({"error": "Internal error"}), 500
 
         vid_str = str(variant_uuid)
+        exclude_kernel = _read_exclude_kernel()
         init_progress(_sbom_cve_check_scans_in_progress, vid_str)
 
         def _run_sbom_cve_check_scan() -> None:
@@ -778,7 +794,8 @@ def init_app(app: Flask) -> None:
                     "Resolving active packages…"
                 )
                 packages, pkg_err = resolve_active_packages(
-                    variant_uuid, _sbom_cve_check_scans_in_progress, vid_str)
+                    variant_uuid, _sbom_cve_check_scans_in_progress, vid_str,
+                    exclude_kernel=exclude_kernel)
                 if pkg_err:
                     return
 

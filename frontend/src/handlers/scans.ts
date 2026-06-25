@@ -202,9 +202,9 @@ class ScansHandler {
         return response.ok;
     }
 
-    static async triggerGrypeScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+    static async triggerGrypeScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/grype-scan?exclude_kernel=${excludeKernel}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -232,9 +232,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerNvdScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -251,9 +251,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerOsvScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+    static async triggerOsvScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/osv-scan?exclude_kernel=${excludeKernel}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };
@@ -270,9 +270,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerSbomCveCheckScan(variantId: string): Promise<{ ok: boolean; error?: string }> {
+    static async triggerSbomCveCheckScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/sbom-cve-check-scan?exclude_kernel=${excludeKernel}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };

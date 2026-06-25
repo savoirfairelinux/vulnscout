@@ -128,6 +128,7 @@ def resolve_active_packages(
     variant_uuid: uuid_module.UUID,
     progress_dict: Optional[ProgressDict] = None,
     vid_str: Optional[str] = None,
+    exclude_kernel: bool = True,
 ) -> Tuple[Sequence[Package], Optional[str]]:
     """Return the active ``Package`` list for *variant_uuid*.
 
@@ -139,9 +140,11 @@ def resolve_active_packages(
     Returns ``(packages, error_string_or_None)``.  When *progress_dict*
     and *vid_str* are provided the function sets an error state on failure.
 
-    Kernel module packages (``kernel-module-*``) are excluded: they bloat
-    SPDX 3 SBOMs to thousands of entries and make the scanners crawl with
-    no useful results.
+    When *exclude_kernel* is ``True`` (the default), kernel companion
+    packages (``kernel-*``) are dropped: they bloat SPDX 3 SBOMs to
+    thousands of entries and all inherit the base kernel CPE, so feeding
+    them to the scanners attributes the entire kernel CVE set to each with
+    no useful results.  Pass ``exclude_kernel=False`` to scan them anyway.
     """
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
 
@@ -163,7 +166,9 @@ def resolve_active_packages(
         db.select(Package).where(Package.id.in_(all_pkg_ids))
     ).scalars().all()
 
-    return filter_scannable_packages(packages), None
+    if exclude_kernel:
+        return filter_scannable_packages(packages), None
+    return packages, None
 
 
 # ---------------------------------------------------------------------------

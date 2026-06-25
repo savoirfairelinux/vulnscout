@@ -25,6 +25,12 @@ export type ScanEntryState = {
 
 export type ScanManagerSnapshot = readonly ScanEntryState[];
 
+/** Options forwarded to the per-variant trigger call. */
+export type ScanTriggerOptions = {
+    /** Exclude kernel companion packages from scanner inputs (default true). */
+    excludeKernel?: boolean;
+};
+
 // Status response shape returned by the backend polling endpoints
 type StatusResponse = {
     status: string;
@@ -59,9 +65,12 @@ export class ScanStateManager {
     /** Queue of variants waiting to be triggered (serial mode only) */
     private pendingQueue: Array<{ id: string; name: string }> = [];
 
+    /** Options forwarded to every triggerFn call of the current run */
+    private currentOptions: ScanTriggerOptions = {};
+
     constructor(
         /** Function to trigger a scan for one variant */
-        private triggerFn: (vid: string) => Promise<{ ok: boolean; error?: string }>,
+        private triggerFn: (vid: string, opts: ScanTriggerOptions) => Promise<{ ok: boolean; error?: string }>,
         /** Function to poll status for one variant */
         private statusFn: (vid: string) => Promise<StatusResponse>,
         /** Human label for error messages (e.g. "Grype") */
@@ -118,8 +127,10 @@ export class ScanStateManager {
      * In **serial** mode only the first variant is triggered immediately;
      * the rest are queued and started one-by-one as each finishes.
      */
-    triggerScan = async (variants: Array<{ id: string; name: string }>) => {
+    triggerScan = async (variants: Array<{ id: string; name: string }>, opts: ScanTriggerOptions = {}) => {
         if (variants.length === 0) return;
+
+        this.currentOptions = opts;
 
         if (this.serial) {
             // Show all entries immediately; first is "running", rest are "queued"
@@ -141,7 +152,7 @@ export class ScanStateManager {
 
             // Trigger only the first variant
             const first = variants[0];
-            const result = await this.triggerFn(first.id);
+            const result = await this.triggerFn(first.id, this.currentOptions);
             if (!result.ok) {
                 this.setVariantState(first.id, {
                     status: "error",
@@ -176,7 +187,7 @@ export class ScanStateManager {
 
         // Trigger each scan sequentially (avoids overwhelming the backend)
         for (const v of variants) {
-            const result = await this.triggerFn(v.id);
+            const result = await this.triggerFn(v.id, this.currentOptions);
             if (!result.ok) {
                 this.setVariantState(v.id, {
                     status: "error",
@@ -229,7 +240,7 @@ export class ScanStateManager {
             progress: "starting",
             logs: [],
         });
-        this.triggerFn(next.id).then((result) => {
+        this.triggerFn(next.id, this.currentOptions).then((result) => {
             if (!result.ok) {
                 this.setVariantState(next.id, {
                     status: "error",

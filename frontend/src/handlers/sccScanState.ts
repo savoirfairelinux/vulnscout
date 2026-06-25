@@ -10,7 +10,7 @@ import { ScanStateManager } from "./scanStateManager";
 export type { ScanEntryState as SccState, ScanManagerSnapshot } from "./scanStateManager";
 
 const manager = new ScanStateManager(
-    (vid) => ScansHandler.triggerSbomCveCheckScan(vid),
+    (vid, opts) => ScansHandler.triggerSbomCveCheckScan(vid, opts.excludeKernel ?? true),
     (vid) => ScansHandler.getSbomCveCheckScanStatus(vid),
     "sbom-cve-check",
 );
