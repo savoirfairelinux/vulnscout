@@ -121,6 +121,52 @@ export class ScanStateManager {
     };
 
     /**
+     * Re-seed in-progress scans after a page refresh from status data that
+     * the caller has already fetched (typically via the bulk
+     * ``/api/scans/running`` endpoint, so no per-variant polling is needed).
+     *
+     * Each entry whose backend status is "running" is added to the local
+     * state map and polling is (re)started. Variants already tracked in
+     * memory are left untouched, so a scan triggered earlier in this session
+     * is never clobbered.
+     *
+     * Note: queued-but-not-yet-started variants (serial mode) are not
+     * restored — they were never started server-side, so there is nothing to
+     * resume.
+     *
+     * @param entries  Running-scan entries with variant id, name and status.
+     */
+    restoreFromStatus = (
+        entries: Array<{ variantId: string; name: string; status: StatusResponse }>,
+    ) => {
+        let anyRestored = false;
+
+        for (const { variantId, name, status } of entries) {
+            // Skip if already tracked (e.g. triggered in this session before restore ran)
+            if (this.states.has(variantId)) continue;
+            // Only restore actively running scans
+            if (status.status !== "running") continue;
+
+            this.states.set(variantId, {
+                variantId,
+                variantName: name,
+                status: "running",
+                error: null,
+                progress: status.progress ?? "starting",
+                logs: status.logs ?? [],
+                total: status.total ?? 0,
+                doneCount: status.done_count ?? 0,
+            });
+            anyRestored = true;
+        }
+
+        if (anyRestored) {
+            this.rebuildSnapshot();
+            this.startPolling();
+        }
+    };
+
+    /**
      * Trigger scans for one or more variants.
      * Each variant gets its own state entry and log panel.
      *

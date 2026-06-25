@@ -931,3 +931,31 @@ def init_app(app: Flask) -> None:
     def sbom_cve_check_scan_status(variant_id: str) -> ResponseReturnValue:
         """Check the status of a running sbom-cve-check scan for the given variant."""
         return scan_status_response(variant_id, _sbom_cve_check_scans_in_progress)
+
+    # ------------------------------------------------------------------
+    # Bulk running-scan discovery
+    # ------------------------------------------------------------------
+
+    @app.route('/api/scans/running')
+    def running_scans() -> ResponseReturnValue:
+        """Return every scan currently running, grouped by scan type.
+
+        Lets the frontend restore in-progress scan panels after a page
+        refresh with a single request instead of polling each variant's
+        per-type ``/status`` endpoint individually.
+        """
+        groups = {
+            "grype": _grype_scans_in_progress,
+            "nvd": _nvd_scans_in_progress,
+            "osv": _osv_scans_in_progress,
+            "sbom-cve-check": _sbom_cve_check_scans_in_progress,
+        }
+        result = {
+            label: [
+                {"variant_id": vid_str, **info}
+                for vid_str, info in progress_dict.items()
+                if info.get("status") == "running"
+            ]
+            for label, progress_dict in groups.items()
+        }
+        return jsonify(result)

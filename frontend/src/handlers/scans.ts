@@ -155,6 +155,17 @@ type GlobalResult = {
 
 export type { Scan, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, ScanDiff, GlobalResult, GlobalResultFinding, GlobalResultPackage, GlobalResultVuln, GlobalResultAssessment };
 
+type ScanStatusResponse = { status: string; error?: string | null; progress?: string | null; logs?: string[]; total?: number; done_count?: number };
+type RunningScanEntry = ScanStatusResponse & { variant_id: string };
+type RunningScans = {
+    grype: RunningScanEntry[];
+    nvd: RunningScanEntry[];
+    osv: RunningScanEntry[];
+    "sbom-cve-check": RunningScanEntry[];
+};
+
+export type { ScanStatusResponse, RunningScanEntry, RunningScans };
+
 class ScansHandler {
     static async list(variantId?: string, projectId?: string): Promise<Scan[]> {
         let url: string;
@@ -287,6 +298,23 @@ class ScansHandler {
         );
         if (!response.ok) return { status: 'unknown' };
         return await response.json();
+    }
+
+    static async getRunningScans(): Promise<RunningScans> {
+        const empty: RunningScans = { grype: [], nvd: [], osv: [], 'sbom-cve-check': [] };
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + `/api/scans/running`,
+            { mode: 'cors' }
+        );
+        if (!response.ok) return empty;
+        const data = await response.json().catch(() => null);
+        if (data === null || typeof data !== 'object') return empty;
+        return {
+            grype: Array.isArray(data.grype) ? data.grype : [],
+            nvd: Array.isArray(data.nvd) ? data.nvd : [],
+            osv: Array.isArray(data.osv) ? data.osv : [],
+            'sbom-cve-check': Array.isArray(data['sbom-cve-check']) ? data['sbom-cve-check'] : [],
+        };
     }
 
     static async deleteScan(scanId: string): Promise<{ ok: boolean; error?: string; orphaned_findings_removed?: number }> {

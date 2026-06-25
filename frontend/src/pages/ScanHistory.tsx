@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
-import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss } from "../handlers/grypeScanState";
+import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult, RunningScanEntry } from "../handlers/scans";
+import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
     getSnapshot as nvdGetSnapshot,
     setOnDone as nvdSetOnDone,
     triggerScan as nvdTriggerScan,
     dismiss as nvdDismiss,
+    restoreFromStatus as nvdRestore,
 } from "../handlers/nvdScanState";
 import {
     subscribe as osvSubscribe,
@@ -16,6 +17,7 @@ import {
     setOnDone as osvSetOnDone,
     triggerScan as osvTriggerScan,
     dismiss as osvDismiss,
+    restoreFromStatus as osvRestore,
 } from "../handlers/osvScanState";
 import {
     subscribe as sccSubscribe,
@@ -23,6 +25,7 @@ import {
     setOnDone as sccSetOnDone,
     triggerScan as sccTriggerScan,
     dismiss as sccDismiss,
+    restoreFromStatus as sccRestore,
 } from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
 import ScanProgressPanel from "../components/ScanProgressPanel";
@@ -1223,6 +1226,29 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (sccEntries.some(e => e.status === 'done')) refreshScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // After variants are loaded, probe the backend once for any scan that was
+    // running before the page was refreshed and restore the progress panel.
+    useEffect(() => {
+        if (allVariants.length === 0) return;
+        const nameById = new Map(allVariants.map(v => [v.id, v.name]));
+        let cancelled = false;
+
+        ScansHandler.getRunningScans().then(running => {
+            if (cancelled) return;
+            const toEntries = (list: RunningScanEntry[]) =>
+                list
+                    .filter(s => nameById.has(s.variant_id))
+                    .map(s => ({ variantId: s.variant_id, name: nameById.get(s.variant_id)!, status: s }));
+
+            grypeRestore(toEntries(running.grype));
+            nvdRestore(toEntries(running.nvd));
+            osvRestore(toEntries(running.osv));
+            sccRestore(toEntries(running['sbom-cve-check']));
+        });
+
+        return () => { cancelled = true; };
+    }, [allVariants]);
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {

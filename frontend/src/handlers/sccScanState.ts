@@ -21,3 +21,4 @@ export const setOnDone = manager.setOnDone;
 export const triggerScan = manager.triggerScan;
 export const dismiss = manager.dismiss;
 export const dismissAll = manager.dismissAll;
+export const restoreFromStatus = manager.restoreFromStatus;

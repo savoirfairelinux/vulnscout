@@ -474,3 +474,51 @@ class TestOsvScanStatus:
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# Bulk running-scan discovery
+# ---------------------------------------------------------------------------
+
+class TestRunningScans:
+    def test_empty_when_nothing_running(self, client):
+        resp = client.get("/api/scans/running")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == {"grype": [], "nvd": [], "osv": [], "sbom-cve-check": []}
+
+    @patch("threading.Thread")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_lists_running_scans_grouped_by_type(self, mock_which, mock_thread, client, ids):
+        # Leave the spawned threads unstarted so the scans stay "running".
+        mock_thread.return_value = MagicMock()
+        vid = ids["variant_id"]
+        client.post(f"/api/variants/{vid}/grype-scan")
+        client.post(f"/api/variants/{vid}/nvd-scan")
+
+        resp = client.get("/api/scans/running")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+
+        assert len(data["grype"]) == 1
+        assert data["grype"][0]["variant_id"] == vid
+        assert data["grype"][0]["status"] == "running"
+        assert len(data["nvd"]) == 1
+        assert data["nvd"][0]["variant_id"] == vid
+        assert data["osv"] == []
+        assert data["sbom-cve-check"] == []
+
+    @patch("threading.Thread")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_excludes_finished_scans(self, mock_which, mock_thread, client, ids):
+        vid = ids["variant_id"]
+        # Run the grype scan synchronously so it completes (status -> done).
+        with _sync_thread_patch():
+            with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout='{"matches": []}')):
+                client.post(f"/api/variants/{vid}/grype-scan")
+
+        resp = client.get("/api/scans/running")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["grype"] == []
+
