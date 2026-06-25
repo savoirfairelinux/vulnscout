@@ -163,3 +163,45 @@ def test_math_operation_duration():
     assert Iso8601Duration("PT5M") // 10 == "PT30S"
     with pytest.raises(ValueError):
         Iso8601Duration("PT5M") / "PT5M"
+
+
+# ---------------------------------------------------------------------------
+# Line 120: negative component raises ValueError
+# ---------------------------------------------------------------------------
+
+def test_negative_duration_raises():
+    """Line 120: any negative parsed component raises ValueError.
+    The regex only accepts \\d+, so we bypass it by patching the compiled
+    patterns with mocks whose .match() returns a fake group with a negative value.
+    """
+    from unittest.mock import MagicMock, patch
+
+    d = object.__new__(Iso8601Duration)
+    for attr in ('years', 'months', 'weeks', 'days', 'hours', 'minutes',
+                 'seconds', 'total_seconds'):
+        object.__setattr__(d, attr, 0)
+
+    # group(1) = "-1Y" → float("-1") = -1.0 → triggers "Negative duration"
+    fake_match = MagicMock()
+    fake_match.group.side_effect = lambda n: ("-1Y" if n == 1 else None)
+
+    fake_regex_parse = MagicMock()
+    fake_regex_parse.match.return_value = fake_match
+
+    fake_regex_validate = MagicMock()
+    fake_regex_validate.match.return_value = MagicMock()  # truthy — passes validation
+
+    with patch.object(Iso8601Duration, 'regex_parse', fake_regex_parse):
+        with patch.object(Iso8601Duration, 'regex_validate', fake_regex_validate):
+            with pytest.raises(ValueError, match="Negative duration"):
+                d.parse_duration("P-1Y")
+
+
+# ---------------------------------------------------------------------------
+# Line 210: __eq__ with None returns False (not zero-seconds check)
+# ---------------------------------------------------------------------------
+
+def test_eq_none_returns_false():
+    """Line 210: duration == None should return False, not raise."""
+    d = Iso8601Duration("PT1H")
+    assert (d == None) is False  # noqa: E711

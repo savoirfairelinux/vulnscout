@@ -295,3 +295,64 @@ class TestGetEnvVarMethod:
         """Test that env() is available as a Jinja global function"""
         assert "env" in templates_instance.env.globals
         assert templates_instance.env.globals["env"] == TemplatesExtensions.get_env_var
+
+
+# ---------------------------------------------------------------------------
+# TemplatesExtensions — filter_by_variant, filter_by_project, sort_by_scan_date
+# (lines 567-568, 572-573, 577)
+# ---------------------------------------------------------------------------
+
+class TestTemplatesExtensionsFilterSort:
+    def test_filter_by_variant_matching(self):
+        """Lines 567-568: filter_by_variant returns items where variant_id matches."""
+        items = [
+            {"id": "v1", "variant_id": "var-A", "variant_ids": []},
+            {"id": "v2", "variant_id": "var-B", "variant_ids": []},
+            {"id": "v3", "variant_id": None,    "variant_ids": ["var-A"]},
+        ]
+        result = TemplatesExtensions.filter_by_variant(items, "var-A")
+        ids = [r["id"] for r in result]
+        assert "v1" in ids
+        assert "v3" in ids
+        assert "v2" not in ids
+
+    def test_filter_by_project_matching(self):
+        """Lines 572-573: filter_by_project returns items where project_id matches."""
+        items = [
+            {"id": "v1", "project_id": "proj-1"},
+            {"id": "v2", "project_id": "proj-2"},
+        ]
+        result = TemplatesExtensions.filter_by_project(items, "proj-1")
+        assert len(result) == 1
+        assert result[0]["id"] == "v1"
+
+    def test_sort_by_scan_date_descending(self):
+        """Line 577: sort_by_scan_date sorts by timestamp descending."""
+        items = [
+            {"id": "a", "timestamp": "2023-01-01T00:00:00"},
+            {"id": "b", "timestamp": "2024-01-01T00:00:00"},
+            {"id": "c", "timestamp": "2022-01-01T00:00:00"},
+        ]
+        result = TemplatesExtensions.sort_by_scan_date(items)
+        assert result[0]["id"] == "b"  # newest first
+
+
+# ---------------------------------------------------------------------------
+# Templates.render — assessments with variant_id (line 162)
+# ---------------------------------------------------------------------------
+
+class TestTemplatesRenderAssessmentsWithVariantId:
+    def test_render_with_assessment_variant_id_populates_by_variant(self, templates_instance, pkg_ABC, vuln_123):
+        """Line 162: by_variant.setdefault is called when assessment has variant_id."""
+        assess_with_variant = Assessment.new_dto(vuln_123.id, [pkg_ABC])
+        assess_with_variant.set_status("affected")
+        assess_with_variant.variant_id = "test-variant-uuid"
+
+        templates_instance.packagesCtrl.add(pkg_ABC)
+        templates_instance.vulnerabilitiesCtrl.add(vuln_123)
+        templates_instance.assessmentsCtrl.add(assess_with_variant)
+
+        with patch.object(templates_instance.env, 'get_template') as mock_tpl:
+            mock_tpl.return_value.render.return_value = "rendered"
+            result = templates_instance.render("test.jinja2")
+        assert result == "rendered"

@@ -137,3 +137,62 @@ class TestAssessmentAddPackage:
         assess.add_package("pkg@1.0")
         assess.add_package("pkg@1.0")
         assert assess.packages.count("pkg@1.0") == 1
+
+
+# ---------------------------------------------------------------------------
+# Lines 162-164: vuln_id property exception path
+# ---------------------------------------------------------------------------
+
+class TestAssessmentPropertyExceptions:
+    def test_vuln_id_exception_returns_empty(self):
+        """Lines 162-164: when finding.vulnerability_id raises, vuln_id returns ''."""
+        from src.models.assessment import Assessment
+        from unittest.mock import PropertyMock, patch
+
+        assess = Assessment.new_dto("CVE-2099-EXC")
+        assess._vuln_id = ""
+
+        # Patch the 'finding' property at the class level for this test only
+        with patch.object(type(assess), "finding",
+                          new_callable=PropertyMock,
+                          side_effect=RuntimeError("DB gone")):
+            result = assess.vuln_id
+        assert result == ""
+
+    def test_packages_exception_returns_empty_list(self):
+        """Lines 177-178: when finding.package access raises, packages returns []."""
+        from src.models.assessment import Assessment
+        from unittest.mock import PropertyMock, patch
+
+        assess = Assessment.new_dto("CVE-2099-EXC2")
+        assess._packages = []
+
+        with patch.object(type(assess), "finding",
+                          new_callable=PropertyMock,
+                          side_effect=RuntimeError("lazy load failed")):
+            result = assess.packages
+        assert result == []
+
+    def test_add_package_initializes_list_on_bare_object(self):
+        """Line 228: add_package creates _packages list when attribute is absent."""
+        from src.models.assessment import Assessment
+
+        assess = object.__new__(Assessment)  # bypass __init__, no _packages set
+        result = assess.add_package("bare@1.0")
+        assert result is True
+        assert "bare@1.0" in assess._packages
+
+    def test_add_package_package_subclass_with_broken_string_id(self):
+        """Lines 239-240: AttributeError when string_id raises on a Package subclass."""
+        from src.models.assessment import Assessment
+        from src.models.package import Package
+
+        class _BrokenPkg(Package):
+            @property
+            def string_id(self):
+                raise AttributeError("no string_id")
+
+        assess = Assessment.new_dto("CVE-2099-EXC3")
+        broken = object.__new__(_BrokenPkg)
+        result = assess.add_package(broken)
+        assert result is False

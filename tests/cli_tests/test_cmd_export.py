@@ -180,3 +180,42 @@ class TestCmdExportSpdx2:
             data = json.load(f)
 
         assert "Organization: TestAuthor" in data["creationInfo"]["creators"]
+
+
+class TestCmdExportVariantScoping:
+    """Cover the variant_id and project scoping branches (lines 59-67)."""
+
+    def test_invalid_variant_id_warns_and_exports_all(self, app, tmp_path):
+        """Lines 62-63: non-UUID variant_id → warning, fall back to global export."""
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export", "--format", "spdx2",
+            "--output-dir", str(tmp_path),
+            "--variant-id", "not-a-uuid",
+        ])
+        assert result.exit_code == 0
+        assert "invalid variant id" in result.output.lower()
+
+    def test_unknown_variant_id_warns_and_exports_all(self, app, tmp_path):
+        """Lines 64-65: valid UUID but not found in DB → warning, fall back."""
+        import uuid as _uuid
+        fake_id = str(_uuid.uuid4())
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export", "--format", "spdx2",
+            "--output-dir", str(tmp_path),
+            "--variant-id", fake_id,
+        ])
+        assert result.exit_code == 0
+        assert "not found" in result.output.lower()
+
+    def test_unknown_project_warns_and_exports_all(self, app, tmp_path):
+        """Lines 69-70: project name not in DB → warning, fall back to global."""
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export", "--format", "spdx2",
+            "--output-dir", str(tmp_path),
+            "--project", "nonexistent-project",
+        ])
+        assert result.exit_code == 0
+        assert "not found" in result.output.lower()
