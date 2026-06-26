@@ -748,7 +748,7 @@ def import_custom_data(
                             DBAssessment.variant_id == target_variant_id,
                             DBAssessment.status == status,
                         )
-                    ).scalar_one_or_none()
+                    ).scalars().first()
                     if existing is not None:
                         result["assessments_skipped"] += 1
                         continue

@@ -1119,6 +1119,51 @@ def test_import_custom_data_duplicate_skipped(client):
     assert r2["assessments_imported"] == 0
 
 
+def test_import_custom_data_duplicate_multiple_existing_rows(app, client):
+    """Dedup must not crash when several matching assessments already exist.
+
+    ``--export-custom-assessments`` can yield an item whose finding/variant/
+    status matches more than one existing assessment row. The dedup query
+    previously used ``scalar_one_or_none()`` which raised
+    "Multiple rows were found when one or none was required" and dropped the
+    item. The import should skip it cleanly instead.
+    """
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        pkg = Package.find_or_create("generic/glibc", "2.39", supplier="")
+        Vulnerability.get_or_create("CVE-2026-5450")
+        finding = Finding.get_or_create(pkg.id, "CVE-2026-5450")
+        # Two assessments sharing finding + variant + status.
+        for _ in range(2):
+            Assessment.create(
+                status="affected",
+                finding_id=finding.id,
+                variant_id=VARIANT_UUID,
+                origin="custom",
+            )
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2026-5450",
+        "status": "affected",
+        "packages": ["generic/glibc@2.39"],
+        "variant_id": VARIANT_UUID,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload, content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_skipped"] >= 1
+    # No error entry for the CVE that previously triggered the crash.
+    assert all(e.get("vuln_id") != "CVE-2026-5450" for e in result["errors"])
+
+
 def test_import_custom_data_cvss(client):
     """Import CVSS via the custom-data endpoint."""
     payload = _custom_data_payload(cvss=[{
