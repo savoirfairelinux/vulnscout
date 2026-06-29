@@ -93,6 +93,36 @@ class TestTemplatesRenderExceptions:
             assert result == "test"
 
 
+class TestRenderGroupsAssessments:
+    """render() groups assessments from to_dict() instead of a per-vuln DB query."""
+
+    def test_render_does_not_call_gets_by_vuln(self, templates_instance, pkg_ABC, vuln_123, assesment_123):
+        """The N+1 gets_by_vuln() per vulnerability must no longer be used."""
+        templates_instance.packagesCtrl.add(pkg_ABC)
+        templates_instance.vulnerabilitiesCtrl.add(vuln_123)
+        templates_instance.assessmentsCtrl.add(assesment_123)
+        templates_instance.assessmentsCtrl.gets_by_vuln = MagicMock(
+            side_effect=AssertionError("gets_by_vuln must not be called by render()")
+        )
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        with patch.object(templates_instance.env, 'get_template') as mock_template:
+            mock_template.return_value.render.side_effect = _capture
+            result = templates_instance.render("test.jinja2")
+
+        assert result == "ok"
+        templates_instance.assessmentsCtrl.gets_by_vuln.assert_not_called()
+        # The assessment is still correctly associated with its vulnerability.
+        rendered_vuln = captured["vulnerabilities"][vuln_123.id]
+        assert len(rendered_vuln["assessments"]) == 1
+        assert rendered_vuln["assessments"][0]["vuln_id"] == vuln_123.id
+
+
 class TestAdocToPdfErrors:
     """Test error handling in adoc_to_pdf method"""
 

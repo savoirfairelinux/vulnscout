@@ -90,10 +90,16 @@ class Templates:
         if "scan_date" not in kwargs:
             kwargs["scan_date"] = "unknown date"  # don't use actual datetime by default.
 
+        # Group every assessment by its vulnerability id once, up front. This
+        # turns the per-vulnerability loop below into a pure in-memory lookup
+        # instead of issuing one SELECT per vulnerability (the previous
+        # gets_by_vuln() call), which made large reports extremely slow.
+        assessments_by_vuln: dict[str, list] = {}
+        for assessment in kwargs["unfiltered_assessments"].values():
+            assessments_by_vuln.setdefault(assessment["vuln_id"], []).append(assessment)
+
         for vuln_obj in kwargs["unfiltered_vulnerabilities"].values():
-            vuln_assessments = []
-            for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj['id']):
-                vuln_assessments.append(assessment.to_dict())
+            vuln_assessments = list(assessments_by_vuln.get(vuln_obj['id'], []))
 
             vuln_assessments = sorted(vuln_assessments, key=lambda x: x["timestamp"], reverse=True)  # type: ignore
             if len(vuln_assessments) >= 1:
