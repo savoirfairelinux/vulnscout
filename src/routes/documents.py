@@ -76,9 +76,6 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:
-        ctrls = ControllersCache()
-        ctrls.packages._preload_cache()
-        templ = Templates(ctrls)
         try:
             base_mime = guess_mime_type(doc_name)
             if base_mime is None:
@@ -97,35 +94,36 @@ def init_app(app: Flask) -> None:
             except ValueError:
                 pass
 
+            # Resolve the optional project/variant scope from the "Project &
+            # Variant" selection. It applies to BOTH SBOM/VEX exports and
+            # reports (templates) so that every document only contains the
+            # in-scope data. variant_id takes precedence; project_id alone
+            # means "All variants" of that project. No selection => global.
+            variant_id = request.args.get("variant_id")
+            project_id = request.args.get("project_id")
+            scope = None
+            if variant_id:
+                variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+                if err is not None:
+                    return err
+                scope = compute_export_scope(variant_id=variant_uuid)
+            elif project_id:
+                project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+                if err is not None:
+                    return err
+                scope = compute_export_scope(project_id=project_uuid)
+
+            ctrls = ControllersCache(scope=scope)
+            ctrls.packages._preload_cache()
+
             if (
                 doc_name.startswith("CycloneDX ")
                 or doc_name == "OpenVex"
                 or doc_name.startswith("SPDX")
             ):
-                # SBOM/VEX exports are scoped to the current project/variant
-                # when the frontend passes variant_id / project_id.  Reports
-                # (templates) keep their global, unscoped data.
-                variant_id = request.args.get("variant_id")
-                project_id = request.args.get("project_id")
-                scope = None
-                if variant_id:
-                    variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
-                    if err is not None:
-                        return err
-                    scope = compute_export_scope(variant_id=variant_uuid)
-                elif project_id:
-                    project_uuid, err = parse_uuid_or_400(project_id, "project_id")
-                    if err is not None:
-                        return err
-                    scope = compute_export_scope(project_id=project_uuid)
+                return handle_sbom_exports(doc_name, ctrls, expected_mime, metadata)
 
-                if scope is not None:
-                    scoped_ctrls = ControllersCache(scope=scope)
-                    scoped_ctrls.packages._preload_cache()
-                else:
-                    scoped_ctrls = ctrls
-                return handle_sbom_exports(doc_name, scoped_ctrls, expected_mime, metadata)
-
+            templ = Templates(ctrls)
             content = templ.render(doc_name, **metadata)
 
             if base_mime == expected_mime:
