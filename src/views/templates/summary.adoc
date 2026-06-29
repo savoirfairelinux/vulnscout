@@ -66,7 +66,7 @@ The following list use EPSS ranking to outline the vulnerabilities which are mos
 **{{loop.index}}. {{ vuln.id }} ({{ vuln.severity.severity | capitalize }}) - EPSS: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %**
 
 [.text-justify]
-{{ vuln.description }}
+{{ vuln.description | escape_adoc }}
 
 Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 

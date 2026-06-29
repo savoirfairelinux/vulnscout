@@ -55,7 +55,7 @@ No vulnerabilities matched the condition. The scan passed successfully.
 
 {% if vuln.description -%}
 **Description:**
-{{ vuln.description }}
+{{ vuln.description | escape_adoc }}
 {%- endif %}
 
 {% if vuln.last_assessment is defined -%}
