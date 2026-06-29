@@ -128,6 +128,17 @@ JSON output from the Yocto `cve-check` task.
 
 ---
 
+### Yocto VEX Output
+
+```
+--add-yocto-vex <path>
+```
+
+JSON output from the Yocto `vex.bbclass` task.  Carries richer CPE and
+patch-file information than the plain cve-check output.
+
+---
+
 ### OpenVEX
 
 ```

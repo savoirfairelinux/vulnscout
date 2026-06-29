@@ -44,6 +44,7 @@ Setting:
 Input commands:
   --add-spdx <path>         Add an SPDX 2/3 SBOM file or archive
   --add-cve-check <path>    Add a Yocto CVE check JSON file
+  --add-yocto-vex <path>    Add a Yocto VEX JSON file
   --add-openvex <path>      Add an OpenVEX JSON file
   --add-cdx <path>          Add a CycloneDX file
   --add-grype <path>        Add a Grype results file
@@ -298,6 +299,11 @@ cmd_scan() {
             [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f") && has_inputs=true
         done
     fi
+    if [[ -d "$INPUTS_DIR/yocto_vex" ]]; then
+        for f in "$INPUTS_DIR/yocto_vex"/*.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-vex "$f") && has_inputs=true
+        done
+    fi
     if [[ -d "$INPUTS_DIR/grype" ]]; then
         for f in "$INPUTS_DIR/grype"/*.grype.json; do
             [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f") && has_inputs=true
@@ -385,7 +391,7 @@ cmd_scan() {
             done || _cmd_scan_exit=$?
         if [[ "$has_inputs" == "true" ]]; then
             # Clean up input files now that they are fully processed
-            for _type in spdx cdx openvex yocto_cve_check grype osv; do
+            for _type in spdx cdx openvex yocto_cve_check yocto_vex grype osv; do
                 rm -f "${INPUTS_DIR:?}/$_type"/*
             done
             # Also clean up any staged temp files
@@ -607,6 +613,8 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file openvex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
             cmd_add_file cdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
+        --add-yocto-vex)
+            cmd_add_file yocto_vex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)

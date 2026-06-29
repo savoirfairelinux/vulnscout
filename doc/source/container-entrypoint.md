@@ -42,6 +42,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 |------|-------------|
 | `--add-spdx <path>` | Add an SPDX 2/3 SBOM file or archive (`.json`, `.spdx`, `.tar`, `.tar.gz`, `.tar.zst`) |
 | `--add-cve-check <path>` | Add a Yocto CVE check JSON file |
+| `--add-yocto-vex <path>` | Add a Yocto VEX JSON file (from `vex.bbclass`) |
 | `--add-openvex <path>` | Add an OpenVEX JSON file |
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
@@ -149,6 +150,7 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \
   --add-spdx /scan/inputs/sbom.spdx.json \
   --add-cve-check /scan/inputs/cve-check.json \
+  --add-yocto-vex /scan/inputs/vex.json \
   --serve
 ```
 

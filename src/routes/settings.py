@@ -95,6 +95,15 @@ def _detect_format(filename: str, data: dict) -> str:
     if "openvex" in str(ctx):
         return "openvex"
     if "package" in data and "matches" not in data:
+        # yocto-vex and yocto cve-check share the same shape; prefer yocto_vex
+        # when package-level `cpes` or issue-level `patch-file`/`detail` are
+        # present, as those fields are unique to the vex.bbclass output.
+        for _pkg in data.get("package", []):
+            if _pkg.get("cpes"):
+                return "yocto_vex"
+            for _issue in _pkg.get("issue", []):
+                if "patch-file" in _issue or "detail" in _issue:
+                    return "yocto_vex"
         return "yocto_cve_check"
     if "matches" in data:
         return "grype"

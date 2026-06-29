@@ -728,6 +728,27 @@ class TestDetectFormat:
         from src.routes.settings import _detect_format
         assert _detect_format("cve.json", {"package": [{"name": "x"}]}) == "yocto_cve_check"
 
+    def test_yocto_vex_via_cpes(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "openssl", "cpes": ["cpe:2.3:a:openssl:openssl:3.0.2:*:*:*:*:*:*:*"], "issue": []}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_vex_via_patch_file(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "openssl", "issue": [{"id": "CVE-2022-0778", "patch-file": "/patches/fix.patch"}]}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_vex_via_detail(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "busybox", "issue": [{"id": "CVE-2021-0001", "detail": "fixed-version: 1.35.1"}]}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_cve_check_not_misidentified_as_vex(self):
+        from src.routes.settings import _detect_format
+        # Plain cve-check file without cpes/patch-file/detail stays yocto_cve_check
+        data = {"package": [{"name": "x", "issue": [{"id": "CVE-2020-1234", "status": "Patched"}]}]}
+        assert _detect_format("cve.json", data) == "yocto_cve_check"
+
     def test_grype_content(self):
         from src.routes.settings import _detect_format
         assert _detect_format("scan.json", {"matches": []}) == "grype"

@@ -92,6 +92,7 @@ _FORMAT_TO_FOUND_BY: dict[str, str] = {
     "spdx": "spdx3",
     "cdx": "cyclonedx",
     "openvex": "openvex",
+    "yocto_vex": "yocto_vex",
 }
 
 # Mapping from Scan.scan_source to the found_by string for tool scans

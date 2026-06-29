@@ -120,6 +120,9 @@ VulnScout accepts multiple input file types. Commands can be chained and will au
 # Yocto CVE check JSON output
 ./vulnscout --add-cve-check <path>
 
+# Yocto VEX JSON output (from vex.bbclass)
+./vulnscout --add-yocto-vex <path>
+
 # CycloneDX file
 ./vulnscout --add-cdx <path>
 

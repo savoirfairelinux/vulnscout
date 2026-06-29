@@ -10,6 +10,7 @@ from ..views.fast_spdx import FastSPDX
 from ..views.fast_spdx3 import FastSPDX3
 from ..views.openvex import OpenVex
 from ..views.yocto_vulns import YoctoVulns
+from ..views.yocto_vex import YoctoVex
 from ..views.grype_vulns import GrypeVulns
 from ..views.templates import Templates
 from ..controllers import ControllersCache, ConditionParser, ScanController, SBOMDocumentController
@@ -33,6 +34,23 @@ if TYPE_CHECKING:
     from ..controllers.packages import PackagesController
     from ..controllers.vulnerabilities import VulnerabilitiesController
     from ..controllers.assessments import AssessmentsController
+
+
+def _is_yocto_vex(data: dict) -> bool:
+    """Return True when JSON content looks like a yocto-vex file rather than a
+    plain yocto cve-check file.
+
+    yocto-vex and yocto cve-check share the same top-level shape
+    (``version``/``package``/``issue``).  The distinguishing fields are
+    package-level ``cpes`` and issue-level ``patch-file`` / ``detail``.
+    """
+    for pkg in data.get("package", []):
+        if pkg.get("cpes"):
+            return True
+        for issue in pkg.get("issue", []):
+            if "patch-file" in issue or "detail" in issue:
+                return True
+    return False
 
 
 def _ts_key(ts) -> str:
@@ -105,6 +123,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     fastspdx = FastSPDX(controllers)
     openvex = OpenVex(controllers)
     yocto = YoctoVulns(controllers)
+    yocto_vex = YoctoVex(controllers)
     grype = GrypeVulns(controllers)
     templates = Templates(controllers)
 
@@ -123,9 +142,9 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 data = json.load(f)
 
             # Prefer the explicit format stored at registration time (set by
-            # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --grype
+            # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --yocto-vex / --grype
             # options) and fall back to content-sniffing only when it is absent.
-            fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'grype', or None
+            fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'yocto_vex', 'grype', or None
 
             if fmt == "spdx" or (
                 fmt is None and (
@@ -149,6 +168,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 cdx.parse_and_merge()
             elif fmt == "openvex" or (fmt is None and "statements" in data):
                 openvex.load_from_dict(data)
+            elif fmt == "yocto_vex" or (
+                fmt is None
+                and "package" in data
+                and "matches" not in data
+                and _is_yocto_vex(data)
+            ):
+                yocto_vex.load_from_dict(data)
             elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
                 yocto.load_from_dict(data)
             elif fmt == "grype" or (fmt is None and "matches" in data):
@@ -185,6 +211,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
               help="OpenVEX file (may be repeated).")
 @click.option("--yocto-cve", "yocto_cve_inputs", multiple=True, type=click.Path(exists=True),
               help="Yocto CVE-check JSON file (may be repeated).")
+@click.option("--yocto-vex", "yocto_vex_inputs", multiple=True, type=click.Path(exists=True),
+              help="Yocto VEX JSON file (may be repeated).")
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
 @with_appcontext
@@ -195,13 +223,14 @@ def create_project_context(
     cdx_inputs: tuple,
     openvex_inputs: tuple,
     yocto_cve_inputs: tuple,
+    yocto_vex_inputs: tuple,
     grype_inputs: tuple,
 ) -> None:
     """Register SBOM inputs into the database under a named project/variant scan.
 
-    Use --spdx, --cdx, --openvex, --yocto-cve and --grype to pass files with
-    their explicit format so that parsing is unambiguous.  Each option may be
-    repeated for multiple files of the same format.
+    Use --spdx, --cdx, --openvex, --yocto-cve, --yocto-vex and --grype to pass
+    files with their explicit format so that parsing is unambiguous.  Each
+    option may be repeated for multiple files of the same format.
     When no variant is given, inputs go into a scan under the 'default' variant.
     """
     variant_name = variant or DEFAULT_VARIANT_NAME
@@ -210,7 +239,7 @@ def create_project_context(
 
     # Determine scan type: if there are any SBOM inputs (spdx, cdx, yocto_cve)
     # or openvex, it's an "sbom" scan.  Grype-only → "tool" scan.
-    has_sbom_inputs = bool(spdx_inputs or cdx_inputs or openvex_inputs or yocto_cve_inputs)
+    has_sbom_inputs = bool(spdx_inputs or cdx_inputs or openvex_inputs or yocto_cve_inputs or yocto_vex_inputs)
     scan_type = "sbom" if has_sbom_inputs else "tool"
     scan_description = "empty description"
     scan_source = "grype" if (not has_sbom_inputs and grype_inputs) else None
@@ -224,6 +253,7 @@ def create_project_context(
         (cdx_inputs, "cdx"),
         (openvex_inputs, "openvex"),
         (yocto_cve_inputs, "yocto_cve_check"),
+        (yocto_vex_inputs, "yocto_vex"),
         (grype_inputs, "grype"),
     ]
     for files, fmt in format_groups:
