@@ -5,6 +5,7 @@ from jinja2 import sandbox, FileSystemLoader, ChoiceLoader
 import subprocess
 import os
 import random
+import re
 import string
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
@@ -90,10 +91,16 @@ class Templates:
         if "scan_date" not in kwargs:
             kwargs["scan_date"] = "unknown date"  # don't use actual datetime by default.
 
+        # Group every assessment by its vulnerability id once, up front. This
+        # turns the per-vulnerability loop below into a pure in-memory lookup
+        # instead of issuing one SELECT per vulnerability (the previous
+        # gets_by_vuln() call), which made large reports extremely slow.
+        assessments_by_vuln: dict[str, list] = {}
+        for assessment in kwargs["unfiltered_assessments"].values():
+            assessments_by_vuln.setdefault(assessment["vuln_id"], []).append(assessment)
+
         for vuln_obj in kwargs["unfiltered_vulnerabilities"].values():
-            vuln_assessments = []
-            for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj['id']):
-                vuln_assessments.append(assessment.to_dict())
+            vuln_assessments = list(assessments_by_vuln.get(vuln_obj['id'], []))
 
             vuln_assessments = sorted(vuln_assessments, key=lambda x: x["timestamp"], reverse=True)  # type: ignore
             if len(vuln_assessments) >= 1:
@@ -293,6 +300,7 @@ class TemplatesExtensions:
         jinjaEnv.filters["filter_by_variant"] = TemplatesExtensions.filter_by_variant
         jinjaEnv.filters["filter_by_project"] = TemplatesExtensions.filter_by_project
         jinjaEnv.filters["sort_by_scan_date"] = TemplatesExtensions.sort_by_scan_date
+        jinjaEnv.filters["escape_adoc"] = TemplatesExtensions.escape_adoc
 
     @staticmethod
     def get_env_var(key: str, default: str = "") -> str:
@@ -301,6 +309,56 @@ class TemplatesExtensions:
         if prefixed is not None:
             return prefixed
         return default
+
+    # A line made only of these runs is an AsciiDoc delimited-block fence
+    # (example ``====``, listing ``----``, literal ``....``, sidebar ``****``,
+    # quote ``____``, passthrough ``++++``, comment ``////``), an open block
+    # ``--`` or a table fence (``|===``, ``,===``, ``:===``, ``!===``).
+    _ADOC_BLOCK_FENCE = re.compile(r"^(?:[=\-.*_+/]{4,}|--|[|,:!]={3,})[ \t]*$")
+
+    # A line that opens/closes a Markdown-style fenced code block (3+ backticks
+    # or tildes, optionally followed by a language). Asciidoctor honours these
+    # for Markdown compatibility, so a lone fence left by truncation would open
+    # a code block that swallows everything after it.
+    _ADOC_MD_FENCE = re.compile(r"^[`~]{3,}")
+
+    # A line that starts with ``=`` (AsciiDoc section title) or ``#`` (Markdown
+    # heading) followed by whitespace would create a spurious section/chapter
+    # and corrupt the report's heading hierarchy.
+    _ADOC_HEADING = re.compile(r"^(?:={1,6}|#{1,6})[ \t]")
+
+    @staticmethod
+    def escape_adoc(value: Optional[str]) -> str:
+        """Neutralise AsciiDoc structural markup in arbitrary free-form text.
+
+        Vulnerability descriptions are untrusted text (frequently kernel commit
+        messages containing code, lockdep splats, separator lines, Markdown
+        headings and fenced code blocks). When injected verbatim into an
+        AsciiDoc template:
+
+        * a line made of delimiter characters (``----``, ``====``, ``////`` ...)
+          or a Markdown code fence (```` ``` ````) opens a delimited block that,
+          if never closed, swallows the rest of the document. This is especially
+          easy to trigger when truncation cuts a description between a fence and
+          its matching closing delimiter;
+        * a line starting with ``=`` or ``#`` becomes a section title and breaks
+          the report's chapter hierarchy.
+
+        We defuse such lines by prefixing them with a zero-width space so
+        Asciidoctor no longer treats them as structural markup, while the
+        visible text stays unchanged.
+        """
+        if not value:
+            return ""
+        lines = value.splitlines()
+        for i, line in enumerate(lines):
+            if (
+                TemplatesExtensions._ADOC_BLOCK_FENCE.match(line)
+                or TemplatesExtensions._ADOC_MD_FENCE.match(line)
+                or TemplatesExtensions._ADOC_HEADING.match(line)
+            ):
+                lines[i] = "\u200b" + line
+        return "\n".join(lines)
 
     @staticmethod
     def filter_status(value: list, status: str | list[str]) -> list:

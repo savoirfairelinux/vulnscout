@@ -184,14 +184,3 @@ docker exec vulnscout /scan/src/entrypoint.sh \
 docker exec vulnscout /scan/src/entrypoint.sh --config NVD_API_KEY abc123
 docker exec vulnscout /scan/src/entrypoint.sh --config-list
 ```
-
----
-
-## Legacy Setup Detection
-
-If the container detects a legacy docker-compose setup (an `openvex.json` output exists but no SQLite database), it will:
-
-- In interactive mode: display a warning notification in the web UI
-- In non-interactive mode: exit with code 2 and print migration instructions
-
-Use the `migration.sh` script on the host to import legacy data into the new database format. See the [VulnScout CLI](vulnscout-script.md) page for details.

@@ -648,6 +648,33 @@ def test_import_custom_assessments_json_success(app, tmp_path):
     assert "Imported 1 assessments" in result.output
 
 
+def test_import_custom_assessments_custom_data_format(app, tmp_path):
+    """Import the web 'export custom data' format (non-OpenVEX) via the CLI.
+
+    The filename does not match a variant; the embedded ``variant_id`` is used.
+    """
+    _create_custom_assessment(app)
+    with app.app_context():
+        from src.helpers.assessment_io import build_custom_data_export
+        from src.models.variant import Variant
+        variant_id = Variant.get_all()[0].id
+        data = build_custom_data_export([variant_id])
+    assert data["assessments"], "fixture should produce at least one assessment"
+
+    json_file = tmp_path / "custom_data_export_20260101_000000.json"
+    json_file.write_text(json.dumps(data))
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "import-custom-assessments",
+            "--project", _PROJECT_NAME,
+            str(json_file),
+        ])
+    assert result.exit_code == 0, result.output
+    assert "assessments" in result.output.lower()
+    assert "time estimates" in result.output.lower()
+
+
 def test_import_custom_assessments_json_success_variant_flag(app, tmp_path):
     """Import a .json with a filename that doesn't match any variant."""
     doc = {

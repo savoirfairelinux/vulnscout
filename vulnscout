@@ -165,19 +165,6 @@ config_clear() {
     echo "Config cleared: $key"
 }
 
-_detect_legacy() {
-    # If the new DB already exists, no migration needed.
-    [[ -f "$VULNSCOUT_CACHE_DIR/vulnscout.db" ]] && return
-    # Walk inside the build dir for legacy docker-compose/output artefacts.
-    # Legacy project dirs (e.g. oip-image-*/docker-compose.yml) sit directly
-    # alongside the cache/ and outputs/ subdirs, so maxdepth 2 reaches them.
-    if find "$VULNSCOUT_BUILD_DIR" -maxdepth 2 \( -name 'openvex.json' -o -name 'docker-*.yml' \) 2>/dev/null | grep -q .; then
-        LEGACY_SETUP_DETECTED=true
-    fi
-}
-
-LEGACY_SETUP_DETECTED=false
-
 do_start() {
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
@@ -217,13 +204,11 @@ EOF
     local _sbom_cve_check_host_db="${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-}"
 
     local -a env_args=()
-    _detect_legacy
     while IFS='=' read -r key value; do
         [ -z "$key" ] && continue
         [ "${key#\#}" = "$key" ] || continue
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
-    [[ "$LEGACY_SETUP_DETECTED" == true ]] && env_args+=(-e LEGACY_SETUP_DETECTED=true)
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
     # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
     [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")

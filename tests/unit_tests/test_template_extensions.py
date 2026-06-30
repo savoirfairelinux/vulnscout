@@ -653,3 +653,46 @@ class TestFilterPublishDateExceptions:
         result = extensions.filters["filter_by_publish_date"](vulns, "NOT-A-DATE")
         assert result == vulns
 
+
+ZWSP = "\u200b"
+
+
+class TestEscapeAdoc:
+    """escape_adoc neutralises AsciiDoc/Markdown structural markup in untrusted text."""
+
+    def test_none_and_empty_return_empty_string(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        assert f(None) == ""
+        assert f("") == ""
+
+    def test_plain_text_unchanged(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        text = "A normal description.\nA line with an = sign but no heading."
+        assert f(text) == text
+
+    def test_block_fence_lines_are_defused(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        out = f("intro\n----\ncode\n----\nend").split("\n")
+        assert out[0] == "intro"
+        assert out[1] == ZWSP + "----"
+        assert out[3] == ZWSP + "----"
+        assert out[4] == "end"
+
+    def test_markdown_code_fence_is_defused(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        out = f("```python\nx = 1\n```").split("\n")
+        assert out[0] == ZWSP + "```python"
+        assert out[2] == ZWSP + "```"
+
+    def test_headings_are_defused(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        assert f("= Title") == ZWSP + "= Title"
+        assert f("## Subsection") == ZWSP + "## Subsection"
+
+    def test_short_marker_without_space_is_not_a_heading(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        assert f("=no space here") == "=no space here"
+
+    def test_table_fence_is_defused(self, extensions):
+        f = extensions.filters["escape_adoc"]
+        assert f("|===") == ZWSP + "|==="

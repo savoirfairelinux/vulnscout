@@ -468,10 +468,12 @@ cmd_import_custom_assessments() {
     raw_basename="$(basename "$file")"
     dest_name="${raw_basename#vulnscout_stage_}"
     if [[ "$dest_name" != "$raw_basename" ]]; then
+        # Strip the staging prefix added by the wrapper before importing.
         dest_file="$(dirname "$file")/$dest_name"
         mv "$file" "$dest_file"
-        import_args+=("$dest_file")
+        file="$dest_file"
     fi
+    import_args+=("$file")
 
     flask --app src.bin.webapp db upgrade
     flask --app src.bin.webapp import-custom-assessments "${import_args[@]}"
@@ -574,60 +576,6 @@ EXPORT_FORMATS=()
 SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
-
-# ---------------------------------------------------------------------------
-# Legacy setup detection: if an openvex.json output exists but no database,
-# this container is being started with the old docker-compose workflow.
-# LEGACY_SETUP_DETECTED may also be injected by the host-side 'vulnscout'
-# wrapper when it finds legacy artefacts outside the /scan/outputs mount.
-# ---------------------------------------------------------------------------
-# Pre-scan args so INTERACTIVE_MODE is correct before the legacy check,
-# even when this script is called with --serve via 'docker exec'.
-for _prearg in "$@"; do
-    [[ "$_prearg" == "--serve" ]] && INTERACTIVE_MODE="true"
-done
-unset _prearg
-
-# Only run legacy detection when we are in (or about to enter) interactive/serve
-# mode. When the new 'vulnscout' wrapper starts the container with the 'daemon'
-# command, skip this block entirely — it will be re-evaluated correctly once
-# 'exec_container --serve' is called and INTERACTIVE_MODE becomes true.
-_run_legacy_check=false
-[[ "${INTERACTIVE_MODE:-false}" == "true" ]] && _run_legacy_check=true
-
-_LEGACY_OPENVEX="${OUTPUTS_DIR:-/scan/outputs}/openvex.json"
-_DB_FILE="/cache/vulnscout/vulnscout.db"
-if [[ "$_run_legacy_check" == "true" ]] && {
-    [[ "${LEGACY_SETUP_DETECTED:-false}" == "true" ]] ||
-    [[ -f "$_LEGACY_OPENVEX" && ! -f "$_DB_FILE" ]]
-}; then
-    if [[ "${INTERACTIVE_MODE:-false}" == "true" ]]; then
-        # Write a notification that the web UI will display as a popup
-        mkdir -p /scan
-        cat > /scan/legacy_notification.json <<EOF
-{
-  "level": "warning",
-  "title": "Legacy setup detected — migration required",
-  "message": "This container was started using the old docker-compose workflow. Your data (inputs + assessments) has not been imported into the new database yet.",
-  "action": "Run migration.sh script (available on https://github.com/savoirfairelinux/vulnscout) to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow."
-}
-EOF
-        echo "WARNING: Legacy setup detected. A notification has been queued for the web UI."
-        # Write a completed status so the scan middleware doesn't block all routes
-        echo "2 <!-- __END_OF_SCAN_SCRIPT__ -->" > "$BASE_DIR/status.txt"
-        cd "$BASE_DIR"
-        flask --app src.bin.webapp db upgrade
-        flask --app src.bin.webapp run
-        exit $?
-    else
-        echo "ERROR: Legacy docker-compose setup detected." >&2
-        echo "This container was started using the old docker-compose workflow. Your data (inputs + assessments) has not been imported into the new database yet." >&2
-        echo "       Run migration.sh to import your data into the new database format," >&2
-        echo "       Run migration.sh scriptavailable on https://github.com/savoirfairelinux/vulnscout to import your data in the new vulnscout.db. After migration, use the 'vulnscout' wrapper instead of docker-compose to start the container with the new workflow." >&2
-        exit 2
-    fi
-fi
-unset _LEGACY_OPENVEX _DB_FILE _run_legacy_check
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon

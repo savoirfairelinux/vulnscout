@@ -181,6 +181,11 @@ class PackagesController:
 
     def to_dict(self) -> dict:
         """Return all packages as a ``{id: dict}`` mapping, preferring in-memory when available."""
+        if self._scope is not None:
+            # Scoped export/report: only the in-scope packages are pre-loaded
+            # into the in-memory cache. Never fall back to the global DB set
+            # (which would leak other projects/variants when the scope is empty).
+            return {sid: pkg.to_dict() for sid, pkg in self._cache.items()}
         return to_dict_with_fallback(
             self._cache, Package.get_all,
             lambda pkg: pkg.string_id, "PackagesController",

@@ -451,39 +451,6 @@ If you want to run VulnScout with an HTTP proxy, set variables in the config:
 
 Or pass them directly as environment variables when calling `vulnscout`.
 
-=== Migrating from the Legacy docker-compose Workflow
-
-If you were previously running VulnScout with a `docker-compose.yml` file per variant,
-use `migration.sh` to import all your existing data into the new SQLite database.
-
-[source,shell]
-----
-# Migrate specifying the directory explicitly
-./migration.sh /path/to/.vulnscout --project myproject
-
-# Remove legacy YAML files and output dirs without prompting
-./migration.sh /path/to/.vulnscout --project myproject --remove-old
-
-# Keep legacy files (skip cleanup prompt)
-./migration.sh /path/to/.vulnscout --project myproject --keep-old
-----
-
-The script will:
-
-. Scan the build directory for sub-directories containing `docker-compose.yml` files.
-. Use each sub-directory name as the `--variant` for that import batch.
-. Extract host-side input paths from the compose volume mounts and import them.
-. Re-import legacy assessments from any `output/openvex.json` found alongside the compose file.
-. After all imports succeed, prompt whether to delete the old YAML files and output directories
-  (overridden by `--keep-old` / `--remove-old`).
-
-Once migration is complete, start VulnScout normally:
-
-[source,shell]
-----
-./vulnscout serve
-----
-
 == :mag_right: Architecture
 
 image::doc/source/_static/architecture_with_logo.png[An architecture diagram showing different components of the VulnScout app]

@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.17.1] - 2026-06-30
+
+### Fixed
+- Report: scope reports to selected project/variant.
+- Import: scope OpenVEX import dedup to custom assessments.
+- Import: use `.first()` instead of `scalar_one_or_none()` in custom-data dedup.
+- Assessments: persist deletions to the OpenVEX output file.
+- Import: only deduplicate custom-data imports against custom assessments.
+- CLI: accept web "export custom data" format and fix arg passing.
+- Report: harden AsciiDoc rendering of untrusted descriptions.
+- Report: eliminate N+1 and redundant re-persist when rendering.
+- Remove deprecated code to force YML update.
+
+---
+
 ## [0.17.0] - 2026-06-25
 
 ### Added

@@ -18,6 +18,7 @@ from ..helpers.assessment_io import (
     import_statements,
     import_archive_bytes,
     import_directory,
+    import_custom_data,
 )
 from ..models.assessment import Assessment as DBAssessment
 from ..models.variant import Variant as DBVariant
@@ -181,6 +182,39 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
             raise SystemExit(1)
 
     elif file_path.endswith(".json"):
+        try:
+            with open(file_path) as fh:
+                data = _json.load(fh)
+        except Exception:
+            click.echo("Error: invalid JSON file.", err=True)
+            raise SystemExit(1)
+
+        # Custom-data export format (web "export custom data" button):
+        # {version, assessments, cvss, time_estimates}. Routed to the
+        # dedicated importer; the embedded per-item variant is used unless
+        # --variant forces a target.
+        if isinstance(data, dict) and "version" in data and not is_openvex_doc(data):
+            result = import_custom_data(
+                data, variant_by_name,
+                variant_obj.id if variant_obj is not None else None,
+            )
+            if result.get("status") != "success":
+                click.echo("Error: failed to import custom-data file.", err=True)
+                for err in result.get("errors", []):
+                    click.echo(f"  {err}", err=True)
+                raise SystemExit(1)
+            for err in result.get("errors", []):
+                click.echo(f"  Warning: {err}", err=True)
+            click.echo(
+                f"Imported {result['assessments_imported']} assessments"
+                f" ({result['assessments_skipped']} skipped as duplicates),"
+                f" {result['cvss_imported']} CVSS,"
+                f" {result['time_estimates_imported']} time estimates"
+            )
+            return
+
+        # OpenVEX single-document format: requires a variant (from --variant
+        # or the filename matching an existing variant name).
         if variant:
             assert variant_obj
         else:
@@ -195,13 +229,6 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
                     err=True,
                 )
                 raise SystemExit(1)
-
-        try:
-            with open(file_path) as fh:
-                data = _json.load(fh)
-        except Exception:
-            click.echo("Error: invalid JSON file.", err=True)
-            raise SystemExit(1)
 
         if not is_openvex_doc(data):
             click.echo("Error: not a valid OpenVEX document.", err=True)

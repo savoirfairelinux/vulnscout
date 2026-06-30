@@ -1,7 +1,7 @@
 = Vulnerabilities Report
 {{author}}
 {{export_date}}
-:toc:
+{{ ":toc:" if (vulnerabilities | as_list | length) <= 1000 else "" }}
 
 {% if client_name is defined and client_name != "" -%}
 This report is strictly confidential and restricted to {% if author is defined and author != "" %}{{author}} and {% endif %}{{client_name}}.
@@ -58,23 +58,20 @@ They are classified as follow:
 ^.^| **{{ vulnerabilities | as_list | status_ignored | length }}**
 |===
 
-You will find below the vulnerabilities found, starting by open / active vulnerabilities and in the next section thoses who are closed.
-All vulnerabilities are classed by the date of last change.
+You will find below the vulnerabilities found, grouped by assessment status and then by severity.
+Within each category, vulnerabilities are sorted by EPSS score and then by date of last change.
 
-<<<
-
-== Open vulnerabilities (classed as pending review or exploitable)
-
-{% for vuln in vulnerabilities | as_list | status_active | sort_by_epss | sort_by_last_modified %}
+{% macro vuln_block(vuln) %}
 
 [{{vuln.last_assessment.timestamp | print_iso8601}}] **{{ vuln.id }} ({{ vuln.severity.severity | capitalize }}) - EPSS: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %**
 
 Impacts following packages: {{' & '.join(vuln.packages)}} +
-Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
+{% set refs = (vuln.urls | reject("equalto", "") | list)[:3] -%}
+Links: {{ refs | join(' , ') if refs | length > 0 else (vuln.datasource if vuln.datasource and vuln.datasource != "unknown" else "No sources found") }} +
 
 {% if vuln.description -%}
 **Description:**
-{{ vuln.description }}
+{{ vuln.description | escape_adoc }}
 {%- endif %}
 
 **Assessment:**
@@ -90,37 +87,34 @@ Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
 {%- endif %}
 
 '''
+{% endmacro %}
 
-{%- endfor %}
+{% macro severity_subsection(items, letter, label) %}
+
+=== {{ letter }}) {{ label }}
+
+{% set rows = items | sort_by_epss | sort_by_last_modified %}
+{% if rows | length == 0 %}
+_No vulnerability in this category._
+{% else %}
+{% for vuln in rows %}{{ vuln_block(vuln) }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+
+{% macro status_chapter(numeral, title, items) %}
+
+== {{ numeral }} - {{ title }}
+{{ severity_subsection(items | severity("critical"), 'a', 'Critical') }}
+{{ severity_subsection(items | severity("high"), 'b', 'High') }}
+{{ severity_subsection(items | severity("medium"), 'c', 'Medium') }}
+{{ severity_subsection(items | severity("low"), 'd', 'Low') }}
+{{ severity_subsection(items | severity("unknown"), 'e', 'Unknown') }}
 
 <<<
+{% endmacro %}
 
-== Closed vulnerabilities (classed as patched or ignored)
-
-{% for vuln in vulnerabilities | as_list | status_inactive | sort_by_epss | sort_by_last_modified %}
-
-[{{vuln.last_assessment.timestamp | print_iso8601}}] **{{ vuln.id }} ({{ vuln.severity.severity | capitalize }}) - EPSS: {{ "%.2f" | format(vuln.epss.score | float * 100) }} %**
-
-Impacts following packages: {{' & '.join(vuln.packages)}} +
-Reference: {{ vuln.datasource or vuln.urls[0] or "No sources found" }}
-
-{% if vuln.description -%}
-**Description:**
-{{ vuln.description }}
-{%- endif %}
-
-** Assessment:**
-* [{{vuln.last_assessment.timestamp | print_iso8601}}] {{vuln.last_assessment.status}} {{vuln.last_assessment.justification or ""}}
-{%- if vuln.last_assessment.status_notes != '' %}
-** Notes: {{vuln.last_assessment.status_notes}}
-{%- endif %}
-{%- if vuln.last_assessment.impact_statement != '' %}
-** Impact statement: {{vuln.last_assessment.impact_statement}}
-{%- endif %}
-{%- if vuln.last_assessment.workaround != '' %}
-** Workaround: {{vuln.last_assessment.workaround}}
-{%- endif %}
-
-'''
-
-{%- endfor %}
+{{ status_chapter('I', 'Pending Investigation', vulnerabilities | as_list | status_pending) }}
+{{ status_chapter('II', 'Exploitable', vulnerabilities | as_list | status_affected) }}
+{{ status_chapter('III', 'Fixed', vulnerabilities | as_list | status_fixed) }}
+{{ status_chapter('IV', 'Ignored or false positive', vulnerabilities | as_list | status_ignored) }}

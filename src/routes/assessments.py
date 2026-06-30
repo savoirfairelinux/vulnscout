@@ -801,6 +801,7 @@ def init_app(app: Flask) -> None:
         if existing is None:
             return {"error": "Assessment not found"}, 404
         existing.delete()
+        _save_openvex()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 

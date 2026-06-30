@@ -976,24 +976,3 @@ Get the current progress of EPSS score enrichment.
 
 ---
 
-## Notifications
-
-### Get Notifications
-
-```
-GET /api/notifications
-```
-
-Returns pending system notifications (e.g. legacy setup warnings).
-
-**Response:** JSON array — empty when no notifications are pending.
-```json
-[
-  {
-    "level": "warning",
-    "title": "Legacy setup detected",
-    "message": "This container was started using the old docker-compose workflow.",
-    "action": "Run migration.sh to import your data."
-  }
-]
-```

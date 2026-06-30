@@ -633,6 +633,11 @@ class VulnerabilitiesController:
 
     def to_dict(self) -> dict:
         """Export the list of vulnerabilities preferring in-memory data when available."""
+        if self._scope is not None:
+            # Scoped export/report: only the in-scope vulns are pre-loaded into
+            # the in-memory cache. Never fall back to the global DB set (which
+            # would leak other projects/variants when the scope is empty).
+            return {k: v.to_dict() for k, v in self.vulnerabilities.items()}
         return to_dict_with_fallback(
             self.vulnerabilities, Vulnerability.get_all,
             lambda r: r.id, "VulnerabilitiesController",

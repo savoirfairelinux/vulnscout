@@ -294,6 +294,11 @@ class AssessmentsController:
 
     def to_dict(self) -> dict:
         """Return all assessments preferring in-memory data when available."""
+        if self._scope is not None:
+            # Scoped export/report: restrict to the in-scope variants. get_all()
+            # merges in-memory + DB and applies the scope filter, so a fallback
+            # to the DB never leaks another project's/variant's assessments.
+            return {str(a.id): a.to_dict() for a in self.get_all()}
         return to_dict_with_fallback(
             self.assessments, Assessment.get_all,
             lambda a: str(a.id), "AssessmentsController",

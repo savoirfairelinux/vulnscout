@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from ..controllers import ControllersCache, VulnerabilitiesController
+from ..controllers import ControllersCache
 from ..controllers.projects import ProjectController
 from ..models.variant import Variant as DBVariant
 from ..views.spdx import SPDX
@@ -135,9 +135,6 @@ def report_command(template_name: str, output_dir: str, output_format: str | Non
     invoked; TEMPLATE_NAME is always generated regardless.
     """
     controllers = ControllersCache()
-    controllers.vulnerabilities = VulnerabilitiesController.from_dict(
-        controllers.packages, controllers.vulnerabilities.to_dict()
-    )
     templ = Templates(controllers)
 
     # Reuse failed_vulns from flask process if available, otherwise evaluate now

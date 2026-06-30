@@ -161,6 +161,19 @@ class TestCmdExportCoverage:
             ])
         mock_eval.assert_called_once()
 
+    def test_report_does_not_rebuild_vulnerabilities_controller(self, app, tmp_path):
+        """report_command must not re-persist all vulns via from_dict (perf)."""
+        with patch("src.views.templates.Templates.render") as mock_render, \
+             patch("src.controllers.vulnerabilities.VulnerabilitiesController.from_dict") as mock_from_dict:
+            mock_render.return_value = "= Title\ncontent"
+            runner = app.test_cli_runner()
+            result = runner.invoke(args=[
+                "report", "report.adoc", "--output-dir", str(tmp_path)
+            ])
+
+        assert result.exit_code == 0, result.output
+        mock_from_dict.assert_not_called()
+
 
 class TestCmdExportSpdx2:
     def test_author_present(self, app, tmp_path, monkeypatch):
