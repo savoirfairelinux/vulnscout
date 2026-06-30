@@ -120,6 +120,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [selectedVariants, setSelectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -297,11 +298,24 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
+    const variantList = useMemo(() => {
+        const set = new Set<string>();
+        for (const a of assessments) {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            for (const vid of vids) {
+                const name = variantNames[vid];
+                if (name) set.add(name);
+            }
+        }
+        return [...set].sort();
+    }, [assessments, variantNames]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
+        setSelectedVariants([]);
     };
 
     const handleExportReview = useCallback(async () => {
@@ -877,6 +891,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
+        if (selectedVariants.length) {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
+            if (!selectedVariants.some(v => rowVariants.includes(v))) return false;
+        }
         return true;
     });
 
@@ -937,6 +956,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 options={supplierList}
                                 selected={selectedSuppliers}
                                 setSelected={setSelectedSuppliers}
+                            />
+                        )}
+
+                        {variantList.length > 0 && (
+                            <FilterOption
+                                label="Variants"
+                                options={variantList}
+                                selected={selectedVariants}
+                                setSelected={setSelectedVariants}
                             />
                         )}
                     </>

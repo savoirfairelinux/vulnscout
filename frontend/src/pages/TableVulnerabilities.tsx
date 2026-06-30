@@ -353,6 +353,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+    const [selectedVariants, setSelectedVariants] = useState<string[]>([]);
     const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
     const [publishedDateValue, setPublishedDateValue] = useState<string>('');
     const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
@@ -575,6 +576,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         () => sources_list.map(formatSourceName),
         [sources_list]
     );
+
+    const variants_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
+        vuln.variants.forEach(variant => {
+            if (!acc.includes(variant) && variant != '')
+                acc.push(variant)
+        });
+        return acc.sort();
+    }, []), [vulnerabilities])
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -1039,6 +1048,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
+            if (selectedVariants.length && !selectedVariants.some(variant => el.variants.includes(variant))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -1130,7 +1140,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -1158,6 +1168,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedPackages([]);
+        setSelectedVariants([]);
         setPublishedDateFilterType('');
         setPublishedDateValue('');
         setPublishedDaysValue('');
@@ -1369,6 +1380,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 selected={selectedStatuses}
                 setSelected={setSelectedStatuses}
             />
+
+            {variants_list.length > 0 && (
+                <FilterOption
+                    label="Variants"
+                    options={variants_list}
+                    selected={selectedVariants}
+                    setSelected={setSelectedVariants}
+                />
+            )}
 
             {/* Published Date Filter Dropdown */}
             <PublishedDateFilter

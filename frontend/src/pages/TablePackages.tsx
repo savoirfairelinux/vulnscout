@@ -52,6 +52,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [selectedVariants, setSelectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
@@ -168,11 +169,20 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc.sort();
     }, []), [packages])
 
+    const variants_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
+        for (const variant of pkg.variants) {
+            if (variant !== '' && !acc.includes(variant))
+                acc.push(variant);
+        }
+        return acc.sort();
+    }, []), [packages])
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
+        setSelectedVariants([]);
         setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
@@ -382,9 +392,12 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             if (selectedSuppliers.length && !selectedSuppliers.includes(extractSupplierName(el.supplier))) {
                 return false;
             }
+            if (selectedVariants.length && !selectedVariants.some(variant => el.variants.includes(variant))) {
+                return false;
+            }
             return true;
         });
-    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers]);
+    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -459,6 +472,15 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 selected={selectedSbomDocs}
                 setSelected={setSelectedSbomDocs}
             />
+
+            {variants_list.length > 0 && (
+                <FilterOption
+                    label="Variants"
+                    options={variants_list}
+                    selected={selectedVariants}
+                    setSelected={setSelectedVariants}
+                />
+            )}
 
             <div className="ml-4">
                 <ToggleSwitch

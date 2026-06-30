@@ -321,6 +321,50 @@ describe('Packages Table', () => {
         });
     })
 
+    test('filter by variant', async () => {
+        // ARRANGE: packages spread across two variants
+        const packagesWithVariants: Package[] = [
+            { ...packages[0], variants: ['variant-a'] },
+            { ...packages[1], variants: ['variant-b'] },
+            { ...packages[2], variants: ['variant-a', 'variant-b'] },
+        ];
+        render(<TablePackages packages={packagesWithVariants} />);
+
+        const user = userEvent.setup();
+
+        // Open the "Variants" filter dropdown
+        const variants_btn = await screen.getByRole('button', { name: /^variants$/i });
+        await user.click(variants_btn);
+
+        // ACT: select "variant-a"
+        const variantACheckbox = await screen.getByRole('checkbox', { name: /variant-a/i });
+        await user.click(variantACheckbox);
+
+        // xxxyyyzzz is only in variant-b, so it must disappear
+        await waitFor(() => {
+            expect(document.body.innerHTML).not.toContain('xxxyyyzzz');
+        }, { timeout: 2000 });
+
+        // aaabbbccc (variant-a) and dddeeefff (variant-a + variant-b) remain
+        expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+        expect(screen.getAllByRole('cell', { name: /dddeeefff/ }).length).toBeGreaterThan(0);
+
+        // REVERT CHANGE: uncheck "variant-a"
+        await user.click(variantACheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
+        });
+    })
+
+    test('variant filter is hidden when no package has variants', async () => {
+        // ARRANGE: the default packages have no variants
+        render(<TablePackages packages={packages} />);
+
+        // ASSERT: the "Variants" filter button is not rendered
+        expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
+    })
+
     test('reset filters button clears all filters', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
