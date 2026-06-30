@@ -28,6 +28,7 @@ def init_app(app: Flask) -> None:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
+        variant_ids = request.args.get('variant_ids')
         if variant_id and compare_variant_id:
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -78,6 +79,48 @@ def init_app(app: Flask) -> None:
                     .order_by(Package.name)
                 ).scalars().all())
             active_scan_ids = []  # compare mode: do not restrict by scan
+        elif variant_ids:
+            # Multi-variant mode: union or intersection of the packages present
+            # in two or more selected variants.
+            raw_ids = [s.strip() for s in variant_ids.split(',') if s.strip()]
+            parsed_uuids: list[uuid.UUID] = []
+            for raw_id in raw_ids:
+                parsed, err = parse_uuid_or_400(raw_id, "variant_ids")
+                if err:
+                    return err
+                if parsed is None:
+                    return {"error": "Internal error"}, 500
+                parsed_uuids.append(parsed)
+            operation = request.args.get('operation', 'union')
+
+            def _multi_pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
+                return set(db.session.execute(
+                    db.select(Package.id)
+                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                    .join(Scan, SBOMDocument.scan_id == Scan.id)
+                    .where(Scan.variant_id == variant_uuid)
+                    .distinct()
+                ).scalars().all())
+
+            id_sets = [_multi_pkg_ids_for_variant(u) for u in parsed_uuids]
+            if not id_sets:
+                multi_result_ids: list[uuid.UUID] = []
+            elif operation == 'intersection':
+                multi_result_ids = list(set.intersection(*id_sets))
+            else:  # union (default)
+                multi_result_ids = list(set.union(*id_sets))
+            pkgs = list(db.session.execute(
+                db.select(Package)
+                .where(Package.id.in_(multi_result_ids))
+                .order_by(Package.name)
+            ).scalars().all()) if multi_result_ids else []
+            # Restrict enrichment to the active SBOM scans of the selected variants
+            active_scan_ids = [
+                sid
+                for parsed in parsed_uuids
+                for sid in active_sbom_scan_ids_for_variant(parsed)
+            ]
         elif variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:

@@ -66,6 +66,24 @@ def _sbom_pkg_filter(pkg_ids: set[uuid.UUID]) -> "ColumnElement[bool] | None":
     )
 
 
+def _vuln_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[str]:
+    """Vuln IDs from *scan_ids*, filtering tool scans to active SBOM packages."""
+    if not scan_ids:
+        return set()
+    _pkg_ids = active_package_ids_for_scans(scan_ids)
+    q = (
+        db.select(Vulnerability.id)
+        .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+        .join(Observation, Finding.id == Observation.finding_id)
+        .join(Scan, Observation.scan_id == Scan.id)
+        .where(Observation.scan_id.in_(scan_ids))
+    )
+    _flt = _sbom_pkg_filter(_pkg_ids)
+    if _flt is not None:
+        q = q.where(_flt)
+    return set(db.session.execute(q.distinct()).scalars().all())
+
+
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
 # Mapping from SBOMDocument.format to the found_by string exposed by the API
 _FORMAT_TO_FOUND_BY: dict[str, str] = {
@@ -281,6 +299,7 @@ def init_app(app: Flask) -> None:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
+        variant_ids = request.args.get('variant_ids')
         variant_scoped_overrides: dict[str, _ScopedOverrides] = {}
         current_scan_ids: list[uuid.UUID] = []
         records: list[Vulnerability] = []
@@ -307,23 +326,6 @@ def init_app(app: Flask) -> None:
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
             )
-
-            def _vuln_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[str]:
-                """Vuln IDs from *scan_ids*, filtering tool scans to active packages."""
-                if not scan_ids:
-                    return set()
-                _pkg_ids = active_package_ids_for_scans(scan_ids)
-                q = (
-                    db.select(Vulnerability.id)
-                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
-                    .where(Observation.scan_id.in_(scan_ids))
-                )
-                _flt = _sbom_pkg_filter(_pkg_ids)
-                if _flt is not None:
-                    q = q.where(_flt)
-                return set(db.session.execute(q.distinct()).scalars().all())
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
             operation = request.args.get('operation', 'difference')
@@ -360,6 +362,43 @@ def init_app(app: Flask) -> None:
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
             variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, compare_uuid)
+        elif variant_ids:
+            # Multi-variant mode: union or intersection of the vulnerabilities
+            # present in two or more selected variants.
+            raw_ids = [s.strip() for s in variant_ids.split(',') if s.strip()]
+            parsed_uuids: list[uuid.UUID] = []
+            for raw_id in raw_ids:
+                parsed, err = parse_uuid_or_400(raw_id, "variant_ids")
+                if err:
+                    return err
+                if parsed is None:
+                    return {"error": "Internal error"}, 500
+                parsed_uuids.append(parsed)
+            operation = request.args.get('operation', 'union')
+            _scope_variant = None
+            _scope_project = None
+            opts = (
+                selectinload(Vulnerability.findings).selectinload(Finding.package),
+                selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
+                selectinload(Vulnerability.metrics),
+            )
+            per_variant_scan_ids = {u: active_scan_ids_for_variant(u) for u in parsed_uuids}
+            current_scan_ids = []
+            for _ids in per_variant_scan_ids.values():
+                current_scan_ids.extend(_ids)
+            id_sets = [_vuln_ids_for_scans(per_variant_scan_ids[u]) for u in parsed_uuids]
+            if not id_sets:
+                result_ids: list = []
+            elif operation == 'intersection':
+                result_ids = list(set.intersection(*id_sets))
+            else:  # union (default)
+                result_ids = list(set.union(*id_sets))
+            records = list(db.session.execute(
+                select(Vulnerability)
+                .options(*opts)
+                .where(Vulnerability.id.in_(result_ids))
+                .order_by(Vulnerability.id)
+            ).scalars().all()) if result_ids else []
         elif variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
