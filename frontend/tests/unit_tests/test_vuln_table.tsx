@@ -1322,14 +1322,27 @@ describe('Vulnerability Table', () => {
     // Published Date Feature Tests
     // =========================================================================
 
-    test('published date filter button is disabled when NVD sync is not completed', async () => {
-        // NVD progress mock defaults to phase: 'idle', which means not completed
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+    test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {
+        // NVD progress mock defaults to phase: 'idle' (not completed). With no
+        // vulnerability carrying a published date, the filter has nothing to act on.
+        const noPublished = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={noPublished} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const publishedDateBtn = await screen.getByRole('button', { name: /published date/i });
         expect(publishedDateBtn).toBeInTheDocument();
         expect(publishedDateBtn).toBeDisabled();
-        expect(publishedDateBtn).toHaveAttribute('title', 'NVD sync in progress');
+        expect(publishedDateBtn).toHaveAttribute('title', 'No published dates available');
+    });
+
+    test('published date filter button is enabled when a published date exists even if NVD has not synced', async () => {
+        // NVD progress mock defaults to 'idle' (not completed), but the fixture
+        // vulnerabilities carry published dates (e.g. from an sbom-cve-check scan).
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const publishedDateBtn = await screen.getByRole('button', { name: /published date/i });
+        expect(publishedDateBtn).toBeInTheDocument();
+        expect(publishedDateBtn).not.toBeDisabled();
+        expect(publishedDateBtn).toHaveAttribute('title', 'Filter by published date');
     });
 
     test('published date filter button is enabled when NVD sync is completed', async () => {
@@ -1344,6 +1357,49 @@ describe('Vulnerability Table', () => {
         });
 
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
+            expect(publishedDateBtn).not.toBeDisabled();
+            expect(publishedDateBtn).toHaveAttribute('title', 'Filter by published date');
+        });
+    });
+
+    test('published date filter button is disabled while NVD sync is in progress even when published dates exist', async () => {
+        // An active NVD sync takes priority: the button is disabled and shows
+        // the sync tooltip, regardless of already-available published dates.
+        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+        NVDProgressHandler.getProgress.mockResolvedValueOnce({
+            in_progress: true,
+            phase: 'downloading',
+            current: 10,
+            total: 100,
+            message: 'Downloading',
+        });
+
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
+            expect(publishedDateBtn).toBeDisabled();
+            expect(publishedDateBtn).toHaveAttribute('title', 'NVD sync in progress');
+        });
+    });
+
+    test('published date filter button is enabled when NVD sync is completed even without published dates', async () => {
+        // A completed NVD sync makes the filter usable on its own, independent
+        // of whether the loaded vulnerabilities carry published dates.
+        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+        NVDProgressHandler.getProgress.mockResolvedValueOnce({
+            in_progress: false,
+            phase: 'completed',
+            current: 100,
+            total: 100,
+            message: 'Done',
+        });
+
+        const noPublished = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={noPublished} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         await waitFor(() => {
             const publishedDateBtn = screen.getByRole('button', { name: /published date/i });

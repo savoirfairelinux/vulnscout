@@ -158,17 +158,21 @@ type PublishedDateFilterProps = {
     setDateFrom: (value: string) => void;
     setDateTo: (value: string) => void;
     nvdProgress: NVDProgress | null;
+    hasAnyPublishedDate: boolean;
 };
 
 function PublishedDateFilter({
     filterType, dateValue, daysValue, dateFrom, dateTo,
     setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo,
-    nvdProgress
+    nvdProgress, hasAnyPublishedDate
 }: Readonly<PublishedDateFilterProps>) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    const isDisabled = !nvdProgress || nvdProgress.in_progress || nvdProgress.phase !== 'completed';
+    // Disabled only while NVD is actively syncing, or when there is no
+    // published-date data at all (neither from NVD nor any other scan).
+    const nvdReady = !!nvdProgress && !nvdProgress.in_progress && nvdProgress.phase === 'completed';
+    const isDisabled = (nvdProgress?.in_progress ?? false) || (!nvdReady && !hasAnyPublishedDate);
     const hasActiveFilter = filterType !== '' && (dateValue || daysValue || (dateFrom && dateTo));
 
     useEffect(() => {
@@ -206,7 +210,9 @@ function PublishedDateFilter({
                         ? 'bg-sky-950'
                         : 'bg-sky-900 hover:bg-sky-950'
                 } text-white`}
-                title={isDisabled ? 'NVD sync in progress' : 'Filter by published date'}
+                title={isDisabled
+                    ? (nvdProgress?.in_progress ? 'NVD sync in progress' : 'No published dates available')
+                    : 'Filter by published date'}
             >
                 Published Date
                 {hasActiveFilter && <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>}
@@ -413,6 +419,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const hasAnyGhsaVuln = useMemo(
         () => vulnerabilities.some(v => v.id?.toUpperCase().startsWith('GHSA-')),
+        [vulnerabilities]
+    );
+
+    // Published dates can come from sources other than NVD (e.g. an
+    // sbom-cve-check scan). When at least one vulnerability already has a
+    // published date, the filter is usable even if NVD has never synced.
+    const hasAnyPublishedDate = useMemo(
+        () => vulnerabilities.some(v => !!v.published),
         [vulnerabilities]
     );
 
@@ -1368,6 +1382,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setDateFrom={setPublishedDateFrom}
                 setDateTo={setPublishedDateTo}
                 nvdProgress={nvdProgress}
+                hasAnyPublishedDate={hasAnyPublishedDate}
             />
 
             {/* More Filters dropdown — EPSS Range, Attack Vector, First Scan Date */}
