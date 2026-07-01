@@ -622,3 +622,169 @@ class TestAssessmentGlobalAndList:
         assert "assessments_added" in data
         assert "assessments_removed" in data
         assert "assessments_unchanged" in data
+
+
+# ===================================================================
+# _scan_diff.py — _scan_list_fingerprint (cache invalidation key)
+# ===================================================================
+
+class TestScanListFingerprint:
+    """The fingerprint drives cache invalidation for the scan-history list."""
+
+    @staticmethod
+    def _scan(id_, description, timestamp):
+        from types import SimpleNamespace
+        return SimpleNamespace(id=id_, description=description, timestamp=timestamp)
+
+    def test_order_independent(self):
+        from src.routes._scan_diff import _scan_list_fingerprint
+        a = self._scan(1, "a", 100)
+        b = self._scan(2, "b", 200)
+        assert _scan_list_fingerprint([a, b]) == _scan_list_fingerprint([b, a])
+
+    def test_changes_when_scan_added_or_removed(self):
+        from src.routes._scan_diff import _scan_list_fingerprint
+        a = self._scan(1, "a", 100)
+        b = self._scan(2, "b", 200)
+        assert _scan_list_fingerprint([a, b]) != _scan_list_fingerprint([a])
+
+    def test_changes_on_rename(self):
+        from src.routes._scan_diff import _scan_list_fingerprint
+        before = [self._scan(1, "old name", 100)]
+        after = [self._scan(1, "new name", 100)]
+        assert _scan_list_fingerprint(before) != _scan_list_fingerprint(after)
+
+    def test_changes_on_timestamp(self):
+        from src.routes._scan_diff import _scan_list_fingerprint
+        before = [self._scan(1, "a", 100)]
+        after = [self._scan(1, "a", 200)]
+        assert _scan_list_fingerprint(before) != _scan_list_fingerprint(after)
+
+
+# ===================================================================
+# _scan_diff.py — serialize_list_with_diff_cached (per-scope cache)
+# ===================================================================
+
+class TestSerializeListWithDiffCached:
+    """The cached wrapper must match the uncached output and only recompute
+    when the underlying set of scans changes."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        from src.routes import _scan_diff
+        with _scan_diff._LIST_CACHE_LOCK:
+            _scan_diff._LIST_CACHE.clear()
+        yield
+        with _scan_diff._LIST_CACHE_LOCK:
+            _scan_diff._LIST_CACHE.clear()
+
+    def test_output_matches_uncached(self, app, ids):
+        from src.routes._scan_diff import (
+            _serialize_list_with_diff, serialize_list_with_diff_cached,
+        )
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            expected = _serialize_list_with_diff(scans)
+            cached = serialize_list_with_diff_cached("all", scans)
+            assert cached == expected
+
+    def test_second_call_returns_cached_object(self, app, ids):
+        from src.routes._scan_diff import serialize_list_with_diff_cached
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            first = serialize_list_with_diff_cached("all", scans)
+            second = serialize_list_with_diff_cached("all", scans)
+            # Same scan set → cache hit → the very same list object is returned.
+            assert second is first
+
+    def test_scopes_are_isolated(self, app, ids):
+        from src.routes._scan_diff import serialize_list_with_diff_cached
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            all_scope = serialize_list_with_diff_cached("all", scans)
+            variant_scope = serialize_list_with_diff_cached(
+                f"variant:{ids['variant_id']}", scans)
+            # Different scope keys are computed independently…
+            assert variant_scope is not all_scope
+            # …but over the same scans they yield equal content.
+            assert variant_scope == all_scope
+
+    def test_recomputes_when_scan_set_changes(self, app, ids):
+        from src.routes._scan_diff import serialize_list_with_diff_cached
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            first = serialize_list_with_diff_cached("all", scans)
+            # Drop a scan → fingerprint changes → recompute (new object).
+            reduced = serialize_list_with_diff_cached("all", scans[:-1])
+            assert reduced is not first
+            assert len(reduced) == len(first) - 1
+
+    def test_recomputes_after_rename(self, app, ids):
+        from src.routes._scan_diff import serialize_list_with_diff_cached
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            first = serialize_list_with_diff_cached("all", scans)
+            scans[0].description = "renamed for cache test"
+            renamed = serialize_list_with_diff_cached("all", scans)
+            assert renamed is not first
+
+
+# ===================================================================
+# _scan_diff.py — prefetch helpers
+# ===================================================================
+
+class TestObservationRowsByScan:
+    """_observation_rows_by_scan batches finding/package/vuln rows per scan."""
+
+    def test_empty_input_returns_empty(self, app):
+        from src.routes._scan_diff import _observation_rows_by_scan
+        with app.app_context():
+            assert _observation_rows_by_scan([]) == {}
+
+    def test_rows_grouped_by_scan(self, app, ids):
+        from src.routes._scan_diff import _observation_rows_by_scan
+        with app.app_context():
+            sbom_a = uuid.UUID(ids["sbom_a_id"])
+            tool = uuid.UUID(ids["tool_scan_id"])
+            rows = _observation_rows_by_scan([sbom_a, tool])
+
+            # First SBOM: openssl@1.1.0 → CVE-2020-0001
+            a_vulns = {vid for (_fid, _pkg, vid) in rows[sbom_a]}
+            a_pkgs = {pkg for (_fid, pkg, _vid) in rows[sbom_a]}
+            assert a_vulns == {"CVE-2020-0001"}
+            assert uuid.UUID(ids["pkg_old_id"]) in a_pkgs
+
+            # Tool scan: two findings (new-version pkg + soon-removed pkg)
+            t_vulns = {vid for (_fid, _pkg, vid) in rows[tool]}
+            assert t_vulns == {"CVE-2021-9999", "CVE-2021-8888"}
+
+
+class TestGlobalAssessmentRowsByScan:
+    """_global_assessment_rows_by_scan excludes custom-origin assessments."""
+
+    def test_empty_input_returns_empty(self, app):
+        from src.routes._scan_diff import _global_assessment_rows_by_scan
+        with app.app_context():
+            assert _global_assessment_rows_by_scan([]) == {}
+
+    def test_excludes_custom_origin(self, app, ids):
+        from src.routes._scan_diff import _global_assessment_rows_by_scan
+        with app.app_context():
+            tool = uuid.UUID(ids["tool_scan_id"])
+            rows = _global_assessment_rows_by_scan([tool])
+            pkg_ids = {pkg for (_aid, pkg) in rows.get(tool, [])}
+
+            # The sbom-origin assessment (on the new-version package) counts…
+            assert uuid.UUID(ids["pkg_new_id"]) in pkg_ids
+            # …the custom-origin assessment (on the removed package) does not.
+            assert uuid.UUID(ids["pkg_removed_id"]) not in pkg_ids

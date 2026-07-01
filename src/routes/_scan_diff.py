@@ -18,12 +18,11 @@ from ..models.package import Package
 from ..extensions import db
 
 import uuid
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from ._scan_queries import (
-    _findings_by_scan_ids,
-    _vulns_by_scan_ids,
     _packages_by_scan_ids,
     _package_rows,
     _variant_info,
@@ -256,12 +255,72 @@ def _contributing_scans_at(scan: Scan, all_variant_scans: list[Scan]) -> Tuple[O
     return sbom_scan, latest_tool
 
 
+def _observation_rows_by_scan(
+    scan_ids: List[uuid.UUID],
+) -> Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID, str]]]:
+    """Pre-fetch ``{scan_id: [(finding_id, package_id, vulnerability_id), …]}``.
+
+    A single JOIN query over all scans so that the per-scan global-result
+    helper can compute its finding/vuln sets in memory instead of issuing
+    one query per contributing-scan set.
+    """
+    result: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID, str]]] = {}
+    if not scan_ids:
+        return result
+    rows = db.session.execute(
+        db.select(
+            Observation.scan_id,
+            Observation.finding_id,
+            Finding.package_id,
+            Finding.vulnerability_id,
+        )
+        .join(Finding, Finding.id == Observation.finding_id)
+        .where(Observation.scan_id.in_(scan_ids))
+    ).all()
+    for sid, fid, pkg_id, vid in rows:
+        result.setdefault(sid, []).append((fid, pkg_id, vid))
+    return result
+
+
+def _global_assessment_rows_by_scan(
+    scan_ids: List[uuid.UUID],
+) -> Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID]]]:
+    """Pre-fetch ``{scan_id: [(assessment_id, package_id), …]}`` for all scans.
+
+    Mirrors the per-set query in :func:`_global_assessment_ids_for` but runs
+    once for the whole scan list.  Custom (manually-created) assessments are
+    excluded, matching the per-set query.
+    """
+    from ..models.assessment import Assessment
+
+    result: Dict[uuid.UUID, List[Tuple[uuid.UUID, uuid.UUID]]] = {}
+    if not scan_ids:
+        return result
+    rows = db.session.execute(
+        db.select(Assessment.id, Observation.scan_id, Finding.package_id)
+        .select_from(Observation)
+        .join(Finding, Finding.id == Observation.finding_id)
+        .join(Assessment, Assessment.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(
+            Observation.scan_id.in_(scan_ids),
+            Assessment.variant_id == Scan.variant_id,
+            Assessment.origin != "custom",
+        )
+    ).all()
+    for aid, sid, pkg_id in rows:
+        result.setdefault(sid, []).append((aid, pkg_id))
+    return result
+
+
 def _global_result_id_sets(
     sbom_scan: Optional[Scan],
     tool_scans: Dict[str, Scan],
     *,
     filter_tool_by_sbom_pkgs: bool = False,
     _cache: Optional[dict] = None,
+    _obs_prefetch: Optional[Dict[uuid.UUID, list]] = None,
+    _pkg_prefetch: Optional[Dict[uuid.UUID, set]] = None,
 ) -> Tuple[set[uuid.UUID], set[str], set[uuid.UUID]]:
     """Return ``(finding_ids, vuln_ids, package_ids)`` for a global result.
 
@@ -298,33 +357,41 @@ def _global_result_id_sets(
 
     sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
         sbom_scan.id, set()
-    )
+    ) if _pkg_prefetch is None else _pkg_prefetch.get(sbom_scan.id, set())
 
     if filter_tool_by_sbom_pkgs:
         tool_scan_ids: set[uuid.UUID] = {s.id for s in tool_scans.values()}
     else:
         tool_scan_ids = set()  # empty → no filtering
 
-    finding_rows = db.session.execute(
-        db.select(
-            Observation.scan_id,
-            Observation.finding_id,
-            Finding.package_id,
-            Finding.vulnerability_id,
-        )
-        .join(Finding, Finding.id == Observation.finding_id)
-        .where(Observation.scan_id.in_(contributing_ids))
-    ).all()
-
     global_fids: set[uuid.UUID] = set()
     global_vids: set[str] = set()
-    for sid, fid, pkg_id, vid in finding_rows:
-        # When filtering is enabled, skip tool-scan findings whose
-        # package is not in the active SBOM.
-        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
-            continue
-        global_fids.add(fid)
-        global_vids.add(vid)
+
+    if _obs_prefetch is not None:
+        for sid in contributing_ids:
+            for fid, pkg_id, vid in _obs_prefetch.get(sid, ()):
+                if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                    continue
+                global_fids.add(fid)
+                global_vids.add(vid)
+    else:
+        finding_rows = db.session.execute(
+            db.select(
+                Observation.scan_id,
+                Observation.finding_id,
+                Finding.package_id,
+                Finding.vulnerability_id,
+            )
+            .join(Finding, Finding.id == Observation.finding_id)
+            .where(Observation.scan_id.in_(contributing_ids))
+        ).all()
+        for sid, fid, pkg_id, vid in finding_rows:
+            # When filtering is enabled, skip tool-scan findings whose
+            # package is not in the active SBOM.
+            if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                continue
+            global_fids.add(fid)
+            global_vids.add(vid)
 
     result = (global_fids, global_vids, sbom_pkg_ids)
     if _cache is not None:
@@ -336,6 +403,8 @@ def _global_assessment_ids_for(
     sbom_scan: Optional[Scan],
     latest_tool: Dict[str, Scan],
     _cache: Optional[dict] = None,
+    _obs_prefetch: Optional[Dict[uuid.UUID, list]] = None,
+    _pkg_prefetch: Optional[Dict[uuid.UUID, set]] = None,
 ) -> set[uuid.UUID]:
     """Return the set of unique Assessment IDs visible in the global result.
 
@@ -359,29 +428,38 @@ def _global_assessment_ids_for(
             return cached
 
     tool_scan_ids: set[uuid.UUID] = {s.id for s in latest_tool.values()}
-    sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
-        sbom_scan.id, set()
-    ) if sbom_scan else set()
-
-    rows = db.session.execute(
-        db.select(Assessment.id, Observation.scan_id, Finding.package_id)
-        .select_from(Observation)
-        .join(Finding, Finding.id == Observation.finding_id)
-        .join(Assessment, Assessment.finding_id == Finding.id)
-        .join(Scan, Scan.id == Observation.scan_id)
-        .where(
-            Observation.scan_id.in_(contributing_ids),
-            Assessment.variant_id == Scan.variant_id,
-            Assessment.origin != "custom",
-        )
-    ).all()
+    if _pkg_prefetch is not None:
+        sbom_pkg_ids = _pkg_prefetch.get(sbom_scan.id, set()) if sbom_scan else set()
+    else:
+        sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
+            sbom_scan.id, set()
+        ) if sbom_scan else set()
 
     result: set[uuid.UUID] = set()
-    for aid, sid, pkg_id in rows:
-        # Skip tool-scan assessments whose finding's package is not in the SBOM
-        if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
-            continue
-        result.add(aid)
+    if _obs_prefetch is not None:
+        for sid in contributing_ids:
+            for aid, pkg_id in _obs_prefetch.get(sid, ()):
+                if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                    continue
+                result.add(aid)
+    else:
+        rows = db.session.execute(
+            db.select(Assessment.id, Observation.scan_id, Finding.package_id)
+            .select_from(Observation)
+            .join(Finding, Finding.id == Observation.finding_id)
+            .join(Assessment, Assessment.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .where(
+                Observation.scan_id.in_(contributing_ids),
+                Assessment.variant_id == Scan.variant_id,
+                Assessment.origin != "custom",
+            )
+        ).all()
+        for aid, sid, pkg_id in rows:
+            # Skip tool-scan assessments whose finding's package is not in SBOM
+            if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
+                continue
+            result.add(aid)
     if _cache is not None:
         _cache[cache_key] = result
     return result
@@ -637,14 +715,55 @@ def _global_result_full(
 # List-view serialisation with diff badges
 # ---------------------------------------------------------------------------
 
+# In-memory cache of the (expensive) serialised scan-history list, keyed by
+# request scope ("all", "project:<id>", "variant:<id>").  
+_LIST_CACHE_LOCK = threading.Lock()
+_LIST_CACHE: Dict[str, Tuple[frozenset, List[dict]]] = {}
+
+
+def _scan_list_fingerprint(scans: list[Scan]) -> frozenset:
+    """Order-independent fingerprint capturing scan add / delete / rename."""
+    return frozenset(
+        (s.id, s.description, s.timestamp) for s in scans
+    )
+
+
+def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[dict]:
+    """Return the serialised scan-history list for *scans*, cached per *scope_key*.
+
+    The heavy diff computation runs once and its result is reused for later
+    requests until the underlying set of scans changes (import / delete /
+    rename), matching an application reload.
+    """
+    fingerprint = _scan_list_fingerprint(scans)
+    with _LIST_CACHE_LOCK:
+        entry = _LIST_CACHE.get(scope_key)
+        if entry is not None and entry[0] == fingerprint:
+            return entry[1]
+    payload = _serialize_list_with_diff(scans)
+    with _LIST_CACHE_LOCK:
+        _LIST_CACHE[scope_key] = (fingerprint, payload)
+    return payload
+
+
 def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     if not scans:
         return []
 
     scan_ids = [s.id for s in scans]
-    findings_map = _findings_by_scan_ids(scan_ids)
+    # One combined observation query supplies per-scan findings, vulns and the
+    # (finding, package, vuln) rows consumed by the global-result helper below,
+    # replacing three separate Observation scans.
+    _obs_prefetch = _observation_rows_by_scan(scan_ids)
+    findings_map: Dict[uuid.UUID, set[uuid.UUID]] = {
+        sid: {r[0] for r in rows} for sid, rows in _obs_prefetch.items()
+    }
+    vulns_map: Dict[uuid.UUID, set[str]] = {
+        sid: {r[2] for r in rows} for sid, rows in _obs_prefetch.items()
+    }
     packages_map = _packages_by_scan_ids(scan_ids)
-    vulns_map = _vulns_by_scan_ids(scan_ids)
+    # Assessment rows (per scan) for the global-assessment helper.
+    _assess_prefetch = _global_assessment_rows_by_scan(scan_ids)
     prev_map = _prev_scan_map(scans)
     variant_map = _variant_info(list({s.variant_id for s in scans}))
     assessments_map = _assessments_by_scan(scans)
@@ -791,10 +910,12 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
             before_fids, before_vids, _ = _global_result_id_sets(
                 sbom_before, tools_before,
-                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache,
+                _obs_prefetch=_obs_prefetch, _pkg_prefetch=packages_map)
             after_fids, after_vids, after_pkg_ids = _global_result_id_sets(
                 sbom_after, tools_after,
-                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache,
+                _obs_prefetch=_obs_prefetch, _pkg_prefetch=packages_map)
 
             # Update running tracker (still needed by the SBOM branch)
             src_key = (scan.variant_id, scan.scan_source)
@@ -819,14 +940,19 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["newly_detected_findings"] = len(after_fids - before_fids)
 
             # Assessments: before/after global sets
-            before_assess = _global_assessment_ids_for(sbom_before, tools_before, _cache=_assess_cache)
-            after_assess = _global_assessment_ids_for(sbom_after, tools_after, _cache=_assess_cache)
+            before_assess = _global_assessment_ids_for(
+                sbom_before, tools_before, _cache=_assess_cache,
+                _obs_prefetch=_assess_prefetch, _pkg_prefetch=packages_map)
+            after_assess = _global_assessment_ids_for(
+                sbom_after, tools_after, _cache=_assess_cache,
+                _obs_prefetch=_assess_prefetch, _pkg_prefetch=packages_map)
             base["newly_detected_assessments"] = len(after_assess - before_assess)
 
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
                 sbom_after, {scan.scan_source or "": scan},
-                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache,
+                _obs_prefetch=_obs_prefetch, _pkg_prefetch=packages_map)
             base["branch_finding_count"] = len(branch_fids)
             base["branch_vuln_count"] = len(branch_vids)
             base["branch_package_count"] = len(branch_pkg_ids)
@@ -869,11 +995,13 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             curr_scan_result_f, curr_scan_result_v, _ = (
                 _global_result_id_sets(
                     scan, latest_tool,
-                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache))
+                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache,
+                    _obs_prefetch=_obs_prefetch, _pkg_prefetch=packages_map))
             prev_sr_f, prev_sr_v, _ = (
                 _global_result_id_sets(
                     prev, latest_tool,
-                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache))
+                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache,
+                    _obs_prefetch=_obs_prefetch, _pkg_prefetch=packages_map))
 
             # --- Classify findings using scan result diffs ---
             # new + upgraded + unchanged = current scan result
