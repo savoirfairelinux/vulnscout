@@ -261,6 +261,7 @@ def _global_result_id_sets(
     tool_scans: Dict[str, Scan],
     *,
     filter_tool_by_sbom_pkgs: bool = False,
+    _cache: Optional[dict] = None,
 ) -> Tuple[set[uuid.UUID], set[str], set[uuid.UUID]]:
     """Return ``(finding_ids, vuln_ids, package_ids)`` for a global result.
 
@@ -287,6 +288,13 @@ def _global_result_id_sets(
         s.id for s in tool_scans.values()
     ]
     contributing_ids = list(dict.fromkeys(contributing_ids))
+
+    cache_key = None
+    if _cache is not None:
+        cache_key = (frozenset(contributing_ids), filter_tool_by_sbom_pkgs)
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
         sbom_scan.id, set()
@@ -318,12 +326,16 @@ def _global_result_id_sets(
         global_fids.add(fid)
         global_vids.add(vid)
 
-    return global_fids, global_vids, sbom_pkg_ids
+    result = (global_fids, global_vids, sbom_pkg_ids)
+    if _cache is not None:
+        _cache[cache_key] = result
+    return result
 
 
 def _global_assessment_ids_for(
     sbom_scan: Optional[Scan],
     latest_tool: Dict[str, Scan],
+    _cache: Optional[dict] = None,
 ) -> set[uuid.UUID]:
     """Return the set of unique Assessment IDs visible in the global result.
 
@@ -338,6 +350,13 @@ def _global_assessment_ids_for(
     contributing_ids = list(dict.fromkeys(contributing_ids))
     if not contributing_ids:
         return set()
+
+    cache_key = None
+    if _cache is not None:
+        cache_key = frozenset(contributing_ids)
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     tool_scan_ids: set[uuid.UUID] = {s.id for s in latest_tool.values()}
     sbom_pkg_ids = _packages_by_scan_ids([sbom_scan.id]).get(
@@ -363,6 +382,8 @@ def _global_assessment_ids_for(
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
             continue
         result.add(aid)
+    if _cache is not None:
+        _cache[cache_key] = result
     return result
 
 
@@ -730,6 +751,11 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
     # Also track the SBOM baseline that was active at each tool scan's
     # timestamp so historical counts stay stable.
     running_src_findings: Dict[Tuple[uuid.UUID, Optional[str]], set[uuid.UUID]] = {}  # (variant_id, source) -> set
+    # Request-scoped memoization: consecutive scans share the same
+    # contributing-scan sets, so cache the expensive global-result and
+    # assessment JOIN queries keyed on the contributing scan-id set.
+    _grs_cache: Dict = {}
+    _assess_cache: Dict = {}
     result = []
     for entry in scan_data:
         scan = entry["scan"]
@@ -765,10 +791,10 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
 
             before_fids, before_vids, _ = _global_result_id_sets(
                 sbom_before, tools_before,
-                filter_tool_by_sbom_pkgs=True)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
             after_fids, after_vids, after_pkg_ids = _global_result_id_sets(
                 sbom_after, tools_after,
-                filter_tool_by_sbom_pkgs=True)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
 
             # Update running tracker (still needed by the SBOM branch)
             src_key = (scan.variant_id, scan.scan_source)
@@ -793,14 +819,14 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["newly_detected_findings"] = len(after_fids - before_fids)
 
             # Assessments: before/after global sets
-            before_assess = _global_assessment_ids_for(sbom_before, tools_before)
-            after_assess = _global_assessment_ids_for(sbom_after, tools_after)
+            before_assess = _global_assessment_ids_for(sbom_before, tools_before, _cache=_assess_cache)
+            after_assess = _global_assessment_ids_for(sbom_after, tools_after, _cache=_assess_cache)
             base["newly_detected_assessments"] = len(after_assess - before_assess)
 
             # Branch result = SBOM ∪ THIS tool scan only (one source)
             branch_fids, branch_vids, branch_pkg_ids = _global_result_id_sets(
                 sbom_after, {scan.scan_source or "": scan},
-                filter_tool_by_sbom_pkgs=True)
+                filter_tool_by_sbom_pkgs=True, _cache=_grs_cache)
             base["branch_finding_count"] = len(branch_fids)
             base["branch_vuln_count"] = len(branch_vids)
             base["branch_package_count"] = len(branch_pkg_ids)
@@ -809,7 +835,7 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             base["global_finding_count"] = len(after_fids)
             base["global_vuln_count"] = len(after_vids)
             base["global_package_count"] = len(after_pkg_ids)
-            base["global_assessment_count"] = _global_assessment_count(scan, variant_scans)
+            base["global_assessment_count"] = len(after_assess)
 
             base["formats"] = []
         elif prev is None:
@@ -843,11 +869,11 @@ def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
             curr_scan_result_f, curr_scan_result_v, _ = (
                 _global_result_id_sets(
                     scan, latest_tool,
-                    filter_tool_by_sbom_pkgs=True))
+                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache))
             prev_sr_f, prev_sr_v, _ = (
                 _global_result_id_sets(
                     prev, latest_tool,
-                    filter_tool_by_sbom_pkgs=True))
+                    filter_tool_by_sbom_pkgs=True, _cache=_grs_cache))
 
             # --- Classify findings using scan result diffs ---
             # new + upgraded + unchanged = current scan result
