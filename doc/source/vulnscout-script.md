@@ -31,13 +31,13 @@ The `vulnscout` script manages the container automatically (using Docker or Podm
 To update VulnScout to the latest version, pull the latest container image and restart:
 
 ```bash
-./vulnscout --update
+./vulnscout update
 ```
 
 Then verify the new version is correctly running:
 
 ```bash
-./vulnscout --version
+./vulnscout version
 ```
 
 ---

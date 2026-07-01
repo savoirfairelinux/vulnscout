@@ -46,8 +46,8 @@ Container lifecycle:
   start                           Start VulnScout container (auto-started by other commands)
   stop                            Stop and remove VulnScout container
   restart                         Restart VulnScout container
-  --update                        Pull latest image and restart if a new version is available
-  --version                       Show current version
+  update                          Pull latest image and restart if a new version is available
+  version                         Show current version
   --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
 
 Note: The container runs as a daemon. All commands auto-start it if needed and
