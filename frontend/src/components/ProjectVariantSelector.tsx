@@ -30,7 +30,7 @@ type Props = {
     onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
 };
 
-function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Readonly<Props>) {
+function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -80,20 +80,17 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
     // Sync display state when default config arrives from the server
     useEffect(() => {
         if (defaultProject?.id) {
-            // Show only the configured variant (if any) on first load.
-            if (defaultVariant?.id) pendingRestoreRef.current = [defaultVariant.id];
+            // All variants are selected by default on first load.
             setSelectedProjectId(defaultProject.id);
             setAppliedProject(defaultProject.name);
         }
-    }, [defaultProject?.id, defaultProject?.name, defaultVariant?.id]);
+    }, [defaultProject?.id, defaultProject?.name]);
 
     useEffect(() => {
-        if (defaultVariant?.id) {
-            setAppliedLabel(defaultVariant.name);
-        } else if (defaultProject?.id) {
+        if (defaultProject?.id) {
             setAppliedLabel('All variants');
         }
-    }, [defaultVariant?.id, defaultVariant?.name, defaultProject?.id]);
+    }, [defaultProject?.id]);
 
     // Default the compare base / compare variant once variants are available
     useEffect(() => {
@@ -144,9 +141,8 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
     useEffect(() => {
         if (appliedScope || variants.length === 0 || !selectedProjectId) return;
         if (defaultProject?.id !== selectedProjectId) return;
-        const variantIds = (defaultVariant?.id && variants.some(v => v.id === defaultVariant.id))
-            ? [defaultVariant.id]
-            : variants.map(v => v.id);
+        // All variants are selected by default.
+        const variantIds = variants.map(v => v.id);
         applyScope({
             projectId: selectedProjectId,
             mode: 'select',
@@ -155,7 +151,7 @@ function ProjectVariantSelector({ defaultProject, defaultVariant, onApply }: Rea
             compareOp: 'difference',
             compareId: '',
         });
-    }, [variants, selectedProjectId, appliedScope, defaultProject?.id, defaultVariant?.id]);
+    }, [variants, selectedProjectId, appliedScope, defaultProject?.id]);
 
     // Restore the panel controls from the applied scope each time it opens.
     useEffect(() => {

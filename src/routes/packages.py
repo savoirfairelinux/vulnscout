@@ -43,12 +43,14 @@ def init_app(app: Flask) -> None:
             operation = request.args.get('operation', 'difference')
 
             def _pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
+                scan_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+                if not scan_ids:
+                    return set()
                 return set(db.session.execute(
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .join(Scan, SBOMDocument.scan_id == Scan.id)
-                    .where(Scan.variant_id == variant_uuid)
+                    .where(SBOMDocument.scan_id.in_(scan_ids))
                     .distinct()
                 ).scalars().all())
 
@@ -63,21 +65,24 @@ def init_app(app: Flask) -> None:
                 ).scalars().all()) if result_ids else []
             else:  # difference (default): packages in compare but NOT in base
                 exclude_ids = list(_pkg_ids_for_variant(base_uuid))
-                pkg_ids_sub = (
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .join(Scan, SBOMDocument.scan_id == Scan.id)
-                    .where(Scan.variant_id == compare_uuid)
-                    .distinct()
-                )
-                if exclude_ids:
-                    pkg_ids_sub = pkg_ids_sub.where(~Package.id.in_(exclude_ids))
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(pkg_ids_sub))
-                    .order_by(Package.name)
-                ).scalars().all())
+                compare_scan_ids = active_sbom_scan_ids_for_variant(compare_uuid)
+                if not compare_scan_ids:
+                    pkgs = []
+                else:
+                    pkg_ids_sub = (
+                        db.select(Package.id)
+                        .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                        .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                        .where(SBOMDocument.scan_id.in_(compare_scan_ids))
+                        .distinct()
+                    )
+                    if exclude_ids:
+                        pkg_ids_sub = pkg_ids_sub.where(~Package.id.in_(exclude_ids))
+                    pkgs = list(db.session.execute(
+                        db.select(Package)
+                        .where(Package.id.in_(pkg_ids_sub))
+                        .order_by(Package.name)
+                    ).scalars().all())
             active_scan_ids = []  # compare mode: do not restrict by scan
         elif variant_ids:
             # Multi-variant mode: union or intersection of the packages present
@@ -94,12 +99,14 @@ def init_app(app: Flask) -> None:
             operation = request.args.get('operation', 'union')
 
             def _multi_pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
+                scan_ids = active_sbom_scan_ids_for_variant(variant_uuid)
+                if not scan_ids:
+                    return set()
                 return set(db.session.execute(
                     db.select(Package.id)
                     .join(SBOMPackage, Package.id == SBOMPackage.package_id)
                     .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .join(Scan, SBOMDocument.scan_id == Scan.id)
-                    .where(Scan.variant_id == variant_uuid)
+                    .where(SBOMDocument.scan_id.in_(scan_ids))
                     .distinct()
                 ).scalars().all())
 

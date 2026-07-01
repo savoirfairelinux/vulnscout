@@ -96,7 +96,7 @@ describe('ProjectVariantSelector', () => {
         });
     });
 
-    test('shows default variant name when both defaultProject and defaultVariant are supplied', async () => {
+    test('shows "All variants" by default even when defaultVariant is supplied', async () => {
         render(
             <ProjectVariantSelector
                 defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
@@ -105,7 +105,7 @@ describe('ProjectVariantSelector', () => {
             />
         );
         await waitFor(() => {
-            expect(screen.getByText('default')).toBeInTheDocument();
+            expect(screen.getByText('All variants')).toBeInTheDocument();
         });
     });
 
@@ -507,7 +507,7 @@ describe('ProjectVariantSelector', () => {
         expect(screen.getByRole('radio', { name: /intersection/i })).toBeChecked();
     });
 
-    test('reopening restores the single configured variant from defaults', async () => {
+    test('all variants are checked by default even when defaultVariant is supplied', async () => {
         render(
             <ProjectVariantSelector
                 defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
@@ -519,9 +519,9 @@ describe('ProjectVariantSelector', () => {
         await waitFor(() => {
             expect(screen.getByRole('checkbox', { name: 'release' })).toBeChecked();
         });
-        // Only the configured variant should be checked, not all
-        expect(screen.getByRole('checkbox', { name: 'default' })).not.toBeChecked();
-        expect(screen.getByRole('checkbox', { name: 'staging' })).not.toBeChecked();
+        // All variants should be checked by default, not just the configured one
+        expect(screen.getByRole('checkbox', { name: 'default' })).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'staging' })).toBeChecked();
     });
 
     // -----------------------------------------------------------------------
