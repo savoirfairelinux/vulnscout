@@ -1,6 +1,6 @@
 import type { Package, VulnCounts, Severities } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
@@ -52,7 +52,10 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
-    const [selectedVariants, setSelectedVariants] = useState<string[]>([]);
+    // Track variants the user has explicitly unchecked. All variants (including
+    // any discovered later) are considered selected unless present here, which
+    // avoids a first-render flash where variant rows briefly disappear.
+    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
@@ -177,12 +180,23 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc.sort();
     }, []), [packages])
 
+    // All variants are checked by default; a variant only leaves the selection
+    // once the user explicitly unchecks it. Deriving the selection during render
+    // (instead of populating it from an effect) prevents a first-render flash.
+    const selectedVariants = useMemo(
+        () => variants_list.filter(v => !deselectedVariants.includes(v)),
+        [variants_list, deselectedVariants]
+    );
+    const setSelectedVariants = useCallback((values: string[]) => {
+        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
+    }, [variants_list]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
-        setSelectedVariants([]);
+        setSelectedVariants(variants_list);
         setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
@@ -392,7 +406,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             if (selectedSuppliers.length && !selectedSuppliers.includes(extractSupplierName(el.supplier))) {
                 return false;
             }
-            if (selectedVariants.length && !selectedVariants.some(variant => el.variants.includes(variant))) {
+            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) {
                 return false;
             }
             return true;

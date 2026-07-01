@@ -607,14 +607,18 @@ describe('Vulnerability Table', () => {
         expect(variantBtn).toBeInTheDocument();
         await user.click(variantBtn);
 
+        // All variants are checked by default; unchecking variant-a removes rows
+        // that belong only to variant-a (the first vuln). Rows that also belong to
+        // variant-b stay visible.
         const variantCheckbox = await screen.getByRole('checkbox', { name: 'variant-a' });
+        expect(variantCheckbox).toBeChecked();
         await user.click(variantCheckbox);
 
         await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
         }, { timeout: 5000 });
 
-        expect(await screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+        expect(await screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
         expect(await screen.getByRole('cell', {name: /CVE-2024-56730/})).toBeInTheDocument();
     })
 

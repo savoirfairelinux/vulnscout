@@ -336,24 +336,24 @@ describe('Packages Table', () => {
         const variants_btn = await screen.getByRole('button', { name: /^variants$/i });
         await user.click(variants_btn);
 
-        // ACT: select "variant-a"
+        // All variants are checked by default. ACT: uncheck "variant-a"
         const variantACheckbox = await screen.getByRole('checkbox', { name: /variant-a/i });
         await user.click(variantACheckbox);
 
-        // xxxyyyzzz is only in variant-b, so it must disappear
+        // aaabbbccc is only in variant-a, so it must disappear
         await waitFor(() => {
-            expect(document.body.innerHTML).not.toContain('xxxyyyzzz');
+            expect(document.body.innerHTML).not.toContain('aaabbbccc');
         }, { timeout: 2000 });
 
-        // aaabbbccc (variant-a) and dddeeefff (variant-a + variant-b) remain
-        expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+        // xxxyyyzzz (variant-b) and dddeeefff (variant-a + variant-b) remain
+        expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
         expect(screen.getAllByRole('cell', { name: /dddeeefff/ }).length).toBeGreaterThan(0);
 
-        // REVERT CHANGE: uncheck "variant-a"
+        // REVERT CHANGE: re-check "variant-a"
         await user.click(variantACheckbox);
 
         await waitFor(() => {
-            expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
+            expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
         });
     })
 

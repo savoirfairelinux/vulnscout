@@ -120,7 +120,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
-    const [selectedVariants, setSelectedVariants] = useState<string[]>([]);
+    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -310,12 +310,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return [...set].sort();
     }, [assessments, variantNames]);
 
+    // All variants are checked by default; a variant only leaves the selection
+    // once the user explicitly unchecks it. Deriving the selection during render
+    // (instead of populating it from an effect) prevents a first-render flash.
+    const selectedVariants = useMemo(
+        () => variantList.filter(v => !deselectedVariants.includes(v)),
+        [variantList, deselectedVariants]
+    );
+    const setSelectedVariants = useCallback((values: string[]) => {
+        setDeselectedVariants(variantList.filter(v => !values.includes(v)));
+    }, [variantList]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
-        setSelectedVariants([]);
+        setSelectedVariants(variantList);
     };
 
     const handleExportReview = useCallback(async () => {
@@ -891,10 +902,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
-        if (selectedVariants.length) {
+        {
             const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
             const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
-            if (!selectedVariants.some(v => rowVariants.includes(v))) return false;
+            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
         }
         return true;
     });
