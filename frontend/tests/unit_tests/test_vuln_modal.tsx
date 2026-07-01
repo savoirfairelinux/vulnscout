@@ -176,7 +176,7 @@ describe('Vulnerability Modal', () => {
             Promise.resolve({
                 json: () => Promise.resolve({
                     "status": "success",
-                    "assessment": {
+                    "assessments": [{
                         id: '00-0-0-0-000-00',
                         vuln_id: vulnerability.id,
                         packages: vulnerability.packages,
@@ -186,7 +186,7 @@ describe('Vulnerability Modal', () => {
                         timestamp: '2021-01-02T00:00:00Z',
                         origin: 'custom',
                         responses: []
-                    }
+                    }]
                 })
             } as Response)
         );
@@ -2013,42 +2013,41 @@ describe('Vulnerability Modal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
         fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v1 (variantPackageMap effect)
         fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v2 (variantPackageMap effect)
-        // Two POST responses for two variants
+        // Single batch POST returns one record per (package, variant) pair
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
-            assessment: {
-                id: 'new-assess-v1',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                status: 'affected',
-                simplified_status: 'Exploitable',
-                justification: '',
-                impact_statement: '',
-                status_notes: 'multi test',
-                workaround: '',
-                timestamp: '2026-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: [],
-                variant_id: 'v1'
-            }
-        }));
-        fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'success',
-            assessment: {
-                id: 'new-assess-v2',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                status: 'affected',
-                simplified_status: 'Exploitable',
-                justification: '',
-                impact_statement: '',
-                status_notes: 'multi test',
-                workaround: '',
-                timestamp: '2026-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: [],
-                variant_id: 'v2'
-            }
+            assessments: [
+                {
+                    id: 'new-assess-v1',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: 'multi test',
+                    workaround: '',
+                    timestamp: '2026-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'v1'
+                },
+                {
+                    id: 'new-assess-v2',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: 'multi test',
+                    workaround: '',
+                    timestamp: '2026-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'v2'
+                }
+            ]
         }));
 
         const appendCb = jest.fn();

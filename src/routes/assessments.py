@@ -722,9 +722,12 @@ def init_app(app: Flask) -> None:
                         if finding is None:
                             finding = Finding.get_or_create(db_pkg.id, vuln_id)
                             finding_cache[f_key] = finding
-                        # Always create a new record — never overwrite an existing assessment
+                        # Always create a new record — never overwrite an existing assessment.
+                        # Honour the per-item timestamp so rows added for the same action
+                        # (e.g. one assessment across several variants) share a value.
                         db_a = _create_assessment_record(
-                            assessment, finding.id, variant_id)
+                            assessment, finding.id, variant_id,
+                            timestamp=getattr(assessment, 'timestamp', None))
                         results.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})

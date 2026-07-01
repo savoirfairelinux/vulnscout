@@ -766,50 +766,54 @@ type VariantScopedSnapshot = {
 
         setSubmittingMessage('Adding assessment...');
         try {
-        for (const vid of variantIds) {
-            const body = vid ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp } : { ...baseContent, timestamp: sharedTimestamp };
-            const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                method: 'POST',
-                mode: 'cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await response.json();
-            if (data?.status === 'success') {
-                // Backend returns an array (one record per package); support legacy single too
-                const rawList: unknown[] = Array.isArray(data?.assessments)
-                    ? data.assessments
-                    : (data?.assessment ? [data.assessment] : []);
-                for (const raw of rawList) {
-                    const casted = asAssessment(raw);
-                    if (!Array.isArray(casted) && typeof casted === 'object') {
-                        successCount++;
-                        lastCasted = casted;
-                        if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
-                        for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
+        // Post every variant in a single batch request
+        const items = variantIds.map(vid =>
+            vid
+                ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp }
+                : { ...baseContent, timestamp: sharedTimestamp }
+        );
+        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/batch`, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assessments: items })
+        });
+        const data = await response.json();
+        if (data?.status === 'success') {
+            // Backend returns one record per (package, variant) pair.
+            const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
+            for (const raw of rawList) {
+                const casted = asAssessment(raw);
+                if (!Array.isArray(casted) && typeof casted === 'object') {
+                    successCount++;
+                    lastCasted = casted;
+                    if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
+                    for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
 
-                        // Highlight the very first created assessment
-                        if (successCount === 1) {
-                            setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                            setTimeout(() => {
-                                setNewAssessmentIds(prev => {
-                                    const newSet = new Set(prev);
-                                    newSet.delete(casted.id);
-                                    return newSet;
-                                });
-                            }, 5500);
-                        }
-
-                        appendAssessment(casted);
-                        vuln.assessments.push(casted);
-                        // Keep allVulnAssessments in sync so variant tags appear immediately
-                        setAllVulnAssessments(prev => [...prev, casted]);
-                        vuln.simplified_status = casted.simplified_status;
+                    // Highlight the very first created assessment
+                    if (successCount === 1) {
+                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                        setTimeout(() => {
+                            setNewAssessmentIds(prev => {
+                                const newSet = new Set(prev);
+                                newSet.delete(casted.id);
+                                return newSet;
+                            });
+                        }, 5500);
                     }
+
+                    appendAssessment(casted);
+                    vuln.assessments.push(casted);
+                    // Keep allVulnAssessments in sync so variant tags appear immediately
+                    setAllVulnAssessments(prev => [...prev, casted]);
+                    vuln.simplified_status = casted.simplified_status;
                 }
-            } else {
-                showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
             }
+            if (Array.isArray(data?.errors) && data.errors.length > 0) {
+                showMessage(`Some assessments failed: ${escape(JSON.stringify(data.errors))}`, 'error');
+            }
+        } else {
+            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
         }
 
         if (lastCasted) {
