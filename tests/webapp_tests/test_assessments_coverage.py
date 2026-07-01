@@ -504,22 +504,6 @@ def test_update_assessment_updates_last_update(client):
     assert data["assessment"]["last_update"] >= original_last_update
 
 
-# Test verifying that OpenVEX file is updated after assessment changes
-def test_update_assessment_updates_openvex_file(client, init_files):
-    """Test that OpenVEX file is updated when assessment is modified"""
-    # Create assessment
-    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
-        'packages': ['test@1.0.0'],
-        'status': 'affected'
-    })
-    assert response.status_code == 200
-    
-    # Check that OpenVEX file was created/updated
-    assert init_files["openvex"].exists()
-    openvex_content = json.loads(init_files["openvex"].read_text())
-    assert "statements" in openvex_content
-
-
 def test_post_assessment_invalid_timestamp(client):
     """POST with an unparseable timestamp string falls back silently (lines 257-258)."""
     response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
@@ -527,26 +511,6 @@ def test_post_assessment_invalid_timestamp(client):
         "status": "affected",
         "timestamp": "not-a-valid-timestamp",
     })
-    assert response.status_code == 200
-
-
-def test_save_openvex_exception_is_silenced(client, monkeypatch):
-    """_save_openvex silently ignores write errors (lines 41-42)."""
-    import builtins
-    real_open = builtins.open
-
-    def fail_on_write(path, mode="r", **kwargs):
-        # path can be str or pathlib.Path — use str() for consistent matching
-        if "openvex" in str(path) and "w" in str(mode):
-            raise PermissionError("no write access")
-        return real_open(path, mode, **kwargs)
-
-    monkeypatch.setattr("builtins.open", fail_on_write)
-
-    response = client.post("/api/vulnerabilities/CVE-2020-35492/assessments", json={
-        "packages": ["cairo@1.16.0"], "status": "affected"
-    })
-    # Despite the write failure, the API should still succeed
     assert response.status_code == 200
 
 

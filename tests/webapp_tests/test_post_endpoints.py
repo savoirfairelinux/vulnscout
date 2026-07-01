@@ -293,27 +293,3 @@ def test_delete_assessment_not_found(client):
     
     data = json.loads(response.data)
     assert data["error"] == "Assessment not found"
-
-
-def test_delete_assessment_updates_openvex_file(app, client):
-    # Create an assessment for a vulnerability not already present
-    response = client.post("/api/vulnerabilities/CVE-1999-54321/assessments", json={
-        'packages': ['abc@1.2.3'],
-        'status': 'exploitable',
-        'status_notes': 'Assessment to be deleted'
-    })
-    assert response.status_code == 200
-    assessment_id = json.loads(response.data)["assessment"]["id"]
-
-    # The OpenVEX output file should now reference this vulnerability
-    openvex_path = app.config["OPENVEX_FILE"]
-    with open(openvex_path) as f:
-        assert "CVE-1999-54321" in f.read()
-
-    # Delete the assessment
-    response = client.delete(f"/api/assessments/{assessment_id}")
-    assert response.status_code == 200
-
-    # The OpenVEX file must be regenerated without the deleted assessment
-    with open(openvex_path) as f:
-        assert "CVE-1999-54321" not in f.read()

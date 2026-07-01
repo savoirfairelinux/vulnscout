@@ -7,9 +7,6 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
-from ..views.openvex import OpenVex
-from ..controllers import ControllersCache
-from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
@@ -28,8 +25,6 @@ from ..helpers.assessment_io import (
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import select
-
-OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -91,25 +86,8 @@ def _create_assessment_record(
 
 def init_app(app: Flask) -> None:
 
-    if "OPENVEX_FILE" not in app.config:
-        app.config["OPENVEX_FILE"] = OPENVEX_FILE
-
     def _get_all_db_assessments() -> list["DBAssessment"]:
         return DBAssessment.get_all()
-
-    def _save_openvex() -> None:
-        """Re-generate and save the OpenVEX file from current DB state."""
-        try:
-            import json
-
-            ctrls = ControllersCache()
-            ctrls.packages._preload_cache()
-
-            vex = OpenVex(ctrls)
-            with open(app.config["OPENVEX_FILE"], "w") as f:
-                f.write(json.dumps(vex.to_dict(), indent=2))
-        except Exception as e:
-            verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
@@ -262,7 +240,6 @@ def init_app(app: Flask) -> None:
                     "errors": total_errors,
                 }, 400
 
-            _save_openvex()
             return {
                 "status": "success",
                 "imported": len(total_created),
@@ -295,7 +272,6 @@ def init_app(app: Flask) -> None:
                 }, 400
 
             created, errors, skipped = _import_openvex_statements(data["statements"], variant.id)
-            _save_openvex()
             return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
@@ -556,8 +532,6 @@ def init_app(app: Flask) -> None:
         variant_by_name = build_variant_by_name_map()
         result = import_custom_data(data, variant_by_name, variant_id)
 
-        _save_openvex()
-
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code
 
@@ -661,7 +635,6 @@ def init_app(app: Flask) -> None:
         if not created:
             return {"error": "No valid package found"}, 400
 
-        _save_openvex()
         response_body = {"status": "success", "assessments": created, "assessment": created[0]}
         return response_body, 200
 
@@ -742,8 +715,6 @@ def init_app(app: Flask) -> None:
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
-        if results:
-            _save_openvex()
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
@@ -795,7 +766,6 @@ def init_app(app: Flask) -> None:
             workaround=getattr(mem_assess, "workaround", None),
             responses=list(mem_assess.responses or []),
         )
-        _save_openvex()
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
@@ -804,7 +774,6 @@ def init_app(app: Flask) -> None:
         if existing is None:
             return {"error": "Assessment not found"}, 404
         existing.delete()
-        _save_openvex()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 

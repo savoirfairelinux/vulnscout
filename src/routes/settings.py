@@ -62,22 +62,6 @@ def _prune_upload_status() -> None:
         _upload_status.pop(uid, None)
 
 
-def _regenerate_openvex(app: Flask) -> None:
-    """Re-generate and save the OpenVEX file from current DB state."""
-    try:
-        from ..views.openvex import OpenVex
-        from ..controllers import ControllersCache
-
-        openvex_file = app.config.get("OPENVEX_FILE", "/scan/outputs/openvex.json")
-        ctrls = ControllersCache()
-        ctrls.packages._preload_cache()
-        vex = OpenVex(ctrls)
-        with open(openvex_file, "w") as f:
-            f.write(json.dumps(vex.to_dict(), indent=2))
-    except Exception as e:
-        verbose(f"[_regenerate_openvex] {e}")
-
-
 def _retry_on_lock(fn: Callable[[], T], max_retries: int = 5, delay: float = 0.5) -> T:
     """Call *fn* and retry up to *max_retries* times on SQLite 'database is locked'.
 
@@ -590,9 +574,6 @@ def init_app(app: Flask) -> None:
                     commit=False,
                 )
                 copied += 1
-
-        if copied:
-            _regenerate_openvex(app)
 
         return jsonify({
             "copied": copied,

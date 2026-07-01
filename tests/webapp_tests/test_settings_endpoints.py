@@ -942,19 +942,6 @@ class TestProcessSBOMBackground:
 
             assert _upload_status[upload_id]["status"] == "error"
 
-    def test_regenerate_openvex_handles_exception(self, app, tmp_path):
-        """_regenerate_openvex() must swallow OpenVEX generation failures."""
-        from src.routes.settings import _regenerate_openvex
-
-        out_file = tmp_path / "openvex.json"
-        app.config["OPENVEX_FILE"] = str(out_file)
-
-        with patch("src.views.openvex.OpenVex.to_dict", side_effect=RuntimeError("boom")):
-            _regenerate_openvex(app)
-
-        assert out_file.exists()
-        assert out_file.stat().st_size == 0
-
 
 # ---------------------------------------------------------------------------
 # NVD API key endpoint
