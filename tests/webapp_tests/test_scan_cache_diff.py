@@ -740,6 +740,59 @@ class TestSerializeListWithDiffCached:
 
 
 # ===================================================================
+# _scan_diff.py — invalidate_scan_list_cache
+# ===================================================================
+
+class TestInvalidateScanListCache:
+    """Explicit invalidation drops every cached scope so the next call
+    recomputes, even when the scan fingerprint is unchanged."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        from src.routes import _scan_diff
+        with _scan_diff._LIST_CACHE_LOCK:
+            _scan_diff._LIST_CACHE.clear()
+        yield
+        with _scan_diff._LIST_CACHE_LOCK:
+            _scan_diff._LIST_CACHE.clear()
+
+    def test_invalidate_forces_recompute(self, app, ids):
+        from src.routes._scan_diff import (
+            serialize_list_with_diff_cached, invalidate_scan_list_cache,
+        )
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            first = serialize_list_with_diff_cached("all", scans)
+            # Same scans → cache hit without invalidation.
+            assert serialize_list_with_diff_cached("all", scans) is first
+            invalidate_scan_list_cache()
+            # After invalidation the identical scan set is recomputed.
+            recomputed = serialize_list_with_diff_cached("all", scans)
+            assert recomputed is not first
+            assert recomputed == first
+
+    def test_invalidate_clears_all_scopes(self, app, ids):
+        from src.routes import _scan_diff
+        from src.routes._scan_diff import (
+            serialize_list_with_diff_cached, invalidate_scan_list_cache,
+        )
+        from src.controllers.scans import ScanController
+
+        with app.app_context():
+            scans = ScanController.get_all()
+            serialize_list_with_diff_cached("all", scans)
+            serialize_list_with_diff_cached(
+                f"variant:{ids['variant_id']}", scans)
+            with _scan_diff._LIST_CACHE_LOCK:
+                assert len(_scan_diff._LIST_CACHE) == 2
+            invalidate_scan_list_cache()
+            with _scan_diff._LIST_CACHE_LOCK:
+                assert _scan_diff._LIST_CACHE == {}
+
+
+# ===================================================================
 # _scan_diff.py — prefetch helpers
 # ===================================================================
 

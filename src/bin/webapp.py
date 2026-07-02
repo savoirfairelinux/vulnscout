@@ -45,6 +45,43 @@ def _launch_enrichment(app):
     threading.Thread(target=_enrich_epss, name="enrichment-epss", daemon=True).start()
 
 
+def _warm_scan_list_cache(app):
+    """Pre-compute the scan-history list cache in the background.
+
+    The scan-history view runs an expensive diff/serialisation the first time
+    it is requested.  By warming the cache once the scan is finished (i.e. while
+    the frontend still shows "Loading data..."), the first click on the Scans
+    tab is served from the cache instead of paying that cost interactively.
+
+    Runs in its own daemon thread so it never blocks request handlers; any
+    failure is swallowed since the on-demand path stays fully functional.
+    """
+    def _warm():
+        with app.app_context():
+            db.session.autoflush = False
+            try:
+                from ..controllers.scans import ScanController
+                from ..controllers.projects import ProjectController
+                from ..controllers.variants import VariantController
+                from ..routes._scan_diff import serialize_list_with_diff_cached
+
+                serialize_list_with_diff_cached("all", ScanController.get_all())
+                for project in ProjectController.get_all():
+                    serialize_list_with_diff_cached(
+                        f"project:{project.id}",
+                        ScanController.get_by_project(project.id),
+                    )
+                for variant in VariantController.get_all():
+                    serialize_list_with_diff_cached(
+                        f"variant:{variant.id}",
+                        ScanController.get_by_variant(variant.id),
+                    )
+            except Exception as e:
+                print(f"[cache-warm/scan-list] {e}", flush=True)
+
+    threading.Thread(target=_warm, name="cache-warm-scan-list", daemon=True).start()
+
+
 def create_app():
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
@@ -111,6 +148,7 @@ def create_app():
                 app._INT_SCAN_FINISHED = True
                 if not app.config.get("TESTING"):
                     _launch_enrichment(app)
+                    _warm_scan_list_cache(app)
                 return True
         return False
 

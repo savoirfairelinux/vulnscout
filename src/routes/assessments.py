@@ -12,6 +12,7 @@ from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
+from ._scan_diff import invalidate_scan_list_cache
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -727,6 +728,8 @@ def init_app(app: Flask) -> None:
         if existing is None:
             return {"error": "Assessment not found"}, 404
 
+        was_non_custom = (existing.origin or "") != "custom"
+
         # Reconstruct Assessment DTO for validation
         mem_assess = DBAssessment.from_dict(existing.to_dict())
 
@@ -766,6 +769,10 @@ def init_app(app: Flask) -> None:
             workaround=getattr(mem_assess, "workaround", None),
             responses=list(mem_assess.responses or []),
         )
+        # Editing an automated assessment removes it from the scan-history
+        # counts (it becomes custom-origin), so refresh the cached list view.
+        if was_non_custom:
+            invalidate_scan_list_cache()
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
@@ -773,7 +780,12 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        # A non-custom assessment contributes to the scan-history counts, so
+        # its removal must invalidate the cached list view.
+        was_non_custom = (existing.origin or "") != "custom"
         existing.delete()
+        if was_non_custom:
+            invalidate_scan_list_cache()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 

@@ -716,7 +716,7 @@ def _global_result_full(
 # ---------------------------------------------------------------------------
 
 # In-memory cache of the (expensive) serialised scan-history list, keyed by
-# request scope ("all", "project:<id>", "variant:<id>").  
+# request scope ("all", "project:<id>", "variant:<id>").
 _LIST_CACHE_LOCK = threading.Lock()
 _LIST_CACHE: Dict[str, Tuple[frozenset, List[dict]]] = {}
 
@@ -744,6 +744,21 @@ def serialize_list_with_diff_cached(scope_key: str, scans: list[Scan]) -> List[d
     with _LIST_CACHE_LOCK:
         _LIST_CACHE[scope_key] = (fingerprint, payload)
     return payload
+
+
+def invalidate_scan_list_cache() -> None:
+    """Drop every cached scan-history list.
+
+    The cache fingerprint only tracks the set of scans (add / delete / rename),
+    so it does NOT notice changes to the per-scan assessment counts shown in the
+    list view.  Those counts include automated (non-custom) assessments, so when
+    a non-custom assessment is edited or deleted its scan's counts change while
+    the fingerprint stays the same.  Callers must invalidate the cache in that
+    case.  Custom (manually-created) assessments are excluded from the view and
+    therefore never require invalidation.
+    """
+    with _LIST_CACHE_LOCK:
+        _LIST_CACHE.clear()
 
 
 def _serialize_list_with_diff(scans: list[Scan]) -> list[dict]:
