@@ -119,6 +119,32 @@ When any filter is active, a small checkmark badge appears on its button so you 
 
 Each row has a checkbox on the left. Selecting one or more rows reveals the **multi-edit bar**, which lets you apply a single assessment (status, justification, notes) to all selected vulnerabilities at once. This is particularly valuable when triaging a batch of related CVEs (for example, marking a group of low-severity findings as "Not affected" with a shared justification).
 
+### Refreshing Vulnerability Data
+
+The multi-edit bar also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the **currently selected rows**, so select the vulnerabilities you want to update before opening the dropdown.
+
+The dropdown offers a checkbox per data source plus a **Start** button. Each refresh runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
+
+The available sources are:
+
+- **NVD** — re-fetches the publication date and other metadata from NIST's National Vulnerability Database for the selected CVEs. This is what makes the **Published Date** column and filter usable.
+- **EPSS** — updates the Exploit Prediction Scoring System probability for each selected CVE, feeding the EPSS column and filter.
+- **GHSA** — refreshes the publication date of selected GitHub Security Advisory (`GHSA-…`) identifiers via the GitHub Advisory API.
+- **ENISA EUVD** — annotates the selected CVEs from the European Union Vulnerability Database (see below). This option is only enabled when the selection contains at least one CVE identifier.
+
+### ENISA EUVD Enrichment
+
+The **ENISA EUVD** refresh annotates each selected CVE with information from the [European Union Vulnerability Database](https://euvd.enisa.europa.eu/), the vulnerability registry operated by ENISA. It is a **data enrichment, not a scanner**: it never discovers new vulnerabilities and performs no per-CVE network round-trips. Instead it loads two ENISA dumps once and maps them onto the CVEs you selected.
+
+Two distinct pieces of information are added:
+
+- **EUVD alias** — the ENISA EUVD identifier (for example `EUVD-2021-9696`) that corresponds to the CVE. This comes from ENISA's full *CVE → EUVD id* mapping dump, which covers every published CVE that ENISA tracks, regardless of exploitation status.
+- **Known exploitable flag** — whether the CVE appears in the consolidated EU Known Exploited Vulnerabilities (KEV) list, which merges the CISA KEV and ENISA EU KEV catalogues. When present, the enrichment also records the KEV sources and the date the entry was added.
+
+Both ENISA dumps are downloaded and cached on disk, refreshed at most once per day (ENISA itself publishes new dumps daily at 07:00 UTC). Network or parse failures degrade gracefully — a stale cache is reused, and enrichment never blocks your workflow.
+
+Once an EUVD refresh completes, the banner reports how many of the selected CVEs were matched and how many are flagged as known exploitable. The annotations are then visible in the **Vulnerability Details** modal (see *Aliases and Related vulnerabilities* below).
+
 ### Sorting
 
 Every sortable column header is clickable. Severity sorts by the standard ordering (Critical → None) or by numeric score when the score-based filter is active. Status sorts by triage progression. Published Date and Last Updated sort chronologically. EPSS and Estimated Effort sort numerically. Clicking the same header again reverses the direction.
@@ -144,6 +170,8 @@ The modal header shows the CVE identifier and a set of action buttons. Below it,
 - **Status** — the current triage status.
 - **Affects** — the list of packages in the SBOM that are impacted.
 - **Aliases and Related vulnerabilities** — cross-references to other CVE identifiers.
+
+When a CVE has been enriched via the **ENISA EUVD** refresh (see *Refreshing Vulnerability Data*), the metadata also shows an **ENISA EUVD** entry with the EUVD identifier, linked to the corresponding EUVD record. If the CVE is on the EU Known Exploited Vulnerabilities list, a red **"EU KEV — Known Exploited"** badge is displayed next to it, flagging it for priority triage.
 
 ### CVSS Vectors
 

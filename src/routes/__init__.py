@@ -9,6 +9,7 @@ from .documents import init_app as init_doc_app
 from .nvd_progress import init_app as init_nvd_progress_app
 from .epss_progress import init_app as init_epss_progress_app
 from .ghsa_progress import init_app as init_ghsa_progress_app
+from .euvd_progress import init_app as init_euvd_progress_app
 from .project import init_app as init_project_app
 from .variant import init_app as init_variant_app
 from .scans import init_app as init_scans_app
@@ -26,6 +27,7 @@ def init_app(app):
     init_nvd_progress_app(app)
     init_epss_progress_app(app)
     init_ghsa_progress_app(app)
+    init_euvd_progress_app(app)
     init_project_app(app)
     init_variant_app(app)
     init_scans_app(app)

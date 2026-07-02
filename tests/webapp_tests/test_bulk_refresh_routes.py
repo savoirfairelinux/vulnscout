@@ -45,17 +45,20 @@ def client(app):
 
 @pytest.fixture(autouse=True)
 def reset_progress_trackers():
-    """Reset NVD, EPSS, and GHSA progress tracker singletons between tests."""
+    """Reset NVD, EPSS, GHSA and EUVD progress tracker singletons between tests."""
     from src.controllers.nvd_progress import NVDProgressTracker
     from src.controllers.epss_progress import EPSSProgressTracker
     from src.controllers.ghsa_progress import GHSAProgressTracker
+    from src.controllers.euvd_progress import EUVDProgressTracker
     NVDProgressTracker.complete()
     EPSSProgressTracker.complete()
     GHSAProgressTracker.complete()
+    EUVDProgressTracker.complete()
     yield
     NVDProgressTracker.complete()
     EPSSProgressTracker.complete()
     GHSAProgressTracker.complete()
+    EUVDProgressTracker.complete()
 
 
 @pytest.fixture()
@@ -1494,3 +1497,249 @@ class TestBulkGhsaRefreshFailedCounter:
 
         MockTracker.error.assert_called_once()
         MockTracker.complete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# EUVD progress tracker — smoke test the singleton + endpoint
+# ---------------------------------------------------------------------------
+
+class TestEuvdProgressTracker:
+
+    def test_singleton_starts_idle(self):
+        from src.controllers.euvd_progress import EUVDProgressTracker
+        EUVDProgressTracker.complete()  # reset
+        progress = EUVDProgressTracker.get_progress()
+        assert progress["in_progress"] is False
+
+    def test_euvd_progress_endpoint_returns_200(self, client):
+        from src.controllers.euvd_progress import EUVDProgressTracker
+        EUVDProgressTracker.complete()
+        resp = client.get("/api/euvd/progress")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "in_progress" in data
+        assert "phase" in data
+
+
+# ---------------------------------------------------------------------------
+# Bulk EUVD refresh — /api/vulnerabilities/bulk-euvd-refresh
+# ---------------------------------------------------------------------------
+
+class TestBulkEuvdRefreshEndpoint:
+
+    def test_returns_202_with_valid_cve_ids(self, client, existing_cve_id):
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-euvd-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 202
+        data = resp.get_json()
+        assert data["status"] == "started"
+        assert data["total"] >= 1
+        MockThread.return_value.start.assert_called_once()
+
+    def test_returns_400_when_cve_ids_missing(self, client):
+        resp = client.post("/api/vulnerabilities/bulk-euvd-refresh", json={})
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_returns_400_when_cve_ids_empty_list(self, client):
+        resp = client.post(
+            "/api/vulnerabilities/bulk-euvd-refresh",
+            json={"cve_ids": []},
+        )
+        assert resp.status_code == 400
+
+    def test_returns_400_when_all_ids_are_invalid_format(self, client):
+        resp = client.post(
+            "/api/vulnerabilities/bulk-euvd-refresh",
+            json={"cve_ids": ["not-a-cve", "GHSA-xxxx-xxxx-xxxx"]},
+        )
+        assert resp.status_code == 400
+        assert "valid CVE" in resp.get_json()["error"]
+
+    def test_returns_409_when_already_in_progress(self, client, existing_cve_id):
+        with patch(
+            "src.routes.bulk_refresh.EUVDProgressTracker.start_if_idle",
+            return_value=False,
+        ):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-euvd-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 409
+        assert "already in progress" in resp.get_json()["error"]
+
+    def test_cve_ids_normalized_to_uppercase(self, client, existing_cve_id):
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-euvd-refresh",
+                json={"cve_ids": [existing_cve_id.lower()]},
+            )
+        assert resp.status_code == 202
+
+    def test_total_matches_input_count(self, client, existing_cve_id):
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-euvd-refresh",
+                json={"cve_ids": [existing_cve_id, "CVE-2021-44228"]},
+            )
+        assert resp.status_code == 202
+        assert resp.get_json()["total"] == 2
+
+
+class TestBulkEuvdRefreshBackground:
+    """Tests for the _run() closure spawned by bulk_euvd_refresh."""
+
+    def _capture_target(self, client, cve_ids):
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        with patch("src.routes.bulk_refresh.threading.Thread", side_effect=fake_thread):
+            resp = client.post(
+                "/api/vulnerabilities/bulk-euvd-refresh",
+                json={"cve_ids": cve_ids},
+            )
+        assert resp.status_code == 202
+        return captured["target"]
+
+    def test_run_annotates_record_from_mapping(self, client):
+        cve = "CVE-2021-44228"
+        target = self._capture_target(client, [cve])
+        mock_rec = MagicMock()
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {cve: "EUVD-2021-34768"}
+            instance.get_mapping.return_value = {}
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_id") == "EUVD-2021-34768"
+        assert call_kwargs.get("euvd_known_exploited") is False
+        assert call_kwargs.get("commit") is False
+        MockTracker.complete.assert_called_once()
+
+    def test_run_sets_known_exploited_from_kev(self, client):
+        cve = "CVE-2021-44228"
+        target = self._capture_target(client, [cve])
+        mock_rec = MagicMock()
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {cve: "EUVD-2021-34768"}
+            instance.get_mapping.return_value = {
+                cve: {"euvd_id": "EUVD-2021-34768", "sources": ["cisa_kev"],
+                      "date_added": "2025-10-06"},
+            }
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_known_exploited") is True
+        assert call_kwargs.get("euvd_kev_sources") == ["cisa_kev"]
+        assert call_kwargs.get("euvd_date_added") == "2025-10-06"
+
+    def test_run_errors_when_mapping_empty(self, client):
+        target = self._capture_target(client, ["CVE-2021-44228"])
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {}
+            target()
+
+        MockTracker.error.assert_called_once()
+        MockTracker.complete.assert_not_called()
+
+    def test_run_skips_unmatched_cve(self, client):
+        target = self._capture_target(client, ["CVE-2099-0001"])
+        mock_rec = MagicMock()
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {"CVE-2021-44228": "EUVD-2021-34768"}
+            instance.get_mapping.return_value = {}
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        mock_rec.update_record.assert_not_called()
+        MockTracker.complete.assert_called_once()
+
+    def test_run_stops_and_commits_when_cancelled(self, client):
+        target = self._capture_target(client, ["CVE-2021-44228", "CVE-2021-22555"])
+        call_count = {"n": 0}
+
+        def fake_is_cancelled():
+            call_count["n"] += 1
+            return call_count["n"] > 1
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh._safe_commit") as mock_commit, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.side_effect = fake_is_cancelled
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {
+                "CVE-2021-44228": "EUVD-2021-34768",
+                "CVE-2021-22555": "EUVD-2021-9696",
+            }
+            instance.get_mapping.return_value = {}
+            target()
+
+        MockTracker.mark_cancelled.assert_called_once()
+        MockTracker.complete.assert_not_called()
+        mock_commit.assert_called()
+
+    def test_run_calls_error_on_outer_exception(self, client):
+        target = self._capture_target(client, ["CVE-2021-44228"])
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db"), \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            MockEuvd.return_value.get_full_mapping.side_effect = RuntimeError("boom")
+            target()
+
+        MockTracker.error.assert_called_once()
+
+
+class TestCancelEuvdRefreshEndpoint:
+
+    def test_returns_200_when_refresh_in_progress(self, client):
+        with patch(
+            "src.routes.bulk_refresh.EUVDProgressTracker.cancel",
+            return_value=True,
+        ):
+            resp = client.post("/api/vulnerabilities/cancel-euvd-refresh")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "cancelling"
+
+    def test_returns_409_when_no_refresh_in_progress(self, client):
+        with patch(
+            "src.routes.bulk_refresh.EUVDProgressTracker.cancel",
+            return_value=False,
+        ):
+            resp = client.post("/api/vulnerabilities/cancel-euvd-refresh")
+        assert resp.status_code == 409
+        assert "currently in progress" in resp.get_json()["error"]

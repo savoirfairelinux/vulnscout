@@ -10,10 +10,11 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkGhsaRefreshCancelHandler } from "../handlers/bulkRefresh";
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkGhsaRefreshCancelHandler, BulkEuvdRefreshHandler, BulkEuvdRefreshCancelHandler } from "../handlers/bulkRefresh";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import type { GHSAProgress } from "../handlers/ghsa_progress";
+import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -21,7 +22,7 @@ type Props = {
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
-    triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa', refreshActivity?: boolean) => void;
+    triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => void;
     hideBanner: () => void;
     variantId?: string;
     /** Origin variant when compare mode is active */
@@ -31,9 +32,10 @@ type Props = {
     nvdProgress?: NVDProgress | null;
     epssProgress?: EPSSProgress | null;
     ghsaProgress?: GHSAProgress | null;
+    euvdProgress?: EUVDProgress | null;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress, ghsaProgress} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress, ghsaProgress, euvdProgress} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -42,8 +44,9 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const [nvdCancelling, setNvdCancelling] = useState<boolean>(false)
     const [epssCancelling, setEpssCancelling] = useState<boolean>(false)
     const [ghsaCancelling, setGhsaCancelling] = useState<boolean>(false)
+    const [euvdCancelling, setEuvdCancelling] = useState<boolean>(false)
     const [refreshMenuOpen, setRefreshMenuOpen] = useState<boolean>(false)
-    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa'>>(new Set(['nvd', 'epss', 'ghsa']))
+    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa' | 'euvd'>>(new Set(['nvd', 'epss', 'ghsa', 'euvd']))
     const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
     const hasSelection = selectedVulns.length >= 1
@@ -87,6 +90,10 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     }, [ghsaProgress?.in_progress]);
 
     useEffect(() => {
+        if (!euvdProgress?.in_progress) setEuvdCancelling(false);
+    }, [euvdProgress?.in_progress]);
+
+    useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
             if (refreshMenuRef.current && !refreshMenuRef.current.contains(e.target as Node)) {
                 setRefreshMenuOpen(false);
@@ -98,7 +105,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         }
     }, [refreshMenuOpen]);
 
-    function toggleRefreshType(type: 'nvd' | 'epss' | 'ghsa') {
+    function toggleRefreshType(type: 'nvd' | 'epss' | 'ghsa' | 'euvd') {
         setSelectedRefreshTypes(prev => {
             const next = new Set(prev);
             if (next.has(type)) next.delete(type); else next.add(type);
@@ -109,6 +116,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     const nvdInProgress = nvdProgress?.in_progress ?? false;
     const epssInProgress = epssProgress?.in_progress ?? false;
     const ghsaInProgress = ghsaProgress?.in_progress ?? false;
+    const euvdInProgress = euvdProgress?.in_progress ?? false;
     const selectedGhsaIds = selectedVulns.filter(id => id.toUpperCase().startsWith('GHSA-'));
     const hasGhsaIds = selectedGhsaIds.length > 0;
     const selectedCveIds = selectedVulns.filter(id => id.toUpperCase().startsWith('CVE-'));
@@ -117,7 +125,8 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     // Number of selected targets that are not currently refreshing (actionable)
     const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds ? 1 : 0)
         + (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds ? 1 : 0)
-        + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0);
+        + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0)
+        + (selectedRefreshTypes.has('euvd') && !euvdInProgress && hasCveIds ? 1 : 0);
 
     const allSelectedRefreshing = selectedRefreshTypes.size === 0 || actionableRefreshCount === 0;
 
@@ -146,6 +155,14 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success', 'ghsa', true);
                     else triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa');
                 }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa'))
+            );
+        }
+        if (selectedRefreshTypes.has('euvd') && !euvdInProgress && hasCveIds) {
+            promises.push(
+                BulkEuvdRefreshHandler.trigger(selectedCveIds).then(res => {
+                    if (res) triggerBanner(`EUVD refresh started for ${res.total} CVE(s)`, 'success', 'euvd', true);
+                    else triggerBanner('Failed to start EUVD refresh', 'error', 'euvd');
+                }).catch(() => triggerBanner('Failed to start EUVD refresh', 'error', 'euvd'))
             );
         }
         if (promises.length > 0) setRefreshMenuOpen(false);
@@ -501,13 +518,13 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     <button
                         data-testid="refresh-dropdown-toggle"
                         className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
-                        disabled={!hasSelection && !(nvdInProgress || epssInProgress || ghsaInProgress)}
+                        disabled={!hasSelection && !(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress)}
                         onClick={() => setRefreshMenuOpen(o => !o)}
                         title="Select databases to fetch latest vulnerability data from"
                     >
-                        <FontAwesomeIcon icon={faArrowsRotate} className={(nvdInProgress || epssInProgress || ghsaInProgress) ? 'animate-spin' : ''} />
+                        <FontAwesomeIcon icon={faArrowsRotate} className={(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress) ? 'animate-spin' : ''} />
                         Refresh Vulnerability Data
-                        {(nvdInProgress || epssInProgress || ghsaInProgress) && (
+                        {(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress) && (
                             <span className="inline-block w-2 h-2 rounded-full bg-cyan-300 animate-pulse ml-0.5" title="Refresh in progress" />
                         )}
                         <FontAwesomeIcon icon={faChevronDown} className="ml-0.5 text-xs" />
@@ -622,6 +639,42 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                                                     }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); });
                                                 }}
                                             >{ghsaCancelling ? 'Cancelling…' : 'Cancel'}</button>
+                                        )}
+                                    </div>
+
+                                    {/* EUVD row */}
+                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
+                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
+                                            {euvdInProgress ? (
+                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="EUVD refresh in progress" />
+                                            ) : (
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label="EUVD"
+                                                    checked={selectedRefreshTypes.has('euvd')}
+                                                    onChange={() => toggleRefreshType('euvd')}
+                                                    disabled={!hasCveIds}
+                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                                />
+                                            )}
+                                            <span className={!hasCveIds && !euvdInProgress ? 'opacity-40' : ''}>
+                                                ENISA EUVD {!hasCveIds && !euvdInProgress && <span className="text-xs text-neutral-400">(no CVE selected)</span>}
+                                            </span>
+                                        </div>
+                                        {euvdInProgress && (
+                                            <button
+                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                                disabled={euvdCancelling}
+                                                title="Cancel in-progress EUVD refresh"
+                                                data-testid="cancel-euvd-refresh"
+                                                onClick={() => {
+                                                    setEuvdCancelling(true);
+                                                    BulkEuvdRefreshCancelHandler.trigger().then(res => {
+                                                        if (res) triggerBanner('EUVD refresh cancellation requested', 'success', 'euvd', true);
+                                                        else { setEuvdCancelling(false); triggerBanner('Failed to cancel EUVD refresh', 'error', 'euvd'); }
+                                                    }).catch(() => { setEuvdCancelling(false); triggerBanner('Failed to cancel EUVD refresh', 'error', 'euvd'); });
+                                                }}
+                                            >{euvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
                                         )}
                                     </div>
 

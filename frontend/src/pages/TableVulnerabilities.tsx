@@ -21,6 +21,8 @@ import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import GHSAProgressHandler from "../handlers/ghsa_progress";
 import type { GHSAProgress } from "../handlers/ghsa_progress";
+import EUVDProgressHandler from "../handlers/euvd_progress";
+import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
 
@@ -365,10 +367,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
+    const [euvdProgress, setEuvdProgress] = useState<EUVDProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
     const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
     const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
+    const [euvdBanner, setEuvdBanner] = useState<SourceBanner>(null);
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
@@ -404,6 +408,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const prevGhsaInProgress = useRef<boolean | null>(null);
     const prevGhsaPhase = useRef<string | null>(null);
     const prevGhsaStartedAt = useRef<string | null>(null);
+    const prevEuvdInProgress = useRef<boolean | null>(null);
+    const prevEuvdPhase = useRef<string | null>(null);
+    const prevEuvdStartedAt = useRef<string | null>(null);
     const hasFetchedProgressOnce = useRef(false);
 
     const keyboardShortcuts = [
@@ -448,13 +455,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
     useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
+    useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
 
     const fetchAllProgress = useCallback(async () => {
         const shouldPollGhsa = hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
-        const [nvd, epss, ghsa] = await Promise.allSettled([
+        const [nvd, epss, ghsa, euvd] = await Promise.allSettled([
             NVDProgressHandler.getProgress(),
             EPSSProgressHandler.getProgress(),
             shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
+            EUVDProgressHandler.getProgress(),
         ]);
         if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
         else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
@@ -462,6 +471,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         else console.error('Failed to fetch EPSS refresh progress:', epss.reason);
         if (ghsa.status === 'fulfilled') setGhsaProgress(ghsa.value);
         else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
+        if (euvd.status === 'fulfilled') setEuvdProgress(euvd.value);
+        else console.error('Failed to fetch EUVD refresh progress:', euvd.reason);
     }, [hasAnyGhsaVuln, ghsaProgress?.in_progress]);
 
     // Fetch once on mount so we can recover progress if a refresh was already running.
@@ -475,7 +486,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     // Poll only while any refresh is actively running.
     useEffect(() => {
         const anyInProgress = Boolean(
-            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress
+            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress || euvdProgress?.in_progress
         );
         if (!anyInProgress) {
             return;
@@ -486,17 +497,18 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         }, 3000);
 
         return () => clearInterval(interval);
-    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, fetchAllProgress]);
+    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, euvdProgress?.in_progress, fetchAllProgress]);
 
-    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
+    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, euvdBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa', refreshActivity?: boolean) => {
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
         else if (source === 'epss') setEpssBanner({ message, type });
         else if (source === 'ghsa') setGhsaBanner({ message, type });
+        else if (source === 'euvd') setEuvdBanner({ message, type });
         else setGeneralBanner({ message, type });
 
         // Refresh progress immediately when the caller signals a refresh has
@@ -512,6 +524,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setNvdBanner(null);
         setEpssBanner(null);
         setGhsaBanner(null);
+        setEuvdBanner(null);
         setGeneralBanner(null);
     };
 
@@ -628,6 +641,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'data_fetched_at': 'Last Fetched',
         'data_updated_at': 'Last Updated',
         'found_by': 'Sources',
+        'euvd': 'EU KEV',
         'actions': 'Actions'
     }), []);
 
@@ -1018,6 +1032,29 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ),
             enableSorting: false
             }),
+            columnHelper.accessor('euvd', {
+            id: 'euvd',
+            header: () => <div className="flex items-center justify-center">EU KEV</div>,
+            cell: info => {
+                const euvd = info.getValue();
+                if (!euvd?.known_exploited) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                            Known Exploited
+                        </span>
+                    </div>
+                );
+            },
+            sortingFn: (rowA, rowB) => {
+                const a = rowA.original.euvd?.known_exploited ? 1 : 0;
+                const b = rowB.original.euvd?.known_exploited ? 1 : 0;
+                return a - b;
+            },
+            size: 110
+            }),
             columnHelper.accessor(row => row, {
                 id: 'actions',
                 header: 'Actions',
@@ -1353,7 +1390,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'First Scan Date',
                     'Last Fetched',
                     'Last Updated',
-                    'Sources'
+                    'Sources',
+                    'EU KEV'
                 ]}
                 selected={visibleColumns}
                 setSelected={setVisibleColumns}
@@ -1609,6 +1647,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             nvdProgress={nvdProgress}
             epssProgress={epssProgress}
             ghsaProgress={ghsaProgress}
+            euvdProgress={euvdProgress}
         />
 
         <TableGeneric

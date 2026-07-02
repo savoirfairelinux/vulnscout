@@ -1240,6 +1240,28 @@ type VariantScopedSnapshot = {
                                     <span className="font-bold mr-1">Aliases:</span>
                                     <code>{vuln.aliases.join(', ')}</code>
                                 </li>
+                                {vuln.euvd?.id && (
+                                    <li key="euvd">
+                                        <span className="font-bold mr-1">ENISA EUVD:</span>
+                                        {vuln.euvd.url ? (
+                                            <a
+                                                href={vuln.euvd.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-blue-400 hover:underline"
+                                            >
+                                                <code>{vuln.euvd.id}</code>
+                                            </a>
+                                        ) : (
+                                            <code>{vuln.euvd.id}</code>
+                                        )}
+                                        {vuln.euvd.known_exploited && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                                                EU KEV — Known Exploited
+                                            </span>
+                                        )}
+                                    </li>
+                                )}
                                 <li key="related_vulns">
                                     <span className="font-bold mr-1">Related vulnerabilities:</span>
                                     <code>{vuln.related_vulnerabilities.join(', ')}</code>

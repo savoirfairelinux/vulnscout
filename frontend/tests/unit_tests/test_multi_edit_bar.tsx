@@ -26,10 +26,16 @@ jest.mock('../../src/handlers/bulkRefresh', () => ({
     BulkGhsaRefreshCancelHandler: {
         trigger: jest.fn(),
     },
+    BulkEuvdRefreshHandler: {
+        trigger: jest.fn().mockResolvedValue({ status: 'success', total: 0 }),
+    },
+    BulkEuvdRefreshCancelHandler: {
+        trigger: jest.fn().mockResolvedValue(null),
+    },
 }));
 
 import MultiEditBar from '../../src/components/MultiEditBar';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler } from '../../src/handlers/bulkRefresh';
+import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkEuvdRefreshHandler, BulkEuvdRefreshCancelHandler } from '../../src/handlers/bulkRefresh';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 
 describe('MultiEditBar', () => {
@@ -317,9 +323,11 @@ describe('MultiEditBar', () => {
         const mockHideBanner = jest.fn();
         const mockBulkNvdTrigger = BulkNvdRefreshHandler.trigger as jest.Mock;
         const mockBulkEpssTrigger = BulkEpssRefreshHandler.trigger as jest.Mock;
+        const mockBulkEuvdTrigger = BulkEuvdRefreshHandler.trigger as jest.Mock;
 
         mockBulkNvdTrigger.mockResolvedValue({ status: 'success', total: 2 });
         mockBulkEpssTrigger.mockResolvedValue({ status: 'success', total: 2 });
+        mockBulkEuvdTrigger.mockResolvedValue({ status: 'success', total: 2 });
 
         const props = {
             ...mockProps,
@@ -330,7 +338,7 @@ describe('MultiEditBar', () => {
 
         render(<MultiEditBar {...props} />);
 
-        // Open the refresh dropdown, then click the trigger button (both NVD and EPSS selected by default)
+        // Open the refresh dropdown, then click the trigger button (NVD, EPSS, and EUVD selected by default)
         await act(async () => {
             await userEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
         });
@@ -341,11 +349,13 @@ describe('MultiEditBar', () => {
         await waitFor(() => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('NVD refresh started for 2 CVE(s)', 'success', 'nvd', true);
             expect(mockTriggerBanner).toHaveBeenCalledWith('EPSS refresh started for 2 CVE(s)', 'success', 'epss', true);
+            expect(mockTriggerBanner).toHaveBeenCalledWith('EUVD refresh started for 2 CVE(s)', 'success', 'euvd', true);
         });
 
         expect(mockHideBanner).toHaveBeenCalledTimes(1);
         expect(mockBulkNvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
         expect(mockBulkEpssTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
+        expect(mockBulkEuvdTrigger).toHaveBeenCalledWith(['CVE-2024-0001', 'CVE-2024-0002']);
     });
 
     test('does not trigger NVD refresh when NVD is already in progress', async () => {
@@ -1111,6 +1121,9 @@ describe('MultiEditBar', () => {
         await act(async () => {
             await userEvent.click(screen.getByRole('checkbox', { name: /EPSS/i }));
         });
+        await act(async () => {
+            await userEvent.click(screen.getByRole('checkbox', { name: /EUVD/i }));
+        });
         expect(screen.getByRole('button', { name: /^Start$/i })).toBeDisabled();
     });
 
@@ -1327,6 +1340,44 @@ describe('MultiEditBar', () => {
             expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EPSS refresh', 'error', 'epss');
         });
         expect(screen.getByTestId('cancel-epss-refresh')).not.toBeDisabled();
+    });
+
+    test('Cancel EUVD: shows error banner and resets cancelling when trigger returns null', async () => {
+        const mockTriggerBanner = jest.fn();
+        (BulkEuvdRefreshCancelHandler.trigger as jest.Mock).mockResolvedValue(null);
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['CVE-2024-0001'],
+            euvdProgress: { in_progress: true, phase: 'bulk_euvd_refresh', current: 1, total: 10, message: '' },
+            triggerBanner: mockTriggerBanner,
+        };
+        render(<MultiEditBar {...props} />);
+        await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
+        await act(async () => { await userEvent.click(screen.getByTestId('cancel-euvd-refresh')); });
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EUVD refresh', 'error', 'euvd');
+        });
+        expect(screen.getByTestId('cancel-euvd-refresh')).not.toBeDisabled();
+    });
+
+    test('Cancel EUVD: shows error banner and resets cancelling when trigger throws', async () => {
+        const mockTriggerBanner = jest.fn();
+        (BulkEuvdRefreshCancelHandler.trigger as jest.Mock).mockRejectedValue(new Error('network'));
+
+        const props = {
+            ...mockProps,
+            selectedVulns: ['CVE-2024-0001'],
+            euvdProgress: { in_progress: true, phase: 'bulk_euvd_refresh', current: 1, total: 10, message: '' },
+            triggerBanner: mockTriggerBanner,
+        };
+        render(<MultiEditBar {...props} />);
+        await act(async () => { await userEvent.click(screen.getByTestId('refresh-dropdown-toggle')); });
+        await act(async () => { await userEvent.click(screen.getByTestId('cancel-euvd-refresh')); });
+        await waitFor(() => {
+            expect(mockTriggerBanner).toHaveBeenCalledWith('Failed to cancel EUVD refresh', 'error', 'euvd');
+        });
+        expect(screen.getByTestId('cancel-euvd-refresh')).not.toBeDisabled();
     });
 
     // ---- addAssessment: errors array and catch paths (using variantId to bypass listByVuln) ----

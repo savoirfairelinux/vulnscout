@@ -62,6 +62,13 @@ type Vulnerability = {
     fix: {
         state: string;
     };
+    euvd?: {
+        id: string | null;
+        known_exploited: boolean;
+        sources: string[];
+        date_added: string | null;
+        url: string | null;
+    };
     simplified_status: string;
     status_summary?: StatusSummary;
     assessments: Assessment[];
@@ -258,6 +265,15 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.data_fetched_at === "string") vuln.data_fetched_at = data.data_fetched_at
     if (typeof data?.data_updated_at === "string") vuln.data_updated_at = data.data_updated_at
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
+    if (data?.euvd && typeof data.euvd === "object") {
+        vuln.euvd = {
+            id: typeof data.euvd.id === "string" ? data.euvd.id : null,
+            known_exploited: Boolean(data.euvd.known_exploited),
+            sources: asStringArray(data.euvd.sources),
+            date_added: typeof data.euvd.date_added === "string" ? data.euvd.date_added : null,
+            url: typeof data.euvd.url === "string" ? data.euvd.url : null,
+        }
+    }
     return vuln
 }
 
