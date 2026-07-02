@@ -43,6 +43,8 @@ type ReviewRow = Assessment & {
     _allIds: string[];
     /** All variant IDs merged into this group. */
     _variantIds: string[];
+    /** Raw assessments merged into this group (for per-variant/package edits). */
+    _assessments: Assessment[];
     /** Unique supplier display names extracted from packages (for search). */
     extractedSuppliers: string[];
 };
@@ -60,6 +62,7 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
     const groups = new Map<string, Assessment>();
     const allIds = new Map<string, string[]>();
     const variantIds = new Map<string, Set<string>>();
+    const rawAssessments = new Map<string, Assessment[]>();
     for (const a of assessments) {
         const key = [
             a.vuln_id,
@@ -77,10 +80,12 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
             // Keep the most recent timestamp
             if (a.timestamp > existing.timestamp) existing.timestamp = a.timestamp;
             allIds.get(key)!.push(a.id);
+            rawAssessments.get(key)!.push(a);
             if (a.variant_id) variantIds.get(key)!.add(a.variant_id);
         } else {
             groups.set(key, { ...a, packages: [...a.packages] });
             allIds.set(key, [a.id]);
+            rawAssessments.set(key, [a]);
             const vs = new Set<string>();
             if (a.variant_id) vs.add(a.variant_id);
             variantIds.set(key, vs);
@@ -90,6 +95,7 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
     for (const [key, group] of groups) {
         (group as any)._allIds = allIds.get(key)!;
         (group as any)._variantIds = [...variantIds.get(key)!];
+        (group as any)._assessments = rawAssessments.get(key)!;
         result.push(group);
     }
     return result;
@@ -501,22 +507,101 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
+
+        // Share a single timestamp across all rows created in this edit action.
+        const editSharedTimestamp = new Date().toISOString();
+
+        // Target (package × variant) combos from the form selection.
+        const targetVariantIds: Array<string | undefined> =
+            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : [undefined];
+        const targetPackages: string[] =
+            data.packages && data.packages.length > 0 ? data.packages : editingRow.packages;
+
+        // Existing group assessments indexed by (package, variant) key.
+        const existingByKey = new Map<string, Assessment>();
+        for (const a of editingRow._assessments) {
+            const pkg = a.packages[0] ?? '';
+            const vid = a.variant_id ?? '';
+            existingByKey.set(`${pkg}::${vid}`, a);
+        }
+
+        // Desired set of (package, variant) keys after the edit.
+        const targetKeys = new Set<string>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                targetKeys.add(`${pkg}::${vid ?? ''}`);
+            }
+        }
+
         let anyError = false;
-        for (const id of editingRow._allIds) {
+
+        // 1. Update combos that persist, delete combos that were deselected.
+        for (const [key, existing] of existingByKey) {
             try {
+                if (targetKeys.has(key)) {
+                    const res = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
+                        {
+                            method: 'PUT',
+                            mode: 'cors',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                status: data.status,
+                                justification: data.justification,
+                                impact_statement: data.impact_statement,
+                                status_notes: data.status_notes,
+                                workaround: data.workaround,
+                            }),
+                        }
+                    );
+                    if (!res.ok) anyError = true;
+                } else {
+                    const res = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
+                        { method: 'DELETE', mode: 'cors' }
+                    );
+                    if (!res.ok) anyError = true;
+                }
+            } catch {
+                anyError = true;
+            }
+        }
+
+        // 2. Create newly-selected combos — batch packages per variant so the
+        //    new rows share one timestamp.
+        const newPkgsByVariant = new Map<string | undefined, string[]>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                const key = `${pkg}::${vid ?? ''}`;
+                if (!existingByKey.has(key)) {
+                    const arr = newPkgsByVariant.get(vid) ?? [];
+                    arr.push(pkg);
+                    newPkgsByVariant.set(vid, arr);
+                }
+            }
+        }
+
+        for (const [vid, pkgs] of newPkgsByVariant) {
+            if (pkgs.length === 0) continue;
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: editingRow.vuln_id,
+                    packages: pkgs,
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround,
+                    timestamp: editSharedTimestamp,
+                };
+                if (vid) body.variant_id = vid;
                 const res = await fetch(
-                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
+                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(editingRow.vuln_id)}/assessments`,
                     {
-                        method: 'PUT',
+                        method: 'POST',
                         mode: 'cors',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            status: data.status,
-                            justification: data.justification,
-                            impact_statement: data.impact_statement,
-                            status_notes: data.status_notes,
-                            workaround: data.workaround,
-                        }),
+                        body: JSON.stringify(body),
                     }
                 );
                 if (!res.ok) anyError = true;
@@ -524,6 +609,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 anyError = true;
             }
         }
+
         if (!anyError) {
             const updated = await Assessments.listReview(variantId, projectId);
             setAssessments(groupAssessments(updated));
@@ -1124,6 +1210,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[a.vuln_id] ?? [],
                             _allIds: (a as any)._allIds ?? [a.id],
                             _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                            _assessments: (a as any)._assessments ?? [a],
                             extractedSuppliers: [...new Set(
                                 a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
                             )],
