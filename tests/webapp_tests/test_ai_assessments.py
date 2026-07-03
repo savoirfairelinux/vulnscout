@@ -119,3 +119,34 @@ def test_non_ai_post_not_blocked_by_pending_ai(client):
         },
     )
     assert resp.status_code == 200
+
+
+def _get_first_ai_id(client):
+    body = json.loads(_post_ai(client).data)
+    return body["assessment"]["id"]
+
+
+def test_approve_promotes_group_to_custom(client):
+    aid = _get_first_ai_id(client)
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+    body = json.loads(resp.data)
+    assert all(a["origin"] == "custom" for a in body["assessments"])
+    # now visible in the list feed
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
+
+
+def test_approve_missing_returns_404(client):
+    resp = client.post(f"/api/assessments/{uuid.uuid4()}/approve")
+    assert resp.status_code == 404
+
+
+def test_approve_non_ai_returns_400(client):
+    # create a normal custom assessment
+    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
+    })
+    custom_id = json.loads(r.data)["assessment"]["id"]
+    resp = client.post(f"/api/assessments/{custom_id}/approve")
+    assert resp.status_code == 400

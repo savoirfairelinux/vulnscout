@@ -828,6 +828,21 @@ def init_app(app: Flask) -> None:
         _save_openvex()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
+    @app.route("/api/assessments/<assessment_id>/approve", methods=["POST"])
+    def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
+            return {"error": "Assessment not found"}, 404
+        if existing.origin != "ai":
+            return {"error": "Not a pending AI assessment"}, 400
+        group = _pending_ai_group(existing)
+        approved = []
+        for row in group:
+            row.update(origin="custom")
+            approved.append(row.to_dict())
+        _save_openvex()
+        return {"status": "success", "assessments": approved}, 200
+
 
 def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":
     """
