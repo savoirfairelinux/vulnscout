@@ -53,6 +53,24 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
 
+// Tailwind classes for a simplified-status badge, matching the palette used
+// across the app (red = exploitable, amber = pending, green = not affected).
+const statusBadgeClass = (status: string): string => {
+    switch (status) {
+        case 'Exploitable':
+            return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300';
+        case 'Pending Assessment':
+            return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300';
+        case 'Not affected':
+            return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+        case 'Fixed':
+            return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+        default:
+            return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    }
+};
+
+
 
 type AssessmentGroup = {
     key: string;
@@ -722,6 +740,16 @@ type VariantScopedSnapshot = {
     };
 
     const groupedAssessments = groupAssessments(vuln.assessments);
+    const currentStatusByVariant = availableVariants
+        .map(variant => {
+            const latest = allVulnAssessments
+                .filter(a => a.variant_id === variant.id)
+                .reduce<Assessment | null>((best, a) => {
+                    if (!best) return a;
+                    return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
+                }, null);
+            return { variant, assessment: latest };
+        });
 
     const bothRefreshed = isGhsaVuln
         ? refreshedList.includes('GHSA')
@@ -1320,6 +1348,46 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <h3 className="font-bold mb-2">Assessments</h3>
+                            {currentStatusByVariant.length > 0 && (
+                                <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Current status by variant</h4>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm text-left border-collapse">
+                                            <thead>
+                                                <tr className="text-gray-400 border-b border-gray-600">
+                                                    <th className="py-1 pr-3 font-semibold">Variant</th>
+                                                    <th className="py-1 pr-3 font-semibold">Status</th>
+                                                    <th className="py-1 pr-3 font-semibold">Justification</th>
+                                                    <th className="py-1 pr-3 font-semibold">Impact</th>
+                                                    <th className="py-1 pr-3 font-semibold">Notes</th>
+                                                    <th className="py-1 font-semibold">Workaround</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {currentStatusByVariant.map(({ variant, assessment }) => (
+                                                    <tr key={variant.id} className="border-b border-gray-700 last:border-0 align-top">
+                                                        <td className="py-1.5 pr-3">
+                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 whitespace-nowrap">
+                                                                {variant.name}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-1.5 pr-3">
+                                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${statusBadgeClass(assessment?.simplified_status ?? 'No status')}`}>
+                                                                {assessment?.simplified_status ?? 'No status'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.justification || '—'}</td>
+                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.impact_statement || '—'}</td>
+                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.status_notes || '—'}</td>
+                                                        <td className="py-1.5 text-gray-300 whitespace-pre-line">{assessment?.workaround || '—'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+                            <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
                             <ol className="relative border-s border-gray-800">
                                 {isEditing && (
                                     <li className="ms-4 text-white pb-8">

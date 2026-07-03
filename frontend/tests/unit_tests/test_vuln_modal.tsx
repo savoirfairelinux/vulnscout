@@ -2145,9 +2145,79 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Wait for variant tags to render
-        await screen.findByText('Production');
-        expect(screen.getByText('Staging')).toBeInTheDocument();
+        // Wait for variant tags to render (variant names now appear both in the
+        // per-variant recap and on the assessment history entries)
+        expect((await screen.findAllByText('Production')).length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Staging').length).toBeGreaterThan(0);
+    });
+
+    test('recap shows the latest status for each variant', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // var-1 has two assessments; the most recent one is "Not affected".
+        // var-2 has a single "Exploitable" assessment.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1-old', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v1-new', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'not_affected', simplified_status: 'Not affected', justification: 'vulnerable_code_not_present',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v2', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-2'
+            }
+        ]));
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const recapHeading = await screen.findByText('Current status by variant');
+        const recap = recapHeading.parentElement as HTMLElement;
+        // Production reflects its most recent assessment (Not affected), not the older Exploitable
+        expect(within(recap).getByText('Production')).toBeInTheDocument();
+        expect(within(recap).getByText('Not affected')).toBeInTheDocument();
+        // Staging is Exploitable
+        expect(within(recap).getByText('Staging')).toBeInTheDocument();
+        expect(within(recap).getByText('Exploitable')).toBeInTheDocument();
+    });
+
+    test('recap shows "No status" for affected variants without an assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // Only var-1 has an assessment; var-2 is affected but not yet assessed.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            }
+        ]));
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const recapHeading = await screen.findByText('Current status by variant');
+        const recap = recapHeading.parentElement as HTMLElement;
+        // Staging has no assessment yet, so it is flagged as "No status"
+        expect(within(recap).getByText('Staging')).toBeInTheDocument();
+        expect(within(recap).getByText('No status')).toBeInTheDocument();
+        // Production keeps its actual status
+        expect(within(recap).getByText('Production')).toBeInTheDocument();
+        expect(within(recap).getByText('Exploitable')).toBeInTheDocument();
     });
 
     test('projectId prop filters variants to only show those from the current project', async () => {
