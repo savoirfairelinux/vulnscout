@@ -68,6 +68,9 @@ function TableGeneric<DataType> ({
         });
     }, [fuseKeys, data]);
 
+    const forAllValuesRef = useRef(forAllValues);
+    forAllValuesRef.current = forAllValues;
+
     const filteredData = useMemo(() => {
         const buildFuseQuery = (raw: string) => {
             // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
@@ -104,9 +107,10 @@ function TableGeneric<DataType> ({
 
         // Extract `only:<text>` clauses when the consumer opts in via
         // forAllValues.
+        const forAll = forAllValuesRef.current;
         let effectiveSearch = search ?? '';
         const onlyClauses: RegExp[] = [];
-        if (forAllValues && effectiveSearch) {
+        if (forAll && effectiveSearch) {
             const residual: string[] = [];
             for (const token of effectiveSearch.split(/\s+/)) {
                 const match = /^only:(.+)$/i.exec(token);
@@ -131,16 +135,16 @@ function TableGeneric<DataType> ({
             result = data;
         }
 
-        if (onlyClauses.length > 0 && forAllValues) {
+        if (onlyClauses.length > 0 && forAll) {
             result = result.filter(item => {
-                const values = forAllValues(item);
+                const values = forAll(item);
                 if (values.length === 0) return false; // nothing affected → cannot satisfy "every"
                 return onlyClauses.every(regex => values.every(value => regex.test(value)));
             });
         }
 
         return result;
-    }, [search, fuse, data, fuseKeys, forAllValues]);
+    }, [search, fuse, data, fuseKeys]);
 
     const paginationSizes = useMemo(() => {
         const total = filteredData.length;

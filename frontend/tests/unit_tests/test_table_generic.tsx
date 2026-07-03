@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
+import { useState } from 'react';
 
 import TableGeneric from '../../src/components/TableGeneric';
 
@@ -516,5 +517,123 @@ describe('TableGeneric only:<regex> operator (forAllValues)', () => {
     // "g++" is not a valid regex → treated as the literal string "g++"
     expect(await screen.findByRole('cell', { name: /^cppA$/ })).toBeInTheDocument();
     expect(screen.queryByRole('cell', { name: /^cppB$/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('TableGeneric filteredData stability (blink regression)', () => {
+  type PkgRow = { id: string; packages: string[] };
+
+  const pkgColumns = [
+    {
+      accessorKey: 'id',
+      header: 'ID',
+      cell: (info: any) => info.getValue(),
+      size: 200,
+    },
+  ];
+
+  const stableData: PkgRow[] = [
+    { id: 'vulnA', packages: ['linux-yocto-native', 'busybox-native'] },
+    { id: 'vulnB', packages: ['linux-yocto', 'busybox-native'] },
+  ];
+
+  // Reference-stable so only forAllValues identity varies between renders,
+  // isolating the regression the fix targets.
+  const stableFuseKeys = ['id', 'packages'];
+
+  // Harness that mimics how real tables pass forAllValues: as an inline arrow
+  // whose identity changes on every render. A "bump" button forces an unrelated
+  // re-render (e.g. showing a hover tooltip) without touching search/data.
+  function Harness({ probe }: { probe: (row: PkgRow) => void }) {
+    const [, setBump] = useState(0);
+    return (
+      <>
+        <button onClick={() => setBump(n => n + 1)}>bump</button>
+        <TableGeneric<PkgRow>
+          columns={pkgColumns}
+          data={stableData}
+          fuseKeys={stableFuseKeys}
+          // New identity on every render, delegating to a stable probe so we can
+          // count how many times the filter memo actually evaluated the rows.
+          forAllValues={(row) => { probe(row); return row.packages; }}
+          search="only:-native"
+          tableHeight="auto"
+          hasPagination={false}
+        />
+      </>
+    );
+  }
+
+  test('does not recompute filtered rows when only forAllValues identity changes', async () => {
+    const probe = jest.fn();
+
+    render(<Harness probe={probe} />);
+
+    // Initial filter settles: only:-native keeps vulnA (all packages -native).
+    await waitFor(() => {
+      expect(screen.getByRole('cell', { name: /^vulnA$/ })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
+
+    // Filter memo ran at least once, invoking forAllValues for each row.
+    expect(probe.mock.calls.length).toBeGreaterThan(0);
+    const probeCallsAfterMount = probe.mock.calls.length;
+
+    // Trigger several unrelated re-renders (each supplies a fresh forAllValues arrow).
+    const user = userEvent.setup();
+    const bumpBtn = screen.getByRole('button', { name: 'bump' });
+    await user.click(bumpBtn);
+    await user.click(bumpBtn);
+    await user.click(bumpBtn);
+
+    // The filtered result must not be recomputed: forAllValues is not called
+    // again just because its identity (or an unrelated state) changed.
+    expect(probe.mock.calls.length).toBe(probeCallsAfterMount);
+
+    // The filter is still correct after the churn.
+    expect(screen.getByRole('cell', { name: /^vulnA$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
+  });
+
+  test('uses the latest forAllValues closure when the filter recomputes', async () => {
+    // The fix stores forAllValues in a ref; when search actually changes, the
+    // memo must read the current closure, not a stale one.
+    function ClosureHarness() {
+      const [invert, setInvert] = useState(false);
+      const [search, setSearch] = useState('only:-native');
+      return (
+        <>
+          <button onClick={() => { setInvert(true); setSearch('only:native'); }}>swap</button>
+          <TableGeneric<PkgRow>
+            columns={pkgColumns}
+            data={stableData}
+            fuseKeys={['id', 'packages']}
+            // Latest closure flips the values it exposes for the only: check.
+            forAllValues={(row) => invert ? row.packages.map(p => p.replace('-native', '')) : row.packages}
+            search={search}
+            tableHeight="auto"
+            hasPagination={false}
+          />
+        </>
+      );
+    }
+
+    render(<ClosureHarness />);
+
+    // only:-native + original closure → vulnA kept.
+    await waitFor(() => {
+      expect(screen.getByRole('cell', { name: /^vulnA$/ })).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'swap' }));
+
+    // After swap: search only:native + inverted closure (which strips "-native"),
+    // so no package contains "native" → vulnA is now excluded. This only holds if
+    // the memo read the updated closure via the ref.
+    await waitFor(() => {
+      expect(screen.queryByRole('cell', { name: /^vulnA$/ })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
   });
 });
