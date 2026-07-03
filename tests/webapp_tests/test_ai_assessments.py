@@ -244,6 +244,27 @@ def test_reject_non_ai_returns_400(client):
     assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
 
 
+def test_ai_excluded_from_list_all_formats(client):
+    _post_ai(client)
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert all(a["origin"] != "ai" for a in listed)
+    as_dict = json.loads(client.get("/api/assessments?format=dict").data)
+    assert all(a["origin"] != "ai" for a in as_dict.values())
+
+
+def test_ai_excluded_from_list_by_variant(client):
+    _post_ai(client)
+    listed = json.loads(client.get(
+        f"/api/assessments?format=list&variant_id={VARIANT_UUID}").data)
+    assert all(a["origin"] != "ai" for a in listed)
+
+
+def test_ai_visible_on_per_vuln_endpoint(client):
+    _post_ai(client)
+    data = json.loads(client.get(f"/api/vulnerabilities/{VULN_ID}/assessments").data)
+    assert any(a["origin"] == "ai" for a in data)
+
+
 def test_patch_ai_row_returns_400(client):
     aid = _get_first_ai_id(client)
     resp = client.patch(

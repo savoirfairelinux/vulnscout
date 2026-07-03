@@ -157,6 +157,7 @@ def init_app(app: Flask) -> None:
                 assessments = []
         else:
             assessments = [a.to_dict() for a in _get_all_db_assessments()]
+        assessments = [a for a in assessments if a.get("origin") != "ai"]
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments
