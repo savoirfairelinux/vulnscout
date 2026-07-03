@@ -287,3 +287,27 @@ def test_delete_ai_row_returns_400(client):
     assert json.loads(resp.data)["error"] == (
         "Use the AI approve/reject endpoints for pending AI assessments"
     )
+
+
+def _openvex_statements(client):
+    from src.views.openvex import OpenVex
+    from src.controllers.cache import ControllersCache
+    with client.application.app_context():
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
+        return OpenVex(ctrls).to_dict().get("statements", [])
+
+
+def test_pending_ai_excluded_from_openvex_export(client):
+    before = json.dumps(_openvex_statements(client), sort_keys=True)
+
+    aid = _get_first_ai_id(client)
+
+    pending = json.dumps(_openvex_statements(client), sort_keys=True)
+    assert pending == before
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+
+    approved = json.dumps(_openvex_statements(client), sort_keys=True)
+    assert approved != before
