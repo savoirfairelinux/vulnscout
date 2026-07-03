@@ -70,6 +70,39 @@ const statusBadgeClass = (status: string): string => {
     }
 };
 
+const originLabel = (origin: string): string => {
+    switch (origin) {
+        case 'custom':
+            return 'User';
+        case 'sbom':
+            return 'SBOM';
+        default:
+            return origin ? formatSourceName(origin) : 'Unknown';
+    }
+};
+
+const originBadgeClass = (origin: string): string => {
+    switch (origin) {
+        case 'custom':
+            return 'bg-slate-200 text-slate-800 dark:bg-slate-600 dark:text-slate-100';
+        case 'sbom':
+            return 'bg-blue-200 text-blue-900 dark:bg-blue-800 dark:text-blue-100';
+        case 'scc':
+            return 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-300';
+        case 'grype':
+            return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300';
+        case 'yocto_cve_check':
+            return 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300';
+        case 'nvd':
+        case 'nvd_cpe':
+            return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300';
+        case 'osv':
+            return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+        default:
+            return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    }
+};
+
 
 
 type AssessmentGroup = {
@@ -1412,11 +1445,19 @@ type VariantScopedSnapshot = {
                                     const firstAssess = group.assessments[0]; // Use first assessment for content
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
+                                    const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
 
                                     return (
                                         <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
-                                            <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
+                                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                                <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
+                                                {groupOrigins.map(origin => (
+                                                    <span key={origin} className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${originBadgeClass(origin)}`} title={`Assessment origin: ${origin}`}>
+                                                        {originLabel(origin)}
+                                                    </span>
+                                                ))}
+                                            </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);

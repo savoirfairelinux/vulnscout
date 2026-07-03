@@ -148,7 +148,40 @@ describe('Vulnerability Modal', () => {
         expect(impact).toBeInTheDocument();
         expect(status_notes).toBeInTheDocument();
         expect(workaround).toBeInTheDocument();
+        // The assessment origin ("custom") is surfaced as a "User" tag
+        expect(screen.getByText('User')).toBeInTheDocument();
     })
+
+    test('assessment history tags an SBOM-sourced assessment', async () => {
+        const sbomVuln = {
+            ...vulnerability,
+            assessments: [{
+                ...vulnerability.assessments[0],
+                id: 'assessment-sbom',
+                origin: 'sbom'
+            }]
+        };
+        render(<VulnModal vuln={sbomVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByText('SBOM')).toBeInTheDocument();
+        expect(screen.queryByText('User')).not.toBeInTheDocument();
+    })
+
+    test('assessment history shows sbom-cve-check for the scc origin', async () => {
+        const sccVuln = {
+            ...vulnerability,
+            assessments: [{
+                ...vulnerability.assessments[0],
+                id: 'assessment-scc',
+                origin: 'scc'
+            }]
+        };
+        render(<VulnModal vuln={sccVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByText('sbom-cve-check')).toBeInTheDocument();
+        expect(screen.queryByText('Scc')).not.toBeInTheDocument();
+    })
+
 
     test('closing button', async () => {
         // ARRANGE
