@@ -242,3 +242,27 @@ def test_reject_non_ai_returns_400(client):
     })
     custom_id = json.loads(r.data)["assessment"]["id"]
     assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
+
+
+def test_patch_ai_row_returns_400(client):
+    aid = _get_first_ai_id(client)
+    resp = client.patch(
+        f"/api/assessments/{aid}",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+        },
+    )
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == (
+        "Use the AI approve/reject endpoints for pending AI assessments"
+    )
+
+
+def test_delete_ai_row_returns_400(client):
+    aid = _get_first_ai_id(client)
+    resp = client.delete(f"/api/assessments/{aid}")
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == (
+        "Use the AI approve/reject endpoints for pending AI assessments"
+    )

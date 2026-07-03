@@ -777,6 +777,9 @@ def init_app(app: Flask) -> None:
         if existing is None:
             return {"error": "Assessment not found"}, 404
 
+        if existing.origin == "ai":
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
+
         # Reconstruct Assessment DTO for validation
         mem_assess = DBAssessment.from_dict(existing.to_dict())
 
@@ -824,6 +827,8 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        if existing.origin == "ai":
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
         existing.delete()
         _save_openvex()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
