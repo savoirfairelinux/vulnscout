@@ -837,9 +837,10 @@ def init_app(app: Flask) -> None:
             return {"error": "Not a pending AI assessment"}, 400
         group = _pending_ai_group(existing)
         approved = []
-        for row in group:
-            row.update(origin="custom")
-            approved.append(row.to_dict())
+        with batch_session():
+            for row in group:
+                row.update(origin="custom")
+                approved.append(row.to_dict())
         _save_openvex()
         return {"status": "success", "assessments": approved}, 200
 
