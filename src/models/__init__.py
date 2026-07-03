@@ -18,3 +18,5 @@ from .cvss import CVSS
 from .sbom_observation import SBOMObservation
 from .iso8601_duration import Iso8601Duration
 from .vuln_refresh import VulnRefresh
+from .project_context import ProjectContext
+from .variant_context import VariantContext, ContextFile
