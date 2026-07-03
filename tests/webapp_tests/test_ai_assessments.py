@@ -192,3 +192,53 @@ def test_approve_non_ai_returns_400(client):
     custom_id = json.loads(r.data)["assessment"]["id"]
     resp = client.post(f"/api/assessments/{custom_id}/approve")
     assert resp.status_code == 400
+
+
+def test_reject_deletes_group(client):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    aid = body["assessment"]["id"]
+    ids = {a["id"] for a in body["assessments"]}
+
+    resp = client.post(f"/api/assessments/{aid}/reject")
+
+    assert resp.status_code == 200
+    assert len(body["assessments"]) >= 2
+    assert set(json.loads(resp.data)["deleted"]) == ids
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert not (ids & {a["id"] for a in listed})
+
+
+def test_reject_group_delete_is_atomic(client, app, monkeypatch):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    ids = [row["id"] for row in body["assessments"]]
+
+    original_delete = DBAssessment.delete
+    call_count = 0
+
+    def flaky_delete(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("boom")
+        return original_delete(self, *args, **kwargs)
+
+    monkeypatch.setattr(DBAssessment, "delete", flaky_delete)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(f"/api/assessments/{ids[0]}/reject")
+
+    with app.app_context():
+        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
+        assert all(row is not None and row.origin == "ai" for row in reloaded)
+
+
+def test_reject_missing_returns_404(client):
+    assert client.post(f"/api/assessments/{uuid.uuid4()}/reject").status_code == 404
+
+
+def test_reject_non_ai_returns_400(client):
+    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
+    })
+    custom_id = json.loads(r.data)["assessment"]["id"]
+    assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
