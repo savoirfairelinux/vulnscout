@@ -342,3 +342,17 @@ def test_pending_ai_excluded_from_scan_diff(client):
     assert data["assessments_added"] == []
     assert data["assessments_unchanged"] == []
     assert data["assessments_removed"] == []
+
+
+def test_pending_ai_excluded_from_scan_global_result(client):
+    baseline = json.loads(client.get(f"/api/scans/{SCAN_UUID}/global-result").data)
+    assert baseline["vulnerabilities"]
+    assert any(v["vulnerability_id"] == VULN_ID for v in baseline["vulnerabilities"])
+    assert baseline["assessment_count"] == 0
+    assert baseline["assessments"] == []
+
+    _post_ai(client)
+
+    data = json.loads(client.get(f"/api/scans/{SCAN_UUID}/global-result").data)
+    assert data["assessment_count"] == 0
+    assert data["assessments"] == []
