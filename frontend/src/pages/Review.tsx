@@ -18,6 +18,7 @@ import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import Packages from '../handlers/packages';
 import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
@@ -134,6 +135,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [projectNames, setProjectNames] = useState<Record<string, string>>({});
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
+    const [editVariants, setEditVariants] = useState<Variant[]>([]);
+    const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
@@ -180,6 +183,47 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setProjectNames(map);
         }).catch(() => {});
     }, []);
+
+    // When editing a row, only offer variants that actually have a finding for
+    // this CVE (optionally scoped to the current project), instead of every
+    // variant in the database.
+    useEffect(() => {
+        if (!editingRow) {
+            setEditVariants([]);
+            return;
+        }
+        setEditVariants([]);
+        Variants.listByVuln(editingRow.vuln_id).then(variants => {
+            setEditVariants(projectId ? variants.filter(v => v.project_id === projectId) : variants);
+        }).catch(() => {});
+    }, [editingRow, projectId]);
+
+    // Build the variant -> package compatibility map for the edited row so the
+    // popup can block incompatible package/variant combos (same source as the
+    // SBOM tab: GET /api/packages?variant_id=<id>).
+    useEffect(() => {
+        let cancelled = false;
+        if (editVariants.length === 0) {
+            setEditVariantPackageMap({});
+            return;
+        }
+        (async () => {
+            const entries: [string, string[]][] = await Promise.all(
+                editVariants.map(async (variant): Promise<[string, string[]]> => {
+                    try {
+                        const pkgs = await Packages.list(variant.id);
+                        return [variant.id, pkgs.map(p =>
+                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
+                        )];
+                    } catch {
+                        return [variant.id, []];
+                    }
+                })
+            );
+            if (!cancelled) setEditVariantPackageMap(Object.fromEntries(entries));
+        })();
+        return () => { cancelled = true; };
+    }, [editVariants]);
 
     useEffect(() => {
         setLoading(true);
@@ -1314,10 +1358,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 onSaveAssessment={handleSaveEdit}
                                 onCancel={() => setEditingRow(null)}
                                 triggerBanner={showMessage}
-                                availableVariants={allVariants}
+                                availableVariants={editVariants}
                                 defaultSelectedVariantIds={editingRow._variantIds}
                                 availablePackages={editingRow.packages}
                                 defaultSelectedPackages={editingRow.packages}
+                                variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
                             />
                         )}
                     </div>
