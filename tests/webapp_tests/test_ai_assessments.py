@@ -17,6 +17,7 @@ from . import write_demo_files, setup_demo_db
 
 VARIANT_UUID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 PROJECT_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+SCAN_UUID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 VULN_ID = "CVE-2020-35492"
 PKG = "cairo@1.16.0"
 PKG2 = "abc@1.2.3"
@@ -311,3 +312,33 @@ def test_pending_ai_excluded_from_openvex_export(client):
 
     approved = json.dumps(_openvex_statements(client), sort_keys=True)
     assert approved != before
+
+
+def test_pending_ai_excluded_from_scan_history(client):
+    baseline = json.loads(client.get("/api/scans").data)
+    baseline_scan = next(row for row in baseline if row["id"] == str(SCAN_UUID))
+    assert baseline_scan["assessment_count"] == 0
+    assert baseline_scan["assessments_added"] == 0
+
+    _post_ai(client)
+
+    data = json.loads(client.get("/api/scans").data)
+    scan = next(row for row in data if row["id"] == str(SCAN_UUID))
+    assert scan["assessment_count"] == 0
+    assert scan["assessments_added"] == 0
+
+
+def test_pending_ai_excluded_from_scan_diff(client):
+    baseline = json.loads(client.get(f"/api/scans/{SCAN_UUID}/diff").data)
+    assert baseline["assessment_count"] == 0
+    assert baseline["assessments_added"] == []
+    assert baseline["assessments_unchanged"] == []
+    assert baseline["assessments_removed"] == []
+
+    _post_ai(client)
+
+    data = json.loads(client.get(f"/api/scans/{SCAN_UUID}/diff").data)
+    assert data["assessment_count"] == 0
+    assert data["assessments_added"] == []
+    assert data["assessments_unchanged"] == []
+    assert data["assessments_removed"] == []

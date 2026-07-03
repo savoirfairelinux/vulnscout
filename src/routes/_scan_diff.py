@@ -353,7 +353,7 @@ def _global_assessment_ids_for(
         .where(
             Observation.scan_id.in_(contributing_ids),
             Assessment.variant_id == Scan.variant_id,
-            Assessment.origin != "custom",
+            Assessment.origin.notin_(("custom", "ai")),
         )
     ).all()
 
@@ -571,7 +571,7 @@ def _global_result_full(
         .where(
             Observation.scan_id.in_(contributing_ids),
             Assessment.variant_id == Scan.variant_id,
-            Assessment.origin != "custom",
+            Assessment.origin.notin_(("custom", "ai")),
         )
     )
     if next_scan_ts is not None:

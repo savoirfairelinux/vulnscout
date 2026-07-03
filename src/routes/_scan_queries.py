@@ -299,13 +299,14 @@ def _assessments_by_scan(scans: list[Scan]) -> Dict[uuid_module.UUID, Dict[str, 
     # Deduplicate: same assessment may appear multiple times if a finding
     # belongs to multiple observations (shouldn't happen, but be safe).
     # Group by scan_id, then deduplicate assessment_id.
-    # Exclude custom (manually-created) assessments — only automated
-    # sources (sbom, grype, osv, nvd, etc.) are shown in scan history.
+    # Exclude custom (manually-created) and pending AI assessments —
+    # only automated sources (sbom, grype, osv, nvd, etc.) are shown
+    # in scan history.
     per_scan: Dict[uuid_module.UUID, Dict[uuid_module.UUID, datetime]] = {}  # scan_id -> {assess_id: timestamp}
     for row in rows:
         sid, aid, ats, origin = row[0], row[1], row[2], row[9]
-        if origin == "custom":
-            continue  # skip manually-created assessments
+        if origin in ("custom", "ai"):
+            continue  # skip manually-created and pending AI assessments
         per_scan.setdefault(sid, {})[aid] = ats
 
     result: Dict[uuid_module.UUID, Dict[str, int]] = {}
@@ -405,13 +406,14 @@ def _assessments_detail_for_scan(
     rows = _assessment_rows_for_scans([scan.id])
 
     # Deduplicate by assessment id (row[1])
-    # Exclude custom (manually-created) assessments — only automated
-    # sources (sbom, grype, osv, nvd, etc.) are shown in scan diff.
+    # Exclude custom (manually-created) and pending AI assessments —
+    # only automated sources (sbom, grype, osv, nvd, etc.) are shown
+    # in scan diff.
     seen: Dict[uuid_module.UUID, AssessmentRow] = {}
     for row in rows:
         aid = row[1]
         origin = row[9]
-        if origin == "custom":
+        if origin in ("custom", "ai"):
             continue
         if aid not in seen:
             seen[aid] = row
@@ -465,7 +467,7 @@ def _assessments_detail_for_scan(
         for row in prev_rows:
             aid = row[1]
             origin = row[9]
-            if origin == "custom":
+            if origin in ("custom", "ai"):
                 continue
             if aid not in prev_seen:
                 prev_seen[aid] = row
