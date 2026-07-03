@@ -157,6 +157,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show a row only when all of its affected packages contain text (e.g. only:native keeps rows whose affected packages are all native)' },
     ];
 
     useEffect(() => {
@@ -1090,6 +1091,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         }))}
                         search={search}
                         fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
+                        forAllValues={(row) => row.packages}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"

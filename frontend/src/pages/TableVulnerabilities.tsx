@@ -415,6 +415,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show a vuln only when all of its SBOM-affected packages contain text (e.g. only:native keeps vulns whose affected packages are all native)' },
     ];
 
     const hasAnyGhsaVuln = useMemo(
@@ -1578,6 +1579,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
         <TableGeneric
             fuseKeys={fuseKeys}
+            forAllValues={(vuln) => (vuln.packages_current?.length ? vuln.packages_current : vuln.packages)}
             hoverField="texts"
             search={search}
             columns={columns}

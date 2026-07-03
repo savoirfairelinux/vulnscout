@@ -72,6 +72,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show only packages whose name contains text (e.g. only:native)' },
     ];
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -515,7 +516,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            <TableGeneric fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
         </div>
     </>);
 }

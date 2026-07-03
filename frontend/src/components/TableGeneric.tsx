@@ -22,6 +22,13 @@ type Props<DataType> = {
     hasPagination?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
+    /**
+     * Values checked by the `only:<term>` search operator. When provided, a row
+     * is kept only if EVERY string returned here satisfies the (optionally
+     * negated with `-`) substring condition. Used to scope the operator to a
+     * specific field, e.g. a vulnerability's SBOM-affected packages.
+     */
+    forAllValues?: (item: DataType) => string[];
 };
 /* tslint:enable:no-explicit-any */
 
@@ -38,7 +45,8 @@ function TableGeneric<DataType> ({
     updateSelected = () => {},
     hasPagination = true,
     onFilteredDataChange,
-    onFocusedRowChange
+    onFocusedRowChange,
+    forAllValues
 }: Readonly<Props<DataType>>) {
     const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 })
     const pageIndex = pagination.pageIndex
@@ -61,46 +69,78 @@ function TableGeneric<DataType> ({
     }, [fuseKeys, data]);
 
     const filteredData = useMemo(() => {
-        if (search && search.length > 2) {
-            const buildFuseQuery = (raw: string) => {
-                // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
-                const buildTermClause = (term: string) => {
-                    const isNegated = term.startsWith('-');
-                    const bare = isNegated ? term.slice(1) : term;
-                    const value = isNegated ? `!${bare}` : `'${bare}`; // exact (non-fuzzy) match
+        const buildFuseQuery = (raw: string) => {
+            // FuseJS search query example: https://www.fusejs.io/api/query.html#use-with-extended-searching
+            const buildTermClause = (term: string) => {
+                const isNegated = term.startsWith('-');
+                const bare = isNegated ? term.slice(1) : term;
+                const value = isNegated ? `!${bare}` : `'${bare}`; // exact (non-fuzzy) match
 
-                    if (fuseKeys.length === 1) {
-                        return { [fuseKeys[0]]: value };
-                    }
-
-                    if (isNegated) {
-                        return { $and: fuseKeys.map(key => ({ [key]: value })) };
-                    }
-                    return { $or: fuseKeys.map(key => ({ [key]: value })) };
-                };
-
-                // Split by | to support OR syntax (e.g. "openssl | libssl")
-                const orGroups = raw.split('|').map(group => group.trim()).filter(Boolean);
-
-                if (orGroups.length === 1) {
-                    const terms = orGroups[0].split(/\s+/).filter(Boolean);
-                    return { $and: terms.map(buildTermClause) };
+                if (fuseKeys.length === 1) {
+                    return { [fuseKeys[0]]: value };
                 }
 
-                return {
-                    $or: orGroups.map(group => {
-                        const terms = group.split(/\s+/).filter(Boolean);
-                        return { $and: terms.map(buildTermClause) };
-                    })
-                };
+                if (isNegated) {
+                    return { $and: fuseKeys.map(key => ({ [key]: value })) };
+                }
+                return { $or: fuseKeys.map(key => ({ [key]: value })) };
             };
 
-            const processedSearch = buildFuseQuery(search);
+            // Split by | to support OR syntax (e.g. "openssl | libssl")
+            const orGroups = raw.split('|').map(group => group.trim()).filter(Boolean);
 
-            return fuse.search(processedSearch).map(result => result.item);
+            if (orGroups.length === 1) {
+                const terms = orGroups[0].split(/\s+/).filter(Boolean);
+                return { $and: terms.map(buildTermClause) };
+            }
+
+            return {
+                $or: orGroups.map(group => {
+                    const terms = group.split(/\s+/).filter(Boolean);
+                    return { $and: terms.map(buildTermClause) };
+                })
+            };
+        };
+
+        // Extract `only:<text>` clauses when the consumer opts in via
+        // forAllValues.
+        let effectiveSearch = search ?? '';
+        const onlyClauses: RegExp[] = [];
+        if (forAllValues && effectiveSearch) {
+            const residual: string[] = [];
+            for (const token of effectiveSearch.split(/\s+/)) {
+                const match = /^only:(.+)$/i.exec(token);
+                if (match) {
+                    try {
+                        onlyClauses.push(new RegExp(match[1], 'i'));
+                    } catch {
+                        // Invalid regex — fall back to matching the literal text.
+                        onlyClauses.push(new RegExp(match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+                    }
+                } else if (token) {
+                    residual.push(token);
+                }
+            }
+            effectiveSearch = residual.join(' ');
         }
-        return data;
-    }, [search, fuse, data, fuseKeys]);
+
+        let result: DataType[];
+        if (effectiveSearch && effectiveSearch.length > 2) {
+            result = fuse.search(buildFuseQuery(effectiveSearch)).map(searchResult => searchResult.item);
+        } else {
+            result = data;
+        }
+
+        if (onlyClauses.length > 0 && forAllValues) {
+            result = result.filter(item => {
+                const values = forAllValues(item);
+                if (values.length === 0) return false; // nothing affected → cannot satisfy "every"
+                return onlyClauses.every(regex => values.every(value => regex.test(value)));
+            });
+        }
+
+        return result;
+    }, [search, fuse, data, fuseKeys, forAllValues]);
 
     const paginationSizes = useMemo(() => {
         const total = filteredData.length;

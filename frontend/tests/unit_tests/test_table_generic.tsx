@@ -435,3 +435,86 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     });
   }, 10000);
 });
+
+describe('TableGeneric only:<regex> operator (forAllValues)', () => {
+  type PkgRow = { id: string; packages: string[] };
+
+  const pkgColumns = [
+    {
+      accessorKey: 'id',
+      header: 'ID',
+      cell: (info: any) => info.getValue(),
+      size: 200,
+    },
+  ];
+
+  const onlyData: PkgRow[] = [
+    { id: 'vulnA', packages: ['linux-yocto-native', 'busybox-native'] },
+    { id: 'vulnB', packages: ['linux-yocto', 'busybox-native'] },
+    { id: 'vulnC', packages: [] },
+  ];
+
+  const renderOnly = (search: string) =>
+    render(
+      <TableGeneric<PkgRow>
+        columns={pkgColumns}
+        data={onlyData}
+        fuseKeys={['id', 'packages']}
+        forAllValues={(row) => row.packages}
+        search={search}
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+  test('keeps only rows whose every affected value matches the regex', async () => {
+    renderOnly('only:-native');
+
+    // vulnA: every package matches /-native/i → kept
+    expect(await screen.findByRole('cell', { name: /^vulnA$/ })).toBeInTheDocument();
+    // vulnB: linux-yocto does not match → excluded
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
+    // vulnC: no affected packages → cannot satisfy "every" → excluded
+    expect(screen.queryByRole('cell', { name: /^vulnC$/ })).not.toBeInTheDocument();
+  });
+
+  test('regex is case-insensitive and anchors are supported', async () => {
+    renderOnly('only:^linux');
+
+    // vulnA first package is busybox-native as well → not every matches ^linux → excluded
+    expect(screen.queryByRole('cell', { name: /^vulnA$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
+  });
+
+  test('combines a residual fuzzy search term with the only: clause', async () => {
+    renderOnly('vuln only:-native');
+
+    // residual "vuln" matches all ids, only: narrows to vulnA
+    expect(await screen.findByRole('cell', { name: /^vulnA$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^vulnB$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^vulnC$/ })).not.toBeInTheDocument();
+  });
+
+  test('invalid regex falls back to a literal match', async () => {
+    const cppData: PkgRow[] = [
+      { id: 'cppA', packages: ['g++', 'libstdg++'] },
+      { id: 'cppB', packages: ['gcc'] },
+    ];
+
+    render(
+      <TableGeneric<PkgRow>
+        columns={pkgColumns}
+        data={cppData}
+        fuseKeys={['id', 'packages']}
+        forAllValues={(row) => row.packages}
+        search="only:g++"
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    // "g++" is not a valid regex → treated as the literal string "g++"
+    expect(await screen.findByRole('cell', { name: /^cppA$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /^cppB$/ })).not.toBeInTheDocument();
+  });
+});
