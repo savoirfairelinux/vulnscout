@@ -2027,6 +2027,17 @@ describe('Vulnerability Modal', () => {
                     { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
                 ]));
             }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/variant-snapshots`)) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'variant-1',
+                        effort: {
+                            optimistic: 'PT1H'
+                        },
+                        custom_cvss: []
+                    }
+                ]));
+            }
             if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
                 return Promise.resolve(JSON.stringify([pendingAiAssessment]));
             }
@@ -2099,9 +2110,14 @@ describe('Vulnerability Modal', () => {
     test('readOnly mode hides the pending AI review panel', async () => {
         renderWithPendingAiAssessment({ readOnly: true });
 
+        expect(await screen.findByText('Variant Alpha')).toBeInTheDocument();
         await waitFor(() => {
-            expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`),
+                expect.objectContaining({ mode: 'cors' })
+            );
         });
+        expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
