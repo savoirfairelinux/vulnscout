@@ -10,9 +10,12 @@ import uuid
 import pytest
 
 from src.bin.webapp import create_app
+from src.extensions import db
+from src.models.variant import Variant
 from . import write_demo_files, setup_demo_db
 
 VARIANT_UUID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+PROJECT_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 VULN_ID = "CVE-2020-35492"
 PKG = "cairo@1.16.0"
 PKG2 = "abc@1.2.3"
@@ -82,3 +85,37 @@ def test_ai_post_duplicate_rejected(client):
     assert second.status_code == 409
     body = json.loads(second.data)
     assert body["error"] == "A pending AI assessment already exists for this variant"
+
+
+def test_ai_post_second_variant_allowed(client, app):
+    first = _post_ai(client)
+    assert first.status_code == 200
+
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    with app.app_context():
+        db.session.add(
+            Variant(
+                id=uuid.UUID(other_variant),
+                project_id=PROJECT_UUID,
+                name="variant-b",
+            )
+        )
+        db.session.commit()
+
+    second = _post_ai(client, variant_id=other_variant)
+    assert second.status_code == 200
+
+
+def test_non_ai_post_not_blocked_by_pending_ai(client):
+    first = _post_ai(client)
+    assert first.status_code == 200
+
+    resp = client.post(
+        f"/api/vulnerabilities/{VULN_ID}/assessments",
+        json={
+            "packages": [PKG],
+            "status": "affected",
+            "variant_id": str(VARIANT_UUID),
+        },
+    )
+    assert resp.status_code == 200
