@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
     from .variant import Variant
+    from .project_context import ProjectContext
 
 
 class Project(Base):
@@ -26,6 +27,11 @@ class Project(Base):
     variants: Mapped[list["Variant"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan"
+    )
+    context: Mapped["ProjectContext | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
 
     def __repr__(self) -> str:
