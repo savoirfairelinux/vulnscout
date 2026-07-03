@@ -15,6 +15,7 @@ import ScanHistory from "./ScanHistory";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
+import AIContext from './AIContext';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -27,6 +28,7 @@ const tabLabels: Record<string, string> = {
         review: 'Review',
         exports: 'Export',
         settings: 'Settings',
+        ai: 'AI Context',
 };
 
 type Props = {
@@ -322,6 +324,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                         setLoadingMessage("Loading data...");
                     }
                 }} />}
+                {tab === 'ai' && <AIContext />}
             </div>
             </main>
             <footer>

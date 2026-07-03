@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear, faRobot } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
@@ -82,6 +82,18 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         >
           <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
           Review
+        </button>
+      </li>
+
+      {/* === AI Context === */}
+      <li className={[bgHoverColor, tab == 'ai' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('ai')}
+          className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'ai' ? 'page' : undefined}
+        >
+          <FontAwesomeIcon icon={faRobot} className="mr-1" />
+          AI
         </button>
       </li>
 
