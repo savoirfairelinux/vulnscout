@@ -517,14 +517,17 @@ type VariantScopedSnapshot = {
             }
 
             if (!anyError) {
-                if (vuln.assessments.length > 0) {
-                    const sortedAssessments = [...vuln.assessments].sort(
-                        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-                    );
-                    vuln.simplified_status = sortedAssessments[0].simplified_status;
-                }
+                const updatedAssessments = [...vuln.assessments];
+                const statusSummary = buildStatusSummary(updatedAssessments);
+                vuln.simplified_status = statusSummary.dominant_status;
+                vuln.status_summary = statusSummary;
 
-                patchVuln(vuln.id, vuln);
+                patchVuln(vuln.id, {
+                    ...vuln,
+                    assessments: updatedAssessments,
+                    simplified_status: statusSummary.dominant_status,
+                    status_summary: statusSummary,
+                });
                 showMessage("Assessment deleted successfully!", "success");
             }
         }
@@ -697,13 +700,16 @@ type VariantScopedSnapshot = {
         }
 
         if (!anyError) {
-            const latest = vuln.assessments.slice().sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            )[0];
-            if (latest) {
-                vuln.simplified_status = latest.simplified_status;
-            }
-            patchVuln(vuln.id, vuln);
+            const updatedAssessments = [...vuln.assessments];
+            const statusSummary = buildStatusSummary(updatedAssessments);
+            vuln.simplified_status = statusSummary.dominant_status;
+            vuln.status_summary = statusSummary;
+            patchVuln(vuln.id, {
+                ...vuln,
+                assessments: updatedAssessments,
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+            });
             showMessage('Assessment updated successfully!', 'success');
         }
 
