@@ -582,6 +582,58 @@ def init_app(app: Flask) -> None:
                     })
         return variants_out, 200
 
+    @app.route('/api/vulnerabilities/<vuln_id>/variant-active-packages')
+    def list_variant_active_packages(vuln_id: str) -> ResponseReturnValue:
+        """For each variant affected by this vulnerability, return the subset of
+        the vulnerability's packages still present in that variant's active SBOM.
+
+        Lets the front-end classify deprecated (variant, package) pairs in a
+        single request instead of one ``/api/packages`` call per variant.
+        """
+        from ..models.observation import Observation
+        from ..models.scan import Scan
+        from ..models.variant import Variant as DBVariant
+        from ..helpers.active_scans import (
+            active_sbom_scan_ids_for_variant,
+            active_package_ids_for_scans,
+        )
+
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        findings = Finding.get_by_vulnerability(vuln_id)
+        # package_id -> string_id for the packages affected by this vulnerability
+        pkg_string_by_id: dict[UUID, str] = {}
+        for f in findings:
+            if f.package_id and f.package:
+                pkg_string_by_id[f.package_id] = f.package.string_id
+
+        # Distinct variants with a finding for this vuln (Observation -> Scan -> Variant)
+        seen_variant_ids: set[UUID] = set()
+        variant_ids: list[UUID] = []
+        for finding in findings:
+            for obs in Observation.get_by_finding(finding.id):
+                scan = db.session.get(Scan, obs.scan_id)
+                if scan is None or scan.variant_id in seen_variant_ids:
+                    continue
+                seen_variant_ids.add(scan.variant_id)
+                if project_uuid is not None:
+                    variant = db.session.get(DBVariant, scan.variant_id)
+                    if variant is None or variant.project_id != project_uuid:
+                        continue
+                variant_ids.append(scan.variant_id)
+
+        result = []
+        for vid in variant_ids:
+            active_ids = active_package_ids_for_scans(active_sbom_scan_ids_for_variant(vid))
+            active_packages = [sid for pid, sid in pkg_string_by_id.items() if pid in active_ids]
+            result.append({"variant_id": str(vid), "active_packages": active_packages})
+        return result, 200
+
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
         payload_data = request.get_json()

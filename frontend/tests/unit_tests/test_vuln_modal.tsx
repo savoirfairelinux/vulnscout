@@ -2035,6 +2035,127 @@ describe('Vulnerability Modal', () => {
         expect(patchVuln).toHaveBeenCalled();
     });
 
+    test('recomputes the status summary after deleting an assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
+
+        const patchVuln = jest.fn();
+        // Two variants with different statuses: deleting the "Exploitable" one
+        // must leave a summary dominated by the remaining "Not affected" variant.
+        const vulnWithTwoVariants = {
+            ...vulnerability,
+            simplified_status: 'Exploitable',
+            assessments: [
+                {
+                    id: 'assess-not-affected',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'not_affected',
+                    simplified_status: 'Not affected',
+                    justification: 'vulnerable_code_not_present',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2021-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'var-1'
+                },
+                {
+                    id: 'assess-exploitable',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2021-06-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'var-2'
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithTwoVariants} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // The most recent group (var-2 / Exploitable) sorts first in the history.
+        const deleteBtns = screen.getAllByTitle(/delete assessment/i);
+        await user.click(deleteBtns[0]);
+        await user.click(screen.getByText(/yes, delete/i));
+
+        await screen.findByText(/assessment deleted successfully/i);
+
+        // The recomputed summary drops the deleted variant and reflects the
+        // remaining "Not affected" assessment (no active status left).
+        expect(patchVuln).toHaveBeenCalledWith('CVE-2010-1234', expect.objectContaining({
+            simplified_status: 'Not affected',
+            status_summary: expect.objectContaining({
+                dominant_status: 'Not affected',
+                has_active_status: false,
+                total_assessments: 1,
+            }),
+        }));
+    });
+
+    test('breaks down the current status by variant and package', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' }
+        ]));
+        // A single variant with an assessment on the active package plus an
+        // assessment on an older package version that is no longer shipped.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-current', vuln_id: 'CVE-2010-1234', packages: ['pkgA@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-old', vuln_id: 'CVE-2010-1234', packages: ['pkgOld@0.9.0'],
+                status: 'fixed', simplified_status: 'Fixed', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Only pkgA is still active in the variant; pkgOld is deprecated.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['pkgA@1.0.0'] }
+        ]));
+
+        const multiPkgVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0'],
+            packages_current: [],
+            assessments: [],
+        };
+
+        render(<VulnModal vuln={multiPkgVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        // Wait for the deprecated split to appear once variant-active-packages loads.
+        const deprecatedHeading = await screen.findByText('Deprecated assessments');
+        const deprecated = deprecatedHeading.parentElement as HTMLElement;
+        // The stale package version is broken out into the deprecated table.
+        expect(within(deprecated).getByText('pkgOld@0.9.0')).toBeInTheDocument();
+        expect(within(deprecated).getByText('Fixed')).toBeInTheDocument();
+        expect(within(deprecated).queryByText('pkgA@1.0.0')).not.toBeInTheDocument();
+
+        // The active (variant, package) pair stays in the current table.
+        const current = screen.getByText('Current assessments').parentElement as HTMLElement;
+        expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
+        expect(within(current).getByText('Exploitable')).toBeInTheDocument();
+        expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
+        // Production appears as the variant tag in the current table.
+        expect(within(current).getByText('Production')).toBeInTheDocument();
+    });
+
     test('adding assessment to multiple variants shows multi-variant success message', async () => {
         fetchMock.resetMocks();
         // Variants endpoint returns two variants
@@ -2044,8 +2165,7 @@ describe('Vulnerability Modal', () => {
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v1 (variantPackageMap effect)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v2 (variantPackageMap effect)
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
         // Single batch POST returns one record per (package, variant) pair
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
@@ -2212,10 +2332,17 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-2'
             }
         ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Both variants still ship the affected package, so their rows stay in
+        // the current (non-deprecated) table.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['aaabbbccc@1.0.0'] },
+            { variant_id: 'var-2', active_packages: ['aaabbbccc@1.0.0'] }
+        ]));
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Current status by variant');
+        const recapHeading = await screen.findByText('Current assessments');
         const recap = recapHeading.parentElement as HTMLElement;
         // Production reflects its most recent assessment (Not affected), not the older Exploitable
         expect(within(recap).getByText('Production')).toBeInTheDocument();
@@ -2240,10 +2367,17 @@ describe('Vulnerability Modal', () => {
                 timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
             }
         ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Both variants still ship the affected package; var-2 has no assessment
+        // yet, so its row surfaces as "No status" in the current table.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['aaabbbccc@1.0.0'] },
+            { variant_id: 'var-2', active_packages: ['aaabbbccc@1.0.0'] }
+        ]));
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Current status by variant');
+        const recapHeading = await screen.findByText('Current assessments');
         const recap = recapHeading.parentElement as HTMLElement;
         // Staging has no assessment yet, so it is flagged as "No status"
         expect(within(recap).getByText('Staging')).toBeInTheDocument();
@@ -2566,18 +2700,16 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
         fetchMock.resetMocks();
-        // Route fetches by URL so the per-variant package lookups resolve
-        // regardless of effect ordering.
+        // Route fetches by URL so the single variant-active-packages lookup
+        // resolves regardless of effect ordering.
         fetchMock.mockResponse((req) => {
             const url = req.url;
-            if (url.includes('/api/packages')) {
-                if (url.includes('variant_id=v1')) {
-                    return Promise.resolve(JSON.stringify([{ name: 'pkgA', version: '1.0.0' }]));
-                }
-                if (url.includes('variant_id=v2')) {
-                    return Promise.resolve(JSON.stringify([{ name: 'pkgB', version: '1.0.0' }]));
-                }
-                return Promise.resolve(JSON.stringify([]));
+            if (url.includes('/variant-active-packages')) {
+                // Single request returns each variant's active packages.
+                return Promise.resolve(JSON.stringify([
+                    { variant_id: 'v1', active_packages: ['pkgA@1.0.0'] },
+                    { variant_id: 'v2', active_packages: ['pkgB@1.0.0'] },
+                ]));
             }
             if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
                 // Variants.listByVuln
@@ -2633,8 +2765,8 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             const url = req.url;
-            if (url.includes('/api/packages')) {
-                // Simulate the package lookup failing for every variant.
+            if (url.includes('/variant-active-packages')) {
+                // Simulate the single active-packages lookup failing.
                 return Promise.reject(new Error('packages unavailable'));
             }
             if (url.includes('/variants') && !url.includes('/variant-snapshots')) {

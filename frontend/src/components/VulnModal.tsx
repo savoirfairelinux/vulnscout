@@ -19,7 +19,6 @@ import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
-import Packages from '../handlers/packages';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
@@ -112,6 +111,8 @@ type AssessmentGroup = {
     packages: string[];
 };
 
+type StatusSortKey = 'variant' | 'package' | 'status' | 'justification' | 'impact' | 'notes' | 'workaround';
+
 type VariantScopedSnapshot = {
     variantId: string;
     variantName: string;
@@ -143,6 +144,10 @@ type VariantScopedSnapshot = {
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
+    // True once the active-SBOM package list has been fetched for every variant,
+    // so deprecated packages can reliably be split into their own table.
+    const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
+    const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
@@ -259,34 +264,46 @@ type VariantScopedSnapshot = {
         return () => { cancelled = true; };
     }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
 
-    // Build variant -> package compatibility map using the same source as the
-    // SBOM tab: GET /api/packages?variant_id=<id> returns the active SBOM
-    // packages for that variant, whose ids match vuln.packages entries.
     useEffect(() => {
         let cancelled = false;
+        setVariantPackageMapLoaded(false);
         if (availableVariants.length === 0) {
             setVariantPackageMap({});
+            setVariantPackageMapLoaded(true);
             return;
         }
         (async () => {
-            const entries: [string, string[]][] = await Promise.all(
-                availableVariants.map(async (variant): Promise<[string, string[]]> => {
-                    try {
-                        const pkgs = await Packages.list(variant.id);
-                        // Build the same key format as vuln.packages:
-                        // "name@version::supplier" when supplier present, else "name@version"
-                        return [variant.id, pkgs.map(p =>
-                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
-                        )];
-                    } catch {
-                        return [variant.id, []];
+            try {
+                const url = new URL(
+                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/variant-active-packages`,
+                    window.location.href
+                );
+                if (projectId) {
+                    url.searchParams.set('project_id', projectId);
+                }
+                const response = await fetch(url.toString(), { mode: 'cors' });
+                const data = response.ok ? await response.json() : [];
+                const map: Record<string, string[]> = {};
+                if (Array.isArray(data)) {
+                    for (const entry of data) {
+                        if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
+                            map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                        }
                     }
-                })
-            );
-            if (!cancelled) setVariantPackageMap(Object.fromEntries(entries));
+                }
+                if (!cancelled) {
+                    setVariantPackageMap(map);
+                    setVariantPackageMapLoaded(true);
+                }
+            } catch {
+                if (!cancelled) {
+                    setVariantPackageMap({});
+                    setVariantPackageMapLoaded(true);
+                }
+            }
         })();
         return () => { cancelled = true; };
-    }, [availableVariants]);
+    }, [availableVariants, vuln.id, projectId]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -779,16 +796,129 @@ type VariantScopedSnapshot = {
     };
 
     const groupedAssessments = groupAssessments(vuln.assessments);
-    const currentStatusByVariant = availableVariants
-        .map(variant => {
-            const latest = allVulnAssessments
+
+    const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
+        allVulnAssessments
+            .filter(a => a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .reduce<Assessment | null>((best, a) => {
+                if (!best) return a;
+                return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
+            }, null);
+
+    type StatusRow = { variant: Variant; pkg: string | null; assessment: Assessment | null; deprecated: boolean };
+
+    const allStatusRows: StatusRow[] = availableVariants.flatMap((variant): StatusRow[] => {
+        const variantPkgs = variantPackageMap[variant.id] ?? [];
+        // Packages affected by this vuln that still exist in the variant's active SBOM.
+        const activeAffected = projectPackages.filter(p => variantPkgs.includes(p));
+        // Packages referenced by the variant's assessments may include older,
+        // now-deprecated versions that are no longer in the active SBOM.
+        const assessmentPkgs = [...new Set(
+            allVulnAssessments
                 .filter(a => a.variant_id === variant.id)
-                .reduce<Assessment | null>((best, a) => {
-                    if (!best) return a;
-                    return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
-                }, null);
-            return { variant, assessment: latest };
-        });
+                .flatMap(a => a.packages)
+        )];
+        const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
+        if (allPkgs.length === 0) {
+            return [{ variant, pkg: null, assessment: latestAssessmentFor(variant.id, null), deprecated: false }];
+        }
+        return allPkgs.slice().sort().map(pkg => ({
+            variant,
+            pkg,
+            assessment: latestAssessmentFor(variant.id, pkg),
+            // A package is deprecated once it's no longer in the variant's active
+            // SBOM. Until that list has loaded, keep it in the current table.
+            deprecated: variantPackageMapLoaded && !variantPkgs.includes(pkg),
+        }));
+    });
+
+    const currentAssessmentRows = allStatusRows.filter(r => !r.deprecated);
+    const deprecatedAssessmentRows = allStatusRows.filter(r => r.deprecated);
+
+    // Value used to compare two rows for a given sortable column.
+    const statusSortValue = (row: StatusRow, key: StatusSortKey): string => {
+        switch (key) {
+            case 'variant': return row.variant.name ?? '';
+            case 'package': return row.pkg ? formatPkgId(row.pkg) : '';
+            case 'status': return row.assessment?.simplified_status ?? 'No status';
+            case 'justification': return row.assessment?.justification ?? '';
+            case 'impact': return row.assessment?.impact_statement ?? '';
+            case 'notes': return row.assessment?.status_notes ?? '';
+            case 'workaround': return row.assessment?.workaround ?? '';
+        }
+    };
+
+    const sortStatusRows = (rows: StatusRow[]): StatusRow[] =>
+        statusSort
+            ? rows.slice().sort((a, b) => {
+                const cmp = statusSortValue(a, statusSort.key)
+                    .localeCompare(statusSortValue(b, statusSort.key), undefined, { sensitivity: 'base' });
+                return statusSort.dir === 'asc' ? cmp : -cmp;
+            })
+            : rows;
+
+    const toggleStatusSort = (key: StatusSortKey) => {
+        setStatusSort(prev =>
+            prev?.key === key
+                ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+                : { key, dir: 'asc' }
+        );
+    };
+
+    const statusSortColumns: { key: StatusSortKey; label: string }[] = [
+        { key: 'variant', label: 'Variant' },
+        { key: 'package', label: 'Package' },
+        { key: 'status', label: 'Status' },
+        { key: 'justification', label: 'Justification' },
+        { key: 'impact', label: 'Impact' },
+        { key: 'notes', label: 'Notes' },
+        { key: 'workaround', label: 'Workaround' },
+    ];
+
+    const renderStatusTable = (rows: StatusRow[]) => (
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr className="text-gray-400 border-b border-gray-600">
+                        {statusSortColumns.map((col, idx) => (
+                            <th
+                                key={col.key}
+                                className={`py-1 font-semibold cursor-pointer select-none hover:text-gray-200 ${idx < statusSortColumns.length - 1 ? 'pr-3' : ''}`}
+                                onClick={() => toggleStatusSort(col.key)}
+                                aria-sort={statusSort?.key === col.key ? (statusSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                            >
+                                {col.label}
+                                <span className="ml-1 text-xs">
+                                    {statusSort?.key === col.key ? (statusSort.dir === 'asc' ? '▲' : '▼') : ''}
+                                </span>
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map(({ variant, pkg, assessment }) => (
+                        <tr key={`${variant.id}::${pkg ?? ''}`} className="border-b border-gray-700 last:border-0 align-top">
+                            <td className="py-1.5 pr-3">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 whitespace-nowrap">
+                                    {variant.name}
+                                </span>
+                            </td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-nowrap">{pkg ? formatPkgId(pkg) : '—'}</td>
+                            <td className="py-1.5 pr-3">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${statusBadgeClass(assessment?.simplified_status ?? 'No status')}`}>
+                                    {assessment?.simplified_status ?? 'No status'}
+                                </span>
+                            </td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.justification || '—'}</td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.impact_statement || '—'}</td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.status_notes || '—'}</td>
+                            <td className="py-1.5 text-gray-300 whitespace-pre-line">{assessment?.workaround || '—'}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
 
     const bothRefreshed = isGhsaVuln
         ? refreshedList.includes('GHSA')
@@ -1409,43 +1539,16 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <h3 className="font-bold mb-2">Assessments</h3>
-                            {currentStatusByVariant.length > 0 && (
+                            {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Current status by variant</h4>
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm text-left border-collapse">
-                                            <thead>
-                                                <tr className="text-gray-400 border-b border-gray-600">
-                                                    <th className="py-1 pr-3 font-semibold">Variant</th>
-                                                    <th className="py-1 pr-3 font-semibold">Status</th>
-                                                    <th className="py-1 pr-3 font-semibold">Justification</th>
-                                                    <th className="py-1 pr-3 font-semibold">Impact</th>
-                                                    <th className="py-1 pr-3 font-semibold">Notes</th>
-                                                    <th className="py-1 font-semibold">Workaround</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {currentStatusByVariant.map(({ variant, assessment }) => (
-                                                    <tr key={variant.id} className="border-b border-gray-700 last:border-0 align-top">
-                                                        <td className="py-1.5 pr-3">
-                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 whitespace-nowrap">
-                                                                {variant.name}
-                                                            </span>
-                                                        </td>
-                                                        <td className="py-1.5 pr-3">
-                                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${statusBadgeClass(assessment?.simplified_status ?? 'No status')}`}>
-                                                                {assessment?.simplified_status ?? 'No status'}
-                                                            </span>
-                                                        </td>
-                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.justification || '—'}</td>
-                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.impact_statement || '—'}</td>
-                                                        <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.status_notes || '—'}</td>
-                                                        <td className="py-1.5 text-gray-300 whitespace-pre-line">{assessment?.workaround || '—'}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                    <h4 className="font-semibold text-gray-200 mb-2">Current assessments</h4>
+                                    {renderStatusTable(sortStatusRows(currentAssessmentRows))}
+                                </div>
+                            )}
+                            {deprecatedAssessmentRows.length > 0 && (
+                                <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Deprecated assessments</h4>
+                                    {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
                             <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>

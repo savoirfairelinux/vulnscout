@@ -110,6 +110,44 @@ class TestAssessmentsProjectIdPaths:
         assert resp.status_code == 400
 
 
+class TestVariantActivePackages:
+    """GET /api/vulnerabilities/<vuln_id>/variant-active-packages."""
+
+    def test_returns_list_per_variant(self, client):
+        """Real vuln → list of {variant_id, active_packages} entries."""
+        resp = client.get("/api/vulnerabilities/CVE-2020-35492/variant-active-packages")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert isinstance(data, list)
+        for entry in data:
+            assert isinstance(entry["variant_id"], str)
+            assert isinstance(entry["active_packages"], list)
+            assert all(isinstance(p, str) for p in entry["active_packages"])
+
+    def test_project_id_filter(self, client):
+        """project_id filters variants without error."""
+        proj_id = "11111111-1111-1111-1111-111111111111"
+        resp = client.get(
+            f"/api/vulnerabilities/CVE-2020-35492/variant-active-packages?project_id={proj_id}"
+        )
+        assert resp.status_code == 200
+        assert isinstance(json.loads(resp.data), list)
+
+    def test_invalid_project_id(self, client):
+        """Invalid project UUID → 400."""
+        resp = client.get(
+            "/api/vulnerabilities/CVE-2020-35492/variant-active-packages?project_id=not-a-uuid"
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_vuln_returns_empty(self, client):
+        """Unknown vuln → empty list."""
+        resp = client.get("/api/vulnerabilities/CVE-0000-00000/variant-active-packages")
+        assert resp.status_code == 200
+        assert json.loads(resp.data) == []
+
+
+
 class TestAssessmentsExportCustomData:
     """Lines 597, 624, 627: export-custom-data endpoint."""
 
