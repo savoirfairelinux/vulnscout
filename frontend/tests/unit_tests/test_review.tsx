@@ -147,6 +147,7 @@ type NetworkOpts = {
     cvss?: unknown[];
     variants?: unknown[];
     projects?: unknown[];
+    packages?: unknown[];
     mutationOk?: boolean;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
@@ -163,6 +164,9 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
     const {
         te = [], cvss = [],
         variants = VARIANTS, projects = PROJECTS,
+        // Every variant ships the shared package by default so the editor's
+        // package/variant compatibility gate does not disable the checkboxes.
+        packages = [{ name: 'pkgA', version: '1.0.0' }],
         mutationOk = true, exportOk = true,
         importResult = {
             status: 'success', assessments_imported: 2, assessments_skipped: 1,
@@ -186,6 +190,8 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             }
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
+            if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) return JSON.stringify(variants);
+            if (url.includes('/api/packages')) return JSON.stringify(packages);
             if (url.includes('/api/vulnerabilities/')) {
                 return vulnOk
                     ? JSON.stringify(vulnDetail)

@@ -220,10 +220,24 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }
                 })
             );
-            if (!cancelled) setEditVariantPackageMap(Object.fromEntries(entries));
+            if (cancelled) return;
+            const map: Record<string, string[]> = Object.fromEntries(entries);
+            // Seed the map with (variant, package) pairs already covered by the
+            // assessment being edited. Deprecated packages are no longer in the
+            // variant's current SBOM, so Packages.list omits them; without this
+            // they would be flagged incompatible and their checkbox disabled.
+            if (editingRow) {
+                for (const a of editingRow._assessments) {
+                    if (!a.variant_id) continue;
+                    const merged = new Set(map[a.variant_id] ?? []);
+                    for (const pkg of a.packages) merged.add(pkg);
+                    map[a.variant_id] = [...merged];
+                }
+            }
+            setEditVariantPackageMap(map);
         })();
         return () => { cancelled = true; };
-    }, [editVariants]);
+    }, [editVariants, editingRow]);
 
     useEffect(() => {
         setLoading(true);
