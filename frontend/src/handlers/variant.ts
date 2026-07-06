@@ -66,10 +66,10 @@ class Variants {
         ) as Variant[];
     }
 
-    static async listByVuln(vulnId: string): Promise<Variant[]> {
+    static async listByVuln(vulnId: string, signal?: AbortSignal): Promise<Variant[]> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}/variants`,
-            { mode: "cors" }
+            { mode: "cors", signal }
         );
         if (!response.ok) return [];
         const data = await response.json();

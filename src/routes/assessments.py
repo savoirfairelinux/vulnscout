@@ -628,8 +628,12 @@ def init_app(app: Flask) -> None:
                 variant_ids.append(scan.variant_id)
 
         result = []
+        vuln_pkg_ids = set(pkg_string_by_id.keys())
         for vid in variant_ids:
-            active_ids = active_package_ids_for_scans(active_sbom_scan_ids_for_variant(vid))
+            active_ids = active_package_ids_for_scans(
+                active_sbom_scan_ids_for_variant(vid),
+                restrict_to_package_ids=vuln_pkg_ids,
+            )
             active_packages = [sid for pid, sid in pkg_string_by_id.items() if pid in active_ids]
             result.append({"variant_id": str(vid), "active_packages": active_packages})
         return result, 200

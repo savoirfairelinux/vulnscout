@@ -2806,7 +2806,68 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
         expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
     });
+
+    test('navigating between vulns fetches each variant endpoint once per vuln', async () => {
+        fetchMock.resetMocks();
+        const counts: Record<string, number> = {
+            snapshots: 0,
+            activePackages: 0,
+            variants: 0,
+        };
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-snapshots')) {
+                counts.snapshots += 1;
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (url.includes('/variant-active-packages')) {
+                counts.activePackages += 1;
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (url.includes('/variants')) {
+                counts.variants += 1;
+                return Promise.resolve(JSON.stringify([
+                    { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+                ]));
+            }
+            // assessments and any other GETs
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const vuln1: Vulnerability = { ...vulnerability, id: 'CVE-1000-0001' };
+        const vuln2: Vulnerability = { ...vulnerability, id: 'CVE-1000-0002' };
+
+        const { rerender } = render(
+            <VulnModal vuln={vuln1} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />
+        );
+
+        // Wait until the first vuln has resolved its variant-derived endpoints.
+        await waitFor(() => {
+            expect(counts.snapshots).toBe(1);
+            expect(counts.activePackages).toBe(1);
+        });
+
+        // Navigate to the next vuln (arrow navigation changes the prop, no remount).
+        rerender(
+            <VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />
+        );
+
+        // The second vuln must trigger exactly one more call to each endpoint —
+        // not two (which happened before the variantsLoadedForVulnId guard, when
+        // the effects fired once with the stale variant set and again after the
+        // new variants loaded).
+        await waitFor(() => {
+            expect(counts.snapshots).toBe(2);
+            expect(counts.activePackages).toBe(2);
+        });
+
+        // Give any erroneous stale-set fetch a chance to land, then assert it did not.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(counts.snapshots).toBe(2);
+        expect(counts.activePackages).toBe(2);
+    });
 });
+
 
 // ---------------------------------------------------------------------------
 // Refresh button (NVD + EPSS for CVEs, GHSA for GHSA advisories)

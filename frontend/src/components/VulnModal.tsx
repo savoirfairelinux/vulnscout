@@ -23,7 +23,7 @@ import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
@@ -140,6 +140,7 @@ type VariantScopedSnapshot = {
     const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
+    const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
@@ -159,21 +160,27 @@ type VariantScopedSnapshot = {
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
     useEffect(() => {
+        const controller = new AbortController();
         setAvailableVariants([]);
-        Variants.listByVuln(vuln.id).then(variants => {
+        setVariantsLoadedForVulnId(null);
+        Variants.listByVuln(vuln.id, controller.signal).then(variants => {
+            if (controller.signal.aborted) return;
             if (projectId) {
                 setAvailableVariants(variants.filter(v => v.project_id === projectId));
             } else {
                 setAvailableVariants(variants);
             }
+            setVariantsLoadedForVulnId(vuln.id);
         }).catch(() => {});
+        return () => controller.abort();
     }, [vuln.id, projectId]);
 
     // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
     // complete even when a variant filter is active in the explorer.
     useEffect(() => {
+        const controller = new AbortController();
         setAllVulnAssessments([]);
-        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors' })
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
                 if (Array.isArray(data)) {
@@ -181,6 +188,7 @@ type VariantScopedSnapshot = {
                 }
             })
             .catch(() => {});
+        return () => controller.abort();
     }, [vuln.id]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
@@ -192,12 +200,21 @@ type VariantScopedSnapshot = {
         setSelectedTargetVariantIds(availableVariants.map(v => v.id));
     }, [variantId, vuln.id, availableVariants]);
 
+    const variantIdsKey = useMemo(
+        () => availableVariants.map(v => v.id).sort().join(','),
+        [availableVariants]
+    );
+
     // Build per-variant snapshots so the modal can show where custom CVSS and
     // effort differ across variants directly in all-variants mode.
     useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
+        const signal = controller.signal;
         if (variantId || availableVariants.length === 0) {
             setVariantSnapshots([]);
+            return;
+        }
+        if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
 
@@ -212,14 +229,14 @@ type VariantScopedSnapshot = {
                 if (projectId) {
                     url.searchParams.set('project_id', projectId);
                 }
-                const response = await fetch(url.toString(), { mode: 'cors' });
+                const response = await fetch(url.toString(), { mode: 'cors', signal });
                 if (!response.ok) {
-                    if (!cancelled) setVariantSnapshots([]);
+                    if (!signal.aborted) setVariantSnapshots([]);
                     return;
                 }
                 const data = await response.json();
                 if (!Array.isArray(data)) {
-                    if (!cancelled) setVariantSnapshots([]);
+                    if (!signal.aborted) setVariantSnapshots([]);
                     return;
                 }
 
@@ -253,23 +270,30 @@ type VariantScopedSnapshot = {
                         };
                     });
 
-                if (!cancelled) {
+                if (!signal.aborted) {
                     setVariantSnapshots(snapshots);
                 }
             } catch {
-                if (!cancelled) setVariantSnapshots([]);
+                if (!signal.aborted) setVariantSnapshots([]);
             }
         })();
 
-        return () => { cancelled = true; };
-    }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
+        return () => { controller.abort(); };
+    // availableVariants is read inside but the fetch is intentionally keyed off
+    // the stable variantIdsKey memo, not the array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [variantId, variantIdsKey, variantsLoadedForVulnId, vuln.id, projectId, snapshotVersion]);
 
     useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
+        const signal = controller.signal;
         setVariantPackageMapLoaded(false);
         if (availableVariants.length === 0) {
             setVariantPackageMap({});
             setVariantPackageMapLoaded(true);
+            return;
+        }
+        if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
         (async () => {
@@ -281,7 +305,7 @@ type VariantScopedSnapshot = {
                 if (projectId) {
                     url.searchParams.set('project_id', projectId);
                 }
-                const response = await fetch(url.toString(), { mode: 'cors' });
+                const response = await fetch(url.toString(), { mode: 'cors', signal });
                 const data = response.ok ? await response.json() : [];
                 const map: Record<string, string[]> = {};
                 if (Array.isArray(data)) {
@@ -291,19 +315,22 @@ type VariantScopedSnapshot = {
                         }
                     }
                 }
-                if (!cancelled) {
+                if (!signal.aborted) {
                     setVariantPackageMap(map);
                     setVariantPackageMapLoaded(true);
                 }
             } catch {
-                if (!cancelled) {
+                if (!signal.aborted) {
                     setVariantPackageMap({});
                     setVariantPackageMapLoaded(true);
                 }
             }
         })();
-        return () => { cancelled = true; };
-    }, [availableVariants, vuln.id, projectId]);
+        return () => { controller.abort(); };
+    // availableVariants.length is read inside but the fetch is intentionally
+    // keyed off the stable variantIdsKey memo, not the array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [variantIdsKey, variantsLoadedForVulnId, vuln.id, projectId]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);

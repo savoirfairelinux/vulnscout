@@ -132,14 +132,25 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]
 # Active package IDs (from SBOM scans only)
 # ------------------------------------------------------------------
 
-def active_package_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+def active_package_ids_for_scans(
+    scan_ids: list[uuid.UUID],
+    restrict_to_package_ids: set[uuid.UUID] | None = None,
+) -> set[uuid.UUID]:
     """Return the set of package IDs present in the SBOM documents of *scan_ids*.
 
     Packages listed by SBOM scans form the "active" package set.
     Tool-scan findings for packages outside this set are stale
     (the package was upgraded or removed) and should be excluded.
+
+    When *restrict_to_package_ids* is provided, only those package IDs are
+    considered — the query filters on them in SQL instead of loading the whole
+    SBOM package set into memory. Callers that only need to test membership of
+    a small, known set of packages should pass it to avoid fetching thousands
+    of rows per scan.
     """
     if not scan_ids:
+        return set()
+    if restrict_to_package_ids is not None and not restrict_to_package_ids:
         return set()
     # Filter to SBOM-type scans only
     sbom_scan_ids = [
@@ -153,10 +164,13 @@ def active_package_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[uuid.UUID]:
     ]
     if not sbom_scan_ids:
         return set()
-    rows = db.session.execute(
+    query = (
         db.select(SBOMPackage.package_id)
         .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
         .where(SBOMDocument.scan_id.in_(sbom_scan_ids))
         .distinct()
-    ).all()
+    )
+    if restrict_to_package_ids is not None:
+        query = query.where(SBOMPackage.package_id.in_(restrict_to_package_ids))
+    rows = db.session.execute(query).all()
     return {r[0] for r in rows}
