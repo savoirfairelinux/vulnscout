@@ -65,6 +65,7 @@ def _create_assessment_record(
     finding_id: UUID,
     variant_id: UUID | None,
     timestamp: datetime | None = None,
+    origin: str = "custom",
 ) -> "DBAssessment":
     """Create a single DBAssessment row from a validated DTO.
 
@@ -75,7 +76,7 @@ def _create_assessment_record(
         simplified_status=STATUS_TO_SIMPLIFIED.get(assessment.status or "", "Pending Assessment"),
         finding_id=finding_id,
         variant_id=variant_id,
-        origin="custom",
+        origin=origin,
         status_notes=assessment.status_notes,
         justification=assessment.justification,
         impact_statement=assessment.impact_statement,
@@ -84,6 +85,23 @@ def _create_assessment_record(
         commit=True,
         timestamp=timestamp,
     )
+
+
+def _has_pending_ai(vuln_id: str, variant_id: UUID | None) -> bool:
+    """True if a pending AI assessment already exists for this (vuln, variant)."""
+    for a in DBAssessment.get_by_vulnerability(vuln_id):
+        if a.origin == "ai" and a.variant_id == variant_id:
+            return True
+    return False
+
+
+def _pending_ai_group(assessment: "DBAssessment") -> list["DBAssessment"]:
+    """All pending AI rows sharing the addressed row's (vuln_id, variant_id)."""
+    vuln_id = assessment.vuln_id
+    return [
+        a for a in DBAssessment.get_by_vulnerability(vuln_id)
+        if a.origin == "ai" and a.variant_id == assessment.variant_id
+    ]
 
 
 def init_app(app: Flask) -> None:
@@ -669,6 +687,11 @@ def init_app(app: Flask) -> None:
         if err:
             return err
 
+        ai_generated = bool(payload_data.get("ai_generated"))
+        target_origin = "ai" if ai_generated else "custom"
+        if ai_generated and _has_pending_ai(vuln_id, variant_id):
+            return {"error": "A pending AI assessment already exists for this variant"}, 409
+
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
         # Prefer the timestamp from the payload (allows frontend to synchronise
@@ -688,7 +711,8 @@ def init_app(app: Flask) -> None:
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
                     db_a = _create_assessment_record(
-                        assessment, finding.id, variant_id, timestamp=shared_timestamp)
+                        assessment, finding.id, variant_id, timestamp=shared_timestamp,
+                        origin=target_origin)
                     created.append(db_a.to_dict())
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
