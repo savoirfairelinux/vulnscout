@@ -17,6 +17,7 @@ from . import write_demo_files, setup_demo_db
 
 VARIANT_UUID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 PROJECT_UUID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+SCAN_UUID = uuid.UUID("33333333-3333-3333-3333-333333333333")
 VULN_ID = "CVE-2020-35492"
 PKG = "cairo@1.16.0"
 PKG2 = "abc@1.2.3"
@@ -242,3 +243,116 @@ def test_reject_non_ai_returns_400(client):
     })
     custom_id = json.loads(r.data)["assessment"]["id"]
     assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
+
+
+def test_ai_excluded_from_list_all_formats(client):
+    _post_ai(client)
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert all(a["origin"] != "ai" for a in listed)
+    as_dict = json.loads(client.get("/api/assessments?format=dict").data)
+    assert all(a["origin"] != "ai" for a in as_dict.values())
+
+
+def test_ai_excluded_from_list_by_variant(client):
+    _post_ai(client)
+    listed = json.loads(client.get(
+        f"/api/assessments?format=list&variant_id={VARIANT_UUID}").data)
+    assert all(a["origin"] != "ai" for a in listed)
+
+
+def test_ai_visible_on_per_vuln_endpoint(client):
+    _post_ai(client)
+    data = json.loads(client.get(f"/api/vulnerabilities/{VULN_ID}/assessments").data)
+    assert any(a["origin"] == "ai" for a in data)
+
+
+def test_patch_ai_row_returns_400(client):
+    aid = _get_first_ai_id(client)
+    resp = client.patch(
+        f"/api/assessments/{aid}",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+        },
+    )
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == (
+        "Use the AI approve/reject endpoints for pending AI assessments"
+    )
+
+
+def test_delete_ai_row_returns_400(client):
+    aid = _get_first_ai_id(client)
+    resp = client.delete(f"/api/assessments/{aid}")
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == (
+        "Use the AI approve/reject endpoints for pending AI assessments"
+    )
+
+
+def _openvex_statements(client):
+    from src.views.openvex import OpenVex
+    from src.controllers.cache import ControllersCache
+    with client.application.app_context():
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
+        return OpenVex(ctrls).to_dict().get("statements", [])
+
+
+def test_pending_ai_excluded_from_openvex_export(client):
+    before = json.dumps(_openvex_statements(client), sort_keys=True)
+
+    aid = _get_first_ai_id(client)
+
+    pending = json.dumps(_openvex_statements(client), sort_keys=True)
+    assert pending == before
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+
+    approved = json.dumps(_openvex_statements(client), sort_keys=True)
+    assert approved != before
+
+
+def test_pending_ai_excluded_from_scan_history(client):
+    baseline = json.loads(client.get("/api/scans").data)
+    baseline_scan = next(row for row in baseline if row["id"] == str(SCAN_UUID))
+    assert baseline_scan["assessment_count"] == 0
+    assert baseline_scan["assessments_added"] == 0
+
+    _post_ai(client)
+
+    data = json.loads(client.get("/api/scans").data)
+    scan = next(row for row in data if row["id"] == str(SCAN_UUID))
+    assert scan["assessment_count"] == 0
+    assert scan["assessments_added"] == 0
+
+
+def test_pending_ai_excluded_from_scan_diff(client):
+    baseline = json.loads(client.get(f"/api/scans/{SCAN_UUID}/diff").data)
+    assert baseline["assessment_count"] == 0
+    assert baseline["assessments_added"] == []
+    assert baseline["assessments_unchanged"] == []
+    assert baseline["assessments_removed"] == []
+
+    _post_ai(client)
+
+    data = json.loads(client.get(f"/api/scans/{SCAN_UUID}/diff").data)
+    assert data["assessment_count"] == 0
+    assert data["assessments_added"] == []
+    assert data["assessments_unchanged"] == []
+    assert data["assessments_removed"] == []
+
+
+def test_pending_ai_excluded_from_scan_global_result(client):
+    baseline = json.loads(client.get(f"/api/scans/{SCAN_UUID}/global-result").data)
+    assert baseline["vulnerabilities"]
+    assert any(v["vulnerability_id"] == VULN_ID for v in baseline["vulnerabilities"])
+    assert baseline["assessment_count"] == 0
+    assert baseline["assessments"] == []
+
+    _post_ai(client)
+
+    data = json.loads(client.get(f"/api/scans/{SCAN_UUID}/global-result").data)
+    assert data["assessment_count"] == 0
+    assert data["assessments"] == []
