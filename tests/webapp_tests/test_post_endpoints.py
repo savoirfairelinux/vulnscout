@@ -58,7 +58,8 @@ def test_post_minimal_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'packages': ['abc@1.2.3', 'cairo@1.16.0'],
         'status': 'exploitable',
-        'workaround': 'Disable option X in configuration'
+        'workaround': 'Disable option X in configuration',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 200
 
@@ -82,7 +83,8 @@ def test_post_detailled_assessment(client):
         'workaround': 'Disable option X in configuration',
         'workaround_timestamp': '2021-01-01T00:00:00Z',
         'timestamp': '2021-01-01T00:00:00Z',
-        'last_updated': '2021-01-01T00:00:00Z'
+        'last_updated': '2021-01-01T00:00:00Z',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 200
 
@@ -202,7 +204,8 @@ def test_update_assessment(client):
         'packages': ['abc@1.2.3'],
         'status': 'exploitable',
         'status_notes': 'Initial assessment',
-        'workaround': 'No workaround available'
+        'workaround': 'No workaround available',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 200
     
@@ -241,7 +244,8 @@ def test_update_assessment_invalid_status(client):
     # First create an assessment
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'packages': ['abc@1.2.3'],
-        'status': 'exploitable'
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 200
     
@@ -263,7 +267,8 @@ def test_delete_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'packages': ['abc@1.2.3'],
         'status': 'exploitable',
-        'status_notes': 'Assessment to be deleted'
+        'status_notes': 'Assessment to be deleted',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 200
     

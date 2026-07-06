@@ -971,10 +971,14 @@ type VariantScopedSnapshot = {
             content.packages = projectPackages;
         }
 
-        // Determine which variants to post to. If none selected, post once without a variant_id.
+        // Determine which variants to post to.
+        // Prefer explicit selections from the form; fall back to the current
+        // variantId context so the assessment is never stored without a variant.
         const variantIds: Array<string | undefined> =
             content.variant_ids && content.variant_ids.length > 0
                 ? content.variant_ids
+                : variantId
+                ? [variantId]
                 : [undefined];
 
         const { variant_ids: _, ...baseContent } = content;

@@ -273,15 +273,15 @@ def test_post_assessment_with_variant_id(client_with_variants, app_with_variants
     assert data["assessment"]["variant_id"] == variant_id_str
 
 
-def test_post_assessment_without_variant_id_has_null(client):
-    """When no variant_id is supplied the field is null in the response."""
+def test_post_assessment_without_variant_id_returns_400(client):
+    """Submitting an assessment without variant_id is rejected with 400."""
     response = client.post(
         "/api/vulnerabilities/CVE-2020-35492/assessments",
         json={"packages": ["cairo@1.16.0"], "status": "affected"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["assessment"]["variant_id"] is None
+    assert "variant_id" in data["error"].lower()
 
 
 def test_post_assessment_invalid_variant_id(client):

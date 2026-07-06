@@ -659,11 +659,11 @@ def init_app(app: Flask) -> None:
 
         # Resolve variant_id once — same for all packages in this request
         variant_id_raw = payload_data.get('variant_id') or None
-        variant_id = None
-        if variant_id_raw:
-            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-            if err:
-                return err
+        if not variant_id_raw:
+            return {"error": "variant_id is required"}, 400
+        variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+        if err:
+            return err
 
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
@@ -725,14 +725,15 @@ def init_app(app: Flask) -> None:
                     continue
 
                 vuln_id = assessment.vuln_id
-                # Parse optional variant_id from the raw item
+                # variant_id is required for every batch item
                 variant_id_raw = item.get('variant_id') or None
-                variant_id = None
-                if variant_id_raw:
-                    variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-                    if err:
-                        errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
-                        continue
+                if not variant_id_raw:
+                    errors.append({"vuln_id": vuln_id, "error": "variant_id is required"})
+                    continue
+                variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+                if err:
+                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                    continue
                 pkg_list = assessment.packages or []
                 if not pkg_list:
                     errors.append({"vuln_id": vuln_id, "error": "No valid package found"})

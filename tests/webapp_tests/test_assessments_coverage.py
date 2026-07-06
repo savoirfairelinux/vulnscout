@@ -47,11 +47,15 @@ def client(app):
 
 
 # Test POST assessment with missing vuln_id (should be inferred from URL)
+DEMO_VARIANT_ID = "22222222-2222-2222-2222-222222222222"
+
+
 def test_post_assessment_without_vuln_id_in_payload(client):
     """Test that vuln_id is automatically added from URL when not in payload"""
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -64,7 +68,8 @@ def test_post_assessment_with_non_string_vuln_id(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'vuln_id': 12345,
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 400
     data = json.loads(response.data)
@@ -77,7 +82,8 @@ def test_post_assessment_with_justification(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'not_affected',
-        'justification': 'vulnerable_code_not_present'
+        'justification': 'vulnerable_code_not_present',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -91,7 +97,8 @@ def test_post_assessment_with_invalid_justification(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'not_affected',
-        'justification': 'invalid_justification'
+        'justification': 'invalid_justification',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 400
     data = json.loads(response.data)
@@ -105,7 +112,8 @@ def test_post_assessment_with_impact_statement(client):
         'packages': ['test@1.0.0'],
         'status': 'not_affected',
         'justification': 'component_not_present',
-        'impact_statement': 'Component not included in build'
+        'impact_statement': 'Component not included in build',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -119,7 +127,8 @@ def test_post_assessment_with_workaround_and_timestamp(client):
         'packages': ['test@1.0.0'],
         'status': 'affected',
         'workaround': 'Disable feature X',
-        'workaround_timestamp': '2024-01-15T12:00:00Z'
+        'workaround_timestamp': '2024-01-15T12:00:00Z',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -132,7 +141,8 @@ def test_post_assessment_with_workaround_without_timestamp(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'affected',
-        'workaround': 'Apply temporary patch'
+        'workaround': 'Apply temporary patch',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -145,7 +155,8 @@ def test_post_assessment_with_responses(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'affected',
-        'responses': ['can_not_fix', 'workaround_available']
+        'responses': ['can_not_fix', 'workaround_available'],
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -161,12 +172,14 @@ def test_post_assessments_batch_all_valid(client):
             {
                 'vuln_id': 'CVE-2021-11111',
                 'packages': ['pkg1@1.0.0'],
-                'status': 'affected'
+                'status': 'affected',
+                'variant_id': DEMO_VARIANT_ID,
             },
             {
                 'vuln_id': 'CVE-2021-22222',
                 'packages': ['pkg2@2.0.0'],
-                'status': 'fixed'
+                'status': 'fixed',
+                'variant_id': DEMO_VARIANT_ID,
             }
         ]
     })
@@ -186,7 +199,8 @@ def test_post_assessments_batch_mixed_validity(client):
             {
                 'vuln_id': 'CVE-2021-11111',
                 'packages': ['pkg1@1.0.0'],
-                'status': 'affected'
+                'status': 'affected',
+                'variant_id': DEMO_VARIANT_ID,
             },
             {
                 'vuln_id': 'CVE-2021-22222',
@@ -222,7 +236,8 @@ def test_post_assessments_batch_all_invalid(client):
                 # Missing packages
                 'status': 'fixed'
             }
-        ]
+        ],
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 400
     data = json.loads(response.data)
@@ -259,7 +274,8 @@ def test_post_assessments_batch_invalid_item_structure(client):
     response = client.post("/api/assessments/batch", json={
         'assessments': [
             'not_a_dict',
-            {'vuln_id': 'CVE-2021-11111', 'packages': ['pkg@1.0.0'], 'status': 'affected'}
+            {'vuln_id': 'CVE-2021-11111', 'packages': ['pkg@1.0.0'], 'status': 'affected',
+             'variant_id': DEMO_VARIANT_ID}
         ]
     })
     assert response.status_code == 200
@@ -275,7 +291,8 @@ def test_update_assessment_status_only(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'under_investigation',
-        'status_notes': 'Initial notes'
+        'status_notes': 'Initial notes',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -296,7 +313,8 @@ def test_update_assessment_status_notes(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'affected',
-        'status_notes': 'Initial notes'
+        'status_notes': 'Initial notes',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -316,7 +334,8 @@ def test_update_assessment_clear_justification(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'not_affected',
-        'justification': 'vulnerable_code_not_present'
+        'justification': 'vulnerable_code_not_present',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -335,7 +354,8 @@ def test_update_assessment_clear_impact_statement(client):
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
         'status': 'affected',
-        'impact_statement': 'Not affected statement'
+        'impact_statement': 'Not affected statement',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -354,7 +374,8 @@ def test_update_assessment_set_impact_statement(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -373,7 +394,8 @@ def test_update_assessment_workaround_without_timestamp(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -392,7 +414,8 @@ def test_update_assessment_workaround_with_timestamp(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -412,7 +435,8 @@ def test_update_assessment_no_payload(client):
     # Create assessment first
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -427,7 +451,8 @@ def test_update_assessment_invalid_justification(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -446,7 +471,8 @@ def test_update_assessment_require_justification(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -465,7 +491,8 @@ def test_patch_assessment(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_id = json.loads(response.data)["assessment"]["id"]
     
@@ -484,7 +511,8 @@ def test_update_assessment_updates_last_update(client):
     # Create assessment
     response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
         'packages': ['test@1.0.0'],
-        'status': 'affected'
+        'status': 'affected',
+        'variant_id': DEMO_VARIANT_ID,
     })
     assessment_data = json.loads(response.data)["assessment"]
     assessment_id = assessment_data["id"]
@@ -510,6 +538,7 @@ def test_post_assessment_invalid_timestamp(client):
         "packages": ["cairo@1.16.0"],
         "status": "affected",
         "timestamp": "not-a-valid-timestamp",
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
 
@@ -560,6 +589,7 @@ def test_post_assessment_vuln_id_mismatch(client):
         "vuln_id": "CVE-2021-DIFFERENT",
         "packages": ["test@1.0.0"],
         "status": "affected",
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 400
     data = json.loads(response.data)
@@ -608,10 +638,48 @@ def test_post_assessments_batch_db_error(client, monkeypatch):
                 "packages": ["pkg1@1.0.0"],
                 "status": "affected",
             }
-        ]
+        ],
+        'variant_id': DEMO_VARIANT_ID,
     })
     data = json.loads(response.data)
     assert data["error_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<vuln_id>/assessments — missing variant_id rejected
+# ---------------------------------------------------------------------------
+
+def test_post_assessment_missing_variant_id_returns_400(client):
+    """POST assessment without variant_id must be rejected with 400."""
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        "packages": ["test@1.0.0"],
+        "status": "affected",
+        # no variant_id
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "variant_id" in data["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/assessments/batch — missing variant_id rejected per item
+# ---------------------------------------------------------------------------
+
+def test_post_assessments_batch_missing_variant_id_returns_error(client):
+    """Batch assessment item without variant_id must produce an error entry."""
+    response = client.post("/api/assessments/batch", json={
+        "assessments": [
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                # no variant_id
+            }
+        ]
+    })
+    data = json.loads(response.data)
+    assert data.get("error_count", 0) >= 1
+    assert any("variant_id" in str(e).lower() for e in data.get("errors", []))
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +694,7 @@ def test_patch_assessment_clears_justification_and_impact(client):
         "status": "not_affected",
         "justification": "component_not_present",
         "impact_statement": "Not present in this build",
+        'variant_id': DEMO_VARIANT_ID,
     })
     assert response.status_code == 200
     assessment_id = json.loads(response.data)["assessment"]["id"]
