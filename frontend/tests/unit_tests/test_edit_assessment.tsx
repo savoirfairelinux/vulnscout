@@ -254,10 +254,41 @@ describe('EditAssessment Component', () => {
             justification: undefined,
             status_notes: 'test notes',
             workaround: 'test workaround',
-            impact_statement: '',
+            // The impact statement (reasoning) must be preserved for false_positive,
+            // not wiped, since the impact textarea is shown and editable for it.
+            impact_statement: 'test impact',
             packages: [],
             variant_ids: undefined
         });
+    });
+
+    test('preserves an edited impact statement for false_positive status', async () => {
+        const fpAssessment: Assessment = {
+            ...mockAssessment,
+            status: 'false_positive',
+            impact_statement: 'original reason'
+        };
+
+        render(
+            <EditAssessment
+                assessment={fpAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const user = userEvent.setup();
+        const impactField = screen.getByPlaceholderText(/Why this vulnerability is not exploitable/i);
+        await user.clear(impactField);
+        await user.type(impactField, 'updated reason');
+
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            status: 'false_positive',
+            impact_statement: 'updated reason',
+            justification: undefined,
+        }));
     });
 
     test('modifies input fields and detects changes', async () => {

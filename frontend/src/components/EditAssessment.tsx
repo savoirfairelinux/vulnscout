@@ -201,16 +201,19 @@ function EditAssessment({
             return;
         }
 
-        const includeJustificationAndImpact = status == "not_affected";
+        // Justification only applies to not_affected; the impact statement
+        // applies to both not_affected and false_positive (mirrors StatusEditor).
+        const includeJustification = status == "not_affected";
+        const includeImpact = status == "not_affected" || status == "false_positive";
 
         onSaveAssessment({
             id: assessment.id,
             status,
-            justification: includeJustificationAndImpact ? justification : undefined,
+            justification: includeJustification ? justification : undefined,
             status_notes: statusNotes,
             workaround,
             // For non-impact statuses the value was folded into status_notes; clear impact_statement.
-            impact_statement: includeJustificationAndImpact ? impact : "",
+            impact_statement: includeImpact ? impact : "",
             variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
             packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
         });
