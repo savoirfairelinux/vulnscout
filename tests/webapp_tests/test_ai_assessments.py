@@ -11,6 +11,7 @@ import pytest
 
 from src.bin.webapp import create_app
 from src.extensions import db
+from src.models.assessment import Assessment as DBAssessment
 from src.models.variant import Variant
 from . import write_demo_files, setup_demo_db
 
@@ -119,3 +120,125 @@ def test_non_ai_post_not_blocked_by_pending_ai(client):
         },
     )
     assert resp.status_code == 200
+
+
+def _get_first_ai_id(client):
+    body = json.loads(_post_ai(client).data)
+    return body["assessment"]["id"]
+
+
+def test_approve_promotes_group_to_custom(client):
+    aid = _get_first_ai_id(client)
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+    body = json.loads(resp.data)
+    assert all(a["origin"] == "custom" for a in body["assessments"])
+    # now visible in the list feed
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert any(a["id"] == aid and a["origin"] == "custom" for a in listed)
+
+
+def test_approve_promotes_multi_package_group(client):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    aid = body["assessments"][0]["id"]
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+
+    assert resp.status_code == 200
+    approved = json.loads(resp.data)["assessments"]
+    assert len(approved) >= 2
+    assert all(a["origin"] == "custom" for a in approved)
+
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    promoted = [a for a in listed if a["id"] in {row["id"] for row in approved}]
+    assert len(promoted) >= 2
+    assert all(a["origin"] == "custom" for a in promoted)
+
+
+def test_approve_group_update_is_atomic(client, app, monkeypatch):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    ids = [row["id"] for row in body["assessments"]]
+
+    original_update = DBAssessment.update
+    call_count = 0
+
+    def flaky_update(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("boom")
+        return original_update(self, *args, **kwargs)
+
+    monkeypatch.setattr(DBAssessment, "update", flaky_update)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(f"/api/assessments/{ids[0]}/approve")
+
+    with app.app_context():
+        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
+        assert all(row is not None and row.origin == "ai" for row in reloaded)
+
+
+def test_approve_missing_returns_404(client):
+    resp = client.post(f"/api/assessments/{uuid.uuid4()}/approve")
+    assert resp.status_code == 404
+
+
+def test_approve_non_ai_returns_400(client):
+    # create a normal custom assessment
+    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
+    })
+    custom_id = json.loads(r.data)["assessment"]["id"]
+    resp = client.post(f"/api/assessments/{custom_id}/approve")
+    assert resp.status_code == 400
+
+
+def test_reject_deletes_group(client):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    aid = body["assessment"]["id"]
+    ids = {a["id"] for a in body["assessments"]}
+
+    resp = client.post(f"/api/assessments/{aid}/reject")
+
+    assert resp.status_code == 200
+    assert len(body["assessments"]) >= 2
+    assert set(json.loads(resp.data)["deleted"]) == ids
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert not (ids & {a["id"] for a in listed})
+
+
+def test_reject_group_delete_is_atomic(client, app, monkeypatch):
+    body = json.loads(_post_ai(client, packages=[PKG, PKG2]).data)
+    ids = [row["id"] for row in body["assessments"]]
+
+    original_delete = DBAssessment.delete
+    call_count = 0
+
+    def flaky_delete(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("boom")
+        return original_delete(self, *args, **kwargs)
+
+    monkeypatch.setattr(DBAssessment, "delete", flaky_delete)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.post(f"/api/assessments/{ids[0]}/reject")
+
+    with app.app_context():
+        reloaded = [DBAssessment.get_by_id(assessment_id) for assessment_id in ids]
+        assert all(row is not None and row.origin == "ai" for row in reloaded)
+
+
+def test_reject_missing_returns_404(client):
+    assert client.post(f"/api/assessments/{uuid.uuid4()}/reject").status_code == 404
+
+
+def test_reject_non_ai_returns_400(client):
+    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
+    })
+    custom_id = json.loads(r.data)["assessment"]["id"]
+    assert client.post(f"/api/assessments/{custom_id}/reject").status_code == 400
