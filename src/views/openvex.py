@@ -95,7 +95,10 @@ class OpenVex:
 
     def _all_assessments(self) -> list:
         """Return all assessments, de-duped by id and restricted to the export scope."""
-        return self.assessmentsCtrl.get_all()
+        # Pending AI-generated assessments are not yet reviewed/approved, so they
+        # must not leak into the OpenVEX export until a human approves them
+        # (at which point their origin is promoted to "custom").
+        return [a for a in self.assessmentsCtrl.get_all() if getattr(a, "origin", None) != "ai"]
 
     def to_dict(self, strict_export=False, author=None) -> dict:
         output = {
