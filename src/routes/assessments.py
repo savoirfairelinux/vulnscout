@@ -138,6 +138,7 @@ def init_app(app: Flask) -> None:
         else:
             assessments = [a.to_dict() for a in _get_all_db_assessments()]
         annotate_assessments_outdated(assessments)
+        assessments = [a for a in assessments if a.get("origin") != "ai"]
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments
@@ -815,6 +816,9 @@ def init_app(app: Flask) -> None:
 
         was_non_custom = (existing.origin or "") != "custom"
 
+        if existing.origin == "ai":
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
+
         # Reconstruct Assessment DTO for validation
         mem_assess = DBAssessment.from_dict(existing.to_dict())
 
@@ -868,6 +872,8 @@ def init_app(app: Flask) -> None:
         # A non-custom assessment contributes to the scan-history counts, so
         # its removal must invalidate the cached list view.
         was_non_custom = (existing.origin or "") != "custom"
+        if existing.origin == "ai":
+            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
         existing.delete()
         if was_non_custom:
             invalidate_scan_list_cache()
