@@ -873,6 +873,35 @@ def init_app(app: Flask) -> None:
             invalidate_scan_list_cache()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
+    @app.route("/api/assessments/<assessment_id>/approve", methods=["POST"])
+    def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
+            return {"error": "Assessment not found"}, 404
+        if existing.origin != "ai":
+            return {"error": "Not a pending AI assessment"}, 400
+        group = _pending_ai_group(existing)
+        approved = []
+        with batch_session():
+            for row in group:
+                row.update(origin="custom")
+                approved.append(row.to_dict())
+        return {"status": "success", "assessments": approved}, 200
+
+    @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
+    def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
+        existing = DBAssessment.get_by_id(assessment_id)
+        if existing is None:
+            return {"error": "Assessment not found"}, 404
+        if existing.origin != "ai":
+            return {"error": "Not a pending AI assessment"}, 400
+        group = _pending_ai_group(existing)
+        deleted_ids = [str(row.id) for row in group]
+        with batch_session():
+            for row in group:
+                row.delete()
+        return {"status": "success", "deleted": deleted_ids}, 200
+
 
 def payload_to_assessment(data: dict) -> "tuple[DBAssessment | dict[str, str], int]":
     """
