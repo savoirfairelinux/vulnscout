@@ -898,7 +898,7 @@ type VariantScopedSnapshot = {
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
-            .filter(a => a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .filter(a => a.origin !== "ai" && a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
                 return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
@@ -915,7 +915,7 @@ type VariantScopedSnapshot = {
         // now-deprecated versions that are no longer in the active SBOM.
         const assessmentPkgs = [...new Set(
             allVulnAssessments
-                .filter(a => a.variant_id === variant.id)
+                .filter(a => a.origin !== "ai" && a.variant_id === variant.id)
                 .flatMap(a => a.packages)
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
