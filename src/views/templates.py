@@ -62,7 +62,12 @@ class Templates:
         kwargs["packages"] = self.packagesCtrl.to_dict()
         kwargs["unfiltered_vulnerabilities"] = self.vulnerabilitiesCtrl.to_dict()
         kwargs["vulnerabilities"] = {}
-        kwargs["unfiltered_assessments"] = self.assessmentsCtrl.to_dict()
+        # Exclude pending AI-generated assessments from reports — they are not
+        # yet reviewed/approved. Their origin becomes "custom" once approved.
+        kwargs["unfiltered_assessments"] = {
+            aid: a for aid, a in self.assessmentsCtrl.to_dict().items()
+            if a.get("origin") != "ai"
+        }
         kwargs["assessments"] = {}
 
         if self.projectsCtrl is not None:
