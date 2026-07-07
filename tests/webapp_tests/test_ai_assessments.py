@@ -356,3 +356,61 @@ def test_pending_ai_excluded_from_scan_global_result(client):
     data = json.loads(client.get(f"/api/scans/{SCAN_UUID}/global-result").data)
     assert data["assessment_count"] == 0
     assert data["assessments"] == []
+
+
+def _cyclonedx_vuln_analysis(client):
+    """The CycloneDX VEX analysis emitted for VULN_ID (or None if absent)."""
+    from src.views.cyclonedx import CycloneDx
+    from src.controllers.cache import ControllersCache
+    with client.application.app_context():
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
+        output = json.loads(CycloneDx(ctrls).output_as_json())
+    for v in output.get("vulnerabilities", []):
+        if v.get("id") == VULN_ID:
+            return v.get("analysis")
+    return None
+
+
+def test_pending_ai_excluded_from_cyclonedx_export(client):
+    before = _cyclonedx_vuln_analysis(client)
+
+    aid = _get_first_ai_id(client)
+
+    # Pending AI must not surface as the exported VEX analysis.
+    assert _cyclonedx_vuln_analysis(client) == before
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+
+    # Once approved (origin -> custom) it becomes the exported analysis.
+    assert _cyclonedx_vuln_analysis(client) != before
+
+
+def _report_assessment_ids(client):
+    """Assessment ids exposed to report templates via unfiltered_assessments."""
+    from jinja2 import DictLoader
+    from src.views.templates import Templates
+    from src.controllers.cache import ControllersCache
+    with client.application.app_context():
+        ctrls = ControllersCache()
+        ctrls.packages._preload_cache()
+        templ = Templates(ctrls)
+        templ.env.loader = DictLoader(
+            {"__ai_probe__": "{{ unfiltered_assessments.keys() | list | join(',') }}"}
+        )
+        rendered = templ.render("__ai_probe__")
+    return set(filter(None, rendered.split(",")))
+
+
+def test_pending_ai_excluded_from_report_templates(client):
+    aid = _get_first_ai_id(client)
+
+    # Pending AI is not passed to report templates.
+    assert aid not in _report_assessment_ids(client)
+
+    resp = client.post(f"/api/assessments/{aid}/approve")
+    assert resp.status_code == 200
+
+    # After approval it appears in the report feed.
+    assert aid in _report_assessment_ids(client)
