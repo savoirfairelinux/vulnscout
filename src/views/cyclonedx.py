@@ -250,6 +250,9 @@ class CycloneDx:
                 assess.add_response("workaround_available")
 
             for assessment in self.assessmentsCtrl.gets_by_vuln(vulnerability.id):
+                # Never merge into / adopt the id of a pending AI assessment.
+                if getattr(assessment, "origin", None) == "ai":
+                    continue
                 if (assessment.is_compatible_status(assess.status)
                    and assessment.is_compatible_justification(assess.justification)
                    and assess.status_notes is not None):
@@ -372,6 +375,11 @@ class CycloneDx:
         """
         last_assessment = None
         for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_obj.id):
+            # Pending AI-generated assessments are not yet reviewed/approved, so
+            # they must not leak into the CycloneDX VEX export until a human
+            # approves them (at which point their origin becomes "custom").
+            if getattr(assessment, "origin", None) == "ai":
+                continue
             if last_assessment is None or (
                 normalize_timestamp_for_sort(last_assessment.timestamp)
                 < normalize_timestamp_for_sort(assessment.timestamp)
