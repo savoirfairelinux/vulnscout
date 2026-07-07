@@ -1260,6 +1260,68 @@ def test_import_statements_not_skipped_when_only_scanner_assessment_exists(app):
     assert len(created) == 1
 
 
+def test_import_statements_preserves_original_timestamp(app):
+    """The OpenVEX statement timestamp must be persisted on the assessment.
+
+    This keeps exports ordered by the date of the custom assessment and makes
+    the exported file reproducible when two developers import each other's
+    assessments (the date travels with the assessment instead of being reset
+    to the import time).
+    """
+    from src.helpers.assessment_io import import_statements
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+    from src.models.assessment import Assessment
+    from src.helpers.datetime_utils import ensure_utc_iso
+
+    original_ts = "2024-05-01T12:00:00+00:00"
+    with app.app_context():
+        Package.find_or_create("tspreserve", "1.0.0", supplier="")
+        Vulnerability.get_or_create("CVE-2024-90001")
+
+        statements = [{
+            "vulnerability": {"name": "CVE-2024-90001"},
+            "status": "fixed",
+            "products": ["tspreserve@1.0.0"],
+            "timestamp": original_ts,
+        }]
+        created, errors, skipped = import_statements(statements, VARIANT_UUID)
+
+        assert errors == []
+        assert len(created) == 1
+
+        finding = Finding.get_or_create(
+            Package.find_or_create("tspreserve", "1.0.0", supplier="").id,
+            "CVE-2024-90001",
+        )
+        stored = Assessment.get_by_finding_and_variant(finding.id, VARIANT_UUID)
+        assert stored
+        assert ensure_utc_iso(stored[0].timestamp) == original_ts
+
+
+def test_import_statements_invalid_timestamp_falls_back(app):
+    """An unparseable statement timestamp must not break the import."""
+    from src.helpers.assessment_io import import_statements
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+
+    with app.app_context():
+        Package.find_or_create("tsbad", "1.0.0", supplier="")
+        Vulnerability.get_or_create("CVE-2024-90002")
+
+        statements = [{
+            "vulnerability": {"name": "CVE-2024-90002"},
+            "status": "fixed",
+            "products": ["tsbad@1.0.0"],
+            "timestamp": "not-a-date",
+        }]
+        created, errors, skipped = import_statements(statements, VARIANT_UUID)
+
+    assert errors == []
+    assert len(created) == 1
+
+
 def test_import_custom_data_not_skipped_when_only_scanner_assessment_exists(app, client):
     """A scanner-origin assessment must not block importing a custom one.
 

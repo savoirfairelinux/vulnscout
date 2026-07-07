@@ -585,6 +585,61 @@ class TestBuildOpenvexDoc:
             doc = build_openvex_doc([assess], "author")
         assert "action_statement_timestamp" in doc["statements"][0]
 
+    def _make_assessment(self, vuln_id, pkg, ts):
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "affected", "timestamp": ts}
+        assess.vuln_id = vuln_id
+        assess.packages = [pkg]
+        assess.source = "s"
+        assess.origin = "o"
+        return assess
+
+    def test_statements_ordered_by_assessment_date(self):
+        """GIVEN assessments in arbitrary order WHEN building doc THEN statements sorted by date."""
+        a_new = self._make_assessment("CVE-2021-0003", "pkg@1.0", "2025-03-01T00:00:00+00:00")
+        a_old = self._make_assessment("CVE-2021-0001", "pkg@1.0", "2025-01-01T00:00:00+00:00")
+        a_mid = self._make_assessment("CVE-2021-0002", "pkg@1.0", "2025-02-01T00:00:00+00:00")
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([a_new, a_old, a_mid], "author")
+        names = [s["vulnerability"]["name"] for s in doc["statements"]]
+        assert names == ["CVE-2021-0001", "CVE-2021-0002", "CVE-2021-0003"]
+
+    def test_equal_dates_ordered_by_vuln_then_package(self):
+        """GIVEN assessments with equal dates WHEN building doc THEN tie-broken deterministically."""
+        ts = "2025-01-01T00:00:00+00:00"
+        a_b = self._make_assessment("CVE-2021-0002", "zlib@1.0", ts)
+        a_a2 = self._make_assessment("CVE-2021-0001", "zlib@2.0", ts)
+        a_a1 = self._make_assessment("CVE-2021-0001", "zlib@1.0", ts)
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([a_b, a_a2, a_a1], "author")
+        keys = [
+            (s["vulnerability"]["name"], s["products"][0]["@id"])
+            for s in doc["statements"]
+        ]
+        assert keys == [
+            ("CVE-2021-0001", "zlib@1.0"),
+            ("CVE-2021-0001", "zlib@2.0"),
+            ("CVE-2021-0002", "zlib@1.0"),
+        ]
+
+    def test_ordering_independent_of_input_order(self):
+        """GIVEN the same assessments in two different orders THEN identical output ordering."""
+        specs = [
+            ("CVE-2021-0003", "pkg@1.0", "2025-03-01T00:00:00+00:00"),
+            ("CVE-2021-0001", "pkg@1.0", "2025-01-01T00:00:00+00:00"),
+            ("CVE-2021-0002", "pkg@1.0", "2025-02-01T00:00:00+00:00"),
+        ]
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc1 = build_openvex_doc(
+                [self._make_assessment(*s) for s in specs], "author"
+            )
+            doc2 = build_openvex_doc(
+                [self._make_assessment(*s) for s in reversed(specs)], "author"
+            )
+        names1 = [s["vulnerability"]["name"] for s in doc1["statements"]]
+        names2 = [s["vulnerability"]["name"] for s in doc2["statements"]]
+        assert names1 == names2
+
 
 # ---------------------------------------------------------------------------
 # build_openvex_archive() tests
