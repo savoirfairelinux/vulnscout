@@ -196,6 +196,37 @@ class Assessments {
         if (!Array.isArray(data)) return [];
         return data;
     }
+
+    /** Approve a pending AI assessment group and return the promoted assessments. */
+    static async approveAi(assessmentId: string): Promise<Assessment[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { method: "POST", mode: "cors" });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (!Array.isArray(data?.assessments)) return [];
+        return data.assessments.flatMap(asAssessment);
+    }
+
+    /** Reject a pending AI assessment group and return the deleted assessment ids. */
+    static async rejectAi(assessmentId: string): Promise<string[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reject`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), { method: "POST", mode: "cors" });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return asStringArray(data?.deleted);
+    }
 }
 
 export default Assessments;

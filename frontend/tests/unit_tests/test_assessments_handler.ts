@@ -296,6 +296,103 @@ describe('Assessments API', () => {
     const url = new URL(fetchMock.mock.calls[0][0] as string);
     expect(url.searchParams.get('project_id')).toBe('proj-4');
   });
+
+  test('approveAi posts to the approve endpoint', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ status: 'success', assessments: [] }), {
+      status: 200,
+    });
+    await Assessments.approveAi('abc');
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/assessments/abc/approve');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', mode: 'cors' });
+  });
+
+  test('approveAi returns parsed assessments from response payload', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({
+      status: 'success',
+      assessments: [{
+        id: 'approved-1',
+        vuln_id: 'CVE-2026-1',
+        status: 'fixed',
+        timestamp: '2026-01-01T00:00:00',
+        packages: ['pkg@1.0'],
+        responses: [],
+      }],
+    }), { status: 200 });
+    const approved = await Assessments.approveAi('abc');
+    expect(approved).toEqual([expect.objectContaining({
+      id: 'approved-1',
+      vuln_id: 'CVE-2026-1',
+      simplified_status: 'Fixed',
+    })]);
+  });
+
+  test('approveAi returns empty array when assessments payload is not an array', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ status: 'success', assessments: null }), {
+      status: 200,
+    });
+    await expect(Assessments.approveAi('abc')).resolves.toEqual([]);
+  });
+
+  test('approveAi throws backend error message on failure', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ error: 'Not a pending AI assessment' }), {
+      status: 400,
+    });
+    await expect(Assessments.approveAi('abc')).rejects.toThrow('Not a pending AI assessment');
+  });
+
+  test('approveAi falls back to HTTP status when error payload cannot be parsed', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: false,
+        status: 400,
+        json: () => Promise.reject(new Error('bad json')),
+      } as Response)
+    );
+    await expect(Assessments.approveAi('abc')).rejects.toThrow('HTTP 400');
+  });
+
+  test('rejectAi posts to the reject endpoint', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ status: 'success', deleted: ['abc'] }), {
+      status: 200,
+    });
+    const deleted = await Assessments.rejectAi('abc');
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/assessments/abc/reject');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', mode: 'cors' });
+    expect(deleted).toEqual(['abc']);
+  });
+
+  test('rejectAi filters deleted ids to strings', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ status: 'success', deleted: ['abc', 123, null, 'def'] }), {
+      status: 200,
+    });
+    const deleted = await Assessments.rejectAi('abc');
+    expect(deleted).toEqual(['abc', 'def']);
+  });
+
+  test('rejectAi returns empty array when deleted payload is not an array', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ status: 'success', deleted: null }), {
+      status: 200,
+    });
+    await expect(Assessments.rejectAi('abc')).resolves.toEqual([]);
+  });
+
+  test('rejectAi throws backend error message on failure', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ error: 'Assessment not found' }), {
+      status: 404,
+    });
+    await expect(Assessments.rejectAi('abc')).rejects.toThrow('Assessment not found');
+  });
+
+  test('rejectAi falls back to HTTP status when error payload cannot be parsed', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.reject(new Error('bad json')),
+      } as Response)
+    );
+    await expect(Assessments.rejectAi('abc')).rejects.toThrow('HTTP 404');
+  });
 });
 
 describe('asAssessment outdated flag', () => {
