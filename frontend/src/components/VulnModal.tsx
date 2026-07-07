@@ -2,7 +2,7 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
-import { asAssessment } from "../handlers/assessments";
+import Assessments, { asAssessment } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -543,6 +543,50 @@ type VariantScopedSnapshot = {
         setShowDeleteConfirm(true);
     };
 
+    const handleApproveAiAssessment = async (group: AssessmentGroup) => {
+        const firstId = group.assessments[0].id;
+        try {
+            const approved = await Assessments.approveAi(firstId);
+            const approvedIds = new Set(group.assessments.map(a => a.id));
+            const approvedById = new Map(approved.map(a => [a.id, a]));
+
+            setAllVulnAssessments(prev => prev.map(a => {
+                if (!approvedIds.has(a.id)) return a;
+                return approvedById.get(a.id) ?? { ...a, origin: "custom" };
+            }));
+
+            approved.forEach(a => {
+                if (!vuln.assessments.some(x => x.id === a.id)) {
+                    vuln.assessments.push(a);
+                } else {
+                    vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
+                }
+            });
+
+            const latest = vuln.assessments.slice().sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+            if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
+
+            patchVuln(vuln.id, vuln);
+            showMessage("AI assessment approved!", "success");
+        } catch (e) {
+            showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
+        }
+    };
+
+    const handleRejectAiAssessment = async (group: AssessmentGroup) => {
+        const firstId = group.assessments[0].id;
+        try {
+            await Assessments.rejectAi(firstId);
+            const rejectedIds = new Set(group.assessments.map(a => a.id));
+            setAllVulnAssessments(prev => prev.filter(a => !rejectedIds.has(a.id)));
+            showMessage("AI assessment rejected.", "success");
+        } catch (e) {
+            showMessage(`Failed to reject AI assessment: ${escape(String(e))}`, "error");
+        }
+    };
+
     const handleConfirmDelete = async () => {
         if (groupToDelete) {
             const idsToDelete = groupToDelete.assessments.map(a => a.id);
@@ -835,6 +879,22 @@ type VariantScopedSnapshot = {
     };
 
     const groupedAssessments = groupAssessments(vuln.assessments);
+    const pendingAiAssessments = allVulnAssessments.filter(a =>
+        a.origin === "ai" && (!variantId || a.variant_id === variantId));
+    const pendingAiByVariant = new Map<string, Assessment[]>();
+    for (const a of pendingAiAssessments) {
+        const key = a.variant_id ?? "__none__";
+        if (!pendingAiByVariant.has(key)) pendingAiByVariant.set(key, []);
+        pendingAiByVariant.get(key)!.push(a);
+    }
+    const pendingAiGroups: AssessmentGroup[] = [...pendingAiByVariant.entries()].map(
+        ([key, assessments]) => ({
+            key,
+            assessments,
+            timestamp: assessments[0].timestamp,
+            packages: [...new Set(assessments.flatMap(a => a.packages))].sort(),
+        })
+    );
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
@@ -1644,6 +1704,65 @@ type VariantScopedSnapshot = {
                                         />
                                     </li>
                                 )}
+
+                                {!readOnly && pendingAiGroups.map(group => {
+                                    const firstAssess = group.assessments[0];
+                                    return (
+                                        <div
+                                            key={`ai-${encodeURIComponent(group.key)}`}
+                                            className="mb-6 p-4 rounded-lg border-2 border-amber-500 bg-amber-950/30"
+                                        >
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="inline-flex items-center gap-2 text-amber-300 font-semibold">
+                                                    <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
+                                                    AI-generated · Pending review
+                                                    {(() => {
+                                                        const v = availableVariants.find(v => v.id === firstAssess.variant_id);
+                                                        return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
+                                                    })()}
+                                                </span>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleApproveAiAssessment(group)}
+                                                        className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm"
+                                                    >
+                                                        Approve
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRejectAiAssessment(group)}
+                                                        className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-sm"
+                                                    >
+                                                        Reject
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="text-sm mb-2 flex flex-wrap gap-1">
+                                                {group.packages.map(pkg => {
+                                                    const { nameVersion, supplier } = splitPkgId(pkg);
+                                                    const supplierName = extractSupplierName(supplier);
+                                                    return (
+                                                        <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                                            <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
+                                                            {nameVersion}
+                                                            {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                            <h3 className="text-lg font-semibold text-white mb-1">
+                                                {firstAssess.simplified_status}
+                                                {firstAssess.justification && <> - {firstAssess.justification}</>}
+                                            </h3>
+                                            <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                {firstAssess.impact_statement && <>{firstAssess.impact_statement}<br/></>}
+                                                {firstAssess.status_notes ?? 'no status notes'}<br/>
+                                                {firstAssess.workaround ?? 'no workaround available'}
+                                            </p>
+                                        </div>
+                                    );
+                                })}
 
                                 {groupedAssessments.map(group => {
                                     const dt = new Date(group.timestamp);
