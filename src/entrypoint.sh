@@ -615,11 +615,6 @@ cmd_daemon() {
     tail -f /dev/null
 }
 
-cmd_clear_inputs() {
-    rm -f "$INPUTS_DIR"/*/*
-    echo "Cleared all inputs"
-}
-
 #######################################
 # Print status update to file + console
 # Globals:
@@ -692,8 +687,6 @@ while [[ $# -gt 0 ]]; do
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-sbom-cve-check-scan)
             SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
-        --clear-inputs)
-            cmd_clear_inputs; shift ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
         --serve)

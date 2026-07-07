@@ -50,7 +50,6 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
 | `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
 | `--perform-sbom-cve-check-scan` | Run a CVE scan using local sbom-cve-check databases |
-| `--clear-inputs` | Remove all staged input files |
 
 ### Scan & Output Commands
 
