@@ -1,7 +1,7 @@
 """add project_context, variant_context, context_files tables
 
-Revision ID: r4a5b6c7d8e9
-Revises: q3f4a5b6c7d8
+Revision ID: t6c7d8e9f0a1
+Revises: s5b6c7d8e9f0
 Create Date: 2026-06-29 00:00:00.000000
 
 """
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'r4a5b6c7d8e9'
-down_revision = 'q3f4a5b6c7d8'
+revision = 't6c7d8e9f0a1'
+down_revision = 's5b6c7d8e9f0'
 branch_labels = None
 depends_on = None
 
