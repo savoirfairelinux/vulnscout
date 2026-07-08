@@ -55,6 +55,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         author_name: "vulnscout",
         client_name: "",
         contact_email: "",
+        grype_memlimit: "",
     });
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);

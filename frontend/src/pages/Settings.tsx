@@ -12,6 +12,7 @@ import {
   faXmark,
   faKey,
   faPenToSquare,
+  faBug,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -59,6 +60,11 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     contact_email: "",
   });
 
+  // ---- Grype settings ----
+  const [grypeMemlimitInput, setGrypeMemlimitInput] = useState("");
+  const [grypeMemlimitBusy, setGrypeMemlimitBusy] = useState(false);
+  const [grypeMemlimitMsg, setGrypeMemlimitMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
   useEffect(() => {
     Config.get()
       .then((config) => {
@@ -69,6 +75,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           client_name: config.client_name,
           contact_email: config.contact_email,
         });
+        setGrypeMemlimitInput(config.grype_memlimit ?? "");
       })
       .catch(() => {
         if (unmountedRef.current) return;
@@ -99,6 +106,23 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       if (!unmountedRef.current) {
         setConfigBusy(false);
       }
+    }
+  };
+
+  const handleSaveGrypeSetting = async () => {
+    if (grypeMemlimitBusy) return;
+    setGrypeMemlimitBusy(true);
+    setGrypeMemlimitMsg(null);
+    try {
+      const updated = await Config.patch({ grype_memlimit: grypeMemlimitInput.trim() });
+      if (unmountedRef.current) return;
+      setGrypeMemlimitInput(updated.grype_memlimit ?? "");
+      setGrypeMemlimitMsg({ text: "Grype memory limit saved.", type: "success" });
+    } catch (e: any) {
+      if (unmountedRef.current) return;
+      setGrypeMemlimitMsg({ text: e?.message || "Failed to save Grype settings.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setGrypeMemlimitBusy(false);
     }
   };
 
@@ -1155,6 +1179,75 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                   {importMsg}
                 </span>
               )}
+            </div>
+          </div>
+        </section>
+
+        {/* ======== Grype Scanner ======== */}
+        <section aria-labelledby="settings-heading-grype">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faBug} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-grype" className="text-xl font-bold text-white">Grype Scanner</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* ---- GRYPE_MEMLIMIT ---- */}
+            <div className="space-y-2">
+              <label htmlFor="grype-memlimit-input" className="block text-sm text-zinc-300 font-semibold">
+                Memory Limit <span className="font-normal text-zinc-500">(GRYPE_MEMLIMIT)</span>
+              </label>
+              <p className="text-zinc-400 text-sm">
+                Caps the RAM used by the Grype binary via Go's soft memory limit (<code className="text-zinc-300 bg-slate-900 px-1 rounded text-xs">GOMEMLIMIT</code>).
+                Leave blank to use the auto-default: <strong className="text-zinc-300">~80 % of the container/cgroup memory limit</strong>,
+                which prevents OOM kills in CI without any configuration.
+                Set to <code className="text-zinc-300 bg-slate-900 px-1 rounded text-xs">off</code> to disable the cap entirely.
+              </p>
+              <input
+                id="grype-memlimit-input"
+                type="text"
+                value={grypeMemlimitInput}
+                onChange={(e) => { setGrypeMemlimitInput(e.target.value); setGrypeMemlimitMsg(null); }}
+                placeholder="auto (leave blank) · e.g. 4GiB · 512MiB · 1073741824 · off"
+                className={inputClass}
+                disabled={grypeMemlimitBusy}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="grype-memlimit-hint"
+              />
+              <p id="grype-memlimit-hint" className="text-zinc-500 text-xs">
+                Valid values: Go memory strings (<code className="bg-slate-900 px-0.5 rounded">4GiB</code>,{" "}
+                <code className="bg-slate-900 px-0.5 rounded">512MiB</code>,{" "}
+                <code className="bg-slate-900 px-0.5 rounded">1073741824</code>),{" "}
+                <code className="bg-slate-900 px-0.5 rounded">off</code> / <code className="bg-slate-900 px-0.5 rounded">disabled</code> to remove the cap,
+                or blank to restore the auto-default.
+              </p>
+            </div>
+
+            {/* ---- Feedback ---- */}
+            {grypeMemlimitMsg && (
+              <MessageBanner
+                type={grypeMemlimitMsg.type}
+                message={grypeMemlimitMsg.text}
+                isVisible={true}
+                onClose={() => setGrypeMemlimitMsg(null)}
+              />
+            )}
+
+            {/* ---- Submit ---- */}
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleSaveGrypeSetting}
+                disabled={grypeMemlimitBusy}
+                className={btnPrimary}
+                aria-busy={grypeMemlimitBusy}
+              >
+                {grypeMemlimitBusy ? (
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                ) : (
+                  <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                )}
+                Save
+              </button>
             </div>
           </div>
         </section>
