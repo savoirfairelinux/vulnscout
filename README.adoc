@@ -211,6 +211,20 @@ This can be chained with other inputs to scan newly added files immediately:
 ./vulnscout --project demo --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json --perform-grype-scan
 ----
 
+`--perform-grype-scan` can consume significant RAM when the SBOM contains many packages.
+By default VulnScout caps Grype's memory at ~80 % of the container/cgroup limit.
+Override with the `GRYPE_MEMLIMIT` environment variable (see the Environment Variables table above).
+
+[source,shell]
+----
+# Persistent: keep Grype below 6 GiB across all future scans in this container
+./vulnscout --config GRYPE_MEMLIMIT 6GiB
+
+# One-off: override via the host environment before starting the container
+export GRYPE_MEMLIMIT=24GiB
+./vulnscout --project demo --variant x86 --perform-grype-scan
+----
+
 ===  Generating Reports
 
 Reports are generated from AsciiDoc templates. VulnScout ships with built-in templates and also supports custom ones.
@@ -401,6 +415,10 @@ The following environment variables can be set via `vulnscout config` or exporte
 |`NVD_API_KEY`
 |NVD API key for higher rate limits (https://nvd.nist.gov/developers/request-an-api-key)
 |_(none)_
+
+|`GRYPE_MEMLIMIT`
+|Cap the RAM used by the `grype` binary (Go soft memory limit, `GOMEMLIMIT`). Accepts the same unit strings as Go: `4GiB`, `8192MiB`, plain bytes. Set to `off` to disable. Default (unset): auto (~80 % of the container/cgroup memory limit, recommended for CI).
+|_(auto)_
 
 |`IGNORE_PARSING_ERRORS`
 |Continue scanning even if input files contain errors

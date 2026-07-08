@@ -46,7 +46,7 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--add-openvex <path>` | Add an OpenVEX JSON file |
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
-| `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back |
+| `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back. Memory capped by `GRYPE_MEMLIMIT` (default: auto ~80 % of cgroup limit) |
 | `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
 | `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
 | `--perform-sbom-cve-check-scan` | Run a CVE scan using local sbom-cve-check databases |

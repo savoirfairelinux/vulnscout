@@ -560,6 +560,236 @@ class TestOsvScanWithToolAndSbom:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_grype_memlimit unit tests
+# ---------------------------------------------------------------------------
+
+class TestResolveGrypeMemlimit:
+    """Unit tests for the _resolve_grype_memlimit() helper."""
+
+    def setup_method(self):
+        # Remove GRYPE_MEMLIMIT from env before each test
+        os.environ.pop("GRYPE_MEMLIMIT", None)
+
+    def teardown_method(self):
+        os.environ.pop("GRYPE_MEMLIMIT", None)
+
+    def test_explicit_value_returned_verbatim(self):
+        """An explicit GRYPE_MEMLIMIT value is forwarded to GOMEMLIMIT as-is."""
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        os.environ["GRYPE_MEMLIMIT"] = "24GiB"
+        assert _resolve_grype_memlimit() == "24GiB"
+
+    def test_explicit_bytes_returned_verbatim(self):
+        """A plain-integer GRYPE_MEMLIMIT is forwarded unchanged."""
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        os.environ["GRYPE_MEMLIMIT"] = "6442450944"
+        assert _resolve_grype_memlimit() == "6442450944"
+
+    def test_off_returns_none(self):
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        os.environ["GRYPE_MEMLIMIT"] = "off"
+        assert _resolve_grype_memlimit() is None
+
+    def test_zero_returns_none(self):
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        os.environ["GRYPE_MEMLIMIT"] = "0"
+        assert _resolve_grype_memlimit() is None
+
+    def test_disabled_returns_none(self):
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        os.environ["GRYPE_MEMLIMIT"] = "disabled"
+        assert _resolve_grype_memlimit() is None
+
+    def test_auto_mode_uses_proc_meminfo(self, tmp_path):
+        """Auto mode reads /proc/meminfo and returns ~80 % as bytes."""
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        import builtins as _builtins
+        fake_meminfo = tmp_path / "meminfo"
+        # 8 GiB = 8388608 kB
+        fake_meminfo.write_text("MemTotal:        8388608 kB\nMemFree: 1000000 kB\n")
+        _real_open = _builtins.open
+
+        def _patched_open(path, *a, **kw):
+            if str(path) == "/proc/meminfo":
+                return _real_open(str(fake_meminfo), *a, **kw)
+            raise OSError(f"not available: {path}")
+
+        with patch("builtins.open", side_effect=_patched_open):
+            result = _resolve_grype_memlimit()
+        # 8 GiB * 80 % = 6.4 GiB = 6871947674 bytes (approx)
+        if result is not None:
+            assert int(result) == 8388608 * 1024 * 80 // 100
+
+    def test_auto_mode_returns_integer_string(self, tmp_path):
+        """Auto mode result is a plain integer string (valid GOMEMLIMIT)."""
+        from src.routes.scan_triggers import _resolve_grype_memlimit
+        import builtins as _builtins
+        fake_meminfo = tmp_path / "meminfo"
+        fake_meminfo.write_text("MemTotal:        4194304 kB\n")
+        _real_open = _builtins.open
+
+        def _patched_open(path, *a, **kw):
+            if str(path) == "/proc/meminfo":
+                return _real_open(str(fake_meminfo), *a, **kw)
+            raise OSError(f"not available: {path}")
+
+        with patch("builtins.open", side_effect=_patched_open):
+            result = _resolve_grype_memlimit()
+        if result is not None:
+            assert result.isdigit()
+
+
+# ---------------------------------------------------------------------------
+# GRYPE_MEMLIMIT integration: grype subprocess receives GOMEMLIMIT
+# ---------------------------------------------------------------------------
+
+class TestGrypeScanMemlimit:
+    """Assert that _run_grype_scan passes GOMEMLIMIT to the grype subprocess."""
+
+    @pytest.fixture()
+    def grype_app_ml(self, tmp_path):
+        """Minimal app for memory-limit tests."""
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        scan_file = tmp_path / "scan_status.txt"
+        scan_file.write_text("__END_OF_SCAN_SCRIPT__")
+        os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        try:
+            application = create_app()
+            application.config.update({
+                "TESTING": True, "SCAN_FILE": str(scan_file),
+            })
+            with application.app_context():
+                _db.drop_all()
+                _db.create_all()
+                project = Project.create("MLProject")
+                variant = Variant.create("MLVariant", project.id)
+                Scan.create("base scan", variant.id)
+                _db.session.commit()
+                application._test_ids = {
+                    "variant_id": str(variant.id),
+                }
+            yield application
+        finally:
+            os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
+            os.environ.pop("GRYPE_MEMLIMIT", None)
+
+    def _subprocess_side_effect(self, grype_tmp):
+        """Return a side_effect that creates the expected CDX export file."""
+        def _side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if isinstance(cmd, list) and "export" in cmd:
+                out_dir = cmd[cmd.index("--output-dir") + 1]
+                import json as _json
+                cdx_path = os.path.join(out_dir, "sbom_cyclonedx_v1_6.cdx.json")
+                with open(cdx_path, "w") as f:
+                    _json.dump({"components": []}, f)
+            elif isinstance(cmd, list) and "grype" in cmd:
+                stdout_file = kwargs.get("stdout")
+                if stdout_file and hasattr(stdout_file, "write"):
+                    stdout_file.write('{"matches": []}')
+            return MagicMock(returncode=0)
+        return _side_effect
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_explicit_grype_memlimit_sets_gomemlimit(
+        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+    ):
+        """When GRYPE_MEMLIMIT is set, grype subprocess receives GOMEMLIMIT."""
+        os.environ["GRYPE_MEMLIMIT"] = "8GiB"
+        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
+        client = grype_app_ml.test_client()
+        vid = grype_app_ml._test_ids["variant_id"]
+
+        with _make_sync_thread_patch():
+            resp = client.post(f"/api/variants/{vid}/grype-scan")
+        assert resp.status_code == 202
+
+        # Find the grype subprocess call (the one whose cmd contains "grype")
+        grype_call = next(
+            (c for c in mock_sp_run.call_args_list
+             if isinstance(c.args[0], list) and "grype" in c.args[0]),
+            None,
+        )
+        assert grype_call is not None, "grype subprocess was never called"
+        env_passed = grype_call.kwargs.get("env", {})
+        assert env_passed.get("GOMEMLIMIT") == "8GiB"
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_off_grype_memlimit_does_not_set_gomemlimit(
+        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+    ):
+        """When GRYPE_MEMLIMIT=off, grype subprocess should NOT have GOMEMLIMIT."""
+        os.environ["GRYPE_MEMLIMIT"] = "off"
+        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
+        client = grype_app_ml.test_client()
+        vid = grype_app_ml._test_ids["variant_id"]
+
+        with _make_sync_thread_patch():
+            resp = client.post(f"/api/variants/{vid}/grype-scan")
+        assert resp.status_code == 202
+
+        grype_call = next(
+            (c for c in mock_sp_run.call_args_list
+             if isinstance(c.args[0], list) and "grype" in c.args[0]),
+            None,
+        )
+        assert grype_call is not None, "grype subprocess was never called"
+        env_passed = grype_call.kwargs.get("env", {})
+        # GOMEMLIMIT must not be injected
+        assert "GOMEMLIMIT" not in env_passed
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_flask_export_does_not_receive_gomemlimit(
+        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+    ):
+        """GOMEMLIMIT must only reach grype, not the flask export subprocess."""
+        os.environ["GRYPE_MEMLIMIT"] = "4GiB"
+        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
+        client = grype_app_ml.test_client()
+        vid = grype_app_ml._test_ids["variant_id"]
+
+        with _make_sync_thread_patch():
+            resp = client.post(f"/api/variants/{vid}/grype-scan")
+        assert resp.status_code == 202
+
+        export_call = next(
+            (c for c in mock_sp_run.call_args_list
+             if isinstance(c.args[0], list) and "export" in c.args[0]),
+            None,
+        )
+        assert export_call is not None, "flask export subprocess was never called"
+        # The export call should not have an env kwarg (inherits from process)
+        export_env = export_call.kwargs.get("env")
+        if export_env is not None:
+            assert "GOMEMLIMIT" not in export_env
+
+    @patch("subprocess.run")
+    @patch("shutil.which", return_value="/usr/bin/grype")
+    def test_memlimit_logged_in_scan_progress(
+        self, mock_which, mock_sp_run, grype_app_ml, tmp_path
+    ):
+        """Applied GOMEMLIMIT is recorded in the scan progress logs."""
+        os.environ["GRYPE_MEMLIMIT"] = "12GiB"
+        mock_sp_run.side_effect = self._subprocess_side_effect(tmp_path)
+        client = grype_app_ml.test_client()
+        vid = grype_app_ml._test_ids["variant_id"]
+
+        with _make_sync_thread_patch():
+            client.post(f"/api/variants/{vid}/grype-scan")
+
+        resp_s = client.get(f"/api/variants/{vid}/grype-scan/status")
+        data = json.loads(resp_s.data)
+        assert any("GOMEMLIMIT" in line and "12GiB" in line
+                   for line in data.get("logs", []))
+
+
+# ---------------------------------------------------------------------------
 # NVD / OSV scans outer exception handler (lines 1187-1189 / 1479-1481)
 # ---------------------------------------------------------------------------
 

@@ -43,6 +43,69 @@ def _read_exclude_kernel() -> bool:
     return request.args.get("exclude_kernel", "true").strip().lower() != "false"
 
 
+def _resolve_grype_memlimit() -> str | None:
+    """Translate ``GRYPE_MEMLIMIT`` into a ``GOMEMLIMIT`` value.
+
+    Returns the string to assign to ``GOMEMLIMIT``, or ``None`` if no limit
+    should be applied.
+
+    Behaviour:
+
+    * ``GRYPE_MEMLIMIT=off`` / ``0`` / ``disabled``  → ``None`` (no limit).
+    * ``GRYPE_MEMLIMIT=<value>`` (e.g. ``"4GiB"``) → returned verbatim.
+    * ``GRYPE_MEMLIMIT`` unset / empty → auto mode: ~80 % of the memory
+      limit detected from the container's cgroup (v2 ``memory.max``, v1
+      ``memory.limit_in_bytes``) or from ``/proc/meminfo`` MemTotal.
+      Returned as a plain integer number of bytes (GOMEMLIMIT accepts that).
+    """
+    raw = os.environ.get("GRYPE_MEMLIMIT", "").strip()
+
+    if raw.lower() in ("off", "0", "disabled"):
+        return None
+
+    if raw:
+        return raw
+
+    # Auto mode: probe cgroup / proc for the available memory ceiling.
+    mem_bytes = 0
+
+    cg2 = "/sys/fs/cgroup/memory.max"
+    cg1 = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    try:
+        with open(cg2) as fh:
+            val = fh.read().strip()
+        if val.isdigit() and int(val) > 0:
+            mem_bytes = int(val)
+    except OSError:
+        pass
+
+    if mem_bytes == 0:
+        try:
+            with open(cg1) as fh:
+                val = fh.read().strip()
+            # cgroup v1 uses a large sentinel (PAGE_COUNTER_MAX) when unconstrained
+            if val.isdigit() and 0 < int(val) < 9223372036854771712:
+                mem_bytes = int(val)
+        except OSError:
+            pass
+
+    if mem_bytes == 0:
+        try:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        mem_bytes = kb * 1024
+                        break
+        except OSError:
+            pass
+
+    if mem_bytes > 0:
+        return str(mem_bytes * 80 // 100)
+
+    return None
+
+
 def init_app(app: Flask) -> None:
 
     # ------------------------------------------------------------------
@@ -200,6 +263,13 @@ def init_app(app: Flask) -> None:
                         "[2/4] Running Grype vulnerability scanner…"
                     )
                     grype_out = os.path.join(grype_tmp, "grype_results.grype.json")
+                    grype_env = os.environ.copy()
+                    _gomemlimit = _resolve_grype_memlimit()
+                    if _gomemlimit is not None:
+                        grype_env["GOMEMLIMIT"] = _gomemlimit
+                        _grype_scans_in_progress[vid_str]["logs"].append(
+                            f"[2/4] Grype memory limit (GOMEMLIMIT): {_gomemlimit}"
+                        )
                     with open(grype_out, "w") as gf:
                         subprocess.run(
                             ["grype", "--add-cpes-if-none",
@@ -207,6 +277,7 @@ def init_app(app: Flask) -> None:
                             cwd=base_dir, check=True, text=True,
                             stdout=gf, stderr=subprocess.PIPE,
                             timeout=600,
+                            env=grype_env,
                         )
                     _grype_scans_in_progress[vid_str]["done_count"] = 2
 

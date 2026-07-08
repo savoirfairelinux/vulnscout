@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+- `GRYPE_MEMLIMIT`: configurable memory cap for the `grype` subprocess (translates to Go's `GOMEMLIMIT`). Default: auto (~80 % of the container/cgroup memory limit), preventing OOM kills in memory-constrained CI environments. Set to an explicit value (e.g. `6GiB`) via `--config GRYPE_MEMLIMIT 6GiB` or the `GRYPE_MEMLIMIT` environment variable; set to `off` to disable the cap entirely.
+
 ---
 
 ## [0.17.1] - 2026-06-30

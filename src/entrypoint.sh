@@ -26,6 +26,65 @@ fi
 # finds (and, with SBOM_CVE_CHECK_AUTO_UPDATE=1, clones) them without an explicit env
 # var; config.env (sourced above) or an explicit override may still change this.
 export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/sbom_cve_check_databases}"
+
+# resolve_grype_memlimit  —  translate GRYPE_MEMLIMIT into a GOMEMLIMIT value.
+#
+# GRYPE_MEMLIMIT accepts:
+#   - An explicit memory string accepted by Go's runtime (e.g. "4GiB", "24GiB",
+#     "6442450944").  The value is forwarded to GOMEMLIMIT unchanged.
+#   - "off", "0", or "disabled"  —  disable the limit (no GOMEMLIMIT set).
+#   - Unset / empty  —  auto mode: compute ~80 % of the available memory limit
+#     detected from the container's cgroup (v2 memory.max or v1
+#     memory.limit_in_bytes) or, as a fallback, from /proc/meminfo MemTotal.
+#     Output as an integer number of bytes.
+#
+# Prints the effective GOMEMLIMIT value, or nothing if no limit should be set.
+resolve_grype_memlimit() {
+    local raw="${GRYPE_MEMLIMIT:-}"
+
+    # Explicit opt-out
+    if [[ "$raw" == "off" || "$raw" == "0" || "$raw" == "disabled" ]]; then
+        return 0
+    fi
+
+    # Explicit value — forward verbatim
+    if [[ -n "$raw" ]]; then
+        echo "$raw"
+        return 0
+    fi
+
+    # Auto mode: detect available memory and use 80 %.
+    # Try cgroup v2 first, then v1, then /proc/meminfo.
+    local mem_bytes=0
+    local cg2="/sys/fs/cgroup/memory.max"
+    local cg1="/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    if [[ -r "$cg2" ]]; then
+        local val
+        val=$(cat "$cg2" 2>/dev/null || true)
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val > 0 )); then
+            mem_bytes=$val
+        fi
+    fi
+    if (( mem_bytes == 0 )) && [[ -r "$cg1" ]]; then
+        local val
+        val=$(cat "$cg1" 2>/dev/null || true)
+        # cgroup v1 uses a large sentinel (PAGE_COUNTER_MAX) when unconstrained
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val > 0 && val < 9223372036854771712 )); then
+            mem_bytes=$val
+        fi
+    fi
+    if (( mem_bytes == 0 )) && [[ -r "/proc/meminfo" ]]; then
+        local kb
+        kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+        if [[ "$kb" =~ ^[0-9]+$ ]] && (( kb > 0 )); then
+            mem_bytes=$(( kb * 1024 ))
+        fi
+    fi
+
+    if (( mem_bytes > 0 )); then
+        echo $(( mem_bytes * 80 / 100 ))
+    fi
+}
 mkdir -p "$SBOM_CVE_CHECK_DATABASES_DIR" 2>/dev/null || true
 # Auto-update is on by default: the engine will clone/fetch the NVD-FKIE and CVEList
 # databases on first use and keep them current.  Set SBOM_CVE_CHECK_AUTO_UPDATE=0 to
@@ -236,6 +295,7 @@ cmd_scan() {
     export HTTPS_PROXY="${HTTPS_PROXY:-}"
     export NO_PROXY="${NO_PROXY:-}"
     export IGNORE_PARSING_ERRORS="${IGNORE_PARSING_ERRORS:-false}"
+    export GRYPE_MEMLIMIT="${GRYPE_MEMLIMIT:-}"
 
     if [[ -n "${MATCH_CONDITION:-}" ]]; then
         export MATCH_CONDITION
@@ -344,7 +404,14 @@ cmd_scan() {
                 mkdir -p "$INPUTS_DIR/grype"
                 local grype_out="$INPUTS_DIR/grype/grype_from_db.grype.json"
                 echo "Grype scan: $exported_cdx -> $grype_out"
-                grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                local _grype_gomemlimit
+                _grype_gomemlimit=$(resolve_grype_memlimit)
+                if [[ -n "$_grype_gomemlimit" ]]; then
+                    echo "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
+                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                else
+                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                fi
                 echo "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out")

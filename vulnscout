@@ -194,6 +194,11 @@ USER_UID=$(id -u)
 USER_GID=$(id -g)
 VITE_API_URL=http://localhost:7275
 REFRESH_REMOTE_DELAY=2w
+# GRYPE_MEMLIMIT — cap RAM used by the grype binary (Go soft memory limit).
+# Unset = auto (~80 % of the container/cgroup memory limit, recommended).
+# Explicit value examples: 4GiB  8GiB  24GiB  6442450944
+# Set to "off" to disable the limit entirely.
+#GRYPE_MEMLIMIT=
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
@@ -213,6 +218,9 @@ EOF
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
     # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
     [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
+    # Forward GRYPE_MEMLIMIT from the host so operators can cap grype RAM usage
+    # without editing config.env (e.g. export GRYPE_MEMLIMIT=24GiB before running).
+    [[ -n "${GRYPE_MEMLIMIT:-}" ]] && env_args+=(-e "GRYPE_MEMLIMIT=$GRYPE_MEMLIMIT")
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"

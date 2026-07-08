@@ -194,6 +194,25 @@ This can be chained with other inputs to scan newly added files immediately:
   --perform-grype-scan
 ```
 
+`--perform-grype-scan` can consume significant RAM on large SBOMs.
+VulnScout automatically caps Grype's memory at ~80 % of the container/cgroup limit.
+Use `GRYPE_MEMLIMIT` to override:
+
+```bash
+# Set a persistent limit
+./vulnscout --config GRYPE_MEMLIMIT 6GiB
+
+# Or export it on the host before running (forwarded into the container)
+export GRYPE_MEMLIMIT=24GiB
+./vulnscout --project demo --perform-grype-scan
+
+# Disable the limit entirely
+./vulnscout --config GRYPE_MEMLIMIT off
+```
+
+Accepts any value valid for Go's `GOMEMLIMIT` (`4GiB`, `8192MiB`, plain bytes).
+Set to `off`, `0`, or `disabled` to remove the cap.
+
 ---
 
 ## Performing an sbom-cve-check Scan
