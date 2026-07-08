@@ -105,7 +105,17 @@ const getStatusSummaryEntries = (counts: Record<string, number>): { status: stri
         });
 }
 
-const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
+const buildStatusSummary = (assessments: Assessment[], currentPackages?: string[]): StatusSummary => {
+    if (currentPackages && currentPackages.length > 0 && assessments.length > 0) {
+        const currentSet = new Set(currentPackages);
+        const filtered = assessments.filter(a =>
+            a.packages.length === 0 || a.packages.some(p => currentSet.has(p))
+        );
+        if (filtered.length > 0) {
+            assessments = filtered;
+        }
+    }
+
     if (assessments.length === 0) {
         return {
             counts: { unknown: 1 },
@@ -343,7 +353,7 @@ class Vulnerabilities {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
             const vulnAssessments = assessments_per_vuln[vuln.id];
-            const statusSummary = buildStatusSummary(vulnAssessments);
+            const statusSummary = buildStatusSummary(vulnAssessments, vuln.packages_current);
             return {
                 ...vuln,
                 simplified_status: statusSummary.dominant_status,
@@ -359,7 +369,7 @@ class Vulnerabilities {
                 const assessments = [...vuln.assessments, assessment].sort((a, b) => {
                     return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
                 });
-                const statusSummary = buildStatusSummary(assessments);
+                const statusSummary = buildStatusSummary(assessments, vuln.packages_current);
                 return {
                     ...vuln,
                     simplified_status: statusSummary.dominant_status,

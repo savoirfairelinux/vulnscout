@@ -484,6 +484,49 @@ describe('buildStatusSummary helpers', () => {
     expect(summary.dominant_status).toBe('Fixed');
     expect(Object.keys(summary.counts)).toHaveLength(1);
   });
+
+  const makePkgAssessment = (
+    simplified_status: string, timestamp: string, variant_id: string, packages: string[],
+  ) => ({ ...makeAssessment(simplified_status, timestamp, variant_id), packages });
+
+  test('ignores assessments on deprecated packages when current packages given', () => {
+    // Active package is linux-yocto@6.6.129 (Pending). The deprecated
+    // linux-yocto@6.6.122 (Not affected) is more recent but must not count.
+    const assessments = [
+      makePkgAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1', ['linux-yocto@6.6.129']),
+      makePkgAssessment('Not affected', '2024-02-01T00:00:00', 'v1', ['linux-yocto@6.6.122']),
+    ];
+    const summary = buildStatusSummary(assessments, ['linux-yocto@6.6.129']);
+    expect(summary.dominant_status).toBe('Pending Assessment');
+    expect(summary.counts['Not affected']).toBeUndefined();
+  });
+
+  test('keeps assessments without packages when current packages given', () => {
+    const assessments = [
+      makePkgAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1', []),
+    ];
+    const summary = buildStatusSummary(assessments, ['linux-yocto@6.6.129']);
+    expect(summary.dominant_status).toBe('Pending Assessment');
+  });
+
+  test('falls back to all assessments when none reference a current package', () => {
+    // All packages are deprecated → do not collapse to "unknown".
+    const assessments = [
+      makePkgAssessment('Not affected', '2024-01-01T00:00:00', 'v1', ['linux-yocto@6.6.111']),
+    ];
+    const summary = buildStatusSummary(assessments, ['linux-yocto@6.6.129']);
+    expect(summary.dominant_status).toBe('Not affected');
+  });
+
+  test('empty current packages disables filtering', () => {
+    const assessments = [
+      makePkgAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1', ['linux-yocto@6.6.129']),
+      makePkgAssessment('Not affected', '2024-02-01T00:00:00', 'v2', ['linux-yocto@6.6.122']),
+    ];
+    const summary = buildStatusSummary(assessments, []);
+    expect(summary.counts['Pending Assessment']).toBe(1);
+    expect(summary.counts['Not affected']).toBe(1);
+  });
 });
 
 describe('getTopStatusSummaryLabel', () => {

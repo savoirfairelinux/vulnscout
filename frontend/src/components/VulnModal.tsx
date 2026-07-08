@@ -562,7 +562,7 @@ type VariantScopedSnapshot = {
 
             if (!anyError) {
                 const updatedAssessments = [...vuln.assessments];
-                const statusSummary = buildStatusSummary(updatedAssessments);
+                const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
                 vuln.simplified_status = statusSummary.dominant_status;
                 vuln.status_summary = statusSummary;
 
@@ -745,7 +745,7 @@ type VariantScopedSnapshot = {
 
         if (!anyError) {
             const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments);
+            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
             vuln.simplified_status = statusSummary.dominant_status;
             vuln.status_summary = statusSummary;
             patchVuln(vuln.id, {
@@ -1046,7 +1046,7 @@ type VariantScopedSnapshot = {
 
         if (lastCasted) {
             const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments);
+            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
             patchVuln(vuln.id, {
                 ...vuln,
                 assessments: updatedAssessments,
