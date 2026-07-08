@@ -438,19 +438,53 @@ describe('Variants.copyAssessments', () => {
                 body: JSON.stringify({
                     source_variant_id: 'source-v1',
                     target_variant_id: 'target-v2',
-                    ignore_package_version: false,
+                    match_mode: 'exact',
+                    version_precision: 1,
                 }),
             })
         );
     });
 
-    test('passes ignore_package_version flag when true', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ copied: 3, skipped: 0, message: 'ok' }));
+    test('sends version_precision for ignore_minor_version mode', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ copied: 1, skipped: 0, message: 'ok' }));
 
-        await Variants.copyAssessments('src', 'tgt', true);
+        await Variants.copyAssessments('src', 'tgt', 'ignore_minor_version', 2);
 
         const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
-        expect(body.ignore_package_version).toBe(true);
+        expect(body.match_mode).toBe('ignore_minor_version');
+        expect(body.version_precision).toBe(2);
+    });
+
+    test('omits selections when not provided', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ copied: 0, skipped: 0, message: 'ok' }));
+
+        await Variants.copyAssessments('src', 'tgt', 'ignore_version', 1);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect('selections' in body).toBe(false);
+    });
+
+    test('includes selections array when provided', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ copied: 2, skipped: 0, message: 'ok' }));
+
+        const selections = [
+            { source_assessment_id: 'a1', target_finding_id: 'tf1' },
+            { source_assessment_id: 'a2', target_finding_id: 'tf2' },
+        ];
+        await Variants.copyAssessments('src', 'tgt', 'ignore_version', 1, selections);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect(body.selections).toEqual(selections);
+        expect(body.match_mode).toBe('ignore_version');
+    });
+
+    test('includes an empty selections array when explicitly passed', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ copied: 0, skipped: 0, message: 'ok' }));
+
+        await Variants.copyAssessments('src', 'tgt', 'ignore_version', 1, []);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect(body.selections).toEqual([]);
     });
 
     test('throws on error response', async () => {
@@ -504,7 +538,7 @@ describe('Variants.previewCopyAssessments', () => {
         if (!('unsupported' in result)) {
             expect(result.count).toBe(3);
             expect(result.entries).toHaveLength(1);
-            expect(result.entries[0].vulnerability_id).toBe('CVE-2023-1234');
+            expect(result.entries![0].vulnerability_id).toBe('CVE-2023-1234');
         }
         expect(fetchMock).toHaveBeenCalledWith(
             expect.stringContaining('/api/variants/copy-assessments/preview'),
@@ -560,12 +594,61 @@ describe('Variants.previewCopyAssessments', () => {
         await expect(Variants.previewCopyAssessments('src', 'tgt')).rejects.toThrow('Preview failed (503)');
     });
 
-    test('passes ignore_package_version flag', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ count: 0, skipped: 0, message: '', entries: [] }));
+    test('passes match_mode for ignore_version mode', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ count: 0, skipped: 0, message: '', mode: 'ignore_version', groups: [] }));
 
-        await Variants.previewCopyAssessments('src', 'tgt', true);
+        await Variants.previewCopyAssessments('src', 'tgt', 'ignore_version');
 
         const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
-        expect(body.ignore_package_version).toBe(true);
+        expect(body.match_mode).toBe('ignore_version');
+        expect('ignore_package_version' in body).toBe(false);
+    });
+
+    test('sends match_mode and version_precision for ignore_minor_version', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({ count: 0, skipped: 0, message: '', mode: 'ignore_minor_version', groups: [] }));
+
+        await Variants.previewCopyAssessments('src', 'tgt', 'ignore_minor_version', 2);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as any[])[1].body as string);
+        expect(body.match_mode).toBe('ignore_minor_version');
+        expect(body.version_precision).toBe(2);
+        expect('ignore_package_version' in body).toBe(false);
+    });
+
+    test('returns grouped candidates for alternative modes', async () => {
+        const grouped = {
+            count: 2,
+            skipped: 1,
+            skipped_count: 1,
+            message: '2 assessments would be copied. 1 already present would be skipped.',
+            mode: 'ignore_version',
+            groups: [
+                {
+                    source_assessment_id: 'a1',
+                    source_finding_id: 'sf1',
+                    vulnerability_id: 'CVE-2024-0001',
+                    source_package: 'openssl@1.1.1',
+                    candidates: [
+                        {
+                            target_finding_id: 'tf1',
+                            target_package: 'openssl@1.4.2',
+                            already_has_custom: false,
+                            selected: true,
+                        },
+                    ],
+                },
+            ],
+        };
+        fetchMock.mockResponseOnce(JSON.stringify(grouped));
+
+        const result = await Variants.previewCopyAssessments('src', 'tgt', 'ignore_version');
+
+        expect('unsupported' in result).toBe(false);
+        if (!('unsupported' in result)) {
+            expect(result.mode).toBe('ignore_version');
+            expect(result.groups).toHaveLength(1);
+            expect(result.groups![0].candidates[0].target_finding_id).toBe('tf1');
+            expect(result.entries).toBeUndefined();
+        }
     });
 });

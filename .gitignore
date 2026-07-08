@@ -89,3 +89,6 @@ venv.bak/
 
 # testing .adoc files
 tests/*.adoc
+
+# local-only dev seeding script
+demo/seed_copy_test.py

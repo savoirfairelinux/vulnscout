@@ -376,8 +376,59 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     # Copy custom assessments between two variants
     # ------------------------------------------------------------------
+    #
+    # match_mode values:
+    #   "exact"               – same package name AND version (default)
+    #   "ignore_minor_version"– same name, leading version components match
+    #                           (precision controls how many: 1=major, 2=major+minor)
+    #   "ignore_version"      – same name, any version
+    #
+    # Return shape for "exact":
+    #   { source, target, operations: [(assessment, source_finding, target_finding)],
+    #     skipped, empty_message, mode }
+    #
+    # Return shape for alternative modes:
+    #   { source, target,
+    #     groups: [{ assessment, source_finding,
+    #                candidates: [{ target_finding, already_has_custom, selected }] }],
+    #     skipped_count, empty_message, mode }
+    # ------------------------------------------------------------------
+
+    def _clone_assessment(src, finding_id, variant_id) -> None:  # type: ignore[no-untyped-def]
+        """Create a copy of *src* Assessment bound to a new finding and variant."""
+        from ..models.assessment import Assessment as DBAssessment
+        DBAssessment.create(
+            status=src.status or "under_investigation",
+            finding_id=finding_id,
+            variant_id=variant_id,
+            source=src.source,
+            origin="custom",
+            simplified_status=src.simplified_status,
+            status_notes=src.status_notes,
+            justification=src.justification,
+            impact_statement=src.impact_statement,
+            workaround=src.workaround,
+            responses=list(src.responses) if src.responses else [],
+            commit=False,
+        )
+
+    def _serialize_assessment_details(assessment) -> dict:  # type: ignore[no-untyped-def]
+        """Return the user-visible fields of an assessment for the preview popup."""
+        return {
+            "simplified_status": assessment.simplified_status or "",
+            "status": assessment.status or "",
+            "justification": assessment.justification or None,
+            "status_notes": assessment.status_notes or None,
+            "impact_statement": assessment.impact_statement or None,
+            "workaround": assessment.workaround or None,
+            "responses": list(assessment.responses) if assessment.responses else [],
+        }
+
     def _compute_copy_assessment_operations(
-        source_id: str, target_id: str, ignore_package_version: bool,
+        source_id: str,
+        target_id: str,
+        match_mode: str = "exact",
+        version_precision: int = 1,
     ) -> tuple[dict, None] | tuple[None, ErrorResponse]:
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
@@ -385,6 +436,7 @@ def init_app(app: Flask) -> None:
             active_sbom_scan_ids_for_variant,
             active_package_ids_for_scans,
         )
+        from ..helpers.version_match import versions_match
 
         source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
         if err:
@@ -409,68 +461,32 @@ def init_app(app: Flask) -> None:
             active_sbom_scan_ids_for_variant(source_uuid))
         target_pkg_ids = active_package_ids_for_scans(
             active_sbom_scan_ids_for_variant(target_uuid))
-        common_pkg_ids = source_pkg_ids & target_pkg_ids
 
         source_assessments = DBAssessment.get_handmade([source_uuid])
 
-        source_vuln_ids: set[str] = set()
-        target_findings_by_vuln: dict[str, list[Finding]] = {}
-
-        if ignore_package_version:
-            source_vuln_ids = {
-                a.finding.vulnerability_id
-                for a in source_assessments
-                if a.finding is not None and a.finding.package_id in source_pkg_ids
-            }
-
-            if source_vuln_ids:
-                target_findings = list(db.session.execute(
-                    db.select(Finding).where(
-                        Finding.package_id.in_(target_pkg_ids),
-                        Finding.vulnerability_id.in_(source_vuln_ids),
-                    )
-                ).scalars().all())
-            else:
-                target_findings = []
-
-            for f in target_findings:
-                target_findings_by_vuln.setdefault(f.vulnerability_id, []).append(f)
-
-            if not target_findings_by_vuln:
-                return {
-                    "source": source,
-                    "target": target,
-                    "operations": [],
-                    "skipped": 0,
-                    "empty_message": "No vulnerabilities in common between the two variants.",
-                }, None
-        else:
+        # ---- exact mode: original flat-operations behavior ----
+        if match_mode == "exact":
+            common_pkg_ids = source_pkg_ids & target_pkg_ids
             if not common_pkg_ids:
                 return {
-                    "source": source,
-                    "target": target,
-                    "operations": [],
-                    "skipped": 0,
+                    "source": source, "target": target,
+                    "operations": [], "skipped": 0,
                     "empty_message": "No packages in common between the two variants.",
+                    "mode": "exact",
                 }, None
 
-        operations = []
-        skipped = 0
-        processed_target_finding_ids: set = set()
+            operations = []
+            skipped = 0
+            processed_target_finding_ids: set = set()
 
-        for assessment in source_assessments:
-            source_finding = assessment.finding
-            if source_finding is None:
-                continue
-
-            if ignore_package_version:
-                target_findings = target_findings_by_vuln.get(source_finding.vulnerability_id, [])
-            else:
+            for assessment in source_assessments:
+                source_finding = assessment.finding
+                if source_finding is None:
+                    continue
                 if source_finding.package_id not in common_pkg_ids:
                     continue
-                target_findings = [source_finding]
-
-            for target_finding in target_findings:
+                # Exact mode: same package_id → same Finding row shared across variants
+                target_finding = source_finding
                 if target_finding.id in processed_target_finding_ids:
                     continue
                 processed_target_finding_ids.add(target_finding.id)
@@ -482,13 +498,116 @@ def init_app(app: Flask) -> None:
 
                 operations.append((assessment, source_finding, target_finding))
 
+            return {
+                "source": source, "target": target,
+                "operations": operations, "skipped": skipped,
+                "empty_message": None, "mode": "exact",
+            }, None
+
+        # ---- alternative modes: build grouped candidates ----
+        source_vuln_ids: set[str] = {
+            a.finding.vulnerability_id
+            for a in source_assessments
+            if a.finding is not None and a.finding.package_id in source_pkg_ids
+        }
+
+        if source_vuln_ids:
+            target_findings_all: list[Finding] = list(db.session.execute(
+                db.select(Finding).where(
+                    Finding.package_id.in_(target_pkg_ids),
+                    Finding.vulnerability_id.in_(source_vuln_ids),
+                )
+            ).scalars().all())
+        else:
+            target_findings_all = []
+
+        target_findings_by_vuln: dict[str, list[Finding]] = {}
+        for f in target_findings_all:
+            target_findings_by_vuln.setdefault(f.vulnerability_id, []).append(f)
+
+        if not target_findings_by_vuln:
+            return {
+                "source": source, "target": target,
+                "groups": [], "skipped_count": 0,
+                "empty_message": "No vulnerabilities in common between the two variants.",
+                "mode": match_mode,
+            }, None
+
+        # Batch-load existing custom assessments for the target variant once
+        target_custom_assessments = DBAssessment.get_handmade([target_uuid])
+        target_custom_finding_ids: set = {
+            a.finding_id for a in target_custom_assessments if a.finding_id is not None
+        }
+
+        groups = []
+        skipped_count = 0
+
+        for assessment in source_assessments:
+            source_finding = assessment.finding
+            if source_finding is None:
+                continue
+            if source_finding.package_id not in source_pkg_ids:
+                continue
+
+            vuln_id = source_finding.vulnerability_id
+            potential_targets = target_findings_by_vuln.get(vuln_id, [])
+            if not potential_targets:
+                continue
+
+            source_pkg = source_finding.package
+            candidates = []
+
+            for tf in potential_targets:
+                if source_pkg is None or tf.package is None:
+                    continue
+                if source_pkg.name != tf.package.name:
+                    continue
+                if match_mode == "ignore_minor_version":
+                    if not versions_match(
+                        source_pkg.version, tf.package.version, version_precision,
+                    ):
+                        continue
+
+                already_has_custom = tf.id in target_custom_finding_ids
+                if already_has_custom:
+                    skipped_count += 1
+
+                candidates.append({
+                    "target_finding": tf,
+                    "already_has_custom": already_has_custom,
+                    "selected": not already_has_custom,
+                })
+
+            if not candidates:
+                continue
+
+            groups.append({
+                "assessment": assessment,
+                "source_finding": source_finding,
+                "candidates": candidates,
+            })
+
         return {
-            "source": source,
-            "target": target,
-            "operations": operations,
-            "skipped": skipped,
-            "empty_message": None,
+            "source": source, "target": target,
+            "groups": groups, "skipped_count": skipped_count,
+            "empty_message": None, "mode": match_mode,
         }, None
+
+    def _resolve_match_mode(payload: dict) -> tuple[str, int] | tuple[None, ErrorResponse]:
+        """Extract and validate match_mode and version_precision from a request payload.
+
+        Returns (match_mode, version_precision) on success, or (None, error_response)
+        when version_precision cannot be parsed as an integer.
+        """
+        match_mode = payload.get("match_mode", "exact")
+        raw_precision = payload.get("version_precision", 1)
+        try:
+            version_precision = int(raw_precision)
+        except (TypeError, ValueError):
+            return None, (jsonify({"error": "version_precision must be an integer."}), 400)
+        if version_precision < 1:
+            version_precision = 1
+        return match_mode, version_precision
 
     @app.route('/api/variants/copy-assessments/preview', methods=['POST'])
     def preview_copy_variant_assessments() -> ResponseReturnValue:
@@ -497,67 +616,266 @@ def init_app(app: Flask) -> None:
         target_id = payload.get("target_variant_id")
         if not isinstance(source_id, str) or not isinstance(target_id, str):
             return jsonify({"error": "source_variant_id and target_variant_id are required strings."}), 400
-        ignore_package_version = bool(payload.get("ignore_package_version", False))
+
+        resolved = _resolve_match_mode(payload)
+        if resolved[0] is None:
+            return resolved[1]  # type: ignore[return-value]
+        match_mode, version_precision = resolved  # type: ignore[misc]
+        if match_mode not in ("exact", "ignore_minor_version", "ignore_version"):
+            return jsonify({"error": "Invalid match_mode."}), 400
 
         result, err = _compute_copy_assessment_operations(
-            source_id,
-            target_id,
-            ignore_package_version,
+            source_id, target_id, match_mode, version_precision,
         )
         if err:
             return err
         assert result is not None
 
-        operations = result["operations"]
-        preview_rows = []
-        for assessment, source_finding, target_finding in operations:
-            preview_rows.append({
+        mode = result["mode"]
+
+        if mode == "exact":
+            operations = result["operations"]
+            preview_rows = []
+            for assessment, source_finding, target_finding in operations:
+                preview_rows.append({
+                    "source_assessment_id": str(assessment.id),
+                    "source_finding_id": str(source_finding.id),
+                    "target_finding_id": str(target_finding.id),
+                    "vulnerability_id": source_finding.vulnerability_id,
+                    "source_package": source_finding.package.string_id if source_finding.package else "",
+                    "target_package": target_finding.package.string_id if target_finding.package else "",
+                    "assessment_details": _serialize_assessment_details(assessment),
+                })
+
+            message = result["empty_message"]
+            if message is None:
+                message = (
+                    f"{len(preview_rows)} assessment{'s' if len(preview_rows) != 1 else ''} "
+                    "would be copied."
+                    + (f" {result['skipped']} already present would be skipped." if result["skipped"] else "")
+                )
+
+            return jsonify({
+                "count": len(preview_rows),
+                "skipped": result["skipped"],
+                "message": message,
+                "entries": preview_rows,
+                "mode": mode,
+            }), 200
+
+        # Alternative modes: return grouped candidates for review popup
+        groups = result["groups"]
+        skipped_count = result["skipped_count"]
+
+        serialized_groups = []
+        for g in groups:
+            assessment = g["assessment"]
+            sf = g["source_finding"]
+            candidates_ser = []
+            for c in g["candidates"]:
+                tf = c["target_finding"]
+                candidates_ser.append({
+                    "target_finding_id": str(tf.id),
+                    "target_package": tf.package.string_id if tf.package else "",
+                    "already_has_custom": c["already_has_custom"],
+                    "selected": c["selected"],
+                })
+            serialized_groups.append({
                 "source_assessment_id": str(assessment.id),
-                "source_finding_id": str(source_finding.id),
-                "target_finding_id": str(target_finding.id),
-                "vulnerability_id": source_finding.vulnerability_id,
-                "source_package": source_finding.package.string_id if source_finding.package else "",
-                "target_package": target_finding.package.string_id if target_finding.package else "",
+                "source_finding_id": str(sf.id),
+                "vulnerability_id": sf.vulnerability_id,
+                "source_package": sf.package.string_id if sf.package else "",
+                "assessment_details": _serialize_assessment_details(assessment),
+                "candidates": candidates_ser,
             })
 
-        message = result["empty_message"]
-        if message is None:
+        total_selectable = sum(
+            sum(1 for c in g["candidates"] if c["selected"])
+            for g in groups
+        )
+
+        empty_message = result["empty_message"]
+        if empty_message is None:
             message = (
-                f"{len(preview_rows)} assessment{'s' if len(preview_rows) != 1 else ''} "
+                f"{total_selectable} assessment{'s' if total_selectable != 1 else ''} "
                 "would be copied."
-                + (f" {result['skipped']} already present would be skipped." if result["skipped"] else "")
+                + (f" {skipped_count} already present would be skipped." if skipped_count else "")
             )
+        else:
+            message = empty_message
 
         return jsonify({
-            "count": len(preview_rows),
-            "skipped": result["skipped"],
+            "count": total_selectable,
+            "skipped": skipped_count,
             "message": message,
-            "entries": preview_rows,
+            "groups": serialized_groups,
+            "mode": mode,
         }), 200
 
     @app.route('/api/variants/copy-assessments', methods=['POST'])
     def copy_variant_assessments() -> ResponseReturnValue:
         from ..models.assessment import Assessment as DBAssessment
+        from ..models.finding import Finding
 
         payload = request.get_json(silent=True) or {}
         source_id = payload.get("source_variant_id")
         target_id = payload.get("target_variant_id")
         if not isinstance(source_id, str) or not isinstance(target_id, str):
             return jsonify({"error": "source_variant_id and target_variant_id are required strings."}), 400
-        ignore_package_version = bool(payload.get("ignore_package_version", False))
 
+        resolved = _resolve_match_mode(payload)
+        if resolved[0] is None:
+            return resolved[1]  # type: ignore[return-value]
+        match_mode, version_precision = resolved  # type: ignore[misc]
+        if match_mode not in ("exact", "ignore_minor_version", "ignore_version"):
+            return jsonify({"error": "Invalid match_mode."}), 400
+
+        selections = payload.get("selections")  # list[{source_assessment_id, target_finding_id}]
+
+        # ---- Selections-based copy (from review popup, alternative modes) ----
+        if selections is not None:
+            if not isinstance(selections, list):
+                return jsonify({"error": "selections must be a list."}), 400
+
+            source_uuid, err = parse_uuid_or_400(source_id, "source_variant_id")
+            if err:
+                return err
+            source_uuid = cast(uuid.UUID, source_uuid)
+            target_uuid, err = parse_uuid_or_400(target_id, "target_variant_id")
+            if err:
+                return err
+            target_uuid = cast(uuid.UUID, target_uuid)
+
+            source = VariantController.get(source_id)
+            target = VariantController.get(target_id)
+            if source is None or target is None:
+                return jsonify({"error": "Variant not found."}), 404
+            if source.project_id != target.project_id:
+                return jsonify({"error": "Both variants must belong to the same project."}), 400
+
+            if not selections:
+                return jsonify({
+                    "copied": 0,
+                    "skipped": 0,
+                    "message": f"Copied 0 assessments to '{target.name}'.",
+                }), 200
+
+            from ..helpers.active_scans import (
+                active_sbom_scan_ids_for_variant,
+                active_package_ids_for_scans,
+            )
+            target_pkg_ids = active_package_ids_for_scans(
+                active_sbom_scan_ids_for_variant(target_uuid))
+
+            source_assessments = DBAssessment.get_handmade([source_uuid])
+            source_assessment_by_id = {str(a.id): a for a in source_assessments}
+
+            copied = 0
+            skipped = 0
+            processed_in_batch: set = set()  # prevent duplicate copies within the same call
+            with batch_session():
+                for sel in selections:
+                    if not isinstance(sel, dict):
+                        continue
+                    src_assessment_id = sel.get("source_assessment_id")
+                    tgt_finding_id = sel.get("target_finding_id")
+                    if not isinstance(src_assessment_id, str) or not isinstance(tgt_finding_id, str):
+                        continue
+
+                    assessment = source_assessment_by_id.get(src_assessment_id)
+                    if assessment is None:
+                        continue
+
+                    tgt_finding_uuid, ferr = parse_uuid_or_400(tgt_finding_id, "target_finding_id")
+                    if ferr:
+                        continue
+                    tgt_finding = db.session.get(Finding, tgt_finding_uuid)
+                    if tgt_finding is None or tgt_finding.package_id not in target_pkg_ids:
+                        continue
+
+                    # Reject mismatched vulnerability ids — a fabricated selection
+                    # must not copy a verdict for CVE-A onto a finding for CVE-B.
+                    src_finding = assessment.finding
+                    if (
+                        src_finding is None
+                        or tgt_finding.vulnerability_id != src_finding.vulnerability_id
+                    ):
+                        continue
+
+                    if tgt_finding.id in processed_in_batch:
+                        continue  # already queued in this batch
+
+                    existing = DBAssessment.get_by_finding_and_variant(tgt_finding.id, target_uuid)
+                    if any(e.origin == "custom" for e in existing):
+                        skipped += 1
+                        continue
+
+                    processed_in_batch.add(tgt_finding.id)
+                    _clone_assessment(assessment, tgt_finding.id, target.id)
+                    copied += 1
+
+            return jsonify({
+                "copied": copied,
+                "skipped": skipped,
+                "message": (
+                    f"Copied {copied} assessment{'s' if copied != 1 else ''} to "
+                    f"'{target.name}'."
+                    + (f" Skipped {skipped} already present." if skipped else "")
+                ),
+            }), 200
+
+        # ---- Recompute-based copy (exact mode, no popup) ----
         result, err = _compute_copy_assessment_operations(
-            source_id,
-            target_id,
-            ignore_package_version,
+            source_id, target_id, match_mode, version_precision,
         )
         if err:
             return err
         assert result is not None
 
+        if result["mode"] != "exact":
+            # Auto-copy: pick all non-skipped candidates from each group
+            target = result["target"]
+            assert target is not None
+            groups = result["groups"]
+            skipped = result["skipped_count"]
+
+            if not groups and result["empty_message"]:
+                return jsonify({
+                    "copied": 0,
+                    "skipped": skipped,
+                    "message": result["empty_message"],
+                }), 200
+
+            copied = 0
+            processed_target_finding_ids: set = set()
+            with batch_session():
+                for g in groups:
+                    src_assessment: DBAssessment = g["assessment"]
+                    for c in g["candidates"]:
+                        if c["already_has_custom"]:
+                            continue
+                        tf = c["target_finding"]
+                        if tf.id in processed_target_finding_ids:
+                            continue
+                        processed_target_finding_ids.add(tf.id)
+                        _clone_assessment(src_assessment, tf.id, target.id)
+                        copied += 1
+
+            return jsonify({
+                "copied": copied,
+                "skipped": skipped,
+                "message": (
+                    f"Copied {copied} assessment{'s' if copied != 1 else ''} to "
+                    f"'{target.name}'."
+                    + (f" Skipped {skipped} already present." if skipped else "")
+                ),
+            }), 200
+
         target = result["target"]
+        assert target is not None
         operations = result["operations"]
         skipped = result["skipped"]
+
         if not operations and result["empty_message"]:
             return jsonify({
                 "copied": 0,
@@ -568,20 +886,7 @@ def init_app(app: Flask) -> None:
         copied = 0
         with batch_session():
             for a, _source_finding, target_finding in operations:
-                DBAssessment.create(
-                    status=a.status or "under_investigation",
-                    finding_id=target_finding.id,
-                    variant_id=target.id,
-                    source=a.source,
-                    origin="custom",
-                    simplified_status=a.simplified_status,
-                    status_notes=a.status_notes,
-                    justification=a.justification,
-                    impact_statement=a.impact_statement,
-                    workaround=a.workaround,
-                    responses=list(a.responses) if a.responses else [],
-                    commit=False,
-                )
+                _clone_assessment(a, target_finding.id, target.id)
                 copied += 1
 
         return jsonify({

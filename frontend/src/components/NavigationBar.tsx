@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 
 const greenTheme = true;
@@ -82,6 +82,18 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         >
           <FontAwesomeIcon icon={faClipboardCheck} className="mr-1" />
           Review
+        </button>
+      </li>
+
+      {/* === Transfer === */}
+      <li className={[bgHoverColor, tab == 'transfer' && bgActiveColor].join(' ')}>
+        <button
+          onClick={() => changeTab('transfer')}
+          className="flex items-center h-full px-4 py-2"
+          aria-current={tab === 'transfer' ? 'page' : undefined}
+        >
+          <FontAwesomeIcon icon={faRightLeft} className="mr-1" />
+          Transfer
         </button>
       </li>
 
