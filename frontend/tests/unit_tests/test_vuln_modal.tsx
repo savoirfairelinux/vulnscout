@@ -2140,7 +2140,7 @@ describe('Vulnerability Modal', () => {
         render(<VulnModal vuln={multiPkgVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
         // Wait for the deprecated split to appear once variant-active-packages loads.
-        const deprecatedHeading = await screen.findByText('Deprecated assessments');
+        const deprecatedHeading = await screen.findByText('Assessments on old packages (not present in current SBOMs)');
         const deprecated = deprecatedHeading.parentElement as HTMLElement;
         // The stale package version is broken out into the deprecated table.
         expect(within(deprecated).getByText('pkgOld@0.9.0')).toBeInTheDocument();
@@ -2148,7 +2148,7 @@ describe('Vulnerability Modal', () => {
         expect(within(deprecated).queryByText('pkgA@1.0.0')).not.toBeInTheDocument();
 
         // The active (variant, package) pair stays in the current table.
-        const current = screen.getByText('Current assessments').parentElement as HTMLElement;
+        const current = screen.getByText('Assessments on current SBOMs packages').parentElement as HTMLElement;
         expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
         expect(within(current).getByText('Exploitable')).toBeInTheDocument();
         expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
@@ -2342,7 +2342,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Current assessments');
+        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
         const recap = recapHeading.parentElement as HTMLElement;
         // Production reflects its most recent assessment (Not affected), not the older Exploitable
         expect(within(recap).getByText('Production')).toBeInTheDocument();
@@ -2377,7 +2377,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Current assessments');
+        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
         const recap = recapHeading.parentElement as HTMLElement;
         // Staging has no assessment yet, so it is flagged as "No status"
         expect(within(recap).getByText('Staging')).toBeInTheDocument();

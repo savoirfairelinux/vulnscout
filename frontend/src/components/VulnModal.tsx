@@ -1572,13 +1572,13 @@ type VariantScopedSnapshot = {
                             <h3 className="font-bold mb-2">Assessments</h3>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Current assessments</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOMs packages</h4>
                                     {renderStatusTable(sortStatusRows(currentAssessmentRows))}
                                 </div>
                             )}
                             {deprecatedAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Deprecated assessments</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on old packages (not present in current SBOMs)</h4>
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
