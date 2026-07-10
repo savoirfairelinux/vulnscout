@@ -26,6 +26,7 @@ type CopyAssessmentsPreviewEntry = {
     vulnerability_id: string;
     source_package: string;
     target_package: string;
+    already_has_custom?: boolean;
     assessment_details?: CopyAssessmentsAssessmentDetails;
 };
 

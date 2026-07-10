@@ -90,8 +90,8 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                     candidates: [{
                         target_finding_id:  entry.target_finding_id,
                         target_package:     entry.target_package,
-                        already_has_custom: false,
-                        selected:           true,
+                        already_has_custom: entry.already_has_custom ?? false,
+                        selected:           !(entry.already_has_custom ?? false),
                     } satisfies CopyAssessmentsPreviewCandidate],
                 })
             );

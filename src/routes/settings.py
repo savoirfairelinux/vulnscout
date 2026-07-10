@@ -513,11 +513,11 @@ def init_app(app: Flask) -> None:
                 processed_target_finding_ids.add(target_finding.id)
 
                 existing = DBAssessment.get_by_finding_and_variant(target_finding.id, target_uuid)
-                if any(e.origin == "custom" for e in existing):
+                already_has_custom = any(e.origin == "custom" for e in existing)
+                if already_has_custom:
                     skipped += 1
-                    continue
 
-                operations.append((assessment, source_finding, target_finding))
+                operations.append((assessment, source_finding, target_finding, already_has_custom))
 
             return {
                 "source": source, "target": target,
@@ -664,7 +664,7 @@ def init_app(app: Flask) -> None:
         if mode == "exact":
             operations = result["operations"]
             preview_rows = []
-            for assessment, source_finding, target_finding in operations:
+            for assessment, source_finding, target_finding, already_has_custom in operations:
                 preview_rows.append({
                     "source_assessment_id": str(assessment.id),
                     "source_finding_id": str(source_finding.id),
@@ -672,19 +672,21 @@ def init_app(app: Flask) -> None:
                     "vulnerability_id": source_finding.vulnerability_id,
                     "source_package": source_finding.package.string_id if source_finding.package else "",
                     "target_package": target_finding.package.string_id if target_finding.package else "",
+                    "already_has_custom": already_has_custom,
                     "assessment_details": _serialize_assessment_details(assessment),
                 })
 
+            selectable = sum(1 for r in preview_rows if not r["already_has_custom"])
             message = result["empty_message"]
             if message is None:
                 message = (
-                    f"{len(preview_rows)} assessment{'s' if len(preview_rows) != 1 else ''} "
+                    f"{selectable} assessment{'s' if selectable != 1 else ''} "
                     "would be copied."
                     + (f" {result['skipped']} already present would be skipped." if result["skipped"] else "")
                 )
 
             return jsonify({
-                "count": len(preview_rows),
+                "count": selectable,
                 "skipped": result["skipped"],
                 "message": message,
                 "entries": preview_rows,
@@ -913,7 +915,9 @@ def init_app(app: Flask) -> None:
 
         copied = 0
         with batch_session():
-            for a, _source_finding, target_finding in operations:
+            for a, _source_finding, target_finding, already_has_custom in operations:
+                if already_has_custom:
+                    continue
                 _clone_assessment(a, target_finding.id, target.id)
                 copied += 1
 
