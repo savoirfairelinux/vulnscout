@@ -11,6 +11,7 @@ import Variants from "../handlers/variant";
 import type {
     Variant,
     CopyMatchMode,
+    CopyCondition,
     CopyAssessmentsPreview,
     CopyAssessmentsPreviewGroup,
     CopyAssessmentsPreviewCandidate,
@@ -42,6 +43,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
     const [copyTargetId, setCopyTargetId] = useState<string>("");
     const [copyMatchMode, setCopyMatchMode] = useState<CopyMatchMode>("exact");
     const [copyVersionPrecision, setCopyVersionPrecision] = useState<number>(1);
+    const [copyCondition, setCopyCondition] = useState<CopyCondition>("no_custom");
     const [copyBusy, setCopyBusy] = useState(false);
     const [copyMsg, setCopyMsg] = useState<string | null>(null);
     const [copyPreviewBusy, setCopyPreviewBusy] = useState(false);
@@ -65,6 +67,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                 copyMatchMode,
                 copyVersionPrecision,
                 selections,
+                copyCondition,
             );
             setCopyMsg(result.message);
             onDataChanged?.("Copying assessments...");
@@ -91,7 +94,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                         target_finding_id:  entry.target_finding_id,
                         target_package:     entry.target_package,
                         already_has_custom: entry.already_has_custom ?? false,
-                        selected:           !(entry.already_has_custom ?? false),
+                        selected:           entry.selected ?? !(entry.already_has_custom ?? false),
                     } satisfies CopyAssessmentsPreviewCandidate],
                 })
             );
@@ -136,7 +139,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
         setCopyPreviewError(null);
         setCopyPreviewUnavailableMsg(null);
 
-        Variants.previewCopyAssessments(copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision)
+        Variants.previewCopyAssessments(copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision, copyCondition)
             .then((data) => {
                 if (cancelled || unmountedRef.current) return;
                 if ((data as CopyAssessmentsPreviewUnsupported).unsupported) {
@@ -158,7 +161,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
             });
 
         return () => { cancelled = true; };
-    }, [customProjectId, copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision]);
+    }, [customProjectId, copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision, copyCondition]);
 
     // ---- Styles ----
     const inputClass =
@@ -258,6 +261,48 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                         <option key={v.id} value={v.id}>{v.name}</option>
                                     ))}
                                 </select>
+                            </div>
+                        </div>
+
+                        {/* ---- Copy condition ---- */}
+                        <div className="space-y-2">
+                            <p className="text-sm font-semibold text-zinc-300">Conditions to copy assessments</p>
+                            <div className="grid grid-cols-1 gap-2">
+                                {([
+                                    { value: "no_custom",        label: "Target has no custom assessment",                    desc: "Only copy onto \u201cCopy to\u201d findings that have no custom assessment yet." },
+                                    { value: "different_status", label: "Target has a different status",                      desc: "Also copy when the target already has a custom assessment with a different status." },
+                                    { value: "different_value",  label: "Target differs in any value",                       desc: "Also copy when the target's custom assessment differs in status, justification, workaround or any other value." },
+                                ] as { value: CopyCondition; label: string; desc: string }[]).map(({ value, label, desc }) => (
+                                    <label
+                                        key={value}
+                                        className={[
+                                            "flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors",
+                                            copyCondition === value
+                                                ? "border-cyan-500 bg-cyan-950/40 text-white"
+                                                : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                                            (!customProjectId || copyBusy) ? "opacity-50 cursor-not-allowed" : "",
+                                        ].join(" ")}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="copy-condition"
+                                            value={value}
+                                            checked={copyCondition === value}
+                                            disabled={!customProjectId || copyBusy}
+                                            onChange={() => {
+                                                setCopyCondition(value);
+                                                setCopyMsg(null);
+                                                setCopyPreviewError(null);
+                                                setCopyPreviewUnavailableMsg(null);
+                                            }}
+                                            className="mt-0.5 accent-cyan-500"
+                                        />
+                                        <span className="flex flex-col">
+                                            <span className="text-sm font-medium">{label}</span>
+                                            <span className="text-xs text-zinc-400">{desc}</span>
+                                        </span>
+                                    </label>
+                                ))}
                             </div>
                         </div>
 

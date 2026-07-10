@@ -10,7 +10,7 @@ import threading
 import tarfile
 import subprocess
 import shutil
-from typing import Callable, Protocol, TypeVar, cast
+from typing import Callable, Protocol, TypeVar, cast, TYPE_CHECKING
 import io as _io
 
 from flask import jsonify, request, Flask
@@ -30,6 +30,9 @@ from ..models.project import Project
 from ..models.variant import Variant
 from ..helpers.verbose import verbose
 from ._scan_helpers import parse_uuid_or_400, ErrorResponse
+
+if TYPE_CHECKING:
+    from ..models.assessment import Assessment as DBAssessment
 
 T = TypeVar("T")
 _C = TypeVar("_C")
@@ -394,7 +397,9 @@ def init_app(app: Flask) -> None:
     #     skipped_count, empty_message, mode }
     # ------------------------------------------------------------------
 
-    def _clone_assessment(src, finding_id, variant_id) -> None:  # type: ignore[no-untyped-def]
+    def _clone_assessment(
+        src: "DBAssessment", finding_id: uuid.UUID, variant_id: uuid.UUID,
+    ) -> None:
         """Create a copy of *src* Assessment bound to a new finding and variant."""
         from ..models.assessment import Assessment as DBAssessment
         DBAssessment.create(
@@ -412,7 +417,7 @@ def init_app(app: Flask) -> None:
             commit=False,
         )
 
-    def _serialize_assessment_details(assessment) -> dict:  # type: ignore[no-untyped-def]
+    def _serialize_assessment_details(assessment: "DBAssessment") -> dict:
         """Return the user-visible fields of an assessment for the preview popup."""
         return {
             "simplified_status": assessment.simplified_status or "",
@@ -424,11 +429,48 @@ def init_app(app: Flask) -> None:
             "responses": list(assessment.responses) if assessment.responses else [],
         }
 
+    def _assessment_value_tuple(a: "DBAssessment") -> tuple:
+        """Comparable snapshot of the fields a copy carries over."""
+        return (
+            (a.status or ""),
+            (a.simplified_status or ""),
+            (a.justification or ""),
+            (a.impact_statement or ""),
+            (a.workaround or ""),
+            (a.status_notes or ""),
+            tuple(a.responses or []),
+        )
+
+    def _copy_condition_allows(
+        existing_customs: list["DBAssessment"],
+        src_assessment: "DBAssessment",
+        copy_condition: str,
+    ) -> bool:
+        """Decide whether a copy should be proposed onto a target finding.
+
+        *existing_customs* is the list of custom-origin assessments already on the
+        target finding for the target variant. The three conditions:
+          - "no_custom":        only when the target has no custom assessment.
+          - "different_status": also when the current custom status differs.
+          - "different_value":  also when the current custom differs in any field.
+        """
+        if not existing_customs:
+            return True
+        if copy_condition == "no_custom":
+            return False
+        current = max(existing_customs, key=lambda a: a.timestamp)
+        if copy_condition == "different_status":
+            return (current.simplified_status or "") != (src_assessment.simplified_status or "")
+        if copy_condition == "different_value":
+            return _assessment_value_tuple(current) != _assessment_value_tuple(src_assessment)
+        return False
+
     def _compute_copy_assessment_operations(
         source_id: str,
         target_id: str,
         match_mode: str = "exact",
         version_precision: int = 1,
+        copy_condition: str = "no_custom",
     ) -> tuple[dict, None] | tuple[None, ErrorResponse]:
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
@@ -513,11 +555,13 @@ def init_app(app: Flask) -> None:
                 processed_target_finding_ids.add(target_finding.id)
 
                 existing = DBAssessment.get_by_finding_and_variant(target_finding.id, target_uuid)
-                already_has_custom = any(e.origin == "custom" for e in existing)
-                if already_has_custom:
+                existing_customs = [e for e in existing if e.origin == "custom"]
+                already_has_custom = bool(existing_customs)
+                selected = _copy_condition_allows(existing_customs, assessment, copy_condition)
+                if not selected:
                     skipped += 1
 
-                operations.append((assessment, source_finding, target_finding, already_has_custom))
+                operations.append((assessment, source_finding, target_finding, already_has_custom, selected))
 
             return {
                 "source": source, "target": target,
@@ -563,9 +607,10 @@ def init_app(app: Flask) -> None:
 
         # Batch-load existing custom assessments for the target variant once
         target_custom_assessments = DBAssessment.get_handmade([target_uuid])
-        target_custom_finding_ids: set = {
-            a.finding_id for a in target_custom_assessments if a.finding_id is not None
-        }
+        target_customs_by_finding: dict = {}
+        for a in target_custom_assessments:
+            if a.finding_id is not None:
+                target_customs_by_finding.setdefault(a.finding_id, []).append(a)
 
         groups = []
         skipped_count = 0
@@ -596,14 +641,16 @@ def init_app(app: Flask) -> None:
                     ):
                         continue
 
-                already_has_custom = tf.id in target_custom_finding_ids
-                if already_has_custom:
+                existing_customs = target_customs_by_finding.get(tf.id, [])
+                already_has_custom = bool(existing_customs)
+                selected = _copy_condition_allows(existing_customs, assessment, copy_condition)
+                if not selected:
                     skipped_count += 1
 
                 candidates.append({
                     "target_finding": tf,
                     "already_has_custom": already_has_custom,
-                    "selected": not already_has_custom,
+                    "selected": selected,
                 })
 
             if not candidates:
@@ -637,6 +684,13 @@ def init_app(app: Flask) -> None:
             version_precision = 1
         return match_mode, version_precision
 
+    def _resolve_copy_condition(payload: dict) -> tuple[str, None] | tuple[None, ErrorResponse]:
+        """Extract and validate the copy_condition from a request payload."""
+        copy_condition = payload.get("copy_condition", "no_custom")
+        if copy_condition not in ("no_custom", "different_status", "different_value"):
+            return None, (jsonify({"error": "Invalid copy_condition."}), 400)
+        return copy_condition, None
+
     @app.route('/api/variants/copy-assessments/preview', methods=['POST'])
     def preview_copy_variant_assessments() -> ResponseReturnValue:
         payload = request.get_json(silent=True) or {}
@@ -652,8 +706,13 @@ def init_app(app: Flask) -> None:
         if match_mode not in ("exact", "ignore_minor_version", "ignore_version"):
             return jsonify({"error": "Invalid match_mode."}), 400
 
+        copy_condition, cond_err = _resolve_copy_condition(payload)
+        if cond_err:
+            return cond_err
+        copy_condition = cast(str, copy_condition)
+
         result, err = _compute_copy_assessment_operations(
-            source_id, target_id, match_mode, version_precision,
+            source_id, target_id, match_mode, version_precision, copy_condition,
         )
         if err:
             return err
@@ -664,7 +723,7 @@ def init_app(app: Flask) -> None:
         if mode == "exact":
             operations = result["operations"]
             preview_rows = []
-            for assessment, source_finding, target_finding, already_has_custom in operations:
+            for assessment, source_finding, target_finding, already_has_custom, selected in operations:
                 preview_rows.append({
                     "source_assessment_id": str(assessment.id),
                     "source_finding_id": str(source_finding.id),
@@ -673,10 +732,11 @@ def init_app(app: Flask) -> None:
                     "source_package": source_finding.package.string_id if source_finding.package else "",
                     "target_package": target_finding.package.string_id if target_finding.package else "",
                     "already_has_custom": already_has_custom,
+                    "selected": selected,
                     "assessment_details": _serialize_assessment_details(assessment),
                 })
 
-            selectable = sum(1 for r in preview_rows if not r["already_has_custom"])
+            selectable = sum(1 for r in preview_rows if r["selected"])
             message = result["empty_message"]
             if message is None:
                 message = (
@@ -760,6 +820,11 @@ def init_app(app: Flask) -> None:
         if match_mode not in ("exact", "ignore_minor_version", "ignore_version"):
             return jsonify({"error": "Invalid match_mode."}), 400
 
+        copy_condition, cond_err = _resolve_copy_condition(payload)
+        if cond_err:
+            return cond_err
+        copy_condition = cast(str, copy_condition)
+
         selections = payload.get("selections")  # list[{source_assessment_id, target_finding_id}]
 
         # ---- Selections-based copy (from review popup, alternative modes) ----
@@ -836,7 +901,8 @@ def init_app(app: Flask) -> None:
                         continue  # already queued in this batch
 
                     existing = DBAssessment.get_by_finding_and_variant(tgt_finding.id, target_uuid)
-                    if any(e.origin == "custom" for e in existing):
+                    existing_customs = [e for e in existing if e.origin == "custom"]
+                    if not _copy_condition_allows(existing_customs, assessment, copy_condition):
                         skipped += 1
                         continue
 
@@ -856,7 +922,7 @@ def init_app(app: Flask) -> None:
 
         # ---- Recompute-based copy (exact mode, no popup) ----
         result, err = _compute_copy_assessment_operations(
-            source_id, target_id, match_mode, version_precision,
+            source_id, target_id, match_mode, version_precision, copy_condition,
         )
         if err:
             return err
@@ -882,7 +948,7 @@ def init_app(app: Flask) -> None:
                 for g in groups:
                     src_assessment: DBAssessment = g["assessment"]
                     for c in g["candidates"]:
-                        if c["already_has_custom"]:
+                        if not c["selected"]:
                             continue
                         tf = c["target_finding"]
                         if tf.id in processed_target_finding_ids:
@@ -915,8 +981,8 @@ def init_app(app: Flask) -> None:
 
         copied = 0
         with batch_session():
-            for a, _source_finding, target_finding, already_has_custom in operations:
-                if already_has_custom:
+            for a, _source_finding, target_finding, already_has_custom, selected in operations:
+                if not selected:
                     continue
                 _clone_assessment(a, target_finding.id, target.id)
                 copied += 1

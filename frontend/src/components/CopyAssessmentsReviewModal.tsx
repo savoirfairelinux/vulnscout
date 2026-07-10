@@ -37,7 +37,7 @@ type Action =
 function buildInitialState(groups: CopyAssessmentsPreviewGroup[]): ModalState {
     const rows: Record<string, RowState> = {};
     for (const g of groups) {
-        const defaultIndex = g.candidates.findIndex((c) => c.selected && !c.already_has_custom);
+        const defaultIndex = g.candidates.findIndex((c) => c.selected);
         rows[g.source_assessment_id] = {
             selected: defaultIndex >= 0,
             candidateIndex: Math.max(0, defaultIndex),

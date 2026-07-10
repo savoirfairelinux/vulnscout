@@ -7,6 +7,9 @@ type Variant = {
 /** One of the three copy-assessment matching modes. */
 type CopyMatchMode = "exact" | "ignore_minor_version" | "ignore_version";
 
+/** Condition that decides which target findings a copy is proposed onto. */
+type CopyCondition = "no_custom" | "different_status" | "different_value";
+
 /** The user-visible fields of the source assessment, for display in the review popup. */
 type CopyAssessmentsAssessmentDetails = {
     simplified_status: string;
@@ -27,6 +30,7 @@ type CopyAssessmentsPreviewEntry = {
     source_package: string;
     target_package: string;
     already_has_custom?: boolean;
+    selected?: boolean;
     assessment_details?: CopyAssessmentsAssessmentDetails;
 };
 
@@ -76,6 +80,7 @@ type CopyAssessmentsSelection = {
 export type {
     Variant,
     CopyMatchMode,
+    CopyCondition,
     CopyAssessmentsAssessmentDetails,
     CopyAssessmentsPreview,
     CopyAssessmentsPreviewEntry,
@@ -219,6 +224,7 @@ class Variants {
         matchMode: CopyMatchMode = "exact",
         versionPrecision = 1,
         selections?: CopyAssessmentsSelection[],
+        copyCondition: CopyCondition = "no_custom",
     ): Promise<{ copied: number; skipped: number; message: string }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/variants/copy-assessments",
@@ -231,6 +237,7 @@ class Variants {
                     target_variant_id: targetVariantId,
                     match_mode: matchMode,
                     version_precision: versionPrecision,
+                    copy_condition: copyCondition,
                     ...(selections !== undefined ? { selections } : {}),
                 }),
             }
@@ -247,6 +254,7 @@ class Variants {
         targetVariantId: string,
         matchMode: CopyMatchMode = "exact",
         versionPrecision = 1,
+        copyCondition: CopyCondition = "no_custom",
     ): Promise<CopyAssessmentsPreview | CopyAssessmentsPreviewUnsupported> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/variants/copy-assessments/preview",
@@ -259,6 +267,7 @@ class Variants {
                     target_variant_id: targetVariantId,
                     match_mode: matchMode,
                     version_precision: versionPrecision,
+                    copy_condition: copyCondition,
                 }),
             }
         );

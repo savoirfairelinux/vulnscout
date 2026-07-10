@@ -440,6 +440,7 @@ describe('Variants.copyAssessments', () => {
                     target_variant_id: 'target-v2',
                     match_mode: 'exact',
                     version_precision: 1,
+                    copy_condition: 'no_custom',
                 }),
             })
         );
