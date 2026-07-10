@@ -201,7 +201,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                         )}
 
                         {/* ---- Source / Target selectors ---- */}
-                        <div className="space-y-3">
+                        <div className="relative space-y-3">
                             <div className="space-y-2">
                                 <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
                                 <select
@@ -222,26 +222,8 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     ))}
                                 </select>
                             </div>
-                            <div className="flex justify-center">
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        if (!customProjectId || copyBusy) return;
-                                        setCopySourceId(copyTargetId);
-                                        setCopyTargetId(copySourceId);
-                                        setCopyMsg(null);
-                                        setCopyPreviewError(null);
-                                        setCopyPreviewUnavailableMsg(null);
-                                    }}
-                                    disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
-                                    className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                                    title="Swap source and target variants"
-                                    aria-label="Swap source and target variants"
-                                >
-                                    <FontAwesomeIcon icon={faArrowsUpDown} className="mr-2" aria-hidden="true" />
-                                    Swap
-                                </button>
-                            </div>
+                            {/* Spacer that reserves room for the absolutely-centered Swap button */}
+                            <div className="h-9" aria-hidden="true" />
                             <div className="space-y-2">
                                 <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Target</label>
                                 <select
@@ -262,6 +244,24 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     ))}
                                 </select>
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (!customProjectId || copyBusy) return;
+                                    setCopySourceId(copyTargetId);
+                                    setCopyTargetId(copySourceId);
+                                    setCopyMsg(null);
+                                    setCopyPreviewError(null);
+                                    setCopyPreviewUnavailableMsg(null);
+                                }}
+                                disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
+                                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                                title="Swap source and target variants"
+                                aria-label="Swap source and target variants"
+                            >
+                                <FontAwesomeIcon icon={faArrowsUpDown} className="mr-2" aria-hidden="true" />
+                                Swap
+                            </button>
                         </div>
 
                         {/* ---- Copy condition ---- */}
