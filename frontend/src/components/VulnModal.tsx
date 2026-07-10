@@ -835,7 +835,8 @@ type VariantScopedSnapshot = {
     type StatusRow = { variant: Variant; pkg: string | null; assessment: Assessment | null; deprecated: boolean };
 
     const allStatusRows: StatusRow[] = availableVariants.flatMap((variant): StatusRow[] => {
-        const variantPkgs = variantPackageMap[variant.id] ?? [];
+        const variantActivePkgs = variantPackageMap[variant.id];
+        const variantPkgs = variantActivePkgs ?? [];
         // Packages affected by this vuln that still exist in the variant's active SBOM.
         const activeAffected = projectPackages.filter(p => variantPkgs.includes(p));
         // Packages referenced by the variant's assessments may include older,
@@ -846,6 +847,7 @@ type VariantScopedSnapshot = {
                 .flatMap(a => a.packages)
         )];
         const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
+        const hasActivePkgData = variantPackageMapLoaded && variantActivePkgs !== undefined;
         if (allPkgs.length === 0) {
             return [{ variant, pkg: null, assessment: latestAssessmentFor(variant.id, null), deprecated: false }];
         }
@@ -855,7 +857,7 @@ type VariantScopedSnapshot = {
             assessment: latestAssessmentFor(variant.id, pkg),
             // A package is deprecated once it's no longer in the variant's active
             // SBOM. Until that list has loaded, keep it in the current table.
-            deprecated: variantPackageMapLoaded && !variantPkgs.includes(pkg),
+            deprecated: hasActivePkgData && !variantPkgs.includes(pkg),
         }));
     });
 

@@ -24,6 +24,50 @@ from typing import Dict, List, Optional
 CategoriesDictionary: Dict[str, List[str]] = {}
 
 
+# Directories searched for user-provided templates, most-preferred first. This
+# mirrors ``Templates.external_loader`` so an imported template is picked up by
+# the renderer. The first writable location is used when importing.
+TEMPLATE_UPLOAD_DIRS: List[str] = [
+    "/cache/vulnscout/templates",
+    ".vulnscout/templates",
+    "templates",
+    "/scan/templates",
+]
+
+# Extensions accepted when importing a custom report template.
+ALLOWED_TEMPLATE_EXTENSIONS = {
+    "adoc", "asciidoc", "html", "htm", "md", "markdown",
+    "csv", "txt", "json", "xml", "tex", "j2", "jinja", "jinja2",
+}
+
+
+def sanitize_template_filename(filename: Optional[str]) -> Optional[str]:
+    """Return a safe basename for an uploaded template, or ``None`` if invalid.
+
+    Strips any directory components (guarding against path traversal) and only
+    accepts a known set of template extensions.
+    """
+    name = os.path.basename((filename or "").strip())
+    if not name or name.startswith(".") or ".." in name:
+        return None
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in ALLOWED_TEMPLATE_EXTENSIONS:
+        return None
+    return name
+
+
+def writable_templates_dir() -> Optional[str]:
+    """Return the first templates directory that can be created and written to."""
+    for candidate in TEMPLATE_UPLOAD_DIRS:
+        try:
+            os.makedirs(candidate, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(candidate, os.W_OK):
+            return candidate
+    return None
+
+
 def guess_mime_type(doc_name: Optional[str]) -> Optional[str]:
     if doc_name is None:
         return None
@@ -73,6 +117,38 @@ def init_app(app: Flask) -> None:
         except Exception as e:
             print(e)
             return {"error": str(e)}, 500
+
+    @app.route('/api/documents/templates', methods=['POST'])
+    def upload_template() -> ResponseReturnValue:
+        """Import a custom report template uploaded from the Export tab.
+
+        Expects a ``multipart/form-data`` request with a single ``file`` field.
+        The template is saved under the first writable templates directory so it
+        becomes available as a "custom" report.
+        """
+        if not (request.content_type and 'multipart/form-data' in request.content_type):
+            return {"error": "Expected multipart/form-data with a file upload."}, 400
+
+        uploaded = request.files.get('file')
+        if uploaded is None or not uploaded.filename:
+            return {"error": "No file uploaded."}, 400
+
+        safe_name = sanitize_template_filename(uploaded.filename)
+        if safe_name is None:
+            allowed = ", ".join(sorted(ALLOWED_TEMPLATE_EXTENSIONS))
+            return {"error": f"Unsupported template file. Allowed extensions: {allowed}."}, 400
+
+        target_dir = writable_templates_dir()
+        if target_dir is None:
+            return {"error": "No writable templates directory available on the server."}, 500
+
+        try:
+            uploaded.save(os.path.join(target_dir, safe_name))
+        except OSError as e:
+            print(e, flush=True)
+            return {"error": f"Failed to save template: {e}"}, 500
+
+        return {"id": safe_name, "category": ["custom"], "message": "Template imported."}, 201
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:
