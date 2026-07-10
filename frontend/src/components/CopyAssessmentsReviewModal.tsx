@@ -182,9 +182,11 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
         for (const g of groups) {
             const rowState = state.rows[g.source_assessment_id];
             if (!rowState?.selected) continue;
+            // Skip groups the copy condition disallows entirely.
+            if (!g.candidates.some((c) => c.selected)) continue;
             const candidate: CopyAssessmentsPreviewCandidate | undefined =
                 g.candidates[rowState.candidateIndex];
-            if (!candidate || candidate.already_has_custom) continue;
+            if (!candidate) continue;
             selections.push({
                 source_assessment_id: g.source_assessment_id,
                 target_finding_id: candidate.target_finding_id,
@@ -197,13 +199,13 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
 
     const selectableCount = groups.filter((g) => {
         const rowState = state.rows[g.source_assessment_id];
-        return rowState?.selected && !g.candidates[rowState.candidateIndex ?? 0]?.already_has_custom;
+        return rowState?.selected && g.candidates.some((c) => c.selected);
     }).length;
 
     const totalSelectable = groups.filter((g) => {
         const rowState = state.rows[g.source_assessment_id];
-        // Has at least one non-already_has_custom candidate
-        return g.candidates.some((c) => !c.already_has_custom) && rowState !== undefined;
+        // Has at least one candidate the copy condition allows
+        return g.candidates.some((c) => c.selected) && rowState !== undefined;
     }).length;
 
     return (
@@ -282,7 +284,7 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
                                     const candidateIndex = rowState?.candidateIndex ?? 0;
                                     const currentCandidate = g.candidates[candidateIndex];
                                     const isChecked = rowState?.selected ?? false;
-                                    const isDisabled = g.candidates.every((c) => c.already_has_custom);
+                                    const isDisabled = g.candidates.every((c) => !c.selected);
                                     const isExpanded = rowState?.expanded ?? false;
 
                                     return (

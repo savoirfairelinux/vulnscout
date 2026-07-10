@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
     faCopy,
-    faRightLeft,
+    faArrowsUpDown,
     faSpinner,
     faTriangleExclamation,
     faCheck,
@@ -201,7 +201,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                         )}
 
                         {/* ---- Source / Target selectors ---- */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-3">
                             <div className="space-y-2">
                                 <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
                                 <select
@@ -222,7 +222,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     ))}
                                 </select>
                             </div>
-                            <div className="flex items-end justify-center sm:justify-start">
+                            <div className="flex justify-center">
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -238,12 +238,12 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     title="Swap source and target variants"
                                     aria-label="Swap source and target variants"
                                 >
-                                    <FontAwesomeIcon icon={faRightLeft} className="mr-2" aria-hidden="true" />
+                                    <FontAwesomeIcon icon={faArrowsUpDown} className="mr-2" aria-hidden="true" />
                                     Swap
                                 </button>
                             </div>
                             <div className="space-y-2">
-                                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Copy to</label>
+                                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Target</label>
                                 <select
                                     id="copy-target-select"
                                     value={copyTargetId}
@@ -269,7 +269,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                             <p className="text-sm font-semibold text-zinc-300">Conditions to copy assessments</p>
                             <div className="grid grid-cols-1 gap-2">
                                 {([
-                                    { value: "no_custom",        label: "Target has no custom assessment",                    desc: "Only copy onto \u201cCopy to\u201d findings that have no custom assessment yet." },
+                                    { value: "no_custom",        label: "Target has no custom assessment",                    desc: "Only copy onto target findings that have no custom assessment yet." },
                                     { value: "different_status", label: "Target has a different status",                      desc: "Also copy when the target already has a custom assessment with a different status." },
                                     { value: "different_value",  label: "Target differs in any value",                       desc: "Also copy when the target's custom assessment differs in status, justification, workaround or any other value." },
                                 ] as { value: CopyCondition; label: string; desc: string }[]).map(({ value, label, desc }) => (

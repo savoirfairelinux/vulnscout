@@ -198,6 +198,41 @@ describe('CopyAssessmentsReviewModal', () => {
         expect(onConfirm).toHaveBeenCalledWith([]);
     });
 
+    test('already-assessed candidate allowed by the copy condition is included in confirm', () => {
+        // The copy condition (e.g. "different status") marks the candidate
+        // selected even though it already has a custom assessment. It must not
+        // be skipped by the modal.
+        const groups: CopyAssessmentsPreviewGroup[] = [
+            {
+                source_assessment_id: 'a1',
+                source_finding_id: 'sf1',
+                vulnerability_id: 'CVE-2024-7777',
+                source_package: 'openssl@1.1.1',
+                assessment_details: { simplified_status: 'Fixed', status: 'fixed' },
+                candidates: [
+                    {
+                        target_finding_id: 'tf1',
+                        target_package: 'openssl@1.4.2',
+                        already_has_custom: true,
+                        selected: true,
+                    },
+                ],
+            },
+        ];
+        const onConfirm = jest.fn();
+        render(
+            <CopyAssessmentsReviewModal {...baseProps} groups={groups} onConfirm={onConfirm} />,
+        );
+        const checkbox = screen.getByLabelText('Include CVE-2024-7777') as HTMLInputElement;
+        expect(checkbox).not.toBeDisabled();
+        expect(checkbox).toBeChecked();
+        expect(screen.getByText('(already assessed)')).toBeInTheDocument();
+        fireEvent.click(screen.getByText('Confirm Copy'));
+        expect(onConfirm).toHaveBeenCalledWith([
+            { source_assessment_id: 'a1', target_finding_id: 'tf1' },
+        ]);
+    });
+
     test('rows are expanded by default; collapse hides details and expand reveals them', () => {
         render(<CopyAssessmentsReviewModal {...baseProps} />);
         // Details are visible by default
