@@ -198,28 +198,27 @@ describe('CopyAssessmentsReviewModal', () => {
         expect(onConfirm).toHaveBeenCalledWith([]);
     });
 
-    test('expand arrow reveals assessment details and collapse hides them', () => {
+    test('rows are expanded by default; collapse hides details and expand reveals them', () => {
         render(<CopyAssessmentsReviewModal {...baseProps} />);
-        // Details are initially hidden
-        expect(screen.queryByText('component_not_present')).not.toBeInTheDocument();
-        // Click the expand button for CVE-2024-0001
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0001'));
+        // Details are visible by default
         expect(screen.getByText('component_not_present')).toBeInTheDocument();
         expect(screen.getByText('Reviewed by security team.')).toBeInTheDocument();
         // Status badge is shown
         expect(screen.getByText('Not affected')).toBeInTheDocument();
-        // Collapse again
+        // Collapse the row
         fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001'));
         expect(screen.queryByText('component_not_present')).not.toBeInTheDocument();
+        // Expand it again
+        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0001'));
+        expect(screen.getByText('component_not_present')).toBeInTheDocument();
     });
 
-    test('expand shows status badge with correct text when no other details', () => {
+    test('status badge shows correct text when no other details', () => {
         render(<CopyAssessmentsReviewModal {...baseProps} />);
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0002'));
         expect(screen.getByText('Exploitable')).toBeInTheDocument();
     });
 
-    test('expand on group without assessment_details shows fallback message', () => {
+    test('group without assessment_details shows fallback message', () => {
         const groups: CopyAssessmentsPreviewGroup[] = [{
             source_assessment_id: 'a1',
             source_finding_id: 'sf1',
@@ -228,19 +227,20 @@ describe('CopyAssessmentsReviewModal', () => {
             candidates: [{ target_finding_id: 'tf1', target_package: 'pkg@2.0', already_has_custom: false, selected: true }],
         }];
         render(<CopyAssessmentsReviewModal {...baseProps} groups={groups} />);
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0003'));
         expect(screen.getByText('No details available.')).toBeInTheDocument();
     });
 
-    test('expanding one row does not expand others', () => {
+    test('collapsing one row does not collapse others', () => {
         render(<CopyAssessmentsReviewModal {...baseProps} />);
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0001'));
+        // Both rows are expanded by default
         expect(screen.getByText('component_not_present')).toBeInTheDocument();
-        // CVE-2024-0002 detail (Exploitable badge) is not yet shown
-        // The word 'Exploitable' appears only once (in the sub-row for CVE-2024-0001's row is not expanded, so we check CVE-2024-0002's detail text)
-        expect(screen.queryByText('Reviewed by security team.')).toBeInTheDocument();
-        // CVE-2024-0002 row should NOT be expanded
-        expect(screen.queryByLabelText('Collapse details for CVE-2024-0002')).not.toBeInTheDocument();
+        expect(screen.getByText('Exploitable')).toBeInTheDocument();
+        // Collapse CVE-2024-0001
+        fireEvent.click(screen.getByLabelText('Collapse details for CVE-2024-0001'));
+        expect(screen.queryByText('component_not_present')).not.toBeInTheDocument();
+        // CVE-2024-0002 row should still be expanded
+        expect(screen.getByText('Exploitable')).toBeInTheDocument();
+        expect(screen.getByLabelText('Collapse details for CVE-2024-0002')).toBeInTheDocument();
     });
 
     test.each([
@@ -257,7 +257,6 @@ describe('CopyAssessmentsReviewModal', () => {
             candidates: [{ target_finding_id: 'tf1', target_package: 'pkg@2.0', already_has_custom: false, selected: true }],
         }];
         render(<CopyAssessmentsReviewModal {...baseProps} groups={groups} />);
-        fireEvent.click(screen.getByLabelText('Expand details for CVE-2024-0099'));
         expect(screen.getByText(simplified)).toBeInTheDocument();
     });
 });

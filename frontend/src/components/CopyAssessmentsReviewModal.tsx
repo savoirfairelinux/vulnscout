@@ -41,7 +41,7 @@ function buildInitialState(groups: CopyAssessmentsPreviewGroup[]): ModalState {
         rows[g.source_assessment_id] = {
             selected: defaultIndex >= 0,
             candidateIndex: Math.max(0, defaultIndex),
-            expanded: false,
+            expanded: true,
         };
     }
     return { rows };
