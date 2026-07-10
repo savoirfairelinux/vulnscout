@@ -251,7 +251,7 @@ class TestDeleteVariant:
 
 class TestCopyCustomAssessments:
 
-    def _seed_copy_data(self, app):
+    def _seed_copy_data(self, app, observe_target=True):
         from src.extensions import db
         from src.models.project import Project
         from src.models.variant import Variant
@@ -261,6 +261,7 @@ class TestCopyCustomAssessments:
         from src.models.finding import Finding
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
         from src.models.assessment import Assessment
 
         with app.app_context():
@@ -283,6 +284,14 @@ class TestCopyCustomAssessments:
             target_doc = SBOMDocument.create("/tmp/target.spdx.json", "spdx", target_scan.id)
             SBOMPackage.create(source_doc.id, source_pkg.id)
             SBOMPackage.create(target_doc.id, target_pkg.id)
+
+            # Observations put each finding into its variant's vulnerability pool.
+            # When *observe_target* is False the target package is still in the
+            # SBOM but the vulnerability was not detected there, so it must not
+            # be offered as a copy target.
+            Observation.create(source_finding.id, source_scan.id)
+            if observe_target:
+                Observation.create(target_finding.id, target_scan.id)
 
             Assessment.create(
                 status="affected",
@@ -376,6 +385,52 @@ class TestCopyCustomAssessments:
         assert group["source_package"] == "openssl@1.1.1"
         assert len(group["candidates"]) == 1
         assert group["candidates"][0]["target_package"] == "openssl@3.0.0"
+
+    def test_copy_assessments_skips_vuln_not_in_target_pool(self, app, client):
+        """A vuln whose target finding is not observed in the target's scans
+        (not in the target's vulnerability pool) must not be offered for copy."""
+        from src.models.assessment import Assessment
+
+        ids = self._seed_copy_data(app, observe_target=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No vulnerabilities in common" in data["message"]
+
+        with app.app_context():
+            target_assessments = Assessment.get_by_finding_and_variant(
+                ids["target_finding_id"],
+                ids["target_variant_id"],
+            )
+            assert not any(a.origin == "custom" for a in target_assessments)
+
+    def test_copy_assessments_preview_skips_vuln_not_in_target_pool(self, app, client):
+        """Preview must not list a candidate when the vuln is absent from the
+        target's pool, even though the package is in the target SBOM."""
+        ids = self._seed_copy_data(app, observe_target=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 0
+        assert data.get("groups", []) == []
+        assert "No vulnerabilities in common" in data["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -1467,6 +1522,7 @@ class TestCopyAssessmentsEdgeCases:
         from src.models.assessment import Assessment
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
 
         with app.app_context():
             project = Project.create("NonCommonProject")
@@ -1490,6 +1546,12 @@ class TestCopyAssessmentsEdgeCases:
             tgt_scan = Scan.create("", target.id, scan_type="sbom")
             tgt_doc = SBOMDocument.create("/tmp/tgt_nc.spdx.json", "spdx", tgt_scan.id)
             SBOMPackage.create(tgt_doc.id, pkg_shared.id)
+
+            # The shared finding is detected in both variants' pools; the
+            # source-only finding only in the source.
+            Observation.create(finding_sx.id, src_scan.id)
+            Observation.create(finding_oy.id, src_scan.id)
+            Observation.create(finding_sx.id, tgt_scan.id)
 
             Assessment.create(
                 status="affected", origin="custom", finding_id=finding_sx.id,
@@ -1608,6 +1670,7 @@ class TestCopyAssessmentsMatchModes:
         from src.models.finding import Finding
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
         from src.models.assessment import Assessment
 
         with app.app_context():
@@ -1638,6 +1701,11 @@ class TestCopyAssessmentsMatchModes:
             SBOMPackage.create(source_doc.id, src_pkg.id)
             for pkg in (tgt_major_ok, tgt_major_diff, tgt_other_name, tgt_minor_ok):
                 SBOMPackage.create(target_doc.id, pkg.id)
+
+            # Put each finding into its variant's vulnerability pool.
+            Observation.create(src_finding.id, source_scan.id)
+            for f in (f_major_ok, f_major_diff, f_other_name, f_minor_ok):
+                Observation.create(f.id, target_scan.id)
 
             Assessment.create(
                 status="not_affected",
@@ -2052,6 +2120,7 @@ class TestCopyAssessmentsMatchModes:
         from src.models.finding import Finding
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
         from src.models.assessment import Assessment
 
         with app.app_context():
@@ -2072,6 +2141,10 @@ class TestCopyAssessmentsMatchModes:
             tgt_doc = SBOMDocument.create("/tmp/exd_tgt.spdx.json", "spdx", tgt_scan.id)
             SBOMPackage.create(src_doc.id, pkg.id)
             SBOMPackage.create(tgt_doc.id, pkg.id)
+
+            # Vulnerability observed in both variants' pools.
+            Observation.create(finding.id, src_scan.id)
+            Observation.create(finding.id, tgt_scan.id)
 
             Assessment.create(
                 status="affected",

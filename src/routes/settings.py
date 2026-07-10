@@ -432,8 +432,10 @@ def init_app(app: Flask) -> None:
     ) -> tuple[dict, None] | tuple[None, ErrorResponse]:
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
+        from ..models.observation import Observation
         from ..helpers.active_scans import (
             active_sbom_scan_ids_for_variant,
+            active_scan_ids_for_variant,
             active_package_ids_for_scans,
         )
         from ..helpers.version_match import versions_match
@@ -462,6 +464,21 @@ def init_app(app: Flask) -> None:
         target_pkg_ids = active_package_ids_for_scans(
             active_sbom_scan_ids_for_variant(target_uuid))
 
+        # Findings actually detected (observed) in the target variant's active
+        # scans — i.e. the target's pool of vulnerabilities. A copy must only be
+        # proposed onto a finding that is present in this pool; otherwise we
+        # would attach an assessment to a vulnerability the target variant is
+        # not affected by.
+        target_active_scan_ids = active_scan_ids_for_variant(target_uuid)
+        if target_active_scan_ids:
+            target_observed_finding_ids: set = set(db.session.execute(
+                db.select(Observation.finding_id)
+                .where(Observation.scan_id.in_(target_active_scan_ids))
+                .distinct()
+            ).scalars().all())
+        else:
+            target_observed_finding_ids = set()
+
         source_assessments = DBAssessment.get_handmade([source_uuid])
 
         # ---- exact mode: original flat-operations behavior ----
@@ -487,6 +504,10 @@ def init_app(app: Flask) -> None:
                     continue
                 # Exact mode: same package_id → same Finding row shared across variants
                 target_finding = source_finding
+                # Only propose the copy if this vulnerability is actually part of
+                # the target variant's pool (observed in its active scans).
+                if target_finding.id not in target_observed_finding_ids:
+                    continue
                 if target_finding.id in processed_target_finding_ids:
                     continue
                 processed_target_finding_ids.add(target_finding.id)
@@ -518,6 +539,13 @@ def init_app(app: Flask) -> None:
                     Finding.vulnerability_id.in_(source_vuln_ids),
                 )
             ).scalars().all())
+            # Restrict to findings present in the target variant's pool (observed
+            # in its active scans) so we never propose copying an assessment onto
+            # a vulnerability the target is not affected by.
+            target_findings_all = [
+                f for f in target_findings_all
+                if f.id in target_observed_finding_ids
+            ]
         else:
             target_findings_all = []
 
