@@ -263,18 +263,21 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
 
                         {/* ---- Matching mode ---- */}
                         <div className="space-y-2">
-                            <p className="text-sm font-semibold text-zinc-300">Matching mode</p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <p className="text-sm font-semibold text-zinc-300">How should packages be matched?</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                                 {([
-                                    { value: "exact",                label: "Exact",                desc: "Same package name and version" },
-                                    { value: "ignore_minor_version", label: "Ignore minor version",  desc: "Same name, major version must match" },
-                                    { value: "ignore_version",       label: "Ignore version",        desc: "Same name, any version" },
-                                ] as { value: CopyMatchMode; label: string; desc: string }[]).map(({ value, label, desc }) => (
+                                    { value: "exact",                precision: 1, label: "Same Versions",                 desc: "Package name and full version must match (e.g. 6.5.1 \u2192 6.5.1)" },
+                                    { value: "ignore_minor_version", precision: 2, label: "Same Major and Minor Versions", desc: "Major and minor must match; patch may differ (e.g. 6.5.1 \u2192 6.5.9)" },
+                                    { value: "ignore_minor_version", precision: 1, label: "Same Major Versions",           desc: "Major must match; minor and patch may differ (e.g. 6.5.1 \u2192 6.9.0)" },
+                                    { value: "ignore_version",       precision: 1, label: "Any Versions",                  desc: "Same name; version is ignored (e.g. 6.5.1 \u2192 7.0.0)" },
+                                ] as { value: CopyMatchMode; precision: number; label: string; desc: string }[]).map(({ value, precision, label, desc }) => {
+                                    const selected = copyMatchMode === value && (value === "ignore_minor_version" ? copyVersionPrecision === precision : true);
+                                    return (
                                     <label
-                                        key={value}
+                                        key={label}
                                         className={[
                                             "flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors",
-                                            copyMatchMode === value
+                                            selected
                                                 ? "border-cyan-500 bg-cyan-950/40 text-white"
                                                 : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
                                             (!customProjectId || copyBusy) ? "opacity-50 cursor-not-allowed" : "",
@@ -283,11 +286,12 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                         <input
                                             type="radio"
                                             name="copy-match-mode"
-                                            value={value}
-                                            checked={copyMatchMode === value}
+                                            value={label}
+                                            checked={selected}
                                             disabled={!customProjectId || copyBusy}
                                             onChange={() => {
                                                 setCopyMatchMode(value);
+                                                setCopyVersionPrecision(precision);
                                                 setCopyMsg(null);
                                                 setCopyPreviewError(null);
                                                 setCopyPreviewUnavailableMsg(null);
@@ -299,39 +303,10 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                             <span className="text-xs text-zinc-400">{desc}</span>
                                         </span>
                                     </label>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
-
-                        {/* ---- Version precision (only for ignore_minor_version) ---- */}
-                        {copyMatchMode === "ignore_minor_version" && (
-                            <div className="flex items-center gap-4 pl-1">
-                                <p className="text-xs text-zinc-400 font-semibold">Version precision:</p>
-                                {([
-                                    { precision: 1, label: "Major only",  example: "6.x → 6.y" },
-                                    { precision: 2, label: "Major.Minor", example: "6.5.x → 6.5.y" },
-                                ] as { precision: number; label: string; example: string }[]).map(({ precision, label, example }) => (
-                                    <label key={precision} className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
-                                        <input
-                                            type="radio"
-                                            name="copy-version-precision"
-                                            value={precision}
-                                            checked={copyVersionPrecision === precision}
-                                            disabled={!customProjectId || copyBusy}
-                                            onChange={() => {
-                                                setCopyVersionPrecision(precision);
-                                                setCopyMsg(null);
-                                                setCopyPreviewError(null);
-                                                setCopyPreviewUnavailableMsg(null);
-                                            }}
-                                            className="accent-cyan-500"
-                                        />
-                                        <span>{label}</span>
-                                        <span className="text-zinc-500">{example}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        )}
 
                         {/* ---- Preview summary ---- */}
                         {copyPreviewBusy && (
