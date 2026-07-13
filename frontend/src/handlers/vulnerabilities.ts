@@ -177,13 +177,8 @@ const getVulnerabilityStatusSummary = (vulnerability: Pick<Vulnerability, 'statu
     return vulnerability.status_summary ?? buildFallbackStatusSummary(vulnerability.simplified_status);
 }
 
-const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string => {
-    const top = summary.ordered.slice(0, maxItems).map((entry) => entry.status);
-    const hiddenCount = summary.ordered.length - top.length;
-    if (hiddenCount > 0) {
-        top.push(`+${hiddenCount} more`);
-    }
-    return top.join(', ');
+const getTopStatusSummaryLabel = (summary: StatusSummary): string => {
+    return summary.ordered.map((entry) => entry.status).join(', ');
 }
 
 const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {

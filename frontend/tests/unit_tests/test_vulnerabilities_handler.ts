@@ -537,8 +537,7 @@ describe('getTopStatusSummaryLabel', () => {
     expect(getTopStatusSummaryLabel(summary)).toBe('Fixed');
   });
 
-  test('appends +N more when more than 2 entries', () => {
-    // Force a summary with 3 entries
+  test('lists every status without any "+N more" placeholder', () => {
     const summary = {
       counts: { 'Exploitable': 1, 'Pending Assessment': 1, 'Fixed': 1 },
       ordered: [
@@ -551,12 +550,11 @@ describe('getTopStatusSummaryLabel', () => {
       has_active_status: true,
     };
     const label = getTopStatusSummaryLabel(summary);
-    expect(label).toContain('+1 more');
-    expect(label).toContain('Exploitable');
-    expect(label).toContain('Pending Assessment');
+    expect(label).toBe('Exploitable, Pending Assessment, Fixed');
+    expect(label).not.toContain('more');
   });
 
-  test('custom maxItems parameter', () => {
+  test('never truncates even with many statuses', () => {
     const summary = {
       counts: { 'A': 1, 'B': 1, 'C': 1, 'D': 1 },
       ordered: [
@@ -569,9 +567,9 @@ describe('getTopStatusSummaryLabel', () => {
       dominant_status: 'A',
       has_active_status: false,
     };
-    const label = getTopStatusSummaryLabel(summary, 3);
-    expect(label).toContain('+1 more');
-    expect(label).not.toContain('D');
+    const label = getTopStatusSummaryLabel(summary);
+    expect(label).toBe('A, B, C, D');
+    expect(label).not.toContain('more');
   });
 });
 

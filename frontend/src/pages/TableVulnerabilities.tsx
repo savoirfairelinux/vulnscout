@@ -806,7 +806,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                             <div className="space-y-1 text-gray-100">
                                 <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
                                 <p>Scope follows your active project, variant, and compare selection.</p>
-                                <p>Display shows top outcomes, for example: Exploitable, Pending Assessment.</p>
+                                <p>Display lists every distinct outcome, for example: Exploitable, Pending Assessment.</p>
                                 <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
                             </div>
                         </div>
@@ -816,9 +816,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             cell: info => {
                 const summary = getVulnerabilityStatusSummary(info.row.original);
                 const label = getTopStatusSummaryLabel(summary);
-                const details = summary.ordered.map(entry => entry.status).join(', ');
                 return (
-                    <div className="flex items-center justify-center h-full text-center" title={details}>
+                    <div className="flex items-center justify-center h-full text-center" title={label}>
                         <code>{label}</code>
                     </div>
                 );
