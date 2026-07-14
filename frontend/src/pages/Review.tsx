@@ -10,18 +10,21 @@ import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
-import type { Variant } from '../handlers/variant';
+import type { Variant, CopyAssessmentsPreviewGroup, CopyAssessmentsPreviewCandidate, CopyAssessmentsSelection } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import type { ImportMatchMode } from '../handlers/variant';
 import Packages from '../handlers/packages';
 import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
+import ImportMatchModeDialog from '../components/ImportMatchModeDialog';
+import CopyAssessmentsReviewModal from '../components/CopyAssessmentsReviewModal';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -142,6 +145,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("success");
     const [showBanner, setShowBanner] = useState(false);
+
+    // ---- Import match-mode flow state ----
+    const [importMatchModeOpen, setImportMatchModeOpen] = useState(false);
+    const [importParsedData, setImportParsedData] = useState<object | null>(null);
+    const [importPreviewBusy, setImportPreviewBusy] = useState(false);
+    const [importReviewOpen, setImportReviewOpen] = useState(false);
+    const [importReviewGroups, setImportReviewGroups] = useState<CopyAssessmentsPreviewGroup[]>([]);
+    const [importReviewKey, setImportReviewKey] = useState(0);
+    const [importReviewMode, setImportReviewMode] = useState<ImportMatchMode>("exact");
+    const [importReviewVariantId, setImportReviewVariantId] = useState<string>("");
+    const [importPreviewData, setImportPreviewData] = useState<object | null>(null);
 
     const showMessage = useCallback((message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -486,45 +500,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     return;
                 }
 
-                // New custom data format — send to backend import-custom-data endpoint
+                // New custom data format — open match-mode dialog before preview
                 if (!parsed?.version || !parsed?.assessments) {
                     showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
                     if (fileInputRef.current) fileInputRef.current.value = '';
                     return;
                 }
 
-                setImportStatus("Importing...");
-                const params = new URLSearchParams();
-                if (variantId) params.set('variant_id', variantId);
-                const url = new URL(
-                    import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data" +
-                    (params.toString() ? `?${params.toString()}` : ''),
-                    window.location.href,
-                );
-                const res = await fetch(url.toString(), {
-                    method: 'POST',
-                    mode: 'cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: text,
-                });
-                const result = await res.json();
-
-                if (result.status === 'success') {
-                    const summary: string[] = [];
-                    if (result.assessments_imported > 0) {
-                        let msg = `${result.assessments_imported} assessment(s) imported`;
-                        if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
-                        summary.push(msg);
-                    }
-                    if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
-                    if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
-                    if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
-                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
-                    showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
-                } else {
-                    showMessage(`Import error: ${result.errors?.[0]?.error || 'Unknown error'}`, 'error');
-                }
-                setImportStatus(null);
+                // Store parsed data and open match-mode selection dialog
+                setImportParsedData(parsed);
+                setImportMatchModeOpen(true);
             } catch (err) {
                 console.error(err);
                 showMessage('Import failed — invalid file', 'error');
@@ -535,6 +520,110 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         };
         reader.readAsText(file);
     }, [variantId, projectId, showMessage]);
+
+    /**
+     * Called when the user confirms a match mode in ImportMatchModeDialog.
+     * Calls preview, then opens the review modal.
+     */
+    const handleImportModeConfirm = useCallback(async (mode: ImportMatchMode, dialogVariantId: string) => {
+        if (!importParsedData) return;
+
+        setImportMatchModeOpen(false);
+        setImportPreviewBusy(true);
+
+        try {
+            const preview = await Variants.previewCustomDataImport(
+                importParsedData,
+                dialogVariantId,
+                mode,
+                1,
+            );
+
+            // Convert preview response to groups for the review modal
+            let groups: CopyAssessmentsPreviewGroup[];
+            if (preview.mode === "exact") {
+                groups = (preview.entries ?? []).map(
+                    (entry): CopyAssessmentsPreviewGroup => ({
+                        source_assessment_id: entry.source_assessment_id,
+                        source_finding_id:    entry.source_finding_id,
+                        vulnerability_id:     entry.vulnerability_id,
+                        source_package:       entry.source_package,
+                        assessment_details:   entry.assessment_details,
+                        candidates: [{
+                            target_finding_id:  entry.target_finding_id,
+                            target_package:     entry.target_package,
+                            already_has_custom: entry.already_has_custom ?? false,
+                            selected:           entry.selected ?? !(entry.already_has_custom ?? false),
+                        } satisfies CopyAssessmentsPreviewCandidate],
+                    })
+                );
+            } else {
+                groups = preview.groups ?? [];
+            }
+
+            if (groups.length === 0) {
+                setImportParsedData(null);
+                setImportPreviewData(null);
+                showMessage(preview.message || 'No matching observed findings for the selected mode.', 'error');
+                return;
+            }
+
+            setImportReviewMode(mode);
+            setImportReviewVariantId(dialogVariantId);
+            setImportPreviewData(importParsedData);
+            setImportReviewGroups(groups);
+            setImportReviewKey(k => k + 1);
+            setImportReviewOpen(true);
+        } catch (err: any) {
+            console.error(err);
+            showMessage(`Preview failed: ${err?.message || 'Unknown error'}`, 'error');
+        } finally {
+            setImportPreviewBusy(false);
+        }
+    }, [importParsedData, showMessage]);
+
+    /**
+     * Called when the user confirms selections in the review modal.
+     * Applies selected assessments and imports CVSS/time-estimates.
+     */
+    const handleImportApply = useCallback(async (selections: CopyAssessmentsSelection[]) => {
+        setImportReviewOpen(false);
+        if (!importPreviewData || !importReviewVariantId) return;
+
+        setImportStatus("Applying...");
+        try {
+            const result = await Variants.applyCustomDataImport(
+                importPreviewData,
+                importReviewVariantId,
+                importReviewMode,
+                1,
+                selections,
+            );
+
+            if (result.status === 'success') {
+                const summary: string[] = [];
+                if (result.assessments_imported > 0) {
+                    let msg = `${result.assessments_imported} assessment(s) imported`;
+                    if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
+                    summary.push(msg);
+                }
+                if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
+                if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
+                if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
+                Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
+            } else {
+                showMessage(`Import error: ${result.errors?.[0]?.error || 'Unknown error'}`, 'error');
+            }
+        } catch (err: any) {
+            console.error(err);
+            showMessage(`Apply failed: ${err?.message || 'Unknown error'}`, 'error');
+        } finally {
+            setImportStatus(null);
+            setImportParsedData(null);
+            setImportPreviewData(null);
+        }
+    }, [importPreviewData, importReviewVariantId, projectId, importReviewMode, showMessage, variantId]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -1356,6 +1445,41 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 showTitleIcon={true}
                 onConfirm={handleDeleteRow}
                 onCancel={() => setRowToDelete(null)}
+            />
+
+            {/* Match-mode dialog: opens after picking a custom-data JSON */}
+            <ImportMatchModeDialog
+                isOpen={importMatchModeOpen}
+                variants={projectId ? allVariants.filter(v => v.project_id === projectId) : allVariants}
+                initialVariantId={variantId}
+                onConfirm={handleImportModeConfirm}
+                onCancel={() => {
+                    setImportMatchModeOpen(false);
+                    setImportParsedData(null);
+                }}
+            />
+
+            {/* Preview busy overlay */}
+            {importPreviewBusy && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60">
+                    <div className="flex flex-col items-center gap-3 text-white">
+                        <FontAwesomeIcon icon={faSpinner} className="text-3xl animate-spin text-cyan-400" aria-hidden="true" />
+                        <span className="text-sm">Generating preview…</span>
+                    </div>
+                </div>
+            )}
+
+            {/* Review modal: opened after a successful preview */}
+            <CopyAssessmentsReviewModal
+                key={importReviewKey}
+                isOpen={importReviewOpen}
+                groups={importReviewGroups}
+                onConfirm={handleImportApply}
+                onCancel={() => {
+                    setImportReviewOpen(false);
+                    setImportParsedData(null);
+                    setImportPreviewData(null);
+                }}
             />
 
             {editingRow && (

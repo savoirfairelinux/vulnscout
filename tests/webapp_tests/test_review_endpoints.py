@@ -1800,3 +1800,574 @@ class TestFetchVulnerabilitiesTexts:
         ]
         assert len(shared) == 1
         assert shared[0].packages == ["cairo"]
+
+
+# ── POST /api/assessments/review/import-custom-data/preview ──────────────
+# and apply path (selections in the JSON body)
+
+def _preview_payload(custom_data, variant_id=VARIANT_UUID, match_mode="exact",
+                     version_precision=1):
+    """Build the JSON body for the preview endpoint."""
+    return {
+        "custom_data": custom_data,
+        "variant_id": str(variant_id),
+        "match_mode": match_mode,
+        "version_precision": version_precision,
+    }
+
+
+def _apply_payload(custom_data, selections, variant_id=VARIANT_UUID,
+                   match_mode="exact"):
+    """Build the JSON body for the apply (import with selections) path."""
+    return {
+        "custom_data": custom_data,
+        "variant_id": str(variant_id),
+        "match_mode": match_mode,
+        "selections": selections,
+    }
+
+
+# -- preview: basic --
+
+def test_preview_import_missing_body(client):
+    """No body → 400."""
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        content_type="application/json",
+        data="not-json",
+    )
+    assert resp.status_code == 400
+
+
+def test_preview_import_missing_variant_id(client):
+    """No variant_id in body → 400."""
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json={"custom_data": _custom_data_payload(), "match_mode": "exact"},
+    )
+    assert resp.status_code == 400
+
+
+def test_preview_import_bad_variant_id(client):
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json={**_preview_payload(_custom_data_payload()), "variant_id": "bad"},
+    )
+    assert resp.status_code == 400
+
+
+def test_preview_import_invalid_custom_data(client):
+    """custom_data without 'version' key → 400."""
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json={
+            "custom_data": {"assessments": []},
+            "variant_id": str(VARIANT_UUID),
+            "match_mode": "exact",
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_preview_import_invalid_match_mode(client):
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(_custom_data_payload(), match_mode="unknown"),
+    )
+    assert resp.status_code == 400
+
+
+# -- preview: exact mode --
+
+def test_preview_import_exact_no_match(client):
+    """File has a different version than observed package → no entries."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@9.9.9"],   # not present in demo DB
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["mode"] == "exact"
+    assert data["count"] == 0
+    assert data["entries"] == []
+
+
+def test_preview_import_exact_match(client):
+    """File has matching version → one entry returned."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["mode"] == "exact"
+    assert data["count"] == 1
+    assert len(data["entries"]) == 1
+    entry = data["entries"][0]
+    assert entry["vulnerability_id"] == "CVE-2020-35492"
+    assert "cairo@1.16.0" in entry["source_package"]
+    assert "target_finding_id" in entry
+    assert "source_assessment_id" in entry
+    assert "assessment_details" in entry
+    assert entry["assessment_details"]["status"] == "affected"
+
+
+def test_preview_import_exact_already_has_custom(app, client):
+    """When target finding already has a custom assessment, selected=False."""
+    _create_handmade_assessment(client, status="affected")
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    entry = data["entries"][0]
+    assert entry["already_has_custom"] is True
+    assert entry["selected"] is False
+    assert data["skipped"] == 1
+
+
+# -- preview: ignore_minor_version mode --
+
+def test_preview_import_ignore_minor_same_major(client):
+    """cairo@1.17.0 (different minor) matches cairo@1.16.0 observation."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "not_affected",
+        "packages": ["cairo@1.17.0"],   # major=1 matches observed 1.16.0
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_minor_version"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["mode"] == "ignore_minor_version"
+    assert len(data["groups"]) == 1
+    group = data["groups"][0]
+    assert group["vulnerability_id"] == "CVE-2020-35492"
+    assert len(group["candidates"]) == 1
+    # assessment_details should reflect what's in the file
+    assert group["assessment_details"]["status"] == "not_affected"
+
+
+def test_preview_import_ignore_minor_different_major(client):
+    """cairo@2.0.0 (different major) does NOT match observation."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@2.0.0"],   # major=2 ≠ observed major=1
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_minor_version"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["mode"] == "ignore_minor_version"
+    assert data["groups"] == []
+
+
+# -- preview: ignore_version mode --
+
+def test_preview_import_ignore_version_any_version(client):
+    """Any file version matches when mode is ignore_version."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "fixed",
+        "packages": ["cairo@99.0.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_version"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["mode"] == "ignore_version"
+    assert len(data["groups"]) == 1
+    assert len(data["groups"][0]["candidates"]) == 1
+
+
+def test_preview_import_ignore_version_wrong_name(client):
+    """Wrong package name → no candidates even in ignore_version mode."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["openssl@1.1.1"],  # not in demo DB
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_version"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data["groups"] == []
+
+
+# -- observed-only: unobserved findings must NOT appear in preview --
+
+def test_preview_import_observed_only(app, client):
+    """Findings not observed in the target variant's scans must be excluded."""
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+
+    # Create a finding (package+vuln) that is NOT attached to any scan/observation
+    with app.app_context():
+        pkg = Package.find_or_create("ghostscript", "9.55.0", supplier="")
+        Vulnerability.get_or_create("CVE-2020-35492")
+        Finding.get_or_create(pkg.id, "CVE-2020-35492")
+
+    # File references the unobserved package
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["ghostscript@9.55.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    for mode in ("exact", "ignore_minor_version", "ignore_version"):
+        resp = client.post(
+            "/api/assessments/review/import-custom-data/preview",
+            json=_preview_payload(payload, match_mode=mode),
+        )
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        if mode == "exact":
+            assert data["entries"] == [], f"mode={mode} should return no entries"
+        else:
+            assert data["groups"] == [], f"mode={mode} should return no groups"
+
+
+# -- apply with selections --
+
+def test_apply_with_selections_exact(client):
+    """Preview then apply in exact mode creates the assessment on the target finding."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "not_affected",
+        "justification": "component_not_present",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+
+    # Step 1: preview
+    prev_resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    assert prev_resp.status_code == 200
+    preview = json.loads(prev_resp.data)
+    assert preview["count"] == 1
+    entry = preview["entries"][0]
+    selections = [{
+        "source_assessment_id": entry["source_assessment_id"],
+        "target_finding_id": entry["target_finding_id"],
+    }]
+
+    # Step 2: apply
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections, match_mode="exact"),
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+    assert result["assessments_skipped"] == 0
+
+
+def test_apply_with_selections_ignore_minor(client):
+    """Apply in ignore_minor_version mode creates assessment on the matched finding."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "fixed",
+        "packages": ["cairo@1.17.0"],  # major=1 matches observed 1.16.0
+        "variant_id": str(VARIANT_UUID),
+    }])
+
+    prev_resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_minor_version"),
+    )
+    assert prev_resp.status_code == 200
+    preview = json.loads(prev_resp.data)
+    assert len(preview["groups"]) == 1
+    group = preview["groups"][0]
+    assert len(group["candidates"]) >= 1
+    selections = [{
+        "source_assessment_id": group["source_assessment_id"],
+        "target_finding_id": group["candidates"][0]["target_finding_id"],
+    }]
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections, match_mode="ignore_minor_version"),
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+
+
+def test_apply_with_selections_ignore_version(client):
+    """Apply in ignore_version mode creates assessment on the matched finding."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@99.0.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+
+    prev_resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_version"),
+    )
+    assert prev_resp.status_code == 200
+    preview = json.loads(prev_resp.data)
+    assert len(preview["groups"]) == 1
+    selections = [{
+        "source_assessment_id": preview["groups"][0]["source_assessment_id"],
+        "target_finding_id": preview["groups"][0]["candidates"][0]["target_finding_id"],
+    }]
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections, match_mode="ignore_version"),
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+
+
+def test_apply_skip_exact_duplicate(client):
+    """Applying the same assessment twice skips the second."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+
+    # First apply
+    prev_resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload),
+    )
+    entry = json.loads(prev_resp.data)["entries"][0]
+    selections = [{"source_assessment_id": entry["source_assessment_id"],
+                   "target_finding_id": entry["target_finding_id"]}]
+
+    r1 = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections),
+    )
+    assert r1.status_code == 200
+    assert json.loads(r1.data)["assessments_imported"] == 1
+
+    # Second apply — same selections → skipped
+    r2 = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections),
+    )
+    assert r2.status_code == 200
+    r2_data = json.loads(r2.data)
+    assert r2_data["assessments_skipped"] == 1
+    assert r2_data["assessments_imported"] == 0
+
+
+def test_apply_empty_selections(client):
+    """Sending an empty selections list creates no assessments."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections=[]),
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    # No assessments created because no selections
+    assert result["assessments_imported"] == 0
+
+
+def test_apply_invalid_target_finding_id(client):
+    """An invalid target_finding_id UUID causes an error in the result."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    from src.helpers.assessment_io import _import_item_id
+    item_id = _import_item_id("CVE-2020-35492", "cairo@1.16.0", "affected")
+    selections = [{"source_assessment_id": item_id, "target_finding_id": "not-a-uuid"}]
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections),
+    )
+    # No assessments were imported and there are errors → backend returns 400
+    assert resp.status_code in (200, 400)
+    result = json.loads(resp.data)
+    assert result["errors"]
+
+
+def test_apply_includes_cvss_and_time_estimates(client):
+    """CVSS and time estimates are imported regardless of assessment selections."""
+    payload = _custom_data_payload(
+        assessments=[],
+        cvss=[{
+            "vuln_id": "CVE-2020-35492",
+            "version": "3.1",
+            "vector_string": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "base_score": 7.5,
+            "author": "custom-analyst",
+            "origin": "custom",
+        }],
+        time_estimates=[{
+            "vuln_id": "CVE-2020-35492",
+            "optimistic": 1,
+            "likely": 2,
+            "pessimistic": 4,
+        }],
+    )
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections=[], match_mode="exact"),
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["cvss_imported"] >= 1
+    assert result["time_estimates_imported"] >= 1
+
+
+def test_preview_stable_item_ids(client):
+    """The same (vuln_id, package) pair always produces the same source_assessment_id."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+
+    r1 = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    r2 = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="exact"),
+    )
+    assert r1.status_code == r2.status_code == 200
+    id1 = json.loads(r1.data)["entries"][0]["source_assessment_id"]
+    id2 = json.loads(r2.data)["entries"][0]["source_assessment_id"]
+    assert id1 == id2
+
+
+def test_import_item_id_includes_status(client):
+    """The same (vuln, package) with different statuses yields distinct item IDs."""
+    from src.helpers.assessment_io import _import_item_id
+    affected = _import_item_id("CVE-2020-35492", "cairo@1.16.0", "affected")
+    fixed = _import_item_id("CVE-2020-35492", "cairo@1.16.0", "fixed")
+    assert affected != fixed
+
+
+def test_apply_rejects_unobserved_finding(app, client):
+    """A selection pointing at a finding not observed in the variant is rejected."""
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.finding import Finding
+
+    # A finding that exists but is NOT observed in the target variant's scans.
+    with app.app_context():
+        pkg = Package.find_or_create("ghostscript", "9.55.0", supplier="")
+        Vulnerability.get_or_create("CVE-2020-35492")
+        finding = Finding.get_or_create(pkg.id, "CVE-2020-35492")
+        unobserved_finding_id = str(finding.id)
+
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["ghostscript@9.55.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    from src.helpers.assessment_io import _import_item_id
+    item_id = _import_item_id("CVE-2020-35492", "ghostscript@9.55.0", "affected")
+    selections = [{"source_assessment_id": item_id,
+                   "target_finding_id": unobserved_finding_id}]
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=_apply_payload(payload, selections),
+    )
+    assert resp.status_code in (200, 400)
+    result = json.loads(resp.data)
+    assert result["assessments_imported"] == 0
+    assert result["errors"]
+    assert any("not observed" in e.get("error", "") for e in result["errors"])
+
+
+def test_preview_version_precision_clamped(client):
+    """version_precision < 1 is clamped to 1 rather than matching everything."""
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@2.0.0"],  # major 2 differs from observed 1.16.0
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_minor_version",
+                              version_precision=0),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    # Clamped to precision 1 → major 2 vs 1 does not match → no groups.
+    assert data["groups"] == []
+
+
+def test_preview_group_mode_reports_skipped_key(app, client):
+    """Group-mode preview responses expose the required ``skipped`` key."""
+    _create_handmade_assessment(client, status="affected")
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": str(VARIANT_UUID),
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data/preview",
+        json=_preview_payload(payload, match_mode="ignore_version"),
+    )
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert "skipped" in data
+    assert data["skipped"] == data.get("skipped_count")
+

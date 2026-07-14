@@ -203,6 +203,22 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             return JSON.stringify([]);
         }
         // Mutations (PUT / DELETE / POST)
+        if (url.includes('/api/assessments/review/import-custom-data/preview')) {
+            // Return a minimal exact-mode preview with one entry so the review modal opens
+            return JSON.stringify({
+                count: 1, skipped: 0, mode: 'exact', message: '1 assessment ready.',
+                entries: [{
+                    source_assessment_id: 'item-1',
+                    source_finding_id: 'item-1',
+                    target_finding_id: 'finding-1',
+                    vulnerability_id: 'CVE-2020-35492',
+                    source_package: 'cairo@1.16.0',
+                    target_package: 'cairo@1.16.0',
+                    already_has_custom: false,
+                    selected: true,
+                }],
+            });
+        }
         if (url.includes('/api/assessments/review/import-custom-data')) return JSON.stringify(importResult);
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
@@ -794,7 +810,7 @@ describe('Review — import and export', () => {
         });
     });
 
-    test('importing a custom-data JSON file reports a summary', async () => {
+    test('importing a custom-data JSON file opens the match-mode dialog then reports a summary', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         await screen.findByTitle('Edit assessment');
@@ -805,6 +821,17 @@ describe('Review — import and export', () => {
             { type: 'application/json' },
         );
         fireEvent.change(fileInput(), { target: { files: [file] } });
+
+        // The match-mode dialog should open
+        await screen.findByText('Import custom data');
+
+        // Select a variant and confirm
+        fireEvent.change(screen.getByTestId('import-target-variant-select'), { target: { value: 'v1' } });
+        fireEvent.click(screen.getByTestId('import-match-mode-preview-btn'));
+
+        // The review modal should open after the preview; confirm it
+        await screen.findByText('Review Copy Alignments');
+        fireEvent.click(screen.getByText('Confirm Copy'));
 
         await screen.findByText(/Imported:/);
     });

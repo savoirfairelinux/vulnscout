@@ -10,7 +10,7 @@ test_backend:
 	mypy --config-file ../tox.ini $(SRC_DIR) --check-untyped-defs
 	pytest -n auto --cov-config=../tox.ini --cov-report term-missing --cov-report html --cov=$(SRC_DIR) --cov-fail-under=95
 	pdoc $(SRC_DIR) -o ./htmldocs
-	find . -type f -name '*.py[co]' -delete -o -type d -name __pycache__ -delete
+	find . -depth \( -type f -name '*.py[co]' -o -type d -name __pycache__ \) -delete
 
 test_frontend:
 	cd $(FRONTEND_DIR) && \

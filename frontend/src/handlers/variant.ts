@@ -90,6 +90,11 @@ export type {
     CopyAssessmentsSelection,
 };
 
+/** Match mode for the import-custom-data preview/apply flow. */
+type ImportMatchMode = "exact" | "ignore_minor_version" | "ignore_version";
+
+export type { ImportMatchMode };
+
 class Variants {
     static async list(projectId: string): Promise<Variant[]> {
         const response = await fetch(
@@ -281,6 +286,82 @@ class Variants {
             }
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `Preview failed (${response.status})`);
+        }
+        return response.json();
+    }
+
+    /**
+     * Preview which assessments in a custom-data JSON would be imported onto
+     * the target variant under the chosen match mode.
+     *
+     * Returns a `CopyAssessmentsPreview`-shaped response that can be fed
+     * directly into `CopyAssessmentsReviewModal`.
+     */
+    static async previewCustomDataImport(
+        customData: object,
+        variantId: string,
+        matchMode: ImportMatchMode = "exact",
+        versionPrecision = 1,
+    ): Promise<CopyAssessmentsPreview> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data/preview",
+            {
+                mode: "cors",
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    custom_data: customData,
+                    variant_id: variantId,
+                    match_mode: matchMode,
+                    version_precision: versionPrecision,
+                }),
+            }
+        );
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Preview failed (${response.status})`);
+        }
+        return response.json();
+    }
+
+    /**
+     * Apply a confirmed set of selections from `previewCustomDataImport`.
+     *
+     * Also imports CVSS scores and time estimates from `customData`
+     * (independent of selections).
+     */
+    static async applyCustomDataImport(
+        customData: object,
+        variantId: string,
+        matchMode: ImportMatchMode,
+        versionPrecision: number,
+        selections: CopyAssessmentsSelection[],
+    ): Promise<{
+        status: string;
+        assessments_imported: number;
+        assessments_skipped: number;
+        cvss_imported: number;
+        time_estimates_imported: number;
+        errors: { vuln_id?: string; error: string }[];
+    }> {
+        const response = await fetch(
+            import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data",
+            {
+                mode: "cors",
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    custom_data: customData,
+                    variant_id: variantId,
+                    match_mode: matchMode,
+                    version_precision: versionPrecision,
+                    selections,
+                }),
+            }
+        );
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `Apply failed (${response.status})`);
         }
         return response.json();
     }

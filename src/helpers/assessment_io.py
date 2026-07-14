@@ -919,3 +919,500 @@ def import_custom_data(
             result["status"] = "error"
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Custom-data import with match-mode preview / apply
+# ---------------------------------------------------------------------------
+
+# Stable UUID namespace for generating deterministic import-item IDs from
+# (vuln_id, pkg_string_id, status) triples.  Changing this value would
+# invalidate any in-flight selections between preview and apply calls.
+_IMPORT_PREVIEW_NS = _uuid.UUID("a4b3c2d1-e5f6-7890-abcd-ef1234567890")
+
+
+def _import_item_id(vuln_id: str, pkg_string_id: str, status: str) -> str:
+    """Return a stable synthetic UUID string for a (vuln_id, pkg, status) triple.
+
+    ``status`` is part of the seed so that a custom-data export carrying several
+    assessments for the same vulnerability and package (e.g. differing statuses
+    or per-variant history) produces distinct item IDs.  Without it, preview and
+    apply would collapse those into a single selection and a single user choice
+    would silently apply every colliding assessment.
+    """
+    return str(_uuid.uuid5(_IMPORT_PREVIEW_NS, f"{vuln_id}|{pkg_string_id}|{status}"))
+
+
+def _observed_finding_ids_for_variant(variant_id: "_uuid.UUID") -> set[Any]:
+    """Return the set of finding IDs actually observed in *variant_id*'s scans."""
+    from ..extensions import db
+    from ..models.observation import Observation
+    from ..helpers.active_scans import active_scan_ids_for_variant
+
+    active_scan_ids = active_scan_ids_for_variant(variant_id)
+    if not active_scan_ids:
+        return set()
+    return set(db.session.execute(
+        db.select(Observation.finding_id)
+        .where(Observation.scan_id.in_(active_scan_ids))
+        .distinct()
+    ).scalars().all())
+
+
+def _finding_has_custom_status(
+    customs_by_finding: dict[Any, list[Any]],
+    finding_id: Any,
+    status: str,
+) -> bool:
+    """Return True when *finding_id* already carries a custom assessment whose
+    status equals *status*.
+
+    Used by both preview (to default such entries to unselected) and apply (to
+    skip them) so the two phases agree on what counts as an existing duplicate.
+    """
+    for a in customs_by_finding.get(finding_id, []):
+        if getattr(a, "status", None) == status:
+            return True
+    return False
+
+
+def _parse_pkg_string(pkg_string_id: str) -> tuple[str, str]:
+    """Return (name, version) from a 'name@version[::supplier]' string."""
+    base = pkg_string_id.split("::", 1)[0]
+    if "@" in base:
+        name, version = base.rsplit("@", 1)
+    else:
+        name, version = base, ""
+    return name, version
+
+
+def _flatten_import_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expand the *assessments* list from *data* into one item per (vuln, package).
+
+    Each item carries a stable ``item_id`` so that preview and apply phases
+    can be correlated without re-parsing the file.
+    """
+    from ..models.assessment import STATUS_TO_SIMPLIFIED
+
+    items: list[dict[str, Any]] = []
+    for a in data.get("assessments", []):
+        if not isinstance(a, dict):
+            continue
+        vuln_id = a.get("vuln_id")
+        status = a.get("status")
+        if not vuln_id or not status:
+            continue
+        for pkg_string_id in a.get("packages", []):
+            item_id = _import_item_id(str(vuln_id), str(pkg_string_id), str(status))
+            items.append({
+                "item_id": item_id,
+                "vuln_id": vuln_id,
+                "pkg_string_id": pkg_string_id,
+                "pkg_name": _parse_pkg_string(pkg_string_id)[0],
+                "pkg_version": _parse_pkg_string(pkg_string_id)[1],
+                "status": status,
+                "simplified_status": STATUS_TO_SIMPLIFIED.get(status, "Pending Assessment"),
+                "justification": a.get("justification") or None,
+                "impact_statement": a.get("impact_statement") or None,
+                "status_notes": a.get("status_notes") or None,
+                "workaround": a.get("workaround") or None,
+                "responses": list(a.get("responses") or []),
+            })
+    return items
+
+
+def preview_custom_data_import(
+    data: dict[str, Any],
+    variant_id: "_uuid.UUID",
+    match_mode: str = "exact",
+    version_precision: int = 1,
+) -> dict[str, Any]:
+    """Build a Transfer-shaped preview for importing *data* onto *variant_id*.
+
+    Parameters
+    ----------
+    data:
+        Parsed custom-data JSON (same format as ``import_custom_data``).
+    variant_id:
+        Target variant UUID.
+    match_mode:
+        One of ``"exact"`` (name + full version), ``"ignore_minor_version"``
+        (name + first *version_precision* components), or ``"ignore_version"``
+        (name only).
+    version_precision:
+        Number of leading version components to compare in
+        ``"ignore_minor_version"`` mode.  Default 1 (major only).
+
+    Returns
+    -------
+    dict matching the ``CopyAssessmentsPreview`` TypeScript shape:
+    ``{count, skipped, message, mode, entries|groups}``.
+    """
+    from ..extensions import db
+    from ..models.finding import Finding
+    from ..models.assessment import Assessment as DBAssessment
+    from ..helpers.version_match import versions_match
+
+    # -- Collect the target variant's observed findings --
+    observed_finding_ids = _observed_finding_ids_for_variant(variant_id)
+
+    if observed_finding_ids:
+        target_findings: list[Finding] = list(db.session.execute(
+            db.select(Finding).where(Finding.id.in_(observed_finding_ids))
+        ).scalars().all())
+    else:
+        target_findings = []
+
+    # Index findings by vulnerability_id for fast lookup
+    target_findings_by_vuln: dict[str, list[Finding]] = {}
+    for f in target_findings:
+        target_findings_by_vuln.setdefault(f.vulnerability_id, []).append(f)
+
+    # Batch-load existing custom assessments on the target variant
+    customs_on_target = DBAssessment.get_handmade([variant_id])
+    customs_by_finding: dict[Any, list[DBAssessment]] = {}
+    for a in customs_on_target:
+        if a.finding_id is not None:
+            customs_by_finding.setdefault(a.finding_id, []).append(a)
+
+    items = _flatten_import_items(data)
+
+    if match_mode == "exact":
+        entries = []
+        skipped = 0
+
+        for item in items:
+            candidates = target_findings_by_vuln.get(item["vuln_id"], [])
+            target_finding = None
+            for f in candidates:
+                if f.package is None:
+                    continue
+                if f.package.name == item["pkg_name"] and f.package.version == item["pkg_version"]:
+                    target_finding = f
+                    break
+            if target_finding is None:
+                continue
+
+            already_has_custom = _finding_has_custom_status(
+                customs_by_finding, target_finding.id, item["status"]
+            )
+            selected = not already_has_custom
+            if not selected:
+                skipped += 1
+
+            entries.append({
+                "source_assessment_id": item["item_id"],
+                "source_finding_id": item["item_id"],
+                "target_finding_id": str(target_finding.id),
+                "vulnerability_id": item["vuln_id"],
+                "source_package": item["pkg_string_id"],
+                "target_package": (
+                    target_finding.package.string_id
+                    if target_finding.package else item["pkg_string_id"]
+                ),
+                "already_has_custom": already_has_custom,
+                "selected": selected,
+                "assessment_details": {
+                    "simplified_status": item["simplified_status"],
+                    "status": item["status"],
+                    "justification": item["justification"],
+                    "status_notes": item["status_notes"],
+                    "impact_statement": item["impact_statement"],
+                    "workaround": item["workaround"],
+                    "responses": item["responses"],
+                },
+            })
+
+        count = len(entries)
+        message = (
+            f"{count} assessment(s) ready to import."
+            + (f" {skipped} already present would be skipped." if skipped else "")
+        )
+        return {
+            "count": count,
+            "skipped": skipped,
+            "message": message,
+            "mode": "exact",
+            "entries": entries,
+        }
+
+    # -- Alternative modes: group by item, list candidates --
+    groups = []
+    skipped_count = 0
+
+    for item in items:
+        candidates_for_vuln = target_findings_by_vuln.get(item["vuln_id"], [])
+        candidate_entries: list[dict[str, Any]] = []
+
+        for f in candidates_for_vuln:
+            if f.package is None:
+                continue
+            if f.package.name != item["pkg_name"]:
+                continue
+            if match_mode == "ignore_minor_version":
+                if not versions_match(item["pkg_version"], f.package.version, version_precision):
+                    continue
+
+            already_has_custom = _finding_has_custom_status(
+                customs_by_finding, f.id, item["status"]
+            )
+            selected = not already_has_custom
+            if not selected:
+                skipped_count += 1
+
+            candidate_entries.append({
+                "target_finding_id": str(f.id),
+                "target_package": f.package.string_id if f.package else item["pkg_string_id"],
+                "already_has_custom": already_has_custom,
+                "selected": selected,
+            })
+
+        if not candidate_entries:
+            continue
+
+        groups.append({
+            "source_assessment_id": item["item_id"],
+            "source_finding_id": item["item_id"],
+            "vulnerability_id": item["vuln_id"],
+            "source_package": item["pkg_string_id"],
+            "assessment_details": {
+                "simplified_status": item["simplified_status"],
+                "status": item["status"],
+                "justification": item["justification"],
+                "status_notes": item["status_notes"],
+                "impact_statement": item["impact_statement"],
+                "workaround": item["workaround"],
+                "responses": item["responses"],
+            },
+            "candidates": candidate_entries,
+        })
+
+    count = sum(
+        1
+        for g in groups
+        for c in g["candidates"]
+        if c["selected"]
+    )
+    message = (
+        f"{count} assessment(s) ready to import."
+        + (f" {skipped_count} already present would be skipped." if skipped_count else "")
+    )
+    return {
+        "count": count,
+        "skipped": skipped_count,
+        "skipped_count": skipped_count,
+        "message": message,
+        "mode": match_mode,
+        "groups": groups,
+    }
+
+
+def apply_custom_data_import(
+    data: dict[str, Any],
+    variant_id: "_uuid.UUID",
+    selections: list[dict[str, str]],
+    match_mode: str = "exact",
+) -> dict[str, Any]:
+    """Apply a confirmed set of *selections* from ``preview_custom_data_import``.
+
+    Parameters
+    ----------
+    data:
+        Same custom-data JSON passed to the preview call.
+    variant_id:
+        Target variant UUID.
+    selections:
+        List of ``{"source_assessment_id": str, "target_finding_id": str}``
+        dicts as produced by the frontend review modal.  Each ``target_finding_id``
+        is re-validated against the variant's observed findings; selections
+        pointing elsewhere are rejected.
+    match_mode:
+        Carried through for documentation/logging; does not affect apply logic.
+
+    Returns
+    -------
+    dict with keys ``status``, ``assessments_imported``, ``assessments_skipped``,
+    ``cvss_imported``, ``time_estimates_imported``, ``errors``.
+
+    Note
+    ----
+    CVSS scores and time estimates present in *data* are always imported,
+    independently of *selections*.
+    """
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment
+    from ..models.vulnerability import Vulnerability as DBVuln
+    from ..models.finding import Finding
+    from ..helpers.vuln_helpers import (
+        validate_effort,
+        validate_and_apply_cvss,
+        apply_effort,
+    )
+
+    result: dict[str, Any] = {
+        "status": "success",
+        "assessments_imported": 0,
+        "assessments_skipped": 0,
+        "cvss_imported": 0,
+        "time_estimates_imported": 0,
+        "errors": [],
+        "match_mode": match_mode,
+    }
+
+    # Recompute the set of findings actually observed in the target variant so a
+    # stale or crafted selection cannot attach a custom assessment to a finding
+    # outside the variant (the same invariant the preview enforces).
+    observed_finding_ids = _observed_finding_ids_for_variant(variant_id)
+
+    # Batch-load existing custom assessments on the target variant so the apply
+    # phase skips the same duplicates the preview reported.
+    customs_on_target = DBAssessment.get_handmade([variant_id])
+    customs_by_finding: dict[Any, list[DBAssessment]] = {}
+    for a in customs_on_target:
+        if a.finding_id is not None:
+            customs_by_finding.setdefault(a.finding_id, []).append(a)
+
+    # Build a lookup from item_id → target_finding_id from the user's selections
+    selection_map: dict[str, str] = {
+        str(s["source_assessment_id"]): str(s["target_finding_id"])
+        for s in selections
+        if isinstance(s, dict) and "source_assessment_id" in s and "target_finding_id" in s
+    }
+
+    # -- Apply selected assessments --
+    items = _flatten_import_items(data)
+    for item in items:
+        target_finding_id_str = selection_map.get(item["item_id"])
+        if target_finding_id_str is None:
+            continue
+        try:
+            target_finding_id = _uuid.UUID(target_finding_id_str)
+        except (ValueError, TypeError):
+            result["errors"].append({
+                "vuln_id": item["vuln_id"],
+                "error": f"Invalid target_finding_id '{target_finding_id_str}'",
+            })
+            continue
+
+        # Reject any finding not observed in the target variant's scans.
+        if target_finding_id not in observed_finding_ids:
+            result["errors"].append({
+                "vuln_id": item["vuln_id"],
+                "error": (
+                    f"Finding '{target_finding_id_str}' is not observed in the "
+                    "target variant"
+                ),
+            })
+            continue
+
+        # Verify the finding exists
+        finding = db.session.get(Finding, target_finding_id)
+        if finding is None:
+            result["errors"].append({
+                "vuln_id": item["vuln_id"],
+                "error": f"Finding '{target_finding_id_str}' not found",
+            })
+            continue
+
+        # Skip when the finding already carries a custom assessment with the same
+        # status (the criterion the preview uses to flag ``already_has_custom``).
+        if _finding_has_custom_status(customs_by_finding, target_finding_id, item["status"]):
+            result["assessments_skipped"] += 1
+            continue
+
+        try:
+            DBVuln.get_or_create(item["vuln_id"])
+            new_assessment = DBAssessment.create(
+                status=item["status"],
+                simplified_status=item["simplified_status"],
+                finding_id=target_finding_id,
+                variant_id=variant_id,
+                origin="custom",
+                status_notes=item["status_notes"],
+                justification=item["justification"],
+                impact_statement=item["impact_statement"],
+                workaround=item["workaround"],
+                responses=item["responses"],
+                commit=True,
+            )
+            # Track the freshly-created assessment so a repeated selection within
+            # the same request is treated as a duplicate too.
+            customs_by_finding.setdefault(target_finding_id, []).append(new_assessment)
+            result["assessments_imported"] += 1
+        except Exception as e:
+            result["errors"].append({
+                "vuln_id": item["vuln_id"],
+                "package": item["pkg_string_id"],
+                "error": str(e),
+            })
+
+    # -- Import CVSS scores (not filtered by selections) --
+    cvss_list = data.get("cvss", [])
+    if isinstance(cvss_list, list):
+        for c in cvss_list:
+            if not isinstance(c, dict):
+                continue
+            vuln_id = c.get("vuln_id")
+            if not vuln_id:
+                continue
+            record = DBVuln.get_by_id(vuln_id)
+            if not record:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Vulnerability not found (CVSS)",
+                })
+                continue
+            cvss_data = {
+                "base_score": c.get("base_score"),
+                "vector_string": c.get("vector_string"),
+                "version": c.get("version"),
+                "author": c.get("author", "custom"),
+                "origin": c.get("origin", "custom"),
+                "exploitability_score": c.get("exploitability_score", 0.0),
+                "impact_score": c.get("impact_score", 0.0),
+            }
+            err = validate_and_apply_cvss(
+                cvss_data,
+                record.id,
+                variant_id,
+                log_prefix="apply-custom-import",
+            )
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
+            else:
+                result["cvss_imported"] += 1
+
+    # -- Import time estimates (not filtered by selections) --
+    te_list = data.get("time_estimates", [])
+    if isinstance(te_list, list):
+        for t in te_list:
+            if not isinstance(t, dict):
+                continue
+            vuln_id = t.get("vuln_id")
+            if not vuln_id:
+                continue
+            record = DBVuln.get_by_id(vuln_id)
+            if not record:
+                result["errors"].append({
+                    "vuln_id": vuln_id,
+                    "error": "Vulnerability not found (time estimate)",
+                })
+                continue
+            eff = {
+                "optimistic": t.get("optimistic"),
+                "likely": t.get("likely"),
+                "pessimistic": t.get("pessimistic"),
+            }
+            effort, err = validate_effort(eff)
+            if err:
+                result["errors"].append({"vuln_id": vuln_id, "error": err})
+                continue
+            assert effort is not None
+            apply_effort(record, variant_id, effort, log_prefix="apply-custom-import")
+            result["time_estimates_imported"] += 1
+
+    if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:
+        if result["errors"]:
+            result["status"] = "error"
+
+    return result

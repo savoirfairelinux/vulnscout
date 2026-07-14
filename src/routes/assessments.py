@@ -21,6 +21,8 @@ from ..helpers.assessment_io import (
     import_archive_bytes,
     build_custom_data_export,
     import_custom_data,
+    preview_custom_data_import,
+    apply_custom_data_import,
 )
 
 from flask import request, Flask
@@ -48,6 +50,49 @@ def _is_scanner_author(author: str | None) -> bool:
     if _UUID_RE.match(a):
         return True
     return False
+
+
+_MATCH_MODES = ("exact", "ignore_minor_version", "ignore_version")
+
+
+def _parse_match_mode_body(
+    body: object,
+) -> tuple[tuple[UUID, dict, str, int, dict] | None, ResponseReturnValue | None]:
+    """Validate the shared match-mode request body used by preview and apply.
+
+    Returns ``((variant_id, custom_data, match_mode, version_precision, body), None)``
+    on success, or ``(None, error_response)`` on failure.
+    """
+    if not isinstance(body, dict):
+        return None, ({"error": "Expected application/json body"}, 400)
+
+    raw_vid = body.get("variant_id")
+    if not raw_vid:
+        return None, ({"error": "variant_id is required"}, 400)
+    variant_id, err = parse_uuid_or_400(str(raw_vid), "variant_id")
+    if err:
+        return None, err
+    assert variant_id is not None
+
+    custom_data = body.get("custom_data")
+    if not isinstance(custom_data, dict) or "version" not in custom_data:
+        return None, ({"error": "custom_data must be a valid custom-data export payload"}, 400)
+
+    match_mode = body.get("match_mode", "exact")
+    if match_mode not in _MATCH_MODES:
+        return None, ({"error": "match_mode must be one of: " + ", ".join(_MATCH_MODES)}, 400)
+
+    raw_precision = body.get("version_precision", 1)
+    try:
+        version_precision = int(raw_precision)
+    except (TypeError, ValueError):
+        return None, ({"error": "version_precision must be an integer"}, 400)
+    # A precision below 1 would make every version compare equal, silently
+    # turning ``ignore_minor_version`` into ``ignore_version``.
+    if version_precision < 1:
+        version_precision = 1
+
+    return (variant_id, custom_data, match_mode, version_precision, body), None
 
 
 def _resolve_package(pkg_string_id: str) -> "Package":
@@ -487,6 +532,36 @@ def init_app(app: Flask) -> None:
             "Content-Disposition": f'attachment; filename="{fname}"',
         }
 
+    @app.route('/api/assessments/review/import-custom-data/preview', methods=['POST'])
+    def preview_review_custom_data_import() -> ResponseReturnValue:
+        """Preview which assessments in a custom-data JSON would be imported
+        onto the target variant under a chosen match mode.
+
+        Request body (application/json):
+
+        .. code-block:: json
+
+           {
+             "custom_data": {<custom-data export payload>},
+             "variant_id":  "<uuid>",
+             "match_mode":  "exact" | "ignore_minor_version" | "ignore_version",
+             "version_precision": 1
+           }
+
+        Returns a Transfer-shaped preview (``CopyAssessmentsPreview``).
+        """
+        body = request.get_json(silent=True)
+        parsed, err = _parse_match_mode_body(body)
+        if err:
+            return err
+        assert parsed is not None
+        variant_id, custom_data, match_mode, version_precision, _ = parsed
+
+        result = preview_custom_data_import(
+            custom_data, variant_id, match_mode, version_precision,
+        )
+        return result, 200
+
     @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
     def import_review_custom_data() -> ResponseReturnValue:
         """Import assessments, CVSS scores and time estimates from a custom-data
@@ -496,13 +571,37 @@ def init_app(app: Flask) -> None:
 
         * ``multipart/form-data`` with a ``file`` field containing a ``.json``
           file.
-        * ``application/json`` body with the custom-data payload directly.
+        * ``application/json`` body with the custom-data payload directly (legacy).
+        * ``application/json`` body with ``{"custom_data": {...}, "variant_id": "...",
+          "match_mode": "...", "selections": [...]}`` to apply a confirmed preview
+          (new match-mode flow).
 
-        Optional query parameter ``variant_id`` to force all imported
-        assessments to a specific variant.
+        Optional query parameter ``variant_id`` forces all imported assessments
+        to a specific variant (legacy path only).
         """
         import json as _json
 
+        # ---- New apply path: JSON body contains "selections" key ----
+        if request.content_type and 'application/json' in request.content_type:
+            body = request.get_json(silent=True)
+            if isinstance(body, dict) and "selections" in body:
+                selections = body.get("selections", [])
+                if not isinstance(selections, list):
+                    return {"error": "selections must be a list"}, 400
+
+                parsed, err = _parse_match_mode_body(body)
+                if err:
+                    return err
+                assert parsed is not None
+                apply_variant_id, custom_data, match_mode, _, _ = parsed
+
+                result = apply_custom_data_import(
+                    custom_data, apply_variant_id, selections, match_mode,
+                )
+                status_code = 200 if result["status"] == "success" else 400
+                return result, status_code
+
+        # ---- Legacy path ----
         variant_id = None
         raw_vid = request.args.get('variant_id')
         if raw_vid:
