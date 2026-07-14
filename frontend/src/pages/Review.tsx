@@ -18,6 +18,7 @@ import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
+import Packages from '../handlers/packages';
 import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
@@ -43,6 +44,8 @@ type ReviewRow = Assessment & {
     _allIds: string[];
     /** All variant IDs merged into this group. */
     _variantIds: string[];
+    /** Raw assessments merged into this group (for per-variant/package edits). */
+    _assessments: Assessment[];
     /** Unique supplier display names extracted from packages (for search). */
     extractedSuppliers: string[];
 };
@@ -60,6 +63,7 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
     const groups = new Map<string, Assessment>();
     const allIds = new Map<string, string[]>();
     const variantIds = new Map<string, Set<string>>();
+    const rawAssessments = new Map<string, Assessment[]>();
     for (const a of assessments) {
         const key = [
             a.vuln_id,
@@ -77,10 +81,12 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
             // Keep the most recent timestamp
             if (a.timestamp > existing.timestamp) existing.timestamp = a.timestamp;
             allIds.get(key)!.push(a.id);
+            rawAssessments.get(key)!.push(a);
             if (a.variant_id) variantIds.get(key)!.add(a.variant_id);
         } else {
             groups.set(key, { ...a, packages: [...a.packages] });
             allIds.set(key, [a.id]);
+            rawAssessments.set(key, [a]);
             const vs = new Set<string>();
             if (a.variant_id) vs.add(a.variant_id);
             variantIds.set(key, vs);
@@ -90,6 +96,7 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
     for (const [key, group] of groups) {
         (group as any)._allIds = allIds.get(key)!;
         (group as any)._variantIds = [...variantIds.get(key)!];
+        (group as any)._assessments = rawAssessments.get(key)!;
         result.push(group);
     }
     return result;
@@ -120,6 +127,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -127,6 +135,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [projectNames, setProjectNames] = useState<Record<string, string>>({});
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
+    const [editVariants, setEditVariants] = useState<Variant[]>([]);
+    const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
@@ -157,6 +167,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show a row only when all of its affected packages contain text (e.g. only:native keeps rows whose affected packages are all native)' },
     ];
 
     useEffect(() => {
@@ -172,6 +183,61 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             setProjectNames(map);
         }).catch(() => {});
     }, []);
+
+    // When editing a row, only offer variants that actually have a finding for
+    // this CVE (optionally scoped to the current project), instead of every
+    // variant in the database.
+    useEffect(() => {
+        if (!editingRow) {
+            setEditVariants([]);
+            return;
+        }
+        setEditVariants([]);
+        Variants.listByVuln(editingRow.vuln_id).then(variants => {
+            setEditVariants(projectId ? variants.filter(v => v.project_id === projectId) : variants);
+        }).catch(() => {});
+    }, [editingRow, projectId]);
+
+    // Build the variant -> package compatibility map for the edited row so the
+    // popup can block incompatible package/variant combos (same source as the
+    // SBOM tab: GET /api/packages?variant_id=<id>).
+    useEffect(() => {
+        let cancelled = false;
+        if (editVariants.length === 0) {
+            setEditVariantPackageMap({});
+            return;
+        }
+        (async () => {
+            const entries: [string, string[]][] = await Promise.all(
+                editVariants.map(async (variant): Promise<[string, string[]]> => {
+                    try {
+                        const pkgs = await Packages.list(variant.id);
+                        return [variant.id, pkgs.map(p =>
+                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
+                        )];
+                    } catch {
+                        return [variant.id, []];
+                    }
+                })
+            );
+            if (cancelled) return;
+            const map: Record<string, string[]> = Object.fromEntries(entries);
+            // Seed the map with (variant, package) pairs already covered by the
+            // assessment being edited. Deprecated packages are no longer in the
+            // variant's current SBOM, so Packages.list omits them; without this
+            // they would be flagged incompatible and their checkbox disabled.
+            if (editingRow) {
+                for (const a of editingRow._assessments) {
+                    if (!a.variant_id) continue;
+                    const merged = new Set(map[a.variant_id] ?? []);
+                    for (const pkg of a.packages) merged.add(pkg);
+                    map[a.variant_id] = [...merged];
+                }
+            }
+            setEditVariantPackageMap(map);
+        })();
+        return () => { cancelled = true; };
+    }, [editVariants, editingRow]);
 
     useEffect(() => {
         setLoading(true);
@@ -296,11 +362,35 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
+    const variantList = useMemo(() => {
+        const set = new Set<string>();
+        for (const a of assessments) {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            for (const vid of vids) {
+                const name = variantNames[vid];
+                if (name) set.add(name);
+            }
+        }
+        return [...set].sort();
+    }, [assessments, variantNames]);
+
+    // All variants are checked by default; a variant only leaves the selection
+    // once the user explicitly unchecks it. Deriving the selection during render
+    // (instead of populating it from an effect) prevents a first-render flash.
+    const selectedVariants = useMemo(
+        () => variantList.filter(v => !deselectedVariants.includes(v)),
+        [variantList, deselectedVariants]
+    );
+    const setSelectedVariants = useCallback((values: string[]) => {
+        setDeselectedVariants(variantList.filter(v => !values.includes(v)));
+    }, [variantList]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
+        setSelectedVariants(variantList);
     };
 
     const handleExportReview = useCallback(async () => {
@@ -475,22 +565,101 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
+
+        // Share a single timestamp across all rows created in this edit action.
+        const editSharedTimestamp = new Date().toISOString();
+
+        // Target (package × variant) combos from the form selection.
+        const targetVariantIds: Array<string | undefined> =
+            data.variant_ids && data.variant_ids.length > 0 ? data.variant_ids : [undefined];
+        const targetPackages: string[] =
+            data.packages && data.packages.length > 0 ? data.packages : editingRow.packages;
+
+        // Existing group assessments indexed by (package, variant) key.
+        const existingByKey = new Map<string, Assessment>();
+        for (const a of editingRow._assessments) {
+            const pkg = a.packages[0] ?? '';
+            const vid = a.variant_id ?? '';
+            existingByKey.set(`${pkg}::${vid}`, a);
+        }
+
+        // Desired set of (package, variant) keys after the edit.
+        const targetKeys = new Set<string>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                targetKeys.add(`${pkg}::${vid ?? ''}`);
+            }
+        }
+
         let anyError = false;
-        for (const id of editingRow._allIds) {
+
+        // 1. Update combos that persist, delete combos that were deselected.
+        for (const [key, existing] of existingByKey) {
             try {
+                if (targetKeys.has(key)) {
+                    const res = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
+                        {
+                            method: 'PUT',
+                            mode: 'cors',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                status: data.status,
+                                justification: data.justification,
+                                impact_statement: data.impact_statement,
+                                status_notes: data.status_notes,
+                                workaround: data.workaround,
+                            }),
+                        }
+                    );
+                    if (!res.ok) anyError = true;
+                } else {
+                    const res = await fetch(
+                        import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(existing.id)}`,
+                        { method: 'DELETE', mode: 'cors' }
+                    );
+                    if (!res.ok) anyError = true;
+                }
+            } catch {
+                anyError = true;
+            }
+        }
+
+        // 2. Create newly-selected combos — batch packages per variant so the
+        //    new rows share one timestamp.
+        const newPkgsByVariant = new Map<string | undefined, string[]>();
+        for (const pkg of targetPackages) {
+            for (const vid of targetVariantIds) {
+                const key = `${pkg}::${vid ?? ''}`;
+                if (!existingByKey.has(key)) {
+                    const arr = newPkgsByVariant.get(vid) ?? [];
+                    arr.push(pkg);
+                    newPkgsByVariant.set(vid, arr);
+                }
+            }
+        }
+
+        for (const [vid, pkgs] of newPkgsByVariant) {
+            if (pkgs.length === 0) continue;
+            try {
+                const body: Record<string, unknown> = {
+                    vuln_id: editingRow.vuln_id,
+                    packages: pkgs,
+                    status: data.status,
+                    justification: data.justification,
+                    impact_statement: data.impact_statement,
+                    status_notes: data.status_notes,
+                    workaround: data.workaround,
+                    timestamp: editSharedTimestamp,
+                };
+                if (vid) body.variant_id = vid;
                 const res = await fetch(
-                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
+                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(editingRow.vuln_id)}/assessments`,
                     {
-                        method: 'PUT',
+                        method: 'POST',
                         mode: 'cors',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            status: data.status,
-                            justification: data.justification,
-                            impact_statement: data.impact_statement,
-                            status_notes: data.status_notes,
-                            workaround: data.workaround,
-                        }),
+                        body: JSON.stringify(body),
                     }
                 );
                 if (!res.ok) anyError = true;
@@ -498,6 +667,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 anyError = true;
             }
         }
+
         if (!anyError) {
             const updated = await Assessments.listReview(variantId, projectId);
             setAssessments(groupAssessments(updated));
@@ -876,6 +1046,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
+        {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
+            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
+        }
         return true;
     });
 
@@ -936,6 +1111,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 options={supplierList}
                                 selected={selectedSuppliers}
                                 setSelected={setSelectedSuppliers}
+                            />
+                        )}
+
+                        {variantList.length > 0 && (
+                            <FilterOption
+                                label="Variants"
+                                options={variantList}
+                                selected={selectedVariants}
+                                setSelected={setSelectedVariants}
                             />
                         )}
                     </>
@@ -1084,12 +1268,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             texts: vulnDescriptions[a.vuln_id] ?? [],
                             _allIds: (a as any)._allIds ?? [a.id],
                             _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                            _assessments: (a as any)._assessments ?? [a],
                             extractedSuppliers: [...new Set(
                                 a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
                             )],
                         }))}
                         search={search}
                         fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
+                        forAllValues={(row) => row.packages}
                         estimateRowHeight={50}
                         hasPagination={true}
                         hoverField="texts"
@@ -1186,10 +1372,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 onSaveAssessment={handleSaveEdit}
                                 onCancel={() => setEditingRow(null)}
                                 triggerBanner={showMessage}
-                                availableVariants={allVariants}
+                                availableVariants={editVariants}
                                 defaultSelectedVariantIds={editingRow._variantIds}
                                 availablePackages={editingRow.packages}
                                 defaultSelectedPackages={editingRow.packages}
+                                variantPackageMap={Object.keys(editVariantPackageMap).length > 0 ? editVariantPackageMap : undefined}
                             />
                         )}
                     </div>

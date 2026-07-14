@@ -431,3 +431,66 @@ def test_packages_project_no_active_scans(app, client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert isinstance(data, list)
+
+
+def test_upload_template_success(tmp_path, monkeypatch, client):
+    """POST /api/documents/templates saves a valid template and returns 201."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"= My custom report\n"), "my_report.adoc")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["id"] == "my_report.adoc"
+    assert "custom" in data["category"]
+    saved = tmp_path / "my_report.adoc"
+    assert saved.exists()
+    assert saved.read_bytes() == b"= My custom report\n"
+
+
+def test_upload_template_rejects_bad_extension(tmp_path, monkeypatch, client):
+    """POST /api/documents/templates rejects unsupported extensions with 400."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"MZ..."), "evil.exe")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "evil.exe").exists()
+
+
+def test_upload_template_rejects_path_traversal(tmp_path, monkeypatch, client):
+    """POST /api/documents/templates strips directory components from the name."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/templates",
+        data={"file": (BytesIO(b"data"), "../../escape.adoc")},
+        content_type="multipart/form-data",
+    )
+    # basename keeps "escape.adoc"; it must not escape the target directory.
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["id"] == "escape.adoc"
+    assert (tmp_path / "escape.adoc").exists()
+    assert not (tmp_path.parent.parent / "escape.adoc").exists()
+
+
+def test_upload_template_missing_file(client):
+    """POST /api/documents/templates without a file returns 400."""
+    response = client.post(
+        "/api/documents/templates",
+        data={},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]

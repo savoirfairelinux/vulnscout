@@ -21,11 +21,70 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 # The sbom-cve-check advisory databases live inside the VulnScout cache directory
-# (mounted at /cache/vulnscout), in a sbom_cve_check_databases sub-folder next to
+# (mounted at /cache/vulnscout), in a local_databases sub-folder next to
 # vulnscout.db.  Default SBOM_CVE_CHECK_DATABASES_DIR to that location so the engine
 # finds (and, with SBOM_CVE_CHECK_AUTO_UPDATE=1, clones) them without an explicit env
 # var; config.env (sourced above) or an explicit override may still change this.
-export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/sbom_cve_check_databases}"
+export SBOM_CVE_CHECK_DATABASES_DIR="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/local_databases}"
+
+# resolve_grype_memlimit  —  translate GRYPE_MEMLIMIT into a GOMEMLIMIT value.
+#
+# GRYPE_MEMLIMIT accepts:
+#   - An explicit memory string accepted by Go's runtime (e.g. "4GiB", "24GiB",
+#     "6442450944").  The value is forwarded to GOMEMLIMIT unchanged.
+#   - "off", "0", or "disabled"  —  disable the limit (no GOMEMLIMIT set).
+#   - Unset / empty  —  auto mode: compute ~80 % of the available memory limit
+#     detected from the container's cgroup (v2 memory.max or v1
+#     memory.limit_in_bytes) or, as a fallback, from /proc/meminfo MemTotal.
+#     Output as an integer number of bytes.
+#
+# Prints the effective GOMEMLIMIT value, or nothing if no limit should be set.
+resolve_grype_memlimit() {
+    local raw="${GRYPE_MEMLIMIT:-}"
+
+    # Explicit opt-out
+    if [[ "$raw" == "off" || "$raw" == "0" || "$raw" == "disabled" ]]; then
+        return 0
+    fi
+
+    # Explicit value — forward verbatim
+    if [[ -n "$raw" ]]; then
+        echo "$raw"
+        return 0
+    fi
+
+    # Auto mode: detect available memory and use 80 %.
+    # Try cgroup v2 first, then v1, then /proc/meminfo.
+    local mem_bytes=0
+    local cg2="/sys/fs/cgroup/memory.max"
+    local cg1="/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    if [[ -r "$cg2" ]]; then
+        local val
+        val=$(cat "$cg2" 2>/dev/null || true)
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val > 0 )); then
+            mem_bytes=$val
+        fi
+    fi
+    if (( mem_bytes == 0 )) && [[ -r "$cg1" ]]; then
+        local val
+        val=$(cat "$cg1" 2>/dev/null || true)
+        # cgroup v1 uses a large sentinel (PAGE_COUNTER_MAX) when unconstrained
+        if [[ "$val" =~ ^[0-9]+$ ]] && (( val > 0 && val < 9223372036854771712 )); then
+            mem_bytes=$val
+        fi
+    fi
+    if (( mem_bytes == 0 )) && [[ -r "/proc/meminfo" ]]; then
+        local kb
+        kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+        if [[ "$kb" =~ ^[0-9]+$ ]] && (( kb > 0 )); then
+            mem_bytes=$(( kb * 1024 ))
+        fi
+    fi
+
+    if (( mem_bytes > 0 )); then
+        echo $(( mem_bytes * 80 / 100 ))
+    fi
+}
 mkdir -p "$SBOM_CVE_CHECK_DATABASES_DIR" 2>/dev/null || true
 # Auto-update is on by default: the engine will clone/fetch the NVD-FKIE and CVEList
 # databases on first use and keep them current.  Set SBOM_CVE_CHECK_AUTO_UPDATE=0 to
@@ -44,6 +103,7 @@ Setting:
 Input commands:
   --add-spdx <path>         Add an SPDX 2/3 SBOM file or archive
   --add-cve-check <path>    Add a Yocto CVE check JSON file
+  --add-yocto-vex <path>    Add a Yocto VEX JSON file
   --add-openvex <path>      Add an OpenVEX JSON file
   --add-cdx <path>          Add a CycloneDX file
   --add-grype <path>        Add a Grype results file
@@ -235,6 +295,7 @@ cmd_scan() {
     export HTTPS_PROXY="${HTTPS_PROXY:-}"
     export NO_PROXY="${NO_PROXY:-}"
     export IGNORE_PARSING_ERRORS="${IGNORE_PARSING_ERRORS:-false}"
+    export GRYPE_MEMLIMIT="${GRYPE_MEMLIMIT:-}"
 
     if [[ -n "${MATCH_CONDITION:-}" ]]; then
         export MATCH_CONDITION
@@ -298,6 +359,11 @@ cmd_scan() {
             [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-cve "$f") && has_inputs=true
         done
     fi
+    if [[ -d "$INPUTS_DIR/yocto_vex" ]]; then
+        for f in "$INPUTS_DIR/yocto_vex"/*.json; do
+            [[ -f "$f" ]] && INIT_APP_ARGS+=(--yocto-vex "$f") && has_inputs=true
+        done
+    fi
     if [[ -d "$INPUTS_DIR/grype" ]]; then
         for f in "$INPUTS_DIR/grype"/*.grype.json; do
             [[ -f "$f" ]] && INIT_APP_ARGS+=(--grype "$f") && has_inputs=true
@@ -338,7 +404,14 @@ cmd_scan() {
                 mkdir -p "$INPUTS_DIR/grype"
                 local grype_out="$INPUTS_DIR/grype/grype_from_db.grype.json"
                 echo "Grype scan: $exported_cdx -> $grype_out"
-                grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                local _grype_gomemlimit
+                _grype_gomemlimit=$(resolve_grype_memlimit)
+                if [[ -n "$_grype_gomemlimit" ]]; then
+                    echo "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
+                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                else
+                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out"
+                fi
                 echo "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --grype "$grype_out")
@@ -385,7 +458,7 @@ cmd_scan() {
             done || _cmd_scan_exit=$?
         if [[ "$has_inputs" == "true" ]]; then
             # Clean up input files now that they are fully processed
-            for _type in spdx cdx openvex yocto_cve_check grype osv; do
+            for _type in spdx cdx openvex yocto_cve_check yocto_vex grype osv; do
                 rm -f "${INPUTS_DIR:?}/$_type"/*
             done
             # Also clean up any staged temp files
@@ -405,6 +478,7 @@ cmd_scan() {
         echo "------------------------------------------------------------------------------"
         echo "Initialization Done - Loading is over and WebUI is ready !!!"
         echo "Open  $_url in your browser to access VulnScout"
+        print_nvd_status
         echo "------------------------------------------------------------------------------"
         fg %?flask 2>/dev/null || true # Bring back process named 'flask' (flask run) to foreground.
     fi
@@ -536,15 +610,36 @@ cmd_delete_scan() {
     flask --app src.bin.webapp delete-scan "$scan_id"
 }
 
+#######################################
+# Print a one-line NVD configuration summary
+#######################################
+print_nvd_status() {
+    local nvd_db_dir="${SBOM_CVE_CHECK_DATABASES_DIR:-/cache/vulnscout/local_databases}"
+    local auto_update="${SBOM_CVE_CHECK_AUTO_UPDATE:-1}"
+
+    local db_status
+    if [[ -d "$nvd_db_dir/nvd-fkie" ]] && [[ -d "$nvd_db_dir/cvelist" ]]; then
+        db_status="databases present"
+    else
+        db_status="databases not yet cloned"
+    fi
+    local update_label
+    [[ "$auto_update" == "1" ]] && update_label="auto-update on" || update_label="auto-update off"
+
+    echo "  NVD local    : $nvd_db_dir  [$db_status, $update_label]"
+
+    if [[ -n "${NVD_API_KEY:-}" ]]; then
+        echo "  NVD API key  : configured (API mode available)"
+    else
+        echo "  NVD API key  : not set  (local mode is the default)"
+    fi
+}
+
 cmd_daemon() {
     setup_user
     echo "VulnScout ready. Use '/scan/src/entrypoint.sh --help' for available commands."
+    print_nvd_status
     tail -f /dev/null
-}
-
-cmd_clear_inputs() {
-    rm -f "$INPUTS_DIR"/*/*
-    echo "Cleared all inputs"
 }
 
 #######################################
@@ -607,6 +702,8 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file openvex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-cdx)
             cmd_add_file cdx "$2"; SCAN_REQUIRED=true; shift 2 ;;
+        --add-yocto-vex)
+            cmd_add_file yocto_vex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --perform-grype-scan)
@@ -617,8 +714,6 @@ while [[ $# -gt 0 ]]; do
             OSV_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-sbom-cve-check-scan)
             SBOM_CVE_CHECK_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
-        --clear-inputs)
-            cmd_clear_inputs; shift ;;
         --delete-scan)
             cmd_delete_scan "$2"; shift 2 ;;
         --serve)

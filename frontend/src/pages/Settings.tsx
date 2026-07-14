@@ -10,30 +10,24 @@ import {
   faTriangleExclamation,
   faTrash,
   faXmark,
-  faKey,
   faPenToSquare,
-  faCopy,
-  faRightLeft,
+  faBug,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
 import Variants from "../handlers/variant";
-import type {
-  Variant,
-  CopyAssessmentsPreview,
-  CopyAssessmentsPreviewUnsupported,
-} from "../handlers/variant";
+import type { Variant } from "../handlers/variant";
 import Config from "../handlers/config";
+import NvdApiKey from "../handlers/nvdApiKey";
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
-import NvdApiKey from "../handlers/nvdApiKey";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
 };
 
-type SettingsTab = "general" | "projects" | "variants" | "customData" | "scan";
+type SettingsTab = "general" | "projects" | "variants" | "scan";
 
 function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   // ---- Active category tab ----
@@ -65,6 +59,20 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     contact_email: "",
   });
 
+  // ---- Grype settings ----
+  const [grypeMemlimitInput, setGrypeMemlimitInput] = useState("");
+  const [grypeMemlimitBusy, setGrypeMemlimitBusy] = useState(false);
+  const [grypeMemlimitMsg, setGrypeMemlimitMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // ---- NVD API Key ----
+  const [nvdKeyInput, setNvdKeyInput] = useState("");
+  const [nvdMaskedKey, setNvdMaskedKey] = useState("");
+  const [nvdHasKey, setNvdHasKey] = useState(false);
+  const [nvdBusy, setNvdBusy] = useState(false);
+  const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [nvdEditing, setNvdEditing] = useState(false);
+  const [confirmRemoveNvdKey, setConfirmRemoveNvdKey] = useState(false);
+
   useEffect(() => {
     Config.get()
       .then((config) => {
@@ -75,6 +83,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           client_name: config.client_name,
           contact_email: config.contact_email,
         });
+        setGrypeMemlimitInput(config.grype_memlimit ?? "");
       })
       .catch(() => {
         if (unmountedRef.current) return;
@@ -108,9 +117,88 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
+  const handleSaveGrypeSetting = async () => {
+    if (grypeMemlimitBusy) return;
+    setGrypeMemlimitBusy(true);
+    setGrypeMemlimitMsg(null);
+    try {
+      const updated = await Config.patch({ grype_memlimit: grypeMemlimitInput.trim() });
+      if (unmountedRef.current) return;
+      setGrypeMemlimitInput(updated.grype_memlimit ?? "");
+      setGrypeMemlimitMsg({ text: "Grype memory limit saved.", type: "success" });
+    } catch (e: any) {
+      if (unmountedRef.current) return;
+      setGrypeMemlimitMsg({ text: e?.message || "Failed to save Grype settings.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setGrypeMemlimitBusy(false);
+    }
+  };
+
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Load NVD API key status on mount
+  useEffect(() => {
+    NvdApiKey.get()
+      .then((data) => {
+        if (unmountedRef.current) return;
+        setNvdHasKey(data.has_key);
+        setNvdMaskedKey(data.masked_key);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSaveNvdKey = async () => {
+    if (nvdBusy || !nvdKeyInput.trim()) return;
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const result = await NvdApiKey.set(nvdKeyInput.trim());
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setNvdMsg({ text: result.error ?? "Failed to save NVD API key.", type: "error" });
+      } else {
+        setNvdHasKey(result.has_key);
+        setNvdMaskedKey(result.masked_key);
+        setNvdKeyInput("");
+        setNvdEditing(false);
+        setNvdMsg({
+          text: result.warning ?? "NVD API key saved.",
+          type: result.warning ? "error" : "success",
+        });
+      }
+    } catch {
+      if (unmountedRef.current) return;
+      setNvdMsg({ text: "Failed to save NVD API key.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setNvdBusy(false);
+    }
+  };
+
+  const handleRemoveNvdKey = async () => {
+    setConfirmRemoveNvdKey(false);
+    setNvdBusy(true);
+    setNvdMsg(null);
+    try {
+      const result = await NvdApiKey.remove();
+      if (unmountedRef.current) return;
+      if (!result.ok) {
+        setNvdMsg({ text: result.error ?? "Failed to remove NVD API key.", type: "error" });
+      } else {
+        setNvdHasKey(false);
+        setNvdMaskedKey("");
+        setNvdKeyInput("");
+        setNvdEditing(false);
+        setNvdMsg({ text: "NVD API key removed.", type: "success" });
+      }
+    } catch {
+      if (unmountedRef.current) return;
+      setNvdMsg({ text: "Failed to remove NVD API key.", type: "error" });
+    } finally {
+      if (!unmountedRef.current) setNvdBusy(false);
+    }
+  };
 
   // ---- Manage Projects ----
   const [renameProjectId, setRenameProjectId] = useState<string>("");
@@ -178,12 +266,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         setRenameProjectId("");
         setRenameProjectName("");
       }
-      if (customProjectId === deleteProjectId) {
-        setCustomProjectId("");
-        setCustomProjectVariants([]);
-        setCopySourceId("");
-        setCopyTargetId("");
-      }
       setDeleteProjectId("");
       setConfirmDeleteProject(false);
       loadProjects();
@@ -209,19 +291,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [confirmDeleteVariant, setConfirmDeleteVariant] = useState(false);
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
 
-  // ---- Copy Custom Assessments ----
-  const [customProjectId, setCustomProjectId] = useState<string>("");
-  const [customProjectVariants, setCustomProjectVariants] = useState<Variant[]>([]);
-  const [copySourceId, setCopySourceId] = useState<string>("");
-  const [copyTargetId, setCopyTargetId] = useState<string>("");
-  const [copyIgnorePackageVersion, setCopyIgnorePackageVersion] = useState(false);
-  const [copyBusy, setCopyBusy] = useState(false);
-  const [copyMsg, setCopyMsg] = useState<string | null>(null);
-  const [copyPreviewBusy, setCopyPreviewBusy] = useState(false);
-  const [copyPreviewError, setCopyPreviewError] = useState<string | null>(null);
-  const [copyPreview, setCopyPreview] = useState<CopyAssessmentsPreview | null>(null);
-  const [copyPreviewUnavailableMsg, setCopyPreviewUnavailableMsg] = useState<string | null>(null);
-
   const reloadVariants = useCallback((projectId: string) => {
     if (!projectId) { setVariantProjectVariants([]); return; }
     Variants.list(projectId)
@@ -240,11 +309,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     try {
       await Variants.rename(renameVariantId, renameVariantName.trim());
       reloadVariants(variantProjectId);
-      if (customProjectId === variantProjectId) {
-        Variants.list(customProjectId)
-          .then(setCustomProjectVariants)
-          .catch(() => setCustomProjectVariants([]));
-      }
       onDataChanged?.("Renaming variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -261,11 +325,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       await Variants.create(variantProjectId, newVariantName.trim());
       setNewVariantName("");
       reloadVariants(variantProjectId);
-      if (customProjectId === variantProjectId) {
-        Variants.list(customProjectId)
-          .then(setCustomProjectVariants)
-          .catch(() => setCustomProjectVariants([]));
-      }
       onDataChanged?.("Creating variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -283,18 +342,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       if (renameVariantId === deleteVariantId) {
         setRenameVariantId("");
         setRenameVariantName("");
-        setCopyPreview(null);
-        setCopyPreviewError(null);
-        setCopyPreviewBusy(false);
       }
       setDeleteVariantId("");
       setConfirmDeleteVariant(false);
       reloadVariants(variantProjectId);
-      if (customProjectId === variantProjectId) {
-        Variants.list(customProjectId)
-          .then(setCustomProjectVariants)
-          .catch(() => setCustomProjectVariants([]));
-      }
       onDataChanged?.("Deleting variant...");
     } catch (e: any) {
       setVariantMsg(e.message);
@@ -303,85 +354,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       setDeleteVariantBusy(false);
     }
   };
-
-  const handleCopyAssessments = async () => {
-    if (!copySourceId || !copyTargetId || copyBusy) return;
-    if (copySourceId === copyTargetId) {
-      setCopyMsg("Source and target variants must be different.");
-      return;
-    }
-    setCopyBusy(true);
-    setCopyMsg(null);
-    try {
-      const result = await Variants.copyAssessments(
-        copySourceId,
-        copyTargetId,
-        copyIgnorePackageVersion,
-      );
-      setCopyMsg(result.message);
-      onDataChanged?.("Copying assessments...");
-    } catch (e: any) {
-      setCopyMsg(e.message);
-    } finally {
-      setCopyBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!customProjectId) {
-      setCustomProjectVariants([]);
-      setCopySourceId("");
-      setCopyTargetId("");
-      setCopyPreview(null);
-      setCopyPreviewError(null);
-      setCopyPreviewUnavailableMsg(null);
-      setCopyPreviewBusy(false);
-      return;
-    }
-    Variants.list(customProjectId)
-      .then(setCustomProjectVariants)
-      .catch(() => setCustomProjectVariants([]));
-  }, [customProjectId]);
-
-  useEffect(() => {
-    if (!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId) {
-      setCopyPreview(null);
-      setCopyPreviewError(null);
-      setCopyPreviewUnavailableMsg(null);
-      setCopyPreviewBusy(false);
-      return;
-    }
-
-    let cancelled = false;
-    setCopyPreviewBusy(true);
-    setCopyPreviewError(null);
-    setCopyPreviewUnavailableMsg(null);
-
-    Variants.previewCopyAssessments(copySourceId, copyTargetId, copyIgnorePackageVersion)
-      .then((data) => {
-        if (cancelled || unmountedRef.current) return;
-        if ((data as CopyAssessmentsPreviewUnsupported).unsupported) {
-          setCopyPreview(null);
-          setCopyPreviewUnavailableMsg(data.message);
-          return;
-        }
-        setCopyPreview(data as CopyAssessmentsPreview);
-      })
-      .catch((e: any) => {
-        if (cancelled || unmountedRef.current) return;
-        setCopyPreview(null);
-        setCopyPreviewUnavailableMsg(null);
-        setCopyPreviewError(e?.message || "Failed to generate preview.");
-      })
-      .finally(() => {
-        if (cancelled || unmountedRef.current) return;
-        setCopyPreviewBusy(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [customProjectId, copySourceId, copyTargetId, copyIgnorePackageVersion]);
 
   // ---- Import SBOM ----
   const [importProjectId, setImportProjectId] = useState<string>("");
@@ -468,68 +440,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
     }
   };
 
-  // ---- NVD API Key ----
-  const [nvdKeyInput, setNvdKeyInput] = useState("");
-  const [nvdMaskedKey, setNvdMaskedKey] = useState("");
-  const [nvdHasKey, setNvdHasKey] = useState(false);
-  const [nvdBusy, setNvdBusy] = useState(false);
-  const [nvdMsg, setNvdMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
-  const [nvdEditing, setNvdEditing] = useState(false);
-  const [confirmDeleteNvdKey, setConfirmDeleteNvdKey] = useState(false);
-
-  useEffect(() => {
-    NvdApiKey.get()
-      .then(data => {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-      })
-      .catch((e) => {
-        console.error(e instanceof Error ? e.message : String(e));
-      });
-  }, []);
-
-  const handleSaveNvdKey = async () => {
-    setNvdBusy(true);
-    setNvdMsg(null);
-    try {
-      const data = await NvdApiKey.set(nvdKeyInput);
-      if (!data.ok) {
-        setNvdMsg({ text: data.error || "Failed to save API key", type: "error" });
-      } else {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-        setNvdKeyInput("");
-        setNvdEditing(false);
-        setNvdMsg({ text: data.has_key ? "API key saved." : "API key removed.", type: "success" });
-      }
-    } catch (e) {
-      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
-    } finally {
-      setNvdBusy(false);
-    }
-  };
-
-  const handleRemoveNvdKey = async () => {
-    setConfirmDeleteNvdKey(false);
-    setNvdBusy(true);
-    setNvdMsg(null);
-    try {
-      const data = await NvdApiKey.remove();
-      if (data.ok) {
-        setNvdHasKey(data.has_key);
-        setNvdMaskedKey(data.masked_key);
-        setNvdKeyInput("");
-        setNvdMsg({ text: "API key removed.", type: "success" });
-      } else {
-        setNvdMsg({ text: data.error || "Failed to remove API key", type: "error" });
-      }
-    } catch (e) {
-      setNvdMsg({ text: e instanceof Error ? e.message : String(e), type: "error" });
-    } finally {
-      setNvdBusy(false);
-    }
-  };
-
   // ---- Styles ----
   const inputClass =
     "w-full rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400";
@@ -588,16 +498,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             onClick={() => setActiveTab("scan")}
           >
             Scan Settings
-          </button>
-          <button
-            className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
-              activeTab === "customData"
-                ? "bg-sky-800 text-white border-b-2 border-sky-400"
-                : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
-            }`}
-            onClick={() => setActiveTab("customData")}
-          >
-            Custom Data Settings
           </button>
         </div>
 
@@ -698,82 +598,66 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         {/* ======== NVD API Key ======== */}
         <section aria-labelledby="settings-heading-nvd">
           <div className={cardHeader}>
-            <FontAwesomeIcon icon={faKey} className="text-cyan-400" aria-hidden="true" />
+            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
             <h2 id="settings-heading-nvd" className="text-xl font-bold text-white">NVD API Key</h2>
           </div>
-          <div className={cardBody + " space-y-4"}>
+          <div className={cardBody + " space-y-3"}>
             <p id="nvd-key-description" className="text-zinc-400 text-sm">
-              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds.
-              Get a free key at{" "}
+              An NVD API key increases the rate limit for vulnerability enrichment from 5 to 50 requests per 30 seconds
+              when using NVD REST API mode. Required only when NVD data source is set to <strong>NVD REST API</strong>.{' '}
               <a
+                className="text-cyan-400 hover:text-cyan-300 underline"
                 href="https://nvd.nist.gov/developers/request-an-api-key"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-cyan-400 hover:text-cyan-300 underline"
               >
                 nvd.nist.gov
-              </a>.
+              </a>
             </p>
-
-            {/* -- Feedback -- */}
             {nvdMsg && (
-              <MessageBanner
-                type={nvdMsg.type}
-                message={nvdMsg.text}
-                isVisible={true}
-                onClose={() => setNvdMsg(null)}
-              />
+              <div className={`text-sm rounded px-3 py-2 ${nvdMsg.type === "success" ? "bg-green-900/40 text-green-300" : "bg-red-900/40 text-red-300"}`}>
+                {nvdMsg.text}
+              </div>
             )}
-
             {nvdHasKey && !nvdEditing ? (
-              <>
-                {/* -- Key is set: show masked key + modify / remove buttons -- */}
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-zinc-300">NVD API key:</span>
-                  <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={() => { setNvdEditing(true); setNvdKeyInput(""); setNvdMsg(null); }}
-                    className={btnPrimary}
-                  >
-                    <FontAwesomeIcon icon={faPenToSquare} className="mr-1" aria-hidden="true" />
-                    Modify
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteNvdKey(true)}
-                    disabled={nvdBusy}
-                    className="px-4 py-2 rounded-lg bg-red-900 hover:bg-red-800 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  >
-                    <FontAwesomeIcon icon={faTrash} className="mr-1" aria-hidden="true" />
-                    Remove
-                  </button>
-                </div>
-              </>
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm text-zinc-300">NVD API key:</span>
+                <code className="text-sm text-zinc-300 bg-slate-900 px-2 py-0.5 rounded font-mono">{nvdMaskedKey}</code>
+                <button
+                  type="button"
+                  onClick={() => { setNvdEditing(true); setNvdMsg(null); }}
+                  disabled={nvdBusy}
+                  className={btnPrimary + " text-xs py-1 px-3"}
+                >
+                  Change
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemoveNvdKey(true)}
+                  disabled={nvdBusy}
+                  className="px-3 py-1 rounded text-xs font-semibold bg-red-800 hover:bg-red-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
             ) : (
-              <>
-                {/* -- No key or editing: show input field -- */}
-                <div className="space-y-2">
-                  <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
-                    {nvdEditing ? "New API Key" : "API Key"}
-                  </label>
-                  <input
-                    id="nvd-api-key-input"
-                    type="password"
-                    value={nvdKeyInput}
-                    onChange={e => setNvdKeyInput(e.target.value)}
-                    placeholder="Paste your NVD API key..."
-                    className={inputClass}
-                    disabled={nvdBusy}
-                    autoComplete="off"
-                    aria-required="true"
-                    aria-describedby="nvd-key-description"
-                  />
-                </div>
-
-                <div className="flex items-center gap-3 pt-1">
+              <div className="space-y-2">
+                <label htmlFor="nvd-api-key-input" className="block text-sm text-zinc-300 font-semibold">
+                  {nvdEditing ? "New API Key" : "API Key"}
+                </label>
+                <input
+                  id="nvd-api-key-input"
+                  type="password"
+                  value={nvdKeyInput}
+                  onChange={(e) => setNvdKeyInput(e.target.value)}
+                  placeholder="Paste your NVD API key..."
+                  className={inputClass}
+                  disabled={nvdBusy}
+                  aria-describedby="nvd-key-description"
+                />
+                <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={handleSaveNvdKey}
                     disabled={nvdBusy || !nvdKeyInput.trim()}
                     className={btnPrimary}
@@ -784,24 +668,26 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                     ) : (
                       <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
                     )}
-                    Save
+                    Save key
                   </button>
                   {nvdEditing && (
                     <button
+                      type="button"
                       onClick={() => { setNvdEditing(false); setNvdKeyInput(""); setNvdMsg(null); }}
-                      className="px-4 py-2 rounded-lg bg-slate-600 hover:bg-slate-500 text-white text-sm font-medium transition-colors duration-150"
+                      disabled={nvdBusy}
+                      className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold disabled:opacity-40 transition-colors"
                     >
-                      <FontAwesomeIcon icon={faXmark} className="mr-1" aria-hidden="true" />
                       Cancel
                     </button>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
         </section>
-        </>
-        )}
+
+        </>)
+        }
 
         {/* ======== Projects Settings tab ======== */}
         {activeTab === "projects" && (
@@ -1179,220 +1065,6 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         </>
         )}
 
-        {/* ======== Custom Data Settings tab ======== */}
-        {activeTab === "customData" && (
-        <>
-        {/* ======== Select Project ======== */}
-        <section aria-labelledby="settings-heading-custom-project">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faFolderOpen} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-custom-project" className="text-xl font-bold text-white">Select Project</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <div>
-              <label htmlFor="custom-project-select" className="block text-sm text-zinc-300 mb-1">Project</label>
-              <select
-                id="custom-project-select"
-                value={customProjectId}
-                onChange={(e) => {
-                  setCustomProjectId(e.target.value);
-                  setCopyMsg(null);
-                  setCopyPreview(null);
-                  setCopyPreviewError(null);
-                  setCopyPreviewUnavailableMsg(null);
-                }}
-                className={selectClass}
-              >
-                <option value="">— select a project —</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              {!customProjectId && (
-                <p className="text-zinc-400 text-sm mt-2">
-                  Select a project to manage custom data operations.
-                </p>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* ======== Copy Custom Assessments ======== */}
-        <section
-          aria-labelledby="settings-heading-copy-assessments"
-          aria-disabled={!customProjectId}
-          className={!customProjectId ? "opacity-50" : ""}
-        >
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-copy-assessments" className="text-xl font-bold text-white">Copy Custom Assessments</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <p className="text-sm text-zinc-400">
-              Copy custom assessments from a source variant to a target variant in the selected project.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
-                <select
-                  id="copy-source-select"
-                  value={copySourceId}
-                  onChange={(e) => {
-                    setCopySourceId(e.target.value);
-                    setCopyMsg(null);
-                    setCopyPreviewError(null);
-                    setCopyPreviewUnavailableMsg(null);
-                  }}
-                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-                  disabled={!customProjectId}
-                >
-                  <option value="">— select a variant —</option>
-                  {customProjectVariants.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-end justify-center sm:justify-start">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!customProjectId || copyBusy) return;
-                    setCopySourceId(copyTargetId);
-                    setCopyTargetId(copySourceId);
-                    setCopyMsg(null);
-                    setCopyPreviewError(null);
-                    setCopyPreviewUnavailableMsg(null);
-                  }}
-                  disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
-                  className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                  title="Swap source and target variants"
-                  aria-label="Swap source and target variants"
-                >
-                  <FontAwesomeIcon icon={faRightLeft} className="mr-2" aria-hidden="true" />
-                  Swap
-                </button>
-              </div>
-              <div className="space-y-2">
-                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Copy to</label>
-                <select
-                  id="copy-target-select"
-                  value={copyTargetId}
-                  onChange={(e) => {
-                    setCopyTargetId(e.target.value);
-                    setCopyMsg(null);
-                    setCopyPreviewError(null);
-                    setCopyPreviewUnavailableMsg(null);
-                  }}
-                  className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-                  disabled={!customProjectId}
-                >
-                  <option value="">— select a variant —</option>
-                  {customProjectVariants.map((v) => (
-                    <option key={v.id} value={v.id}>{v.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <label className="inline-flex items-center gap-2 text-sm text-zinc-300">
-              <input
-                type="checkbox"
-                checked={copyIgnorePackageVersion}
-                onChange={(e) => {
-                  setCopyIgnorePackageVersion(e.target.checked);
-                  setCopyMsg(null);
-                  setCopyPreviewError(null);
-                  setCopyPreviewUnavailableMsg(null);
-                }}
-                disabled={!customProjectId || copyBusy}
-                className="rounded border-slate-500 bg-slate-900"
-              />
-              Ignore packages version
-            </label>
-
-            <p className="text-xs text-zinc-400">
-              When enabled, copy by vulnerabilities in common, regardless of package name/version differences.
-            </p>
-
-            <div className="rounded-md border border-slate-600/70 bg-slate-900/40 p-3 space-y-2">
-              <h3 className="text-sm font-semibold text-zinc-200">Preview</h3>
-              {(!customProjectId || !copySourceId || !copyTargetId) && (
-                <p className="text-xs text-zinc-400">Select a source and a target variant to generate a preview.</p>
-              )}
-              {copySourceId && copyTargetId && copySourceId === copyTargetId && (
-                <p className="text-xs text-amber-300">Source and target variants must be different.</p>
-              )}
-              {copyPreviewBusy && (
-                <p className="text-xs text-zinc-300">
-                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  Computing preview...
-                </p>
-              )}
-              {copyPreviewError && (
-                <p className="text-xs text-red-300">
-                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
-                  {copyPreviewError}
-                </p>
-              )}
-              {copyPreviewUnavailableMsg && (
-                <p className="text-xs text-amber-300">
-                  <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" aria-hidden="true" />
-                  {copyPreviewUnavailableMsg}
-                </p>
-              )}
-              {!copyPreviewBusy && !copyPreviewError && copyPreview && (
-                <>
-                  <p className="text-xs text-cyan-300">{copyPreview.message}</p>
-                  {copyPreview.entries.length > 0 && (
-                    <div className="max-h-56 overflow-auto rounded border border-slate-700/80">
-                      <table className="min-w-full text-xs text-zinc-200">
-                        <thead className="bg-slate-800/80 text-zinc-300">
-                          <tr>
-                            <th className="px-2 py-1 text-left">Vulnerability</th>
-                            <th className="px-2 py-1 text-left">Source package</th>
-                            <th className="px-2 py-1 text-left">Target package</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {copyPreview.entries.map((entry) => (
-                            <tr key={`${entry.source_assessment_id}-${entry.target_finding_id}`} className="border-t border-slate-700/70">
-                              <td className="px-2 py-1 font-mono">{entry.vulnerability_id}</td>
-                              <td className="px-2 py-1">{entry.source_package || "-"}</td>
-                              <td className="px-2 py-1">{entry.target_package || "-"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <button
-              onClick={handleCopyAssessments}
-              disabled={!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId || copyBusy}
-              className={btnPrimary}
-            >
-              {copyBusy ? (
-                <FontAwesomeIcon icon={faSpinner} spin className="mr-2" aria-hidden="true" />
-              ) : (
-                <FontAwesomeIcon icon={faCopy} className="mr-2" aria-hidden="true" />
-              )}
-              Copy Assessments
-            </button>
-
-            {copyMsg && (
-              <span role="alert" className="block text-sm text-cyan-300">
-                <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                {copyMsg}
-              </span>
-            )}
-          </div>
-        </section>
-        </>
-        )}
-
         {/* ======== Scan Settings tab ======== */}
         {activeTab === "scan" && (
         <>
@@ -1504,9 +1176,79 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
           </div>
         </section>
+
+        {/* ======== Grype Scanner ======== */}
+        <section aria-labelledby="settings-heading-grype">
+          <div className={cardHeader}>
+            <FontAwesomeIcon icon={faBug} className="text-cyan-400" aria-hidden="true" />
+            <h2 id="settings-heading-grype" className="text-xl font-bold text-white">Grype Scanner</h2>
+          </div>
+          <div className={cardBody + " space-y-4"}>
+
+            {/* ---- GRYPE_MEMLIMIT ---- */}
+            <div className="space-y-2">
+              <label htmlFor="grype-memlimit-input" className="block text-sm text-zinc-300 font-semibold">
+                Memory Limit <span className="font-normal text-zinc-500">(GRYPE_MEMLIMIT)</span>
+              </label>
+              <p className="text-zinc-400 text-sm">
+                Caps the RAM used by the Grype binary via Go's soft memory limit (<code className="text-zinc-300 bg-slate-900 px-1 rounded text-xs">GOMEMLIMIT</code>).
+                Leave blank to use the auto-default: <strong className="text-zinc-300">~80 % of the container/cgroup memory limit</strong>,
+                which prevents OOM kills in CI without any configuration.
+                Set to <code className="text-zinc-300 bg-slate-900 px-1 rounded text-xs">off</code> to disable the cap entirely.
+              </p>
+              <input
+                id="grype-memlimit-input"
+                type="text"
+                value={grypeMemlimitInput}
+                onChange={(e) => { setGrypeMemlimitInput(e.target.value); setGrypeMemlimitMsg(null); }}
+                placeholder="auto (leave blank) · e.g. 4GiB · 512MiB · 1073741824 · off"
+                className={inputClass}
+                disabled={grypeMemlimitBusy}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="grype-memlimit-hint"
+              />
+              <p id="grype-memlimit-hint" className="text-zinc-500 text-xs">
+                Valid values: Go memory strings (<code className="bg-slate-900 px-0.5 rounded">4GiB</code>,{" "}
+                <code className="bg-slate-900 px-0.5 rounded">512MiB</code>,{" "}
+                <code className="bg-slate-900 px-0.5 rounded">1073741824</code>),{" "}
+                <code className="bg-slate-900 px-0.5 rounded">off</code> / <code className="bg-slate-900 px-0.5 rounded">disabled</code> to remove the cap,
+                or blank to restore the auto-default.
+              </p>
+            </div>
+
+            {/* ---- Feedback ---- */}
+            {grypeMemlimitMsg && (
+              <MessageBanner
+                type={grypeMemlimitMsg.type}
+                message={grypeMemlimitMsg.text}
+                isVisible={true}
+                onClose={() => setGrypeMemlimitMsg(null)}
+              />
+            )}
+
+            {/* ---- Submit ---- */}
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={handleSaveGrypeSetting}
+                disabled={grypeMemlimitBusy}
+                className={btnPrimary}
+                aria-busy={grypeMemlimitBusy}
+              >
+                {grypeMemlimitBusy ? (
+                  <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
+                ) : (
+                  <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
+                )}
+                Save
+              </button>
+            </div>
+          </div>
+        </section>
         </>
         )}
       </div>
+
 
       {/* ======== Confirmation Modals ======== */}
       <ConfirmationModal
@@ -1530,14 +1272,14 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         onCancel={() => setConfirmDeleteVariant(false)}
       />
       <ConfirmationModal
-        isOpen={confirmDeleteNvdKey}
+        isOpen={confirmRemoveNvdKey}
         title="Remove NVD API Key"
-        message="Are you sure you want to remove the NVD API key? Vulnerability enrichment will fall back to the lower rate limit."
-        confirmText="Yes, remove"
+        message="Are you sure you want to remove the NVD API key? Vulnerability enrichment will fall back to the lower rate limit when using NVD REST API mode."
+        confirmText="Remove"
         cancelText="Cancel"
         showTitleIcon={true}
         onConfirm={handleRemoveNvdKey}
-        onCancel={() => setConfirmDeleteNvdKey(false)}
+        onCancel={() => setConfirmRemoveNvdKey(false)}
       />
     </div>
   );

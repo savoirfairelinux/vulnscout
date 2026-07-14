@@ -40,7 +40,7 @@ from ._scan_diff import (
     _global_result_id_sets,
     _global_assessment_ids_for,
     _global_result_full,
-    _serialize_list_with_diff,
+    serialize_list_with_diff_cached,
 )
 
 
@@ -59,6 +59,7 @@ from ._scan_queries import (  # noqa: F401  — re-exports
 from ._scan_diff import (  # noqa: F401  — re-exports
     _classify_finding_changes,
     _prev_scan_map,
+    _serialize_list_with_diff,
 )
 
 
@@ -286,7 +287,7 @@ def init_app(app: Flask) -> None:
     @app.route('/api/scans')
     def list_all_scans() -> ResponseReturnValue:
         scans = ScanController.get_all()
-        result = _serialize_list_with_diff(scans)
+        result = serialize_list_with_diff_cached("all", scans)
         return jsonify(result)
 
     @app.route('/api/projects/<project_id>/scans')
@@ -295,7 +296,7 @@ def init_app(app: Flask) -> None:
         if project is None:
             return jsonify({"error": "Project not found"}), 404
         scans = ScanController.get_by_project(project_id)
-        result = _serialize_list_with_diff(scans)
+        result = serialize_list_with_diff_cached(f"project:{project_id}", scans)
         return jsonify(result)
 
     @app.route('/api/variants/<variant_id>/scans')
@@ -304,7 +305,7 @@ def init_app(app: Flask) -> None:
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
         scans = ScanController.get_by_variant(variant_id)
-        result = _serialize_list_with_diff(scans)
+        result = serialize_list_with_diff_cached(f"variant:{variant_id}", scans)
         return jsonify(result)
 
     @app.route('/api/scans/<scan_id>', methods=['PATCH'])

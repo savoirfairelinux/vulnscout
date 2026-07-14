@@ -234,3 +234,134 @@ class TestApiVersion:
         assert resp.status_code == 200
         data = resp.get_json()
         assert "version" in data
+
+
+# ---------------------------------------------------------------------------
+# GET /api/config/nvd-api-key — happy paths and edge cases
+# ---------------------------------------------------------------------------
+
+class TestGetNvdApiKey:
+
+    def test_returns_has_key_false_when_env_unset(self, client, monkeypatch):
+        """GET returns has_key:false and empty masked_key when NVD_API_KEY is unset."""
+        monkeypatch.delenv("NVD_API_KEY", raising=False)
+        resp = client.get("/api/config/nvd-api-key")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["has_key"] is False
+        assert data["masked_key"] == ""
+
+    def test_returns_has_key_true_and_masked_key_when_set(self, client, monkeypatch):
+        """GET returns has_key:true and a partially-masked key when NVD_API_KEY is set."""
+        monkeypatch.setenv("NVD_API_KEY", "abcdefghijklmnop")  # 16 chars
+        resp = client.get("/api/config/nvd-api-key")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["has_key"] is True
+        masked = data["masked_key"]
+        assert len(masked) == 16
+        # First 4 and last 4 chars should be plaintext, middle masked
+        assert masked[:4] == "abcd"
+        assert masked[-4:] == "mnop"
+        assert "*" in masked[4:-4]
+
+    def test_masked_key_is_all_stars_for_short_key(self, client, monkeypatch):
+        """Short keys (≤8 chars) are fully masked."""
+        monkeypatch.setenv("NVD_API_KEY", "shortkey")  # exactly 8 chars
+        resp = client.get("/api/config/nvd-api-key")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["masked_key"] == "********"
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/config/nvd-api-key — store and validate
+# ---------------------------------------------------------------------------
+
+class TestPutNvdApiKey:
+
+    def test_returns_400_when_body_missing_api_key_field(self, client):
+        """400 when the request body does not contain api_key."""
+        resp = client.put("/api/config/nvd-api-key", json={"wrong_field": "value"})
+        assert resp.status_code == 400
+        assert "api_key" in resp.get_json()["error"].lower()
+
+    def test_returns_400_when_api_key_not_string(self, client):
+        """400 when api_key is not a string."""
+        resp = client.put("/api/config/nvd-api-key", json={"api_key": 12345})
+        assert resp.status_code == 400
+
+    def test_valid_key_is_saved_and_returns_200(self, client, tmp_path):
+        """A valid key is probed, persisted, and the response includes masked_key."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(200, {}, {"x-ratelimit-limit": "50"})):
+            with patch("src.routes.config._write_config_key", return_value=True):
+                resp = client.put("/api/config/nvd-api-key",
+                                  json={"api_key": "valid-key-1234567890"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert data["has_key"] is True
+        assert "*" in data["masked_key"]
+
+    def test_401_from_nvd_rejects_key_with_400(self, client):
+        """When the NVD probe returns 401, the key is rejected with 400."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(401, {}, {})):
+            resp = client.put("/api/config/nvd-api-key",
+                              json={"api_key": "bad-key-9999"})
+        assert resp.status_code == 400
+        assert "Invalid NVD API key" in resp.get_json()["error"]
+
+    def test_403_from_nvd_rejects_key_with_400(self, client):
+        """When the NVD probe returns 403, the key is rejected with 400."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(403, {}, {})):
+            resp = client.put("/api/config/nvd-api-key",
+                              json={"api_key": "bad-key-forbidden"})
+        assert resp.status_code == 400
+
+    def test_anonymous_rate_limit_header_rejects_key(self, client):
+        """A key that leaves the rate limit at ≤5 req/30s is treated as invalid."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(200, {}, {"x-ratelimit-limit": "5"})):
+            resp = client.put("/api/config/nvd-api-key",
+                              json={"api_key": "anon-key-0001"})
+        assert resp.status_code == 400
+        assert "anonymous" in resp.get_json()["error"].lower()
+
+    def test_non_200_probe_saves_key_with_warning(self, client):
+        """Non-200, non-401/403 probe still saves the key but adds a warning."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(503, {}, {})):
+            with patch("src.routes.config._write_config_key", return_value=True):
+                resp = client.put("/api/config/nvd-api-key",
+                                  json={"api_key": "uncertain-key-2222"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "warning" in data
+
+    def test_empty_api_key_removes_key(self, client, monkeypatch):
+        """Sending api_key='' removes the key from env and config.env."""
+        monkeypatch.setenv("NVD_API_KEY", "old-key")
+        with patch("src.routes.config._write_config_key", return_value=True):
+            resp = client.put("/api/config/nvd-api-key", json={"api_key": ""})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["has_key"] is False
+
+    def test_write_failure_returns_500(self, client):
+        """500 when _write_config_key fails after successful probe."""
+        from src.controllers.nvd_db import NVD_DB
+        with patch.object(NVD_DB, "api_probe_cve",
+                          return_value=(200, {}, {"x-ratelimit-limit": "50"})):
+            with patch("src.routes.config._write_config_key", return_value=False):
+                resp = client.put("/api/config/nvd-api-key",
+                                  json={"api_key": "valid-key-write-fails"})
+        assert resp.status_code == 500
+        assert "error" in resp.get_json()

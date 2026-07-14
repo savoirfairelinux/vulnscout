@@ -4,6 +4,24 @@ type Variant = {
     project_id: string;
 };
 
+/** One of the three copy-assessment matching modes. */
+type CopyMatchMode = "exact" | "ignore_minor_version" | "ignore_version";
+
+/** Condition that decides which target findings a copy is proposed onto. */
+type CopyCondition = "no_custom" | "different_status" | "different_value";
+
+/** The user-visible fields of the source assessment, for display in the review popup. */
+type CopyAssessmentsAssessmentDetails = {
+    simplified_status: string;
+    status: string;
+    justification?: string | null;
+    status_notes?: string | null;
+    impact_statement?: string | null;
+    workaround?: string | null;
+    responses?: string[];
+};
+
+/** A single row in an exact-mode flat preview. */
 type CopyAssessmentsPreviewEntry = {
     source_assessment_id: string;
     source_finding_id: string;
@@ -11,13 +29,40 @@ type CopyAssessmentsPreviewEntry = {
     vulnerability_id: string;
     source_package: string;
     target_package: string;
+    already_has_custom?: boolean;
+    selected?: boolean;
+    assessment_details?: CopyAssessmentsAssessmentDetails;
 };
 
+/** One candidate target finding within a review-popup group. */
+type CopyAssessmentsPreviewCandidate = {
+    target_finding_id: string;
+    target_package: string;
+    already_has_custom: boolean;
+    selected: boolean;
+};
+
+/** One source-assessment group in alternative-mode preview (for the review popup). */
+type CopyAssessmentsPreviewGroup = {
+    source_assessment_id: string;
+    source_finding_id: string;
+    vulnerability_id: string;
+    source_package: string;
+    assessment_details?: CopyAssessmentsAssessmentDetails;
+    candidates: CopyAssessmentsPreviewCandidate[];
+};
+
+/** Preview response from the backend. */
 type CopyAssessmentsPreview = {
     count: number;
     skipped: number;
+    skipped_count?: number;
     message: string;
-    entries: CopyAssessmentsPreviewEntry[];
+    mode: CopyMatchMode;
+    /** Present for exact mode. */
+    entries?: CopyAssessmentsPreviewEntry[];
+    /** Present for alternative modes. */
+    groups?: CopyAssessmentsPreviewGroup[];
 };
 
 type CopyAssessmentsPreviewUnsupported = {
@@ -26,11 +71,23 @@ type CopyAssessmentsPreviewUnsupported = {
     message: string;
 };
 
+/** One element in the selections array sent to the copy endpoint. */
+type CopyAssessmentsSelection = {
+    source_assessment_id: string;
+    target_finding_id: string;
+};
+
 export type {
     Variant,
+    CopyMatchMode,
+    CopyCondition,
+    CopyAssessmentsAssessmentDetails,
     CopyAssessmentsPreview,
     CopyAssessmentsPreviewEntry,
+    CopyAssessmentsPreviewCandidate,
+    CopyAssessmentsPreviewGroup,
     CopyAssessmentsPreviewUnsupported,
+    CopyAssessmentsSelection,
 };
 
 class Variants {
@@ -66,10 +123,10 @@ class Variants {
         ) as Variant[];
     }
 
-    static async listByVuln(vulnId: string): Promise<Variant[]> {
+    static async listByVuln(vulnId: string, signal?: AbortSignal): Promise<Variant[]> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}/variants`,
-            { mode: "cors" }
+            { mode: "cors", signal }
         );
         if (!response.ok) return [];
         const data = await response.json();
@@ -164,7 +221,10 @@ class Variants {
     static async copyAssessments(
         sourceVariantId: string,
         targetVariantId: string,
-        ignorePackageVersion = false,
+        matchMode: CopyMatchMode = "exact",
+        versionPrecision = 1,
+        selections?: CopyAssessmentsSelection[],
+        copyCondition: CopyCondition = "no_custom",
     ): Promise<{ copied: number; skipped: number; message: string }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/variants/copy-assessments",
@@ -175,7 +235,10 @@ class Variants {
                 body: JSON.stringify({
                     source_variant_id: sourceVariantId,
                     target_variant_id: targetVariantId,
-                    ignore_package_version: ignorePackageVersion,
+                    match_mode: matchMode,
+                    version_precision: versionPrecision,
+                    copy_condition: copyCondition,
+                    ...(selections !== undefined ? { selections } : {}),
                 }),
             }
         );
@@ -189,7 +252,9 @@ class Variants {
     static async previewCopyAssessments(
         sourceVariantId: string,
         targetVariantId: string,
-        ignorePackageVersion = false,
+        matchMode: CopyMatchMode = "exact",
+        versionPrecision = 1,
+        copyCondition: CopyCondition = "no_custom",
     ): Promise<CopyAssessmentsPreview | CopyAssessmentsPreviewUnsupported> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/variants/copy-assessments/preview",
@@ -200,7 +265,9 @@ class Variants {
                 body: JSON.stringify({
                     source_variant_id: sourceVariantId,
                     target_variant_id: targetVariantId,
-                    ignore_package_version: ignorePackageVersion,
+                    match_mode: matchMode,
+                    version_precision: versionPrecision,
+                    copy_condition: copyCondition,
                 }),
             }
         );

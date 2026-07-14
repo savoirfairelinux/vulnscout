@@ -51,21 +51,21 @@ class TestDatabasesDir:
         monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert result == tmp_path.joinpath("sbom_cve_check_databases").resolve()
+        assert result == tmp_path.joinpath("local_databases").resolve()
 
     def test_falls_back_to_cache_vulnscout(self, monkeypatch):
         monkeypatch.delenv("SBOM_CVE_CHECK_DATABASES_DIR", raising=False)
         monkeypatch.delenv("VULNSCOUT_CACHE_DIR", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert str(result).endswith("/cache/vulnscout/sbom_cve_check_databases")
+        assert str(result).endswith("/cache/vulnscout/local_databases")
 
     def test_blank_env_var_falls_back(self, monkeypatch):
         monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", "   ")
         monkeypatch.delenv("VULNSCOUT_CACHE_DIR", raising=False)
         from src.controllers import scc_engine as mod
         result = mod._databases_dir()
-        assert "sbom_cve_check_databases" in str(result)
+        assert "local_databases" in str(result)
 
 
 class TestTrustGitDirectories:

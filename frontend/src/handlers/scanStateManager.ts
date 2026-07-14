@@ -29,6 +29,8 @@ export type ScanManagerSnapshot = readonly ScanEntryState[];
 export type ScanTriggerOptions = {
     /** Exclude kernel companion packages from scanner inputs (default true). */
     excludeKernel?: boolean;
+    /** NVD data source: "local" (default) uses local NVD-FKIE DB; "api" uses NVD REST API. */
+    nvdMode?: "local" | "api";
 };
 
 // Status response shape returned by the backend polling endpoints

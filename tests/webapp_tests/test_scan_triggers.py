@@ -368,7 +368,7 @@ class TestTriggerNvdScan:
         with patch.object(_db.session, "get", side_effect=_fake_get):
             with patch("src.models.metrics.Metrics.from_cvss", side_effect=Exception("boom")):
                 with _sync_thread_patch():
-                    resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+                    resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
 
         assert resp.status_code == 202
 
@@ -521,4 +521,90 @@ class TestRunningScans:
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data["grype"] == []
+
+
+# ---------------------------------------------------------------------------
+# NVD scan — mode parameter (local vs api)
+# ---------------------------------------------------------------------------
+
+class TestNvdScanMode:
+    """Tests for the ``?mode=`` query parameter on the NVD scan trigger."""
+
+    def test_default_mode_is_local(self, client, ids):
+        """When ?mode is absent the scan starts (defaults to local)."""
+        with patch("threading.Thread") as mock_thread:
+            mock_thread.return_value = MagicMock()
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+        assert resp.status_code == 202
+
+    def test_explicit_local_mode_accepted(self, client, ids):
+        """?mode=local is accepted with 202."""
+        with patch("threading.Thread") as mock_thread:
+            mock_thread.return_value = MagicMock()
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=local")
+        assert resp.status_code == 202
+
+    def test_explicit_api_mode_accepted(self, client, ids):
+        """?mode=api is accepted with 202."""
+        with patch("threading.Thread") as mock_thread:
+            mock_thread.return_value = MagicMock()
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
+        assert resp.status_code == 202
+
+    def test_local_mode_uses_scc_engine(self, client, ids):
+        """In local mode the worker calls get_engine() (SCC engine)."""
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        # get_engine is imported inside trigger_nvd_scan (lazy closure), so
+        # all patches must be active across both client.post and target().
+        with patch("threading.Thread", side_effect=fake_thread), \
+             patch("src.controllers.scc_engine.get_engine") as mock_engine, \
+             patch("src.controllers.nvd_db.NVD_DB") as MockNVD, \
+             patch("src.routes.scan_triggers.db"), \
+             patch("src.routes.scan_triggers.resolve_active_packages") as mock_pkgs:
+            mock_pkgs.return_value = ([], None)
+            mock_engine.side_effect = RuntimeError("no db")  # bail early
+            client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=local")
+            try:
+                captured["target"]()
+            except Exception:
+                pass
+
+        mock_engine.assert_called()
+        MockNVD.assert_not_called()
+
+    def test_api_mode_uses_nvd_db(self, client, ids):
+        """In api mode the worker instantiates NVD_DB and does NOT call get_engine()."""
+        captured = {}
+
+        def fake_thread(target=None, **kwargs):
+            captured["target"] = target
+            return MagicMock()
+
+        # NVD_DB is imported lazily inside _do_nvd_scan_api; all patches must
+        # span both client.post (which imports get_engine via closure) and
+        # target() (which imports NVD_DB on demand).
+        with patch("threading.Thread", side_effect=fake_thread), \
+             patch("src.controllers.scc_engine.get_engine") as mock_engine, \
+             patch("src.controllers.nvd_db.NVD_DB") as MockNVD, \
+             patch("src.routes.scan_triggers.db"), \
+             patch("src.routes.scan_triggers.resolve_active_packages") as mock_pkgs:
+            # Empty package list → cpe_to_pkgs empty → early return after NVD_DB()
+            mock_pkgs.return_value = ([], None)
+            client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
+            captured["target"]()
+
+        mock_engine.assert_not_called()
+        MockNVD.assert_called_once()
+
+    def test_mode_query_param_is_case_insensitive(self, client, ids):
+        """mode=LOCAL (uppercase) is treated the same as mode=local."""
+        with patch("threading.Thread") as mock_thread:
+            mock_thread.return_value = MagicMock()
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=LOCAL")
+        assert resp.status_code == 202
 

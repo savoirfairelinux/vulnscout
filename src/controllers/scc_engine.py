@@ -11,9 +11,9 @@ the lifetime of the process.
 Configuration (environment variables):
 
 * ``SBOM_CVE_CHECK_DATABASES_DIR`` — directory holding the ``nvd-fkie`` and ``cvelist`` git
-  clones.  Defaults to a ``sbom_cve_check_databases`` sub-directory of the VulnScout
-  cache directory (``$VULNSCOUT_CACHE_DIR/sbom_cve_check_databases``, i.e.
-  ``/cache/vulnscout/sbom_cve_check_databases`` inside the container), so the advisory
+  clones.  Defaults to a ``local_databases`` sub-directory of the VulnScout
+  cache directory (``$VULNSCOUT_CACHE_DIR/local_databases``, i.e.
+  ``/cache/vulnscout/local_databases`` inside the container), so the advisory
   clones live next to ``vulnscout.db`` instead of in a separate XDG cache tree.
 * ``SBOM_CVE_CHECK_GIT_FETCH_DEPTH`` — git fetch/clone depth (default ``1``: shallow clone).
 * ``SBOM_CVE_CHECK_AUTO_UPDATE`` — ``"1"``/``"true"`` to let the engine clone/fetch fresh
@@ -30,14 +30,17 @@ import os
 import pathlib
 import threading
 from collections.abc import Generator
+from typing import cast
 
-from sbom_cve_check.analysis.computed_vuln import ComputedVulnInfo
 from sbom_cve_check.database.db_git import GitDatabase
 from sbom_cve_check.database.locking import init_global_databases_lock
 from sbom_cve_check.database.manager import DatabasesConfigData, VulnDbManager
 from sbom_cve_check.products.products import init_products_database
 from sbom_cve_check.vuln.cna import init_cna_database
-
+from sbom_cve_check.analysis.computed_vuln import ComputedVulnInfo
+from sbom_cve_check.database.db_nvd import NvdFkieVulnDatabase
+from sbom_cve_check.vuln.vuln import CveId
+from sbom_cve_check.vuln.vex import VexStatus as _VexStatus
 from .scc_adapter import build_comp_build
 
 _logger = logging.getLogger(__name__)
@@ -45,6 +48,10 @@ _logger = logging.getLogger(__name__)
 _ENGINE_LOCK = threading.Lock()
 _ENGINE: "SccEngine | None" = None
 _PURE_CACHES_INSTALLED = False
+
+# Sentinel distinguishing "attribute genuinely absent" (upstream rename) from a
+# legitimate ``None`` value when reaching into sbom-cve-check internals.
+_MISSING = object()
 
 
 def _install_cpe_parse_caches() -> None:
@@ -88,7 +95,7 @@ def _install_cpe_parse_caches() -> None:
 def _databases_dir() -> pathlib.Path:
     """Resolve the directory holding the local advisory git clones.
 
-    Defaults to a ``sbom_cve_check_databases`` sub-directory of the VulnScout cache
+    Defaults to a ``local_databases`` sub-directory of the VulnScout cache
     directory so the NVD-FKIE and CVEList clones sit next to ``vulnscout.db`` instead
     of in a separate ``~/.cache/sbom_cve_check`` tree.
     """
@@ -96,7 +103,7 @@ def _databases_dir() -> pathlib.Path:
     if env and env.strip():
         return pathlib.Path(env).expanduser().resolve()
     cache = os.getenv("VULNSCOUT_CACHE_DIR") or "/cache/vulnscout"
-    return pathlib.Path(cache).expanduser().joinpath("sbom_cve_check_databases").resolve()
+    return pathlib.Path(cache).expanduser().joinpath("local_databases").resolve()
 
 
 def _truthy(value: str | None) -> bool:
@@ -141,6 +148,9 @@ class SccEngine:
         # Serialises per-scan database refreshes so two concurrent scans never
         # fetch / rebuild the index at the same time.
         self._refresh_lock = threading.Lock()
+        # Tracks which "upstream internal changed" warnings have already been
+        # emitted so a rename in sbom-cve-check is logged once, not per lookup.
+        self._degraded_warnings: set = set()
         self._manager = VulnDbManager()
 
         nvd_dir = databases_dir.joinpath("nvd-fkie")
@@ -222,9 +232,42 @@ class SccEngine:
             tuple[frozenset, str | None], dict[str, str]
         ] = {}
 
+    def _warn_degraded(self, key: str, message: str) -> None:
+        """Log ``message`` once per ``key`` when an upstream internal looks renamed.
+
+        The engine reaches into a handful of private sbom-cve-check attributes
+        (``VulnDbManager._databases``, ``NvdFkieVulnDatabase``, the advisory
+        record's ``_json``).  If any of those is renamed by an upstream version
+        bump the old ``getattr(..., None)`` fall-back silently returned no data
+        for every lookup — indistinguishable from "not in DB".  Failing loudly
+        (once) makes such a break diagnosable instead of globally invisible.
+        """
+        if key not in self._degraded_warnings:
+            self._degraded_warnings.add(key)
+            _logger.error(message)
+
+    def _managed_databases(self) -> dict:
+        """Return the manager's ``_databases`` mapping, warning once if it is gone.
+
+        ``_databases`` is a private attribute of the upstream manager.  A
+        missing attribute (rename / API change) is distinguished from a legit
+        empty mapping via a sentinel so the former is logged as an error and the
+        latter is not.
+        """
+        databases = getattr(self._manager, "_databases", _MISSING)
+        if databases is _MISSING:
+            self._warn_degraded(
+                "manager_databases",
+                "sbom-cve-check VulnDbManager has no '_databases' attribute — "
+                "the upstream library layout may have changed; every advisory "
+                "lookup will return no data. Check sbom-cve-check compatibility.",
+            )
+            return {}
+        return cast("dict", databases) or {}
+
     def _install_get_vuln_caches(self) -> None:
         """Wrap every database's ``get_vuln`` with a bounded per-record cache."""
-        databases = getattr(self._manager, "_databases", None)
+        databases = self._managed_databases()
         if not databases:
             return
         for dbs in databases.values():
@@ -236,7 +279,7 @@ class SccEngine:
     def _git_databases(self) -> list:
         """Return the underlying ``GitDatabase`` objects of every managed DB."""
         result: list = []
-        databases = getattr(self._manager, "_databases", None)
+        databases = self._managed_databases()
         if not databases:
             return result
         for dbs in databases.values():
@@ -250,7 +293,7 @@ class SccEngine:
         """Drop every per-scan cache so a refreshed index is never served stale data."""
         self._applicable_cache.clear()
         self._verdict_cache.clear()
-        databases = getattr(self._manager, "_databases", None)
+        databases = self._managed_databases()
         if databases:
             for dbs in databases.values():
                 for db in dbs:
@@ -298,26 +341,24 @@ class SccEngine:
             return changed
 
     @staticmethod
-    def _vex_status_str(computed: ComputedVulnInfo) -> str:
+    def _vex_status_str(computed: "ComputedVulnInfo") -> str:
         """Map an engine VEX assessment to a VulnScout OpenVEX status string.
 
         Triggers the engine's (expensive) version-range evaluation via
         ``computed.vex_assessment``.
         """
-        from sbom_cve_check.vuln.vex import VexStatus
-
         status = computed.vex_assessment.status
-        if status == VexStatus.AFFECTED:
+        if status == _VexStatus.AFFECTED:
             return "affected"
-        if status == VexStatus.NOT_AFFECTED:
+        if status == _VexStatus.NOT_AFFECTED:
             return "not_affected"
-        if status == VexStatus.FIXED:
+        if status == _VexStatus.FIXED:
             return "fixed"
         return "under_investigation"
 
     def applicable_vulns(
         self, pkg
-    ) -> Generator[tuple[ComputedVulnInfo, str], None, None]:
+    ) -> Generator[tuple["ComputedVulnInfo", str], None, None]:
         """Yield ``(ComputedVulnInfo, status)`` for every applicable vuln of a package.
 
         ``status`` is the OpenVEX verdict string (``affected`` /
@@ -375,15 +416,62 @@ class SccEngine:
                 verdicts[cve_id] = status
             yield computed, status
 
+    def get_nvd_cve_json(self, cve_id: str) -> "dict | None":
+        """Return the raw NVD JSON for a CVE from the local NVD-FKIE database.
+
+        The NVD-FKIE git feed stores the same JSON schema as the NVD API v2
+        response, so the result can be passed directly to
+        :func:`~src.controllers.nvd_extract.extract_cve_details`.
+        Returns ``None`` if the CVE is not present in the local database.
+        """
+        databases = self._managed_databases()
+        if not databases:
+            return None
+        try:
+            cve_id_obj = CveId(cve_id.upper().strip())
+        except Exception:
+            return None
+        nvd_db_seen = False
+        for dbs in databases.values():
+            for db in dbs:
+                if not isinstance(db, NvdFkieVulnDatabase):
+                    continue
+                nvd_db_seen = True
+                # get_vuln may be lru_cache-wrapped by _install_get_vuln_caches;
+                # calling it directly is fine — the cache avoids repeated disk reads.
+                entry = db.get_vuln(cve_id_obj)
+                if entry is not None:
+                    raw = getattr(entry, "_json", _MISSING)
+                    if raw is _MISSING:
+                        self._warn_degraded(
+                            "entry_json",
+                            "sbom-cve-check advisory record has no '_json' "
+                            "attribute — the upstream library layout may have "
+                            "changed; NVD CVE JSON lookups will return no data. "
+                            "Check sbom-cve-check compatibility.",
+                        )
+                        return None
+                    return cast("dict | None", raw)
+        if not nvd_db_seen:
+            self._warn_degraded(
+                "no_nvd_fkie_db",
+                "sbom-cve-check databases are present but none is an "
+                "NvdFkieVulnDatabase — the upstream database class may have "
+                "changed; NVD CVE JSON lookups will return no data. "
+                "Check sbom-cve-check compatibility.",
+            )
+        return None
+
 
 def get_engine() -> SccEngine:
     """Return the process-wide indexed engine, building it on first use.
 
     The engine is expensive to build and is cached for the lifetime of the
-    process.  Because that one build would otherwise be the only time the advisory
-    clones are fetched, every call refreshes the databases before returning (a
-    no-op unless ``SBOM_CVE_CHECK_AUTO_UPDATE`` is enabled) so each scan — the
-    first included — runs against up-to-date advisories.
+    process.  Every call refreshes the advisory git clones before returning so
+    scans always run against up-to-date data.  Call this from full-scan paths.
+    For single-CVE look-ups that do not need an immediate git fetch, use
+    :func:`get_cve_json` instead (it reuses the cached engine without
+    triggering a refresh).
     """
     global _ENGINE
     with _ENGINE_LOCK:
@@ -407,3 +495,26 @@ def reset_engine() -> None:
     global _ENGINE
     with _ENGINE_LOCK:
         _ENGINE = None
+
+
+def get_cve_json(cve_id: str) -> "dict | None":
+    """Look up a CVE by ID in the local NVD-FKIE database.
+
+    Reuses the already-built engine without triggering a git fetch so
+    single-CVE look-ups (e.g. from the UI refresh button) are fast.  If no
+    engine has been built yet it falls back to :func:`get_engine` which
+    performs the initial build (including a first fetch).
+
+    Returns the raw NVD CVE JSON dict (same schema as NVD API v2) or ``None``
+    if the CVE is not found or the database is not yet initialised.
+    """
+    with _ENGINE_LOCK:
+        engine = _ENGINE
+    if engine is None:
+        # Engine not yet built — the first build includes a fetch.
+        engine = get_engine()
+    try:
+        return engine.get_nvd_cve_json(cve_id)
+    except Exception as exc:
+        _logger.warning("Failed to look up %s in local NVD database: %s", cve_id, exc)
+        return None

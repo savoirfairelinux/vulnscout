@@ -904,3 +904,34 @@ class TestSpdxMergeSupplierAccessError:
         mock_verbose.assert_called_once()
         assert "bad-pkg" in mock_verbose.call_args[0][0]
 
+
+# ===========================================================================
+# _scan_helpers.resolve_active_packages — exclude_kernel=False path (line 171)
+# ===========================================================================
+
+class TestResolveActivePackagesExcludeKernelFalse:
+    """Cover the ``return packages, None`` branch when exclude_kernel=False."""
+
+    def test_returns_all_packages_when_exclude_kernel_false(self, app):
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.package import Package
+        from src.routes._scan_helpers import resolve_active_packages
+
+        with app.app_context():
+            proj = Project.create("KernelTestProj")
+            var = Variant.create("kv1", proj.id)
+            scan = Scan.create("sbom-scan", var.id, scan_type="sbom")
+            doc = SBOMDocument.create("/kernel/test.spdx", "spdx", scan.id)
+            pkg = Package.create("libfoo", "1.0.0")
+            SBOMPackage.create(doc.id, pkg.id)
+
+            packages, err = resolve_active_packages(var.id, exclude_kernel=False)
+
+        assert err is None
+        assert len(packages) == 1
+        assert packages[0].name == "libfoo"
+

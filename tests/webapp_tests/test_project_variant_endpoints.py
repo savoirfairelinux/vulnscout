@@ -599,6 +599,72 @@ class TestPackagesFiltering:
         )
         assert response.status_code == 400
 
+    # Multi-variant tests:
+    # VariantA has cairo@1.16.0, VariantB has busybox@1.35.0 (no common package).
+
+    def test_packages_multi_union_returns_all_selected(self, client_and_data):
+        """union([VA, VB]): packages present in any selected variant → cairo + busybox."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?format=list"
+            f"&variant_ids={variant_a_id},{variant_b_id}"
+            f"&operation=union"
+        )
+        assert response.status_code == 200
+        names = [p["name"] for p in json.loads(response.data)]
+        assert "cairo" in names
+        assert "busybox" in names
+
+    def test_packages_multi_default_operation_is_union(self, client_and_data):
+        """Omitting operation defaults to union."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?format=list&variant_ids={variant_a_id},{variant_b_id}"
+        )
+        assert response.status_code == 200
+        names = [p["name"] for p in json.loads(response.data)]
+        assert "cairo" in names
+        assert "busybox" in names
+
+    def test_packages_multi_intersection_empty_when_no_common(self, client_and_data):
+        """intersection([VA, VB]): no common package → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        response = client.get(
+            f"/api/packages?format=list"
+            f"&variant_ids={variant_a_id},{variant_b_id}"
+            f"&operation=intersection"
+        )
+        assert response.status_code == 200
+        assert json.loads(response.data) == []
+
+    def test_packages_multi_intersection_same_variant(self, client_and_data):
+        """intersection([VA, VA]): identical sets → all of VA's packages."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?format=list"
+            f"&variant_ids={variant_a_id},{variant_a_id}"
+            f"&operation=intersection"
+        )
+        assert response.status_code == 200
+        names = [p["name"] for p in json.loads(response.data)]
+        assert "cairo" in names
+
+    def test_packages_multi_invalid_uuid(self, client_and_data):
+        """Invalid UUID inside variant_ids returns 400."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/packages?variant_ids={variant_a_id},not-a-uuid"
+        )
+        assert response.status_code == 400
+
 
 # ===========================================================================
 # /api/vulnerabilities  — variant / project filtering
@@ -789,6 +855,75 @@ class TestVulnerabilitiesFiltering:
             f"/api/vulnerabilities?format=list"
             f"&variant_id=not-a-uuid"
             f"&compare_variant_id={variant_a_id}"
+        )
+        assert response.status_code == 400
+
+    # Multi-variant tests:
+    # VariantA has CVE-2020-35492, VariantB has no vulnerabilities.
+
+    def test_vulnerabilities_multi_union_returns_all_selected(self, client_and_data):
+        """union([VA, VB]): vulns in any selected variant → CVE-2020-35492."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_ids={variant_a_id},{variant_b_id}"
+            f"&operation=union"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        ids = [v["id"] for v in response.get_json()]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_multi_default_operation_is_union(self, client_and_data):
+        """Omitting operation defaults to union."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_ids={variant_a_id},{variant_b_id}"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        ids = [v["id"] for v in response.get_json()]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_multi_intersection_empty_when_no_common(self, client_and_data):
+        """intersection([VA, VB]): no common vuln → empty."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        variant_b_id = data["variant_b_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_ids={variant_a_id},{variant_b_id}"
+            f"&operation=intersection"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.get_json() == []
+
+    def test_vulnerabilities_multi_intersection_same_variant(self, client_and_data):
+        """intersection([VA, VA]): identical sets → all of VA's vulns."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        url = (
+            f"/api/vulnerabilities?format=list"
+            f"&variant_ids={variant_a_id},{variant_a_id}"
+            f"&operation=intersection"
+        )
+        response = client.get(url)
+        assert response.status_code == 200
+        ids = [v["id"] for v in response.get_json()]
+        assert "CVE-2020-35492" in ids
+
+    def test_vulnerabilities_multi_invalid_uuid(self, client_and_data):
+        """Invalid UUID inside variant_ids returns 400."""
+        client, data = client_and_data
+        variant_a_id = data["variant_a_id"]
+        response = client.get(
+            f"/api/vulnerabilities?format=list&variant_ids={variant_a_id},bad-uuid"
         )
         assert response.status_code == 400
 

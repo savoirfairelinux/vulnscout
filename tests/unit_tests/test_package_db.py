@@ -120,6 +120,57 @@ def test_active_package_ids_for_scans_returns_empty_for_empty_input(app):
     assert active_package_ids_for_scans([]) == set()
 
 
+def test_active_package_ids_for_scans_restrict_filters_to_requested(app):
+    """restrict_to_package_ids narrows the result to the requested package ids."""
+    from src.helpers.active_scans import active_package_ids_for_scans
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("restrict-proj")
+    variant = Variant.create("restrict-variant", project.id)
+    sbom_scan = Scan.create("sbom", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("sbom.json", "test", sbom_scan.id)
+    pkg_a = Package.create("pkg-a", "1.0.0")
+    pkg_b = Package.create("pkg-b", "2.0.0")
+    SBOMPackage.create(document.id, pkg_a.id)
+    SBOMPackage.create(document.id, pkg_b.id)
+    _db.session.flush()
+
+    # Without restriction: both packages are active.
+    assert active_package_ids_for_scans([sbom_scan.id]) == {pkg_a.id, pkg_b.id}
+
+    # With restriction: only the requested (present) package is returned.
+    assert active_package_ids_for_scans(
+        [sbom_scan.id], restrict_to_package_ids={pkg_a.id}
+    ) == {pkg_a.id}
+
+    # A restriction listing a package absent from the SBOM yields an empty set.
+    absent = Package.create("pkg-c", "3.0.0")
+    assert active_package_ids_for_scans(
+        [sbom_scan.id], restrict_to_package_ids={absent.id}
+    ) == set()
+
+
+def test_active_package_ids_for_scans_restrict_empty_returns_empty(app):
+    """An empty restriction set short-circuits to an empty result."""
+    from src.helpers.active_scans import active_package_ids_for_scans
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+
+    project = Project.create("restrict-empty-proj")
+    variant = Variant.create("restrict-empty-variant", project.id)
+    sbom_scan = Scan.create("sbom", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("sbom.json", "test", sbom_scan.id)
+    pkg = Package.create("pkg-x", "1.0.0")
+    SBOMPackage.create(document.id, pkg.id)
+    _db.session.flush()
+
+    assert active_package_ids_for_scans(
+        [sbom_scan.id], restrict_to_package_ids=set()
+    ) == set()
+
+
+
 def test_find_or_create_openembedded_collapses_into_blank_supplier(app):
     """An OpenEmbedded supplier resolves to the same row as the blank one."""
     pkg_oe = Package.find_or_create("busybox", "1.36.1", supplier="OpenEmbedded ()")

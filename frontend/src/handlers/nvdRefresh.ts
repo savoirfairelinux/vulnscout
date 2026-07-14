@@ -14,9 +14,17 @@ export type NvdRefreshError = {
 export type NvdRefreshResult = NvdRefreshSuccess | NvdRefreshError;
 
 class NvdRefreshHandler {
-    static async triggerSingleRefresh(cveId: string): Promise<NvdRefreshResult> {
+    static async triggerSingleRefresh(
+        cveId: string,
+        mode: "local" | "api" = "local",
+    ): Promise<NvdRefreshResult> {
         const url = `${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(cveId)}/nvd-refresh`;
-        const response = await fetch(url, { method: "POST", mode: "cors" });
+        const response = await fetch(url, {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode }),
+        });
         if (!response.ok) {
             const body = await response.json().catch(() => null);
             const code = body?.error_code === "rate_limited"

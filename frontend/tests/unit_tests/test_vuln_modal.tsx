@@ -148,7 +148,40 @@ describe('Vulnerability Modal', () => {
         expect(impact).toBeInTheDocument();
         expect(status_notes).toBeInTheDocument();
         expect(workaround).toBeInTheDocument();
+        // The assessment origin ("custom") is surfaced as a "User" tag
+        expect(screen.getByText('User')).toBeInTheDocument();
     })
+
+    test('assessment history tags an SBOM-sourced assessment', async () => {
+        const sbomVuln = {
+            ...vulnerability,
+            assessments: [{
+                ...vulnerability.assessments[0],
+                id: 'assessment-sbom',
+                origin: 'sbom'
+            }]
+        };
+        render(<VulnModal vuln={sbomVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByText('SBOM')).toBeInTheDocument();
+        expect(screen.queryByText('User')).not.toBeInTheDocument();
+    })
+
+    test('assessment history shows sbom-cve-check for the scc origin', async () => {
+        const sccVuln = {
+            ...vulnerability,
+            assessments: [{
+                ...vulnerability.assessments[0],
+                id: 'assessment-scc',
+                origin: 'scc'
+            }]
+        };
+        render(<VulnModal vuln={sccVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByText('sbom-cve-check')).toBeInTheDocument();
+        expect(screen.queryByText('Scc')).not.toBeInTheDocument();
+    })
+
 
     test('closing button', async () => {
         // ARRANGE
@@ -176,7 +209,7 @@ describe('Vulnerability Modal', () => {
             Promise.resolve({
                 json: () => Promise.resolve({
                     "status": "success",
-                    "assessment": {
+                    "assessments": [{
                         id: '00-0-0-0-000-00',
                         vuln_id: vulnerability.id,
                         packages: vulnerability.packages,
@@ -186,7 +219,7 @@ describe('Vulnerability Modal', () => {
                         timestamp: '2021-01-02T00:00:00Z',
                         origin: 'custom',
                         responses: []
-                    }
+                    }]
                 })
             } as Response)
         );
@@ -2002,6 +2035,127 @@ describe('Vulnerability Modal', () => {
         expect(patchVuln).toHaveBeenCalled();
     });
 
+    test('recomputes the status summary after deleting an assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('', { status: 200 }); // DELETE response
+
+        const patchVuln = jest.fn();
+        // Two variants with different statuses: deleting the "Exploitable" one
+        // must leave a summary dominated by the remaining "Not affected" variant.
+        const vulnWithTwoVariants = {
+            ...vulnerability,
+            simplified_status: 'Exploitable',
+            assessments: [
+                {
+                    id: 'assess-not-affected',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'not_affected',
+                    simplified_status: 'Not affected',
+                    justification: 'vulnerable_code_not_present',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2021-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'var-1'
+                },
+                {
+                    id: 'assess-exploitable',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: '',
+                    workaround: '',
+                    timestamp: '2021-06-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'var-2'
+                }
+            ]
+        };
+
+        render(<VulnModal vuln={vulnWithTwoVariants} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        // The most recent group (var-2 / Exploitable) sorts first in the history.
+        const deleteBtns = screen.getAllByTitle(/delete assessment/i);
+        await user.click(deleteBtns[0]);
+        await user.click(screen.getByText(/yes, delete/i));
+
+        await screen.findByText(/assessment deleted successfully/i);
+
+        // The recomputed summary drops the deleted variant and reflects the
+        // remaining "Not affected" assessment (no active status left).
+        expect(patchVuln).toHaveBeenCalledWith('CVE-2010-1234', expect.objectContaining({
+            simplified_status: 'Not affected',
+            status_summary: expect.objectContaining({
+                dominant_status: 'Not affected',
+                has_active_status: false,
+                total_assessments: 1,
+            }),
+        }));
+    });
+
+    test('breaks down the current status by variant and package', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' }
+        ]));
+        // A single variant with an assessment on the active package plus an
+        // assessment on an older package version that is no longer shipped.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-current', vuln_id: 'CVE-2010-1234', packages: ['pkgA@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-old', vuln_id: 'CVE-2010-1234', packages: ['pkgOld@0.9.0'],
+                status: 'fixed', simplified_status: 'Fixed', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Only pkgA is still active in the variant; pkgOld is deprecated.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['pkgA@1.0.0'] }
+        ]));
+
+        const multiPkgVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['pkgA@1.0.0'],
+            packages_current: [],
+            assessments: [],
+        };
+
+        render(<VulnModal vuln={multiPkgVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
+
+        // Wait for the deprecated split to appear once variant-active-packages loads.
+        const deprecatedHeading = await screen.findByText('Assessments on old packages (not present in current SBOMs)');
+        const deprecated = deprecatedHeading.parentElement as HTMLElement;
+        // The stale package version is broken out into the deprecated table.
+        expect(within(deprecated).getByText('pkgOld@0.9.0')).toBeInTheDocument();
+        expect(within(deprecated).getByText('Fixed')).toBeInTheDocument();
+        expect(within(deprecated).queryByText('pkgA@1.0.0')).not.toBeInTheDocument();
+
+        // The active (variant, package) pair stays in the current table.
+        const current = screen.getByText('Assessments on current SBOMs packages').parentElement as HTMLElement;
+        expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
+        expect(within(current).getByText('Exploitable')).toBeInTheDocument();
+        expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
+        // Production appears as the variant tag in the current table.
+        expect(within(current).getByText('Production')).toBeInTheDocument();
+    });
+
     test('adding assessment to multiple variants shows multi-variant success message', async () => {
         fetchMock.resetMocks();
         // Variants endpoint returns two variants
@@ -2011,44 +2165,42 @@ describe('Vulnerability Modal', () => {
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // batch variant snapshots (single fetch)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v1 (variantPackageMap effect)
-        fetchMock.mockResponseOnce(JSON.stringify([])); // packages fetch for v2 (variantPackageMap effect)
-        // Two POST responses for two variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-active-packages (single request for variantPackageMap)
+        // Single batch POST returns one record per (package, variant) pair
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
-            assessment: {
-                id: 'new-assess-v1',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                status: 'affected',
-                simplified_status: 'Exploitable',
-                justification: '',
-                impact_statement: '',
-                status_notes: 'multi test',
-                workaround: '',
-                timestamp: '2026-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: [],
-                variant_id: 'v1'
-            }
-        }));
-        fetchMock.mockResponseOnce(JSON.stringify({
-            status: 'success',
-            assessment: {
-                id: 'new-assess-v2',
-                vuln_id: 'CVE-2010-1234',
-                packages: ['aaabbbccc@1.0.0'],
-                status: 'affected',
-                simplified_status: 'Exploitable',
-                justification: '',
-                impact_statement: '',
-                status_notes: 'multi test',
-                workaround: '',
-                timestamp: '2026-01-01T00:00:00Z',
-                origin: 'custom',
-                responses: [],
-                variant_id: 'v2'
-            }
+            assessments: [
+                {
+                    id: 'new-assess-v1',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: 'multi test',
+                    workaround: '',
+                    timestamp: '2026-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'v1'
+                },
+                {
+                    id: 'new-assess-v2',
+                    vuln_id: 'CVE-2010-1234',
+                    packages: ['aaabbbccc@1.0.0'],
+                    status: 'affected',
+                    simplified_status: 'Exploitable',
+                    justification: '',
+                    impact_statement: '',
+                    status_notes: 'multi test',
+                    workaround: '',
+                    timestamp: '2026-01-01T00:00:00Z',
+                    origin: 'custom',
+                    responses: [],
+                    variant_id: 'v2'
+                }
+            ]
         }));
 
         const appendCb = jest.fn();
@@ -2146,9 +2298,93 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        // Wait for variant tags to render
-        await screen.findByText('Production');
-        expect(screen.getByText('Staging')).toBeInTheDocument();
+        // Wait for variant tags to render (variant names now appear both in the
+        // per-variant recap and on the assessment history entries)
+        expect((await screen.findAllByText('Production')).length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Staging').length).toBeGreaterThan(0);
+    });
+
+    test('recap shows the latest status for each variant', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // var-1 has two assessments; the most recent one is "Not affected".
+        // var-2 has a single "Exploitable" assessment.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1-old', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v1-new', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'not_affected', simplified_status: 'Not affected', justification: 'vulnerable_code_not_present',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            },
+            {
+                id: 'assess-v2', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-2'
+            }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Both variants still ship the affected package, so their rows stay in
+        // the current (non-deprecated) table.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['aaabbbccc@1.0.0'] },
+            { variant_id: 'var-2', active_packages: ['aaabbbccc@1.0.0'] }
+        ]));
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recap = recapHeading.parentElement as HTMLElement;
+        // Production reflects its most recent assessment (Not affected), not the older Exploitable
+        expect(within(recap).getByText('Production')).toBeInTheDocument();
+        expect(within(recap).getByText('Not affected')).toBeInTheDocument();
+        // Staging is Exploitable
+        expect(within(recap).getByText('Staging')).toBeInTheDocument();
+        expect(within(recap).getByText('Exploitable')).toBeInTheDocument();
+    });
+
+    test('recap shows "No status" for affected variants without an assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { id: 'var-1', name: 'Production', project_id: 'proj1' },
+            { id: 'var-2', name: 'Staging', project_id: 'proj1' }
+        ]));
+        // Only var-1 has an assessment; var-2 is affected but not yet assessed.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            {
+                id: 'assess-v1', vuln_id: 'CVE-2010-1234', packages: ['aaabbbccc@1.0.0'],
+                status: 'affected', simplified_status: 'Exploitable', justification: '',
+                impact_statement: '', status_notes: '', workaround: '',
+                timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+            }
+        ]));
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
+        // Both variants still ship the affected package; var-2 has no assessment
+        // yet, so its row surfaces as "No status" in the current table.
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { variant_id: 'var-1', active_packages: ['aaabbbccc@1.0.0'] },
+            { variant_id: 'var-2', active_packages: ['aaabbbccc@1.0.0'] }
+        ]));
+
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recap = recapHeading.parentElement as HTMLElement;
+        // Staging has no assessment yet, so it is flagged as "No status"
+        expect(within(recap).getByText('Staging')).toBeInTheDocument();
+        expect(within(recap).getByText('No status')).toBeInTheDocument();
+        // Production keeps its actual status
+        expect(within(recap).getByText('Production')).toBeInTheDocument();
+        expect(within(recap).getByText('Exploitable')).toBeInTheDocument();
     });
 
     test('projectId prop filters variants to only show those from the current project', async () => {
@@ -2404,7 +2640,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD API unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
         });
     });
 
@@ -2448,6 +2684,116 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         });
     });
 
+    test('renders NVD source selector defaulting to Local mode', () => {
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const localRadio = screen.getByRole('radio', { name: 'Git repository' });
+        const apiRadio = screen.getByRole('radio', { name: 'API' });
+        expect(localRadio).toBeChecked();
+        expect(apiRadio).not.toBeChecked();
+    });
+
+    test('switching NVD source to API sends mode "api" to the nvd-refresh endpoint', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const apiRadio = screen.getByRole('radio', { name: 'API' });
+        await user.click(apiRadio);
+        expect(apiRadio).toBeChecked();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
+            expect(nvdCall).toBeDefined();
+            expect(JSON.parse(String(nvdCall![1]!.body))).toEqual({ mode: 'api' });
+        });
+    });
+
+    test('switching back to Local mode sends mode "local" to the nvd-refresh endpoint', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByRole('radio', { name: 'Git repository' }));
+        expect(screen.getByRole('radio', { name: 'Git repository' })).toBeChecked();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
+            expect(nvdCall).toBeDefined();
+            expect(JSON.parse(String(nvdCall![1]!.body))).toEqual({ mode: 'local' });
+        });
+    });
+
+    test('shows API-key-rejected message when NVD returns unauthorized', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(
+            JSON.stringify({ error: 'unauthorized', error_code: 'unauthorized' }),
+            { status: 401 }
+        ); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API key rejected/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows API-mode hint when NVD is unavailable in API mode', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByRole('radio', { name: 'API' }));
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD API unavailable.*switch to Local/i)).toBeInTheDocument();
+        });
+    });
+
+    test('shows local-mode hint when NVD data is unavailable in Local mode', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD data unavailable.*sbom-cve-check/i)).toBeInTheDocument();
+        });
+    });
+
     test('clears success cue and error when navigating to a different vulnerability', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse(JSON.stringify([])); // all fetches return empty
@@ -2459,23 +2805,21 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         rerender(<VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByText('Updated')).not.toBeInTheDocument();
-        expect(screen.queryByText(/NVD API unavailable/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/NVD.*unavailable/i)).not.toBeInTheDocument();
     });
 
     test('builds variantPackageMap and disables packages absent from the selected variant', async () => {
         fetchMock.resetMocks();
-        // Route fetches by URL so the per-variant package lookups resolve
-        // regardless of effect ordering.
+        // Route fetches by URL so the single variant-active-packages lookup
+        // resolves regardless of effect ordering.
         fetchMock.mockResponse((req) => {
             const url = req.url;
-            if (url.includes('/api/packages')) {
-                if (url.includes('variant_id=v1')) {
-                    return Promise.resolve(JSON.stringify([{ name: 'pkgA', version: '1.0.0' }]));
-                }
-                if (url.includes('variant_id=v2')) {
-                    return Promise.resolve(JSON.stringify([{ name: 'pkgB', version: '1.0.0' }]));
-                }
-                return Promise.resolve(JSON.stringify([]));
+            if (url.includes('/variant-active-packages')) {
+                // Single request returns each variant's active packages.
+                return Promise.resolve(JSON.stringify([
+                    { variant_id: 'v1', active_packages: ['pkgA@1.0.0'] },
+                    { variant_id: 'v2', active_packages: ['pkgB@1.0.0'] },
+                ]));
             }
             if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
                 // Variants.listByVuln
@@ -2531,8 +2875,8 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             const url = req.url;
-            if (url.includes('/api/packages')) {
-                // Simulate the package lookup failing for every variant.
+            if (url.includes('/variant-active-packages')) {
+                // Simulate the single active-packages lookup failing.
                 return Promise.reject(new Error('packages unavailable'));
             }
             if (url.includes('/variants') && !url.includes('/variant-snapshots')) {
@@ -2571,5 +2915,258 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
         expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
         expect(packageCheckbox('pkgB@1.0.0').disabled).toBe(false);
+    });
+
+    test('navigating between vulns fetches each variant endpoint once per vuln', async () => {
+        fetchMock.resetMocks();
+        const counts: Record<string, number> = {
+            snapshots: 0,
+            activePackages: 0,
+            variants: 0,
+        };
+        fetchMock.mockResponse((req) => {
+            const url = req.url;
+            if (url.includes('/variant-snapshots')) {
+                counts.snapshots += 1;
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (url.includes('/variant-active-packages')) {
+                counts.activePackages += 1;
+                return Promise.resolve(JSON.stringify([]));
+            }
+            if (url.includes('/variants')) {
+                counts.variants += 1;
+                return Promise.resolve(JSON.stringify([
+                    { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
+                ]));
+            }
+            // assessments and any other GETs
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        const vuln1: Vulnerability = { ...vulnerability, id: 'CVE-1000-0001' };
+        const vuln2: Vulnerability = { ...vulnerability, id: 'CVE-1000-0002' };
+
+        const { rerender } = render(
+            <VulnModal vuln={vuln1} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />
+        );
+
+        // Wait until the first vuln has resolved its variant-derived endpoints.
+        await waitFor(() => {
+            expect(counts.snapshots).toBe(1);
+            expect(counts.activePackages).toBe(1);
+        });
+
+        // Navigate to the next vuln (arrow navigation changes the prop, no remount).
+        rerender(
+            <VulnModal vuln={vuln2} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />
+        );
+
+        // The second vuln must trigger exactly one more call to each endpoint —
+        // not two (which happened before the variantsLoadedForVulnId guard, when
+        // the effects fired once with the stale variant set and again after the
+        // new variants loaded).
+        await waitFor(() => {
+            expect(counts.snapshots).toBe(2);
+            expect(counts.activePackages).toBe(2);
+        });
+
+        // Give any erroneous stale-set fetch a chance to land, then assert it did not.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(counts.snapshots).toBe(2);
+        expect(counts.activePackages).toBe(2);
+    });
+});
+
+
+// ---------------------------------------------------------------------------
+// Refresh button (NVD + EPSS for CVEs, GHSA for GHSA advisories)
+// ---------------------------------------------------------------------------
+
+describe('Refresh button', () => {
+    const baseVuln = {
+        id: 'CVE-2010-1234',
+        aliases: ['CVE-2008-3456'],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: 'https://nvd.nist.gov/vuln/detail/CVE-2010-1234',
+        packages: ['aaabbbccc@1.0.0'],
+        packages_current: [],
+        urls: [],
+        texts: [],
+        severity: { severity: 'low', min_score: 3, max_score: 3, cvss: [] },
+        epss: { score: 0.356789, percentile: 0.7546 },
+        effort: {
+            optimistic: new Iso8601Duration('PT4H'),
+            likely: new Iso8601Duration('P1DT2H'),
+            pessimistic: new Iso8601Duration('P1W2D'),
+        },
+        fix: { state: 'unknown' },
+        simplified_status: 'active',
+        variants: [],
+        assessments: [],
+    };
+
+    const makeVulnBody = (id: string, epssScore: number) => ({
+        id,
+        found_by: [],
+        datasource: 'nvd',
+        namespace: 'nvd',
+        aliases: [],
+        related_vulnerabilities: [],
+        urls: [],
+        texts: [],
+        fix: {},
+        severity: { severity: 'low', min_score: 3, max_score: 3, cvss: [] },
+        epss: { score: epssScore, percentile: 0.9 },
+        effort: {},
+        packages: [],
+        packages_current: [],
+        variants: [],
+        assessments: [],
+        simplified_status: 'active',
+    });
+
+    beforeEach(() => { fetchMock.resetMocks(); });
+
+    test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
+        // Mount fetches
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+        // EPSS refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const refreshBtn = screen.getByTitle(/Refresh from NVD & EPSS/i);
+        await user.click(refreshBtn);
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledTimes(1);
+        });
+
+        // After both NVD and EPSS succeed, "Updated" badge should appear
+        expect(await screen.findByText('Updated')).toBeInTheDocument();
+    });
+
+    test('NVD rate-limited shows error message', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh → rate limited
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 429,
+            json: () => Promise.resolve({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
+        } as Response));
+        // EPSS refresh → success
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD rate-limited/i)).toBeInTheDocument();
+        });
+    });
+
+    test('NVD + EPSS both unavailable shows combined error', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // NVD refresh → 503
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({ error_code: 'unavailable', api_key_configured: true }),
+        } as Response));
+        // EPSS refresh → fail
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({}),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/NVD.*unavailable/i)).toBeInTheDocument();
+        });
+        expect(patchVuln).not.toHaveBeenCalled();
+    });
+
+    test('GHSA refresh success calls patchVuln', async () => {
+        const ghsaVuln = {
+            ...baseVuln,
+            id: 'GHSA-abcd-1234-efgh',
+            namespace: 'github:advisory',
+        };
+
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // GHSA refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({
+                vulnerabilities: [{
+                    ...makeVulnBody('GHSA-abcd-1234-efgh', 0.3),
+                    id: 'GHSA-abcd-1234-efgh',
+                }]
+            }),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        const refreshBtn = screen.getByTitle(/Refresh from GitHub Advisory Database/i);
+        await user.click(refreshBtn);
+
+        await waitFor(() => {
+            expect(patchVuln).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    test('GHSA refresh failure shows error message', async () => {
+        const ghsaVuln = {
+            ...baseVuln,
+            id: 'GHSA-abcd-1234-efgh',
+            namespace: 'github:advisory',
+        };
+
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
+        // GHSA refresh → not ok → returns null → triggers error
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({}),
+        } as Response));
+
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByTitle(/Refresh from GitHub Advisory Database/i));
+
+        await waitFor(() => {
+            expect(screen.getByText(/GitHub Advisory Database refresh failed/i)).toBeInTheDocument();
+        });
+        expect(patchVuln).not.toHaveBeenCalled();
     });
 });

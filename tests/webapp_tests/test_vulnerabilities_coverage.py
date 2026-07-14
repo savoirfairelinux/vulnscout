@@ -1260,3 +1260,427 @@ def test_variant_snapshots_unknown_vuln_returns_404(client):
     assert response.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities/<id>/variant-snapshots — invalid project_id
+# ---------------------------------------------------------------------------
+
+def test_variant_snapshots_invalid_project_id(client):
+    """variant-snapshots with a malformed project_id returns 400."""
+    response = client.get(
+        "/api/vulnerabilities/CVE-2020-35492/variant-snapshots?project_id=not-a-uuid"
+    )
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<id>/nvd-refresh
+# ---------------------------------------------------------------------------
+
+def test_nvd_refresh_cve_not_found(client):
+    """POST nvd-refresh for unknown CVE returns 404."""
+    response = client.post("/api/vulnerabilities/CVE-9999-99999/nvd-refresh")
+    assert response.status_code == 404
+    data = json.loads(response.data)
+    assert "not found" in data["error"].lower()
+
+
+def test_nvd_refresh_api_exception_returns_503(client):
+    """POST nvd-refresh when NVD API raises an exception returns 503."""
+    from unittest.mock import patch, MagicMock
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
+        mock_nvd_cls.return_value.api_get_cve.side_effect = Exception("Network error")
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert data["error_code"] == "unavailable"
+
+
+def test_nvd_refresh_rate_limited_returns_429(client):
+    """POST nvd-refresh when NVD API returns 429 passes it through."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
+        mock_nvd_cls.return_value.api_get_cve.return_value = (429, {})
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 429
+    data = json.loads(response.data)
+    assert data["error_code"] == "rate_limited"
+
+
+def test_nvd_refresh_unauthorized_returns_401(client):
+    """POST nvd-refresh when NVD API returns 401 passes it through."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
+        mock_nvd_cls.return_value.api_get_cve.return_value = (401, {})
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 401
+    data = json.loads(response.data)
+    assert data["error_code"] == "unauthorized"
+
+
+def test_nvd_refresh_forbidden_returns_403(client):
+    """POST nvd-refresh when NVD API returns 403 passes it through."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
+        mock_nvd_cls.return_value.api_get_cve.return_value = (403, {})
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 403
+    data = json.loads(response.data)
+    assert data["error_code"] == "unauthorized"
+
+
+def test_nvd_refresh_no_data_returns_503(client):
+    """POST nvd-refresh when NVD API returns 200 with empty vulnerabilities returns 503."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls:
+        mock_nvd_cls.return_value.api_get_cve.return_value = (200, {"vulnerabilities": []})
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert data["error_code"] == "unavailable"
+
+
+def test_nvd_refresh_success_no_cvss(client):
+    """POST nvd-refresh with valid response but no CVSS data returns 200."""
+    from unittest.mock import patch, MagicMock
+    fake_details = {
+        "description": "Updated description",
+        "base_score": None,
+        "cvss_version": None,
+        "cvss_vector": None,
+    }
+    cve_payload = {"id": "CVE-2020-35492", "descriptions": []}
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls, \
+         patch("src.routes.vulnerabilities.apply_nvd_update") as mock_apply:
+        mock_nvd_cls.return_value.api_get_cve.return_value = (
+            200,
+            {"vulnerabilities": [{"cve": cve_payload}]},
+        )
+        mock_nvd_cls.extract_cve_details.return_value = fake_details
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert "vulnerabilities" in data
+    assert data["vulnerabilities"][0]["id"] == "CVE-2020-35492"
+
+
+def test_nvd_refresh_success_updates_existing_metric(app, client):
+    """POST nvd-refresh with CVSS data updates an existing Metrics row."""
+    from unittest.mock import patch
+    from src.extensions import db
+    from src.models.metrics import Metrics
+
+    with app.app_context():
+        existing_metric = db.session.execute(
+            db.select(Metrics).where(
+                Metrics.vulnerability_id == "CVE-2020-35492",
+                Metrics.version == "3.1",
+                Metrics.variant_id.is_(None),
+            )
+        ).scalar_one_or_none()
+        if existing_metric is None:
+            db.session.add(Metrics(
+                vulnerability_id="CVE-2020-35492",
+                version="3.1",
+                score=7.8,
+                vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+                author="nvd",
+            ))
+            db.session.commit()
+
+    fake_details = {
+        "description": "Updated",
+        "base_score": 8.0,
+        "cvss_version": "3.1",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+    }
+    cve_payload = {"id": "CVE-2020-35492"}
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls, \
+         patch("src.routes.vulnerabilities.apply_nvd_update"):
+        mock_nvd_cls.return_value.api_get_cve.return_value = (
+            200,
+            {"vulnerabilities": [{"cve": cve_payload}]},
+        )
+        mock_nvd_cls.extract_cve_details.return_value = fake_details
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+
+    assert response.status_code == 200
+
+
+def test_nvd_refresh_success_adds_new_metric(app, client):
+    """POST nvd-refresh with CVSS for a new version adds a Metrics row."""
+    from unittest.mock import patch
+
+    fake_details = {
+        "description": "Updated",
+        "base_score": 6.5,
+        "cvss_version": "4.0",
+        "cvss_vector": "CVSS:4.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    }
+    cve_payload = {"id": "CVE-2020-35492"}
+    with patch("src.routes.vulnerabilities.NVD_DB") as mock_nvd_cls, \
+         patch("src.routes.vulnerabilities.apply_nvd_update"):
+        mock_nvd_cls.return_value.api_get_cve.return_value = (
+            200,
+            {"vulnerabilities": [{"cve": cve_payload}]},
+        )
+        mock_nvd_cls.extract_cve_details.return_value = fake_details
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/nvd-refresh",
+                               json={"mode": "api"})
+
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<id>/epss-refresh
+# ---------------------------------------------------------------------------
+
+def test_epss_refresh_cve_not_found(client):
+    """POST epss-refresh for unknown CVE returns 404."""
+    response = client.post("/api/vulnerabilities/CVE-9999-99999/epss-refresh")
+    assert response.status_code == 404
+    data = json.loads(response.data)
+    assert "not found" in data["error"].lower()
+
+
+def test_epss_refresh_api_returns_none_gives_503(client):
+    """POST epss-refresh when EPSS API returns None gives 503."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.EPSS_DB") as mock_epss_cls:
+        mock_epss_cls.return_value.api_get_epss.return_value = None
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/epss-refresh")
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert "no data" in data["error"].lower()
+
+
+def test_epss_refresh_success(client):
+    """POST epss-refresh with valid data returns 200 with updated vulnerability."""
+    from unittest.mock import patch
+    with patch("src.routes.vulnerabilities.EPSS_DB") as mock_epss_cls:
+        mock_epss_cls.return_value.api_get_epss.return_value = {
+            "score": "0.55000",
+            "percentile": "0.85000",
+        }
+        response = client.post("/api/vulnerabilities/CVE-2020-35492/epss-refresh")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert "vulnerabilities" in data
+    vuln = data["vulnerabilities"][0]
+    assert vuln["id"] == "CVE-2020-35492"
+    assert vuln["epss"]["score"] is not None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<ghsa_id>/ghsa-refresh
+# ---------------------------------------------------------------------------
+
+def _ensure_ghsa_in_db(app, ghsa_id="GHSA-1234-5678-9012"):
+    """Create a GHSA vulnerability in the test DB if it doesn't exist."""
+    from src.extensions import db
+    from src.models.vulnerability import Vulnerability
+    with app.app_context():
+        existing = db.session.get(Vulnerability, ghsa_id)
+        if not existing:
+            Vulnerability.create_record(id=ghsa_id, description="Test GHSA", status="medium")
+            db.session.commit()
+
+
+def test_ghsa_refresh_invalid_format_returns_400(client):
+    """POST ghsa-refresh with a non-GHSA ID returns 400."""
+    response = client.post("/api/vulnerabilities/CVE-2020-1234/ghsa-refresh")
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert "GHSA" in data["error"]
+
+
+def test_ghsa_refresh_invalid_segment_length_returns_400(client):
+    """POST ghsa-refresh with wrong-length GHSA segments returns 400."""
+    response = client.post("/api/vulnerabilities/GHSA-1234-5678-TOOLONG/ghsa-refresh")
+    assert response.status_code == 400
+
+
+def test_ghsa_refresh_not_in_db_returns_404(client):
+    """POST ghsa-refresh for GHSA not in DB returns 404."""
+    response = client.post("/api/vulnerabilities/GHSA-ZZZZ-ZZZZ-ZZZZ/ghsa-refresh")
+    assert response.status_code == 404
+    data = json.loads(response.data)
+    assert "not found" in data["error"].lower()
+
+
+def test_ghsa_refresh_github_404_returns_404(app, client):
+    """POST ghsa-refresh when GitHub returns 404 for the advisory returns 404."""
+    import urllib.error
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-ABCD-EFGH-1234")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.side_effect = urllib.error.HTTPError(
+            url="https://api.github.com", code=404, msg="Not Found", hdrs=None, fp=None
+        )
+        response = client.post("/api/vulnerabilities/GHSA-ABCD-EFGH-1234/ghsa-refresh")
+    assert response.status_code == 404
+    data = json.loads(response.data)
+    assert "not found" in data["error"].lower()
+
+
+def test_ghsa_refresh_github_http_error_returns_502(app, client):
+    """POST ghsa-refresh when GitHub returns a non-404 HTTP error returns 502."""
+    import urllib.error
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-ABCD-EFGH-5678")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.side_effect = urllib.error.HTTPError(
+            url="https://api.github.com", code=500, msg="Server Error", hdrs=None, fp=None
+        )
+        response = client.post("/api/vulnerabilities/GHSA-ABCD-EFGH-5678/ghsa-refresh")
+    assert response.status_code == 502
+    data = json.loads(response.data)
+    assert "HTTP 500" in data["error"]
+
+
+def test_ghsa_refresh_url_error_returns_503(app, client):
+    """POST ghsa-refresh when GitHub is unreachable returns 503."""
+    import urllib.error
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-ABCD-EFGH-9012")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.side_effect = urllib.error.URLError("Connection refused")
+        response = client.post("/api/vulnerabilities/GHSA-ABCD-EFGH-9012/ghsa-refresh")
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert "Failed to reach" in data["error"]
+
+
+def test_ghsa_refresh_none_published_at_returns_503(app, client):
+    """POST ghsa-refresh when GitHub returns no published date returns 503."""
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-ABCD-EFGH-3456")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.return_value = None
+        response = client.post("/api/vulnerabilities/GHSA-ABCD-EFGH-3456/ghsa-refresh")
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert "no published date" in data["error"].lower()
+
+
+def test_ghsa_refresh_bad_date_format_returns_503(app, client):
+    """POST ghsa-refresh when GitHub returns unparseable date returns 503."""
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-ABCD-EFGH-7890")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.return_value = "not-a-date"
+        response = client.post("/api/vulnerabilities/GHSA-ABCD-EFGH-7890/ghsa-refresh")
+    assert response.status_code == 503
+    data = json.loads(response.data)
+    assert "unparseable" in data["error"].lower()
+
+
+def test_ghsa_refresh_success(app, client):
+    """POST ghsa-refresh with valid published date returns 200."""
+    from unittest.mock import patch
+    _ensure_ghsa_in_db(app, "GHSA-BCDE-FGHI-2345")
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.return_value = "2024-03-15"
+        response = client.post("/api/vulnerabilities/GHSA-BCDE-FGHI-2345/ghsa-refresh")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert "vulnerabilities" in data
+    assert data["vulnerabilities"][0]["id"] == "GHSA-BCDE-FGHI-2345"
+
+
+def test_ghsa_refresh_success_updates_date(app, client):
+    """POST ghsa-refresh with a new date updates publish_date and returns it."""
+    from unittest.mock import patch
+    from src.extensions import db
+    from src.models.vulnerability import Vulnerability
+    import datetime
+    _ensure_ghsa_in_db(app, "GHSA-CDEF-GHIJ-3456")
+    # Set an initial publish date that differs from what we'll return
+    with app.app_context():
+        rec = db.session.get(Vulnerability, "GHSA-CDEF-GHIJ-3456")
+        if rec:
+            rec.update_record(publish_date=datetime.date(2020, 1, 1), commit=True)
+
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published") as mock_fetch:
+        mock_fetch.return_value = "2024-06-15"
+        response = client.post("/api/vulnerabilities/GHSA-CDEF-GHIJ-3456/ghsa-refresh")
+
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vulnerabilities — compare_variant_id difference with data
+# ---------------------------------------------------------------------------
+
+def test_get_vulnerabilities_compare_difference_with_base_ids(app, client):
+    """Difference op returns only vulns in compare that are NOT in base."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.scan import Scan
+    from src.models.observation import Observation
+    from src.models.finding import Finding
+    from src.models.package import Package
+    from src.models.vulnerability import Vulnerability
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    with app.app_context():
+        project = Project.create("DiffProject")
+        base_v = Variant.create("diff-base", project.id)
+        compare_v = Variant.create("diff-compare", project.id)
+        pkg = Package.find_or_create("diff-pkg", "1.0.0", [], [], "")
+        db.session.commit()
+
+        # Shared vuln (in both)
+        shared = Vulnerability.create_record(id="CVE-DIFF-SHARED-001", description="shared", status="low")
+        # Only in compare
+        compare_only = Vulnerability.create_record(id="CVE-DIFF-COMPARE-001", description="compare only", status="high")
+        db.session.commit()
+
+        finding_shared = Finding.get_or_create(pkg.id, shared.id)
+        finding_compare = Finding.get_or_create(pkg.id, compare_only.id)
+
+        base_scan = Scan(id=_uuid.uuid4(), variant_id=base_v.id,
+                         timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        compare_scan = Scan(id=_uuid.uuid4(), variant_id=compare_v.id,
+                            timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc))
+        db.session.add_all([base_scan, compare_scan])
+
+        base_doc = SBOMDocument(id=_uuid.uuid4(), path="/b.spdx.json",
+                                source_name="b.spdx.json", format="spdx", scan_id=base_scan.id)
+        compare_doc = SBOMDocument(id=_uuid.uuid4(), path="/c.spdx.json",
+                                   source_name="c.spdx.json", format="spdx", scan_id=compare_scan.id)
+        db.session.add_all([base_doc, compare_doc])
+        db.session.add(SBOMPackage(sbom_document_id=base_doc.id, package_id=pkg.id))
+        db.session.add(SBOMPackage(sbom_document_id=compare_doc.id, package_id=pkg.id))
+
+        # Shared: in both
+        db.session.add(Observation(finding_id=finding_shared.id, scan_id=base_scan.id))
+        db.session.add(Observation(finding_id=finding_shared.id, scan_id=compare_scan.id))
+        # compare-only: only in compare
+        db.session.add(Observation(finding_id=finding_compare.id, scan_id=compare_scan.id))
+        db.session.commit()
+
+        base_id = str(base_v.id)
+        compare_id = str(compare_v.id)
+
+    response = client.get(
+        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=difference"
+    )
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    ids = [v["id"] for v in data]
+    # Only compare-only vuln should appear; shared one is excluded
+    assert "CVE-DIFF-COMPARE-001" in ids
+    assert "CVE-DIFF-SHARED-001" not in ids
+
+

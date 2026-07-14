@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:latest}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.18}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
@@ -43,15 +43,15 @@ VulnScout - Vulnerability Scanner
 Usage: vulnscout [--project <name>] [--variant <name>] <command> [options]
 
 Container lifecycle:
-  start                           Start VulnScout container (auto-started by other commands)
-  stop                            Stop and remove VulnScout container
-  restart                         Restart VulnScout container
+  start|--start                   Start VulnScout container (auto-started by other commands)
+  stop|--stop                     Stop and remove VulnScout container
+  restart|--restart               Restart VulnScout container
   --update                        Pull latest image and restart if a new version is available
   --version                       Show current version
   --dev                           Dev mode: mount local src/ into container and start frontend npm dev server
 
 Note: The container runs as a daemon. All commands auto-start it if needed and
-leave it running afterward (including --serve). Use 'stop' to remove it.
+leave it running afterward (including --serve). Use 'stop' or '--stop' to remove it.
 
 Global flags:
   --project <name>                Set project name (default: 'default')
@@ -60,6 +60,7 @@ Global flags:
 Input commands (can be chained, triggers scan automatically):
   --add-spdx <path>               Add an SPDX 2/3 SBOM file or archive
   --add-cve-check <path>          Add a Yocto CVE check JSON file
+  --add-yocto-vex <path>          Add a Yocto VEX JSON file
   --add-openvex <path>            Add an OpenVEX JSON file
   --add-cdx <path>                Add a CycloneDX file
   --add-grype <path>              Add a Grype results file
@@ -82,18 +83,18 @@ Scan & output commands:
   --delete-scan <id>                Delete a past scan by its ID
 
 Data retrieval commands:
-  list-projects                   List all projects and their variants
-  list-scans                      List all past scans
+  --list-projects                 List all projects and their variants
+  --list-scans                    List all past scans
   --json                          Output objects in JSON format
 
 Configuration:
-  config <key> <value>            Set a config value
-  config-list                     Show current configuration
-  config-clear <key>              Remove a config key
+  --config <key> <value>          Set a config value
+  --config-list                   Show current configuration
+  --config-clear <key>            Remove a config key
 
 Environment variables:
   VULNSCOUT_CONTAINER   Container name (default: vulnscout)
-  VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:latest)
+  VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:v0.18)
   VULNSCOUT_BUILD_DIR   Build base dir (default: ./.vulnscout)
   VULNSCOUT_CACHE_DIR   Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
   VULNSCOUT_OUTPUTS_DIR Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
@@ -103,7 +104,7 @@ Examples:
   vulnscout --project test --match-condition "cvss >= 9.0"
   vulnscout --serve
   vulnscout --report summary.adoc
-  vulnscout config NVD_API_KEY abc123
+  vulnscout --config NVD_API_KEY abc123
 
 Exit codes:
   0   Success
@@ -193,14 +194,20 @@ USER_UID=$(id -u)
 USER_GID=$(id -g)
 VITE_API_URL=http://localhost:7275
 REFRESH_REMOTE_DELAY=2w
+# GRYPE_MEMLIMIT — cap RAM used by the grype binary (Go soft memory limit).
+# Unset = auto (~80 % of the container/cgroup memory limit, recommended).
+# Explicit value examples: 4GiB  8GiB  24GiB  6442450944
+# Set to "off" to disable the limit entirely.
+#GRYPE_MEMLIMIT=
 EOF
         echo "Created default config at $VULNSCOUT_CONFIG_FILE"
     fi
     # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
-    # VulnScout cache directory by default (sub-folder next to vulnscout.db), so the
-    # existing cache mount already covers them and no extra mount is needed.  An
-    # explicit VULNSCOUT_SBOM_CVE_CHECK_DB_DIR override (e.g. a shared host clone) is
-    # mounted separately and pointed at by SBOM_CVE_CHECK_DATABASES_DIR.
+    # VulnScout cache directory by default (local_databases sub-folder next to
+    # vulnscout.db), so the existing cache mount already covers them and no extra
+    # mount is needed.  An explicit VULNSCOUT_SBOM_CVE_CHECK_DB_DIR override (e.g. a
+    # shared host clone) is mounted separately and pointed at by
+    # SBOM_CVE_CHECK_DATABASES_DIR.
     local _sbom_cve_check_host_db="${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-}"
 
     local -a env_args=()
@@ -212,6 +219,9 @@ EOF
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
     # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
     [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
+    # Forward GRYPE_MEMLIMIT from the host so operators can cap grype RAM usage
+    # without editing config.env (e.g. export GRYPE_MEMLIMIT=24GiB before running).
+    [[ -n "${GRYPE_MEMLIMIT:-}" ]] && env_args+=(-e "GRYPE_MEMLIMIT=$GRYPE_MEMLIMIT")
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
@@ -219,8 +229,8 @@ EOF
     )
     if [[ -n "$_sbom_cve_check_host_db" ]]; then
         mkdir -p "$_sbom_cve_check_host_db"
-        vol_args+=(-v "$_sbom_cve_check_host_db:/sbom_cve_check_databases:Z")
-        env_args+=(-e "SBOM_CVE_CHECK_DATABASES_DIR=/sbom_cve_check_databases")
+        vol_args+=(-v "$_sbom_cve_check_host_db:/local_databases:Z")
+        env_args+=(-e "SBOM_CVE_CHECK_DATABASES_DIR=/local_databases")
     fi
     if [ "$DEV_MODE" = true ] && [ -d "$SCRIPT_DIR/src" ]; then
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
@@ -307,7 +317,7 @@ parse_and_run() {
                 VARIANT="$2"; shift 2 ;;
             --match-condition)
                 MATCH_CONDITION="$2"; shift 2 ;;
-            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
+            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
@@ -336,7 +346,7 @@ parse_and_run() {
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
                 EXPORT_ARGS+=(--import-custom-assessments "$import_staged")
                 shift 2 ;;
-            --delete-scan)
+            delete-scan|--delete-scan)
                 ensure_running
                 exec_container --delete-scan "$2"
                 shift 2 ;;
@@ -356,9 +366,9 @@ parse_and_run() {
                 fi
                 REPORT_ARGS+=(--report "$tpl")
                 shift 2 ;;
-            list-projects|list-scans)
+            list-projects|--list-projects|list-scans|--list-scans)
                 ensure_running
-                command="$1"
+                command="${1#--}"
                 if [[ "$DATA_REQUESTED" != "" ]]; then
                     # Only 1 data request command is allowed at the same time
                     echo "Cannot use $command and $DATA_REQUESTED together"
@@ -368,27 +378,27 @@ parse_and_run() {
                 shift ;;
             --json)
                 DATA_ARGS+=(--json); shift ;;
-            start)
+            start|--start)
                 do_start
                 if [ "$DEV_MODE" = true ]; then
                     start_frontend_dev
                 fi
                 shift ;;
-            stop)
+            stop|--stop)
                 call_container_engine rm -f "$CONTAINER_NAME"; shift ;;
-            restart)
+            restart|--restart)
                 call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
                 do_start
                 if [ "$DEV_MODE" = true ]; then
                     start_frontend_dev
                 fi
                 shift ;;
-            config)
+            config|--config)
                 config_set "$2" "$3"; shift 3 ;;
-            config-list)
+            config-list|--config-list)
                 cat "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || echo "No config file found."
                 shift ;;
-            config-clear)
+            config-clear|--config-clear)
                 config_clear "$2"; shift 2 ;;
             help|--help|-h)
                 show_help; shift ;;
@@ -397,7 +407,7 @@ parse_and_run() {
                 _v="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
                 echo "VulnScout $_v"
                 shift ;;
-            update)
+            update|--update)
                 local _cur_ver _new_ver _running_img
                 _cur_ver="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo unknown)"
                 if call_container_engine pull "$DOCKER_IMAGE" > /dev/null 2>&1; then

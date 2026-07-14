@@ -251,7 +251,7 @@ class TestDeleteVariant:
 
 class TestCopyCustomAssessments:
 
-    def _seed_copy_data(self, app):
+    def _seed_copy_data(self, app, observe_target=True):
         from src.extensions import db
         from src.models.project import Project
         from src.models.variant import Variant
@@ -261,6 +261,7 @@ class TestCopyCustomAssessments:
         from src.models.finding import Finding
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
         from src.models.assessment import Assessment
 
         with app.app_context():
@@ -283,6 +284,14 @@ class TestCopyCustomAssessments:
             target_doc = SBOMDocument.create("/tmp/target.spdx.json", "spdx", target_scan.id)
             SBOMPackage.create(source_doc.id, source_pkg.id)
             SBOMPackage.create(target_doc.id, target_pkg.id)
+
+            # Observations put each finding into its variant's vulnerability pool.
+            # When *observe_target* is False the target package is still in the
+            # SBOM but the vulnerability was not detected there, so it must not
+            # be offered as a copy target.
+            Observation.create(source_finding.id, source_scan.id)
+            if observe_target:
+                Observation.create(target_finding.id, target_scan.id)
 
             Assessment.create(
                 status="affected",
@@ -324,7 +333,7 @@ class TestCopyCustomAssessments:
             json={
                 "source_variant_id": ids["source_variant_id"],
                 "target_variant_id": ids["target_variant_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert resp.status_code == 200
@@ -363,17 +372,65 @@ class TestCopyCustomAssessments:
             json={
                 "source_variant_id": ids["source_variant_id"],
                 "target_variant_id": ids["target_variant_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["count"] == 1
         assert data["skipped"] == 0
-        assert len(data["entries"]) == 1
-        assert data["entries"][0]["vulnerability_id"] == "CVE-COPY-0001"
-        assert data["entries"][0]["source_package"] == "openssl@1.1.1"
-        assert data["entries"][0]["target_package"] == "openssl@3.0.0"
+        assert len(data["groups"]) == 1
+        group = data["groups"][0]
+        assert group["vulnerability_id"] == "CVE-COPY-0001"
+        assert group["source_package"] == "openssl@1.1.1"
+        assert len(group["candidates"]) == 1
+        assert group["candidates"][0]["target_package"] == "openssl@3.0.0"
+
+    def test_copy_assessments_skips_vuln_not_in_target_pool(self, app, client):
+        """A vuln whose target finding is not observed in the target's scans
+        (not in the target's vulnerability pool) must not be offered for copy."""
+        from src.models.assessment import Assessment
+
+        ids = self._seed_copy_data(app, observe_target=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 0
+        assert "No vulnerabilities in common" in data["message"]
+
+        with app.app_context():
+            target_assessments = Assessment.get_by_finding_and_variant(
+                ids["target_finding_id"],
+                ids["target_variant_id"],
+            )
+            assert not any(a.origin == "custom" for a in target_assessments)
+
+    def test_copy_assessments_preview_skips_vuln_not_in_target_pool(self, app, client):
+        """Preview must not list a candidate when the vuln is absent from the
+        target's pool, even though the package is in the target SBOM."""
+        ids = self._seed_copy_data(app, observe_target=False)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 0
+        assert data.get("groups", []) == []
+        assert "No vulnerabilities in common" in data["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -728,6 +785,27 @@ class TestDetectFormat:
         from src.routes.settings import _detect_format
         assert _detect_format("cve.json", {"package": [{"name": "x"}]}) == "yocto_cve_check"
 
+    def test_yocto_vex_via_cpes(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "openssl", "cpes": ["cpe:2.3:a:openssl:openssl:3.0.2:*:*:*:*:*:*:*"], "issue": []}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_vex_via_patch_file(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "openssl", "issue": [{"id": "CVE-2022-0778", "patch-file": "/patches/fix.patch"}]}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_vex_via_detail(self):
+        from src.routes.settings import _detect_format
+        data = {"package": [{"name": "busybox", "issue": [{"id": "CVE-2021-0001", "detail": "fixed-version: 1.35.1"}]}]}
+        assert _detect_format("vex.json", data) == "yocto_vex"
+
+    def test_yocto_cve_check_not_misidentified_as_vex(self):
+        from src.routes.settings import _detect_format
+        # Plain cve-check file without cpes/patch-file/detail stays yocto_cve_check
+        data = {"package": [{"name": "x", "issue": [{"id": "CVE-2020-1234", "status": "Patched"}]}]}
+        assert _detect_format("cve.json", data) == "yocto_cve_check"
+
     def test_grype_content(self):
         from src.routes.settings import _detect_format
         assert _detect_format("scan.json", {"matches": []}) == "grype"
@@ -941,19 +1019,6 @@ class TestProcessSBOMBackground:
             _process_sbom_background(app, upload_id, [str(sbom_path)], scan.id, variant.id)
 
             assert _upload_status[upload_id]["status"] == "error"
-
-    def test_regenerate_openvex_handles_exception(self, app, tmp_path):
-        """_regenerate_openvex() must swallow OpenVEX generation failures."""
-        from src.routes.settings import _regenerate_openvex
-
-        out_file = tmp_path / "openvex.json"
-        app.config["OPENVEX_FILE"] = str(out_file)
-
-        with patch("src.views.openvex.OpenVex.to_dict", side_effect=RuntimeError("boom")):
-            _regenerate_openvex(app)
-
-        assert out_file.exists()
-        assert out_file.stat().st_size == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1457,6 +1522,7 @@ class TestCopyAssessmentsEdgeCases:
         from src.models.assessment import Assessment
         from src.models.sbom_document import SBOMDocument
         from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
 
         with app.app_context():
             project = Project.create("NonCommonProject")
@@ -1481,6 +1547,12 @@ class TestCopyAssessmentsEdgeCases:
             tgt_doc = SBOMDocument.create("/tmp/tgt_nc.spdx.json", "spdx", tgt_scan.id)
             SBOMPackage.create(tgt_doc.id, pkg_shared.id)
 
+            # The shared finding is detected in both variants' pools; the
+            # source-only finding only in the source.
+            Observation.create(finding_sx.id, src_scan.id)
+            Observation.create(finding_oy.id, src_scan.id)
+            Observation.create(finding_sx.id, tgt_scan.id)
+
             Assessment.create(
                 status="affected", origin="custom", finding_id=finding_sx.id,
                 variant_id=source.id, source="manual",
@@ -1494,14 +1566,14 @@ class TestCopyAssessmentsEdgeCases:
             return {"source_id": str(source.id), "target_id": str(target.id)}
 
     def test_ignore_version_empty_source_active_packages_returns_no_vulns(self, app, client):
-        """ignore_package_version=True with no active source packages → no vulns in common."""
+        """ignore_version mode with no active source packages → no vulns in common."""
         ids = self._seed_no_source_active_packages(app)
         resp = client.post(
             "/api/variants/copy-assessments",
             json={
                 "source_variant_id": ids["source_id"],
                 "target_variant_id": ids["target_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert resp.status_code == 200
@@ -1510,14 +1582,14 @@ class TestCopyAssessmentsEdgeCases:
         assert "No vulnerabilities in common" in data["message"]
 
     def test_ignore_version_no_matching_target_findings_returns_no_vulns(self, app, client):
-        """ignore_package_version=True with non-empty source_vuln_ids but no target findings."""
+        """ignore_version mode with non-empty source_vuln_ids but no target findings."""
         ids = self._seed_no_matching_target_findings(app)
         resp = client.post(
             "/api/variants/copy-assessments",
             json={
                 "source_variant_id": ids["source_id"],
                 "target_variant_id": ids["target_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert resp.status_code == 200
@@ -1552,7 +1624,7 @@ class TestCopyAssessmentsEdgeCases:
             json={
                 "source_variant_id": ids["source_variant_id"],
                 "target_variant_id": ids["target_variant_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert r1.get_json()["copied"] == 1
@@ -1563,7 +1635,7 @@ class TestCopyAssessmentsEdgeCases:
             json={
                 "source_variant_id": ids["source_variant_id"],
                 "target_variant_id": ids["target_variant_id"],
-                "ignore_package_version": True,
+                "match_mode": "ignore_version",
             },
         )
         assert r2.status_code == 200
@@ -1571,6 +1643,540 @@ class TestCopyAssessmentsEdgeCases:
         assert data["copied"] == 0
         assert data["skipped"] == 1
         assert "already present" in data["message"]
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: copy-assessments match modes (match_mode / selections)
+# ---------------------------------------------------------------------------
+
+class TestCopyAssessmentsMatchModes:
+    """Exercise the match_mode / version_precision / selections API surface."""
+
+    def _seed_modes_data(self, app):
+        """Source openssl@1.1.1 + custom assessment; several target findings for CVE-NEW-0001.
+
+        Target findings (all on CVE-NEW-0001):
+          - openssl@1.4.2  (same name; major matches, minor differs)
+          - openssl@3.0.0  (same name; major differs)
+          - curl@2.0.0     (different name)
+          - openssl@1.1.5  (same name; major AND minor match)
+        """
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("ModesProject")
+            source = Variant.create("ModesSource", project.id)
+            target = Variant.create("ModesTarget", project.id)
+
+            source_scan = Scan.create("source sbom", source.id, scan_type="sbom")
+            target_scan = Scan.create("target sbom", target.id, scan_type="sbom")
+
+            src_pkg = Package.find_or_create("openssl", "1.1.1")
+            tgt_major_ok = Package.find_or_create("openssl", "1.4.2")
+            tgt_major_diff = Package.find_or_create("openssl", "3.0.0")
+            tgt_other_name = Package.find_or_create("curl", "2.0.0")
+            tgt_minor_ok = Package.find_or_create("openssl", "1.1.5")
+
+            vuln = Vulnerability.create_record(id="CVE-NEW-0001", description="new mode")
+            db.session.commit()
+
+            src_finding = Finding.get_or_create(src_pkg.id, vuln.id)
+            f_major_ok = Finding.get_or_create(tgt_major_ok.id, vuln.id)
+            f_major_diff = Finding.get_or_create(tgt_major_diff.id, vuln.id)
+            f_other_name = Finding.get_or_create(tgt_other_name.id, vuln.id)
+            f_minor_ok = Finding.get_or_create(tgt_minor_ok.id, vuln.id)
+
+            source_doc = SBOMDocument.create("/tmp/modes_src.spdx.json", "spdx", source_scan.id)
+            target_doc = SBOMDocument.create("/tmp/modes_tgt.spdx.json", "spdx", target_scan.id)
+            SBOMPackage.create(source_doc.id, src_pkg.id)
+            for pkg in (tgt_major_ok, tgt_major_diff, tgt_other_name, tgt_minor_ok):
+                SBOMPackage.create(target_doc.id, pkg.id)
+
+            # Put each finding into its variant's vulnerability pool.
+            Observation.create(src_finding.id, source_scan.id)
+            for f in (f_major_ok, f_major_diff, f_other_name, f_minor_ok):
+                Observation.create(f.id, target_scan.id)
+
+            Assessment.create(
+                status="not_affected",
+                simplified_status="Not affected",
+                origin="custom",
+                finding_id=src_finding.id,
+                variant_id=source.id,
+                source="manual",
+                justification="component_not_present",
+            )
+            db.session.commit()
+
+            return {
+                "source_variant_id": str(source.id),
+                "target_variant_id": str(target.id),
+                "vuln_id": "CVE-NEW-0001",
+                "finding_major_ok": str(f_major_ok.id),
+                "finding_major_diff": str(f_major_diff.id),
+                "finding_other_name": str(f_other_name.id),
+                "finding_minor_ok": str(f_minor_ok.id),
+            }
+
+    # -- validation --------------------------------------------------------
+
+    def test_preview_invalid_match_mode_returns_400(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+                "match_mode": "bogus",
+            },
+        )
+        assert resp.status_code == 400
+        assert "match_mode" in resp.get_json()["error"].lower()
+
+    def test_copy_invalid_match_mode_returns_400(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+                "match_mode": "bogus",
+            },
+        )
+        assert resp.status_code == 400
+        assert "match_mode" in resp.get_json()["error"].lower()
+
+    def test_selections_must_be_a_list(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+                "match_mode": "ignore_version",
+                "selections": {"not": "a list"},
+            },
+        )
+        assert resp.status_code == 400
+        assert "selections" in resp.get_json()["error"].lower()
+
+    def test_invalid_version_precision_returns_400(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+                "match_mode": "ignore_minor_version",
+                "version_precision": "not-a-number",
+            },
+        )
+        assert resp.status_code == 400
+        assert "version_precision" in resp.get_json()["error"].lower()
+
+    def test_null_version_precision_returns_400(self, client):
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": str(uuid.uuid4()),
+                "target_variant_id": str(uuid.uuid4()),
+                "match_mode": "ignore_minor_version",
+                "version_precision": None,
+            },
+        )
+        assert resp.status_code == 400
+        assert "version_precision" in resp.get_json()["error"].lower()
+
+    # -- ignore_version (grouped candidates) ------------------------------
+
+    def test_preview_ignore_version_returns_grouped_candidates(self, app, client):
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["mode"] == "ignore_version"
+        assert "groups" in data
+        assert len(data["groups"]) == 1
+        group = data["groups"][0]
+        # same name openssl → 1.4.2, 3.0.0, 1.1.5 (curl excluded)
+        target_findings = {c["target_finding_id"] for c in group["candidates"]}
+        assert target_findings == {
+            ids["finding_major_ok"],
+            ids["finding_major_diff"],
+            ids["finding_minor_ok"],
+        }
+        assert ids["finding_other_name"] not in target_findings
+        assert all(c["selected"] and not c["already_has_custom"] for c in group["candidates"])
+        assert data["count"] == len(group["candidates"])
+        # The source assessment content is surfaced for the review popup.
+        details = group["assessment_details"]
+        assert details["simplified_status"] == "Not affected"
+        assert details["status"] == "not_affected"
+        assert details["justification"] == "component_not_present"
+
+    # -- ignore_minor_version + version_precision -------------------------
+
+    def test_preview_ignore_minor_version_precision_one_matches_major(self, app, client):
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_minor_version",
+                "version_precision": 1,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["mode"] == "ignore_minor_version"
+        assert len(data["groups"]) == 1
+        target_findings = {c["target_finding_id"] for c in data["groups"][0]["candidates"]}
+        # major-1 openssl → 1.4.2 and 1.1.5 (3.0.0 major differs, curl excluded)
+        assert target_findings == {ids["finding_major_ok"], ids["finding_minor_ok"]}
+
+    def test_preview_ignore_minor_version_precision_two_matches_major_minor(self, app, client):
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_minor_version",
+                "version_precision": 2,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["groups"]) == 1
+        target_findings = {c["target_finding_id"] for c in data["groups"][0]["candidates"]}
+        # 1.1.x only → openssl@1.1.5 matches source openssl@1.1.1
+        assert target_findings == {ids["finding_minor_ok"]}
+
+    def test_preview_version_precision_below_one_is_clamped(self, app, client):
+        """version_precision < 1 clamps to 1 (major-only match)."""
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_minor_version",
+                "version_precision": 0,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        target_findings = {c["target_finding_id"] for c in data["groups"][0]["candidates"]}
+        assert target_findings == {ids["finding_major_ok"], ids["finding_minor_ok"]}
+
+    # -- selections-based copy --------------------------------------------
+
+    def test_copy_with_selections_copies_only_chosen(self, app, client):
+        from src.models.assessment import Assessment
+
+        ids = self._seed_modes_data(app)
+        # First preview to get the source_assessment_id
+        preview = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        ).get_json()
+        source_assessment_id = preview["groups"][0]["source_assessment_id"]
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+                "selections": [
+                    {
+                        "source_assessment_id": source_assessment_id,
+                        "target_finding_id": ids["finding_minor_ok"],
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["copied"] == 1
+
+        with app.app_context():
+            copied = Assessment.get_by_finding_and_variant(
+                ids["finding_minor_ok"], ids["target_variant_id"],
+            )
+            assert any(a.origin == "custom" for a in copied)
+            # A non-selected target finding must NOT have received a copy
+            not_copied = Assessment.get_by_finding_and_variant(
+                ids["finding_major_diff"], ids["target_variant_id"],
+            )
+            assert not any(a.origin == "custom" for a in not_copied)
+
+    def test_copy_with_empty_selections_copies_nothing(self, app, client):
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+                "selections": [],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["copied"] == 0
+
+    def test_copy_with_selections_skips_already_assessed(self, app, client):
+        ids = self._seed_modes_data(app)
+        preview = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        ).get_json()
+        source_assessment_id = preview["groups"][0]["source_assessment_id"]
+        selection = [{
+            "source_assessment_id": source_assessment_id,
+            "target_finding_id": ids["finding_minor_ok"],
+        }]
+
+        first = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+                "selections": selection,
+            },
+        )
+        assert first.get_json()["copied"] == 1
+
+        second = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+                "selections": selection,
+            },
+        )
+        data = second.get_json()
+        assert data["copied"] == 0
+        assert data["skipped"] == 1
+
+    # -- auto-copy (alternative mode, no selections) ----------------------
+
+    def test_copy_ignore_version_without_selections_copies_all_candidates(self, app, client):
+        from src.models.assessment import Assessment
+
+        ids = self._seed_modes_data(app)
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # openssl name → 1.4.2, 3.0.0, 1.1.5
+        assert data["copied"] == 3
+
+        with app.app_context():
+            for fid in (ids["finding_major_ok"], ids["finding_major_diff"], ids["finding_minor_ok"]):
+                assessments = Assessment.get_by_finding_and_variant(fid, ids["target_variant_id"])
+                assert any(a.origin == "custom" for a in assessments)
+
+    def test_preview_already_assessed_candidate_marked(self, app, client):
+        """A target finding that already has a custom assessment is flagged and skipped."""
+        from src.extensions import db
+        from src.models.assessment import Assessment
+
+        ids = self._seed_modes_data(app)
+        with app.app_context():
+            Assessment.create(
+                status="affected",
+                simplified_status="Exploitable",
+                origin="custom",
+                finding_id=ids["finding_minor_ok"],
+                variant_id=ids["target_variant_id"],
+                source="manual",
+            )
+            db.session.commit()
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": ids["source_variant_id"],
+                "target_variant_id": ids["target_variant_id"],
+                "match_mode": "ignore_version",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        candidates = data["groups"][0]["candidates"]
+        flagged = next(c for c in candidates if c["target_finding_id"] == ids["finding_minor_ok"])
+        assert flagged["already_has_custom"] is True
+        assert flagged["selected"] is False
+        assert data["skipped"] == 1
+
+    def test_copy_selections_rejects_mismatched_vulnerability_id(self, app, client):
+        """A selection that points a source assessment at a finding for a different CVE
+        must be silently rejected (copied=0) to prevent VEX-data corruption."""
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("VulnMismatchProject")
+            source = Variant.create("VulnMismatchSrc", project.id)
+            target = Variant.create("VulnMismatchTgt", project.id)
+
+            src_scan = Scan.create("", source.id, scan_type="sbom")
+            tgt_scan = Scan.create("", target.id, scan_type="sbom")
+
+            pkg_a = Package.find_or_create("lib-a-vmm", "1.0")
+            pkg_b = Package.find_or_create("lib-b-vmm", "1.0")
+            cve_a = Vulnerability.create_record(id="CVE-VULN-MM-001", description="a")
+            cve_b = Vulnerability.create_record(id="CVE-VULN-MM-002", description="b")
+            db.session.commit()
+
+            finding_a = Finding.get_or_create(pkg_a.id, cve_a.id)
+            finding_b = Finding.get_or_create(pkg_b.id, cve_b.id)
+
+            src_doc = SBOMDocument.create("/tmp/vmm_src.spdx.json", "spdx", src_scan.id)
+            tgt_doc = SBOMDocument.create("/tmp/vmm_tgt.spdx.json", "spdx", tgt_scan.id)
+            SBOMPackage.create(src_doc.id, pkg_a.id)
+            SBOMPackage.create(tgt_doc.id, pkg_b.id)
+
+            assessment = Assessment.create(
+                status="not_affected",
+                origin="custom",
+                finding_id=finding_a.id,
+                variant_id=source.id,
+                source="manual",
+            )
+            db.session.commit()
+
+            source_id = str(source.id)
+            target_id = str(target.id)
+            src_assessment_id = str(assessment.id)
+            # Craft a selection that pairs the source assessment (CVE-VULN-MM-001)
+            # with a target finding for a different CVE (CVE-VULN-MM-002).
+            mismatched_finding_id = str(finding_b.id)
+
+        resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": source_id,
+                "target_variant_id": target_id,
+                "match_mode": "exact",
+                "selections": [
+                    {
+                        "source_assessment_id": src_assessment_id,
+                        "target_finding_id": mismatched_finding_id,
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["copied"] == 0
+
+    def test_preview_exact_mode_includes_assessment_details(self, app, client):
+        """Exact-mode flat entries carry the source assessment's details for the popup."""
+        from src.extensions import db
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.observation import Observation
+        from src.models.assessment import Assessment
+
+        with app.app_context():
+            project = Project.create("ExactDetailsProject")
+            source = Variant.create("ExactDetailsSrc", project.id)
+            target = Variant.create("ExactDetailsTgt", project.id)
+
+            src_scan = Scan.create("", source.id, scan_type="sbom")
+            tgt_scan = Scan.create("", target.id, scan_type="sbom")
+
+            # Same package row shared by both variants → exact match.
+            pkg = Package.find_or_create("shared-exact-lib", "1.0.0")
+            vuln = Vulnerability.create_record(id="CVE-EXACT-DET-001", description="x")
+            db.session.commit()
+            finding = Finding.get_or_create(pkg.id, vuln.id)
+
+            src_doc = SBOMDocument.create("/tmp/exd_src.spdx.json", "spdx", src_scan.id)
+            tgt_doc = SBOMDocument.create("/tmp/exd_tgt.spdx.json", "spdx", tgt_scan.id)
+            SBOMPackage.create(src_doc.id, pkg.id)
+            SBOMPackage.create(tgt_doc.id, pkg.id)
+
+            # Vulnerability observed in both variants' pools.
+            Observation.create(finding.id, src_scan.id)
+            Observation.create(finding.id, tgt_scan.id)
+
+            Assessment.create(
+                status="affected",
+                simplified_status="Exploitable",
+                origin="custom",
+                finding_id=finding.id,
+                variant_id=source.id,
+                source="manual",
+                status_notes="Confirmed reachable.",
+                impact_statement="RCE possible.",
+            )
+            db.session.commit()
+            source_id = str(source.id)
+            target_id = str(target.id)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": source_id,
+                "target_variant_id": target_id,
+                "match_mode": "exact",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["mode"] == "exact"
+        assert len(data["entries"]) == 1
+        details = data["entries"][0]["assessment_details"]
+        assert details["simplified_status"] == "Exploitable"
+        assert details["status"] == "affected"
+        assert details["status_notes"] == "Confirmed reachable."
+        assert details["impact_statement"] == "RCE possible."
 
 
 # ---------------------------------------------------------------------------

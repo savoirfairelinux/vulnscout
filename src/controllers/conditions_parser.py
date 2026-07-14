@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import typing
+
 import pyparsing as pp
 
 
@@ -11,13 +13,13 @@ class ConditionParser:
     More examples and information in unit tests and in documentation
     """
 
-    def __init__(self, debug=False):
+    def __init__(self, debug: bool = False) -> None:
         """
         Initialize a parser using pyparsing and custom expression language
         :param debug: Enable debug mode in pyparsing
         """
         self.debug = debug
-        self.data = {}
+        self.data: dict = {}
         self.cache_parsed: tuple[str, list | None] = ("", None)
 
         pp.ParserElement.enable_left_recursion()
@@ -47,7 +49,7 @@ class ConditionParser:
             | condition
         ).set_name("conditions")
 
-    def parse_string(self, conditions: str, parse_all=True):
+    def parse_string(self, conditions: str, parse_all: bool = True) -> pp.ParseResults:
         """
         Parse a conditions (string) and return the parsed object
         Not intended for public use, use evaluate() instead
@@ -57,7 +59,7 @@ class ConditionParser:
         """
         return self.conditions.parse_string(conditions, parse_all=parse_all)
 
-    def _eval_internal(self, condition: list):
+    def _eval_internal(self, condition: list) -> bool | int | float | str:
         """
         Evaluate a part of a condition
         Not intended for public use, use evaluate() instead
@@ -99,13 +101,15 @@ class ConditionParser:
             if condition[1] == "!=":
                 return self._eval_internal(condition[0]) != self._eval_internal(condition[2])
             if condition[1] == "<":
-                return self._eval_internal(condition[0]) < self._eval_internal(condition[2])
+                # Cross-type ordering is intentional: invalid combinations raise
+                # TypeError at runtime, which marks the condition as invalid.
+                return self._eval_internal(condition[0]) < self._eval_internal(condition[2])  # type: ignore[operator]
             if condition[1] == ">":
-                return self._eval_internal(condition[0]) > self._eval_internal(condition[2])
+                return self._eval_internal(condition[0]) > self._eval_internal(condition[2])  # type: ignore[operator]
             if condition[1] == "<=":
-                return self._eval_internal(condition[0]) <= self._eval_internal(condition[2])
+                return self._eval_internal(condition[0]) <= self._eval_internal(condition[2])  # type: ignore[operator]
             if condition[1] == ">=":
-                return self._eval_internal(condition[0]) >= self._eval_internal(condition[2])
+                return self._eval_internal(condition[0]) >= self._eval_internal(condition[2])  # type: ignore[operator]
 
             if condition[1] == "and":
                 return self._eval_internal(condition[0]) and self._eval_internal(condition[2])
@@ -136,4 +140,4 @@ class ConditionParser:
             raise ValueError("Failed to parse conditions")
         res = self._eval_internal(parsed)
         self.data = {}
-        return res
+        return typing.cast(bool, res)

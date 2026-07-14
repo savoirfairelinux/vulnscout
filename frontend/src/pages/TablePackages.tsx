@@ -1,6 +1,6 @@
 import type { Package, VulnCounts, Severities } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
@@ -52,6 +52,10 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    // Track variants the user has explicitly unchecked. All variants (including
+    // any discovered later) are considered selected unless present here, which
+    // avoids a first-render flash where variant rows briefly disappear.
+    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
@@ -72,6 +76,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show only packages whose name contains text (e.g. only:native)' },
     ];
 
     const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,11 +172,31 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         return acc.sort();
     }, []), [packages])
 
+    const variants_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
+        for (const variant of pkg.variants) {
+            if (variant !== '' && !acc.includes(variant))
+                acc.push(variant);
+        }
+        return acc.sort();
+    }, []), [packages])
+
+    // All variants are checked by default; a variant only leaves the selection
+    // once the user explicitly unchecks it. Deriving the selection during render
+    // (instead of populating it from an effect) prevents a first-render flash.
+    const selectedVariants = useMemo(
+        () => variants_list.filter(v => !deselectedVariants.includes(v)),
+        [variants_list, deselectedVariants]
+    );
+    const setSelectedVariants = useCallback((values: string[]) => {
+        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
+    }, [variants_list]);
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
+        setSelectedVariants(variants_list);
         setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
@@ -381,9 +406,12 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             if (selectedSuppliers.length && !selectedSuppliers.includes(extractSupplierName(el.supplier))) {
                 return false;
             }
+            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) {
+                return false;
+            }
             return true;
         });
-    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers]);
+    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
@@ -459,6 +487,15 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 setSelected={setSelectedSbomDocs}
             />
 
+            {variants_list.length > 0 && (
+                <FilterOption
+                    label="Variants"
+                    options={variants_list}
+                    selected={selectedVariants}
+                    setSelected={setSelectedVariants}
+                />
+            )}
+
             <div className="ml-4">
                 <ToggleSwitch
                     enabled={showSeverity}
@@ -515,7 +552,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric fuseKeys={fuseKeys} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            <TableGeneric fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
         </div>
     </>);
 }

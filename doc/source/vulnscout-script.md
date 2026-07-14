@@ -128,6 +128,17 @@ JSON output from the Yocto `cve-check` task.
 
 ---
 
+### Yocto VEX Output
+
+```
+--add-yocto-vex <path>
+```
+
+JSON output from the Yocto `vex.bbclass` task.  Carries richer CPE and
+patch-file information than the plain cve-check output.
+
+---
+
 ### OpenVEX
 
 ```
@@ -182,6 +193,25 @@ This can be chained with other inputs to scan newly added files immediately:
   --add-spdx example/spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json \
   --perform-grype-scan
 ```
+
+`--perform-grype-scan` can consume significant RAM on large SBOMs.
+VulnScout automatically caps Grype's memory at ~80 % of the container/cgroup limit.
+Use `GRYPE_MEMLIMIT` to override:
+
+```bash
+# Set a persistent limit
+./vulnscout --config GRYPE_MEMLIMIT 6GiB
+
+# Or export it on the host before running (forwarded into the container)
+export GRYPE_MEMLIMIT=24GiB
+./vulnscout --project demo --perform-grype-scan
+
+# Disable the limit entirely
+./vulnscout --config GRYPE_MEMLIMIT off
+```
+
+Accepts any value valid for Go's `GOMEMLIMIT` (`4GiB`, `8192MiB`, plain bytes).
+Set to `off`, `0`, or `disabled` to remove the cap.
 
 ---
 
@@ -360,7 +390,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:latest` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.18` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |

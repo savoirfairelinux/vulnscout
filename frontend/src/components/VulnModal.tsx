@@ -19,12 +19,11 @@ import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
-import Packages from '../handlers/packages';
 import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
@@ -53,6 +52,57 @@ const dt_options: Intl.DateTimeFormatOptions = {
     timeZoneName: 'shortOffset'
 };
 
+// Tailwind classes for a simplified-status badge, matching the palette used
+// across the app (red = exploitable, amber = pending, green = not affected).
+const statusBadgeClass = (status: string): string => {
+    switch (status) {
+        case 'Exploitable':
+            return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300';
+        case 'Pending Assessment':
+            return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300';
+        case 'Not affected':
+            return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+        case 'Fixed':
+            return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+        default:
+            return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    }
+};
+
+const originLabel = (origin: string): string => {
+    switch (origin) {
+        case 'custom':
+            return 'User';
+        case 'sbom':
+            return 'SBOM';
+        default:
+            return origin ? formatSourceName(origin) : 'Unknown';
+    }
+};
+
+const originBadgeClass = (origin: string): string => {
+    switch (origin) {
+        case 'custom':
+            return 'bg-slate-200 text-slate-800 dark:bg-slate-600 dark:text-slate-100';
+        case 'sbom':
+            return 'bg-blue-200 text-blue-900 dark:bg-blue-800 dark:text-blue-100';
+        case 'scc':
+            return 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-300';
+        case 'grype':
+            return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300';
+        case 'yocto_cve_check':
+            return 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300';
+        case 'nvd':
+        case 'nvd_cpe':
+            return 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300';
+        case 'osv':
+            return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+        default:
+            return 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    }
+};
+
+
 
 type AssessmentGroup = {
     key: string;
@@ -60,6 +110,8 @@ type AssessmentGroup = {
     timestamp: string;
     packages: string[];
 };
+
+type StatusSortKey = 'variant' | 'package' | 'status' | 'justification' | 'impact' | 'notes' | 'workaround';
 
 type VariantScopedSnapshot = {
     variantId: string;
@@ -88,10 +140,15 @@ type VariantScopedSnapshot = {
     const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
+    const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
+    // True once the active-SBOM package list has been fetched for every variant,
+    // so deprecated packages can reliably be split into their own table.
+    const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
+    const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
@@ -103,21 +160,27 @@ type VariantScopedSnapshot = {
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
     useEffect(() => {
+        const controller = new AbortController();
         setAvailableVariants([]);
-        Variants.listByVuln(vuln.id).then(variants => {
+        setVariantsLoadedForVulnId(null);
+        Variants.listByVuln(vuln.id, controller.signal).then(variants => {
+            if (controller.signal.aborted) return;
             if (projectId) {
                 setAvailableVariants(variants.filter(v => v.project_id === projectId));
             } else {
                 setAvailableVariants(variants);
             }
+            setVariantsLoadedForVulnId(vuln.id);
         }).catch(() => {});
+        return () => controller.abort();
     }, [vuln.id, projectId]);
 
     // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
     // complete even when a variant filter is active in the explorer.
     useEffect(() => {
+        const controller = new AbortController();
         setAllVulnAssessments([]);
-        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors' })
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
                 if (Array.isArray(data)) {
@@ -125,6 +188,7 @@ type VariantScopedSnapshot = {
                 }
             })
             .catch(() => {});
+        return () => controller.abort();
     }, [vuln.id]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
@@ -136,12 +200,21 @@ type VariantScopedSnapshot = {
         setSelectedTargetVariantIds(availableVariants.map(v => v.id));
     }, [variantId, vuln.id, availableVariants]);
 
+    const variantIdsKey = useMemo(
+        () => availableVariants.map(v => v.id).sort().join(','),
+        [availableVariants]
+    );
+
     // Build per-variant snapshots so the modal can show where custom CVSS and
     // effort differ across variants directly in all-variants mode.
     useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
+        const signal = controller.signal;
         if (variantId || availableVariants.length === 0) {
             setVariantSnapshots([]);
+            return;
+        }
+        if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
 
@@ -156,14 +229,14 @@ type VariantScopedSnapshot = {
                 if (projectId) {
                     url.searchParams.set('project_id', projectId);
                 }
-                const response = await fetch(url.toString(), { mode: 'cors' });
+                const response = await fetch(url.toString(), { mode: 'cors', signal });
                 if (!response.ok) {
-                    if (!cancelled) setVariantSnapshots([]);
+                    if (!signal.aborted) setVariantSnapshots([]);
                     return;
                 }
                 const data = await response.json();
                 if (!Array.isArray(data)) {
-                    if (!cancelled) setVariantSnapshots([]);
+                    if (!signal.aborted) setVariantSnapshots([]);
                     return;
                 }
 
@@ -197,45 +270,74 @@ type VariantScopedSnapshot = {
                         };
                     });
 
-                if (!cancelled) {
+                if (!signal.aborted) {
                     setVariantSnapshots(snapshots);
                 }
             } catch {
-                if (!cancelled) setVariantSnapshots([]);
+                if (!signal.aborted) setVariantSnapshots([]);
             }
         })();
 
-        return () => { cancelled = true; };
-    }, [variantId, availableVariants, vuln.id, projectId, snapshotVersion]);
+        return () => { controller.abort(); };
+    // availableVariants is read inside but the fetch is intentionally keyed off
+    // the stable variantIdsKey memo, not the array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [variantId, variantIdsKey, variantsLoadedForVulnId, vuln.id, projectId, snapshotVersion]);
 
-    // Build variant -> package compatibility map using the same source as the
-    // SBOM tab: GET /api/packages?variant_id=<id> returns the active SBOM
-    // packages for that variant, whose ids match vuln.packages entries.
     useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
+        const signal = controller.signal;
+        setVariantPackageMapLoaded(false);
         if (availableVariants.length === 0) {
-            setVariantPackageMap({});
+            // Only mark as loaded once we know variants have been resolved.
+            // If variants are still loading (variantsLoadedForVulnId !== vuln.id),
+            // keep variantPackageMapLoaded = false to avoid a premature
+            // "all packages deprecated" flash when the map is empty but
+            // variants haven't arrived yet.
+            if (variantsLoadedForVulnId === vuln.id) {
+                setVariantPackageMap({});
+                setVariantPackageMapLoaded(true);
+            }
+            return;
+        }
+        if (variantsLoadedForVulnId !== vuln.id) {
             return;
         }
         (async () => {
-            const entries: [string, string[]][] = await Promise.all(
-                availableVariants.map(async (variant): Promise<[string, string[]]> => {
-                    try {
-                        const pkgs = await Packages.list(variant.id);
-                        // Build the same key format as vuln.packages:
-                        // "name@version::supplier" when supplier present, else "name@version"
-                        return [variant.id, pkgs.map(p =>
-                            p.supplier ? `${p.name}@${p.version}::${p.supplier}` : `${p.name}@${p.version}`
-                        )];
-                    } catch {
-                        return [variant.id, []];
+            try {
+                const url = new URL(
+                    import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/variant-active-packages`,
+                    window.location.href
+                );
+                if (projectId) {
+                    url.searchParams.set('project_id', projectId);
+                }
+                const response = await fetch(url.toString(), { mode: 'cors', signal });
+                const data = response.ok ? await response.json() : [];
+                const map: Record<string, string[]> = {};
+                if (Array.isArray(data)) {
+                    for (const entry of data) {
+                        if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
+                            map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                        }
                     }
-                })
-            );
-            if (!cancelled) setVariantPackageMap(Object.fromEntries(entries));
+                }
+                if (!signal.aborted) {
+                    setVariantPackageMap(map);
+                    setVariantPackageMapLoaded(true);
+                }
+            } catch {
+                if (!signal.aborted) {
+                    setVariantPackageMap({});
+                    setVariantPackageMapLoaded(true);
+                }
+            }
         })();
-        return () => { cancelled = true; };
-    }, [availableVariants]);
+        return () => { controller.abort(); };
+    // availableVariants.length is read inside but the fetch is intentionally
+    // keyed off the stable variantIdsKey memo, not the array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [variantIdsKey, variantsLoadedForVulnId, vuln.id, projectId]);
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
@@ -248,6 +350,7 @@ type VariantScopedSnapshot = {
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
+    const [nvdMode, setNvdMode] = useState<"local" | "api">("local");
 
     const modalRef = useRef<HTMLDivElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -363,7 +466,7 @@ type VariantScopedSnapshot = {
                 }
             } else {
                 const [nvdResult, epssResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id),
+                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, nvdMode),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
 
@@ -375,8 +478,12 @@ type VariantScopedSnapshot = {
                         errors.push(nvdValue.apiKeyConfigured
                             ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
                             : "NVD rate-limited. Set NVD API key in settings to reduce throttling.");
+                    } else if (nvdValue?.kind === "error" && nvdValue.code === "unauthorized") {
+                        errors.push("NVD API key rejected. Check your key in Settings.");
                     } else {
-                        errors.push("NVD API unavailable");
+                        errors.push(nvdMode === "api"
+                            ? "NVD API unavailable. Try again or switch to Local mode."
+                            : "NVD data unavailable. Try again or run an sbom-cve-check scan.");
                     }
                 }
                 if (epssResult.status === "rejected" || epssResult.value === null) {
@@ -419,7 +526,7 @@ type VariantScopedSnapshot = {
         } finally {
             setRefreshing(false);
         }
-    }, [vuln, patchVuln]);
+    }, [vuln, patchVuln, nvdMode]);
 
     const handleEditAssessment = (assessmentId: string, group: AssessmentGroup) => {
         setEditingAssessmentId(assessmentId);
@@ -466,14 +573,17 @@ type VariantScopedSnapshot = {
             }
 
             if (!anyError) {
-                if (vuln.assessments.length > 0) {
-                    const sortedAssessments = [...vuln.assessments].sort(
-                        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-                    );
-                    vuln.simplified_status = sortedAssessments[0].simplified_status;
-                }
+                const updatedAssessments = [...vuln.assessments];
+                const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+                vuln.simplified_status = statusSummary.dominant_status;
+                vuln.status_summary = statusSummary;
 
-                patchVuln(vuln.id, vuln);
+                patchVuln(vuln.id, {
+                    ...vuln,
+                    assessments: updatedAssessments,
+                    simplified_status: statusSummary.dominant_status,
+                    status_summary: statusSummary,
+                });
                 showMessage("Assessment deleted successfully!", "success");
             }
         }
@@ -646,13 +756,16 @@ type VariantScopedSnapshot = {
         }
 
         if (!anyError) {
-            const latest = vuln.assessments.slice().sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            )[0];
-            if (latest) {
-                vuln.simplified_status = latest.simplified_status;
-            }
-            patchVuln(vuln.id, vuln);
+            const updatedAssessments = [...vuln.assessments];
+            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
+            vuln.simplified_status = statusSummary.dominant_status;
+            vuln.status_summary = statusSummary;
+            patchVuln(vuln.id, {
+                ...vuln,
+                assessments: updatedAssessments,
+                simplified_status: statusSummary.dominant_status,
+                status_summary: statusSummary,
+            });
             showMessage('Assessment updated successfully!', 'success');
         }
 
@@ -723,6 +836,131 @@ type VariantScopedSnapshot = {
 
     const groupedAssessments = groupAssessments(vuln.assessments);
 
+    const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
+        allVulnAssessments
+            .filter(a => a.variant_id === variantIdValue && (pkg === null || a.packages.includes(pkg)))
+            .reduce<Assessment | null>((best, a) => {
+                if (!best) return a;
+                return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
+            }, null);
+
+    type StatusRow = { variant: Variant; pkg: string | null; assessment: Assessment | null; deprecated: boolean };
+
+    const allStatusRows: StatusRow[] = availableVariants.flatMap((variant): StatusRow[] => {
+        const variantActivePkgs = variantPackageMap[variant.id];
+        const variantPkgs = variantActivePkgs ?? [];
+        // Packages affected by this vuln that still exist in the variant's active SBOM.
+        const activeAffected = projectPackages.filter(p => variantPkgs.includes(p));
+        // Packages referenced by the variant's assessments may include older,
+        // now-deprecated versions that are no longer in the active SBOM.
+        const assessmentPkgs = [...new Set(
+            allVulnAssessments
+                .filter(a => a.variant_id === variant.id)
+                .flatMap(a => a.packages)
+        )];
+        const allPkgs = [...new Set([...activeAffected, ...assessmentPkgs])];
+        const hasActivePkgData = variantPackageMapLoaded && variantActivePkgs !== undefined;
+        if (allPkgs.length === 0) {
+            return [{ variant, pkg: null, assessment: latestAssessmentFor(variant.id, null), deprecated: false }];
+        }
+        return allPkgs.slice().sort().map(pkg => ({
+            variant,
+            pkg,
+            assessment: latestAssessmentFor(variant.id, pkg),
+            // A package is deprecated once it's no longer in the variant's active
+            // SBOM. Until that list has loaded, keep it in the current table.
+            deprecated: hasActivePkgData && !variantPkgs.includes(pkg),
+        }));
+    });
+
+    const currentAssessmentRows = allStatusRows.filter(r => !r.deprecated);
+    const deprecatedAssessmentRows = allStatusRows.filter(r => r.deprecated);
+
+    // Value used to compare two rows for a given sortable column.
+    const statusSortValue = (row: StatusRow, key: StatusSortKey): string => {
+        switch (key) {
+            case 'variant': return row.variant.name ?? '';
+            case 'package': return row.pkg ? formatPkgId(row.pkg) : '';
+            case 'status': return row.assessment?.simplified_status ?? 'No status';
+            case 'justification': return row.assessment?.justification ?? '';
+            case 'impact': return row.assessment?.impact_statement ?? '';
+            case 'notes': return row.assessment?.status_notes ?? '';
+            case 'workaround': return row.assessment?.workaround ?? '';
+        }
+    };
+
+    const sortStatusRows = (rows: StatusRow[]): StatusRow[] =>
+        statusSort
+            ? rows.slice().sort((a, b) => {
+                const cmp = statusSortValue(a, statusSort.key)
+                    .localeCompare(statusSortValue(b, statusSort.key), undefined, { sensitivity: 'base' });
+                return statusSort.dir === 'asc' ? cmp : -cmp;
+            })
+            : rows;
+
+    const toggleStatusSort = (key: StatusSortKey) => {
+        setStatusSort(prev =>
+            prev?.key === key
+                ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+                : { key, dir: 'asc' }
+        );
+    };
+
+    const statusSortColumns: { key: StatusSortKey; label: string }[] = [
+        { key: 'variant', label: 'Variant' },
+        { key: 'package', label: 'Package' },
+        { key: 'status', label: 'Status' },
+        { key: 'justification', label: 'Justification' },
+        { key: 'impact', label: 'Impact' },
+        { key: 'notes', label: 'Notes' },
+        { key: 'workaround', label: 'Workaround' },
+    ];
+
+    const renderStatusTable = (rows: StatusRow[]) => (
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr className="text-gray-400 border-b border-gray-600">
+                        {statusSortColumns.map((col, idx) => (
+                            <th
+                                key={col.key}
+                                className={`py-1 font-semibold cursor-pointer select-none hover:text-gray-200 ${idx < statusSortColumns.length - 1 ? 'pr-3' : ''}`}
+                                onClick={() => toggleStatusSort(col.key)}
+                                aria-sort={statusSort?.key === col.key ? (statusSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                            >
+                                {col.label}
+                                <span className="ml-1 text-xs">
+                                    {statusSort?.key === col.key ? (statusSort.dir === 'asc' ? '▲' : '▼') : ''}
+                                </span>
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map(({ variant, pkg, assessment }) => (
+                        <tr key={`${variant.id}::${pkg ?? ''}`} className="border-b border-gray-700 last:border-0 align-top">
+                            <td className="py-1.5 pr-3">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300 whitespace-nowrap">
+                                    {variant.name}
+                                </span>
+                            </td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-nowrap">{pkg ? formatPkgId(pkg) : '—'}</td>
+                            <td className="py-1.5 pr-3">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${statusBadgeClass(assessment?.simplified_status ?? 'No status')}`}>
+                                    {assessment?.simplified_status ?? 'No status'}
+                                </span>
+                            </td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.justification || '—'}</td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.impact_statement || '—'}</td>
+                            <td className="py-1.5 pr-3 text-gray-300 whitespace-pre-line">{assessment?.status_notes || '—'}</td>
+                            <td className="py-1.5 text-gray-300 whitespace-pre-line">{assessment?.workaround || '—'}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+
     const bothRefreshed = isGhsaVuln
         ? refreshedList.includes('GHSA')
         : refreshedList.includes('NVD') && refreshedList.includes('EPSS');
@@ -747,10 +985,14 @@ type VariantScopedSnapshot = {
             content.packages = projectPackages;
         }
 
-        // Determine which variants to post to. If none selected, post once without a variant_id.
+        // Determine which variants to post to.
+        // Prefer explicit selections from the form; fall back to the current
+        // variantId context so the assessment is never stored without a variant.
         const variantIds: Array<string | undefined> =
             content.variant_ids && content.variant_ids.length > 0
                 ? content.variant_ids
+                : variantId
+                ? [variantId]
                 : [undefined];
 
         const { variant_ids: _, ...baseContent } = content;
@@ -766,55 +1008,59 @@ type VariantScopedSnapshot = {
 
         setSubmittingMessage('Adding assessment...');
         try {
-        for (const vid of variantIds) {
-            const body = vid ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp } : { ...baseContent, timestamp: sharedTimestamp };
-            const response = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, {
-                method: 'POST',
-                mode: 'cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const data = await response.json();
-            if (data?.status === 'success') {
-                // Backend returns an array (one record per package); support legacy single too
-                const rawList: unknown[] = Array.isArray(data?.assessments)
-                    ? data.assessments
-                    : (data?.assessment ? [data.assessment] : []);
-                for (const raw of rawList) {
-                    const casted = asAssessment(raw);
-                    if (!Array.isArray(casted) && typeof casted === 'object') {
-                        successCount++;
-                        lastCasted = casted;
-                        if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
-                        for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
+        // Post every variant in a single batch request
+        const items = variantIds.map(vid =>
+            vid
+                ? { ...baseContent, variant_id: vid, timestamp: sharedTimestamp }
+                : { ...baseContent, timestamp: sharedTimestamp }
+        );
+        const response = await fetch(import.meta.env.VITE_API_URL + `/api/assessments/batch`, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assessments: items })
+        });
+        const data = await response.json();
+        if (data?.status === 'success') {
+            // Backend returns one record per (package, variant) pair.
+            const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
+            for (const raw of rawList) {
+                const casted = asAssessment(raw);
+                if (!Array.isArray(casted) && typeof casted === 'object') {
+                    successCount++;
+                    lastCasted = casted;
+                    if (casted.variant_id) touchedVariantIds.add(casted.variant_id);
+                    for (const pkg of casted.packages ?? []) touchedPackages.add(pkg);
 
-                        // Highlight the very first created assessment
-                        if (successCount === 1) {
-                            setNewAssessmentIds(prev => new Set(prev).add(casted.id));
-                            setTimeout(() => {
-                                setNewAssessmentIds(prev => {
-                                    const newSet = new Set(prev);
-                                    newSet.delete(casted.id);
-                                    return newSet;
-                                });
-                            }, 5500);
-                        }
-
-                        appendAssessment(casted);
-                        vuln.assessments.push(casted);
-                        // Keep allVulnAssessments in sync so variant tags appear immediately
-                        setAllVulnAssessments(prev => [...prev, casted]);
-                        vuln.simplified_status = casted.simplified_status;
+                    // Highlight the very first created assessment
+                    if (successCount === 1) {
+                        setNewAssessmentIds(prev => new Set(prev).add(casted.id));
+                        setTimeout(() => {
+                            setNewAssessmentIds(prev => {
+                                const newSet = new Set(prev);
+                                newSet.delete(casted.id);
+                                return newSet;
+                            });
+                        }, 5500);
                     }
+
+                    appendAssessment(casted);
+                    vuln.assessments.push(casted);
+                    // Keep allVulnAssessments in sync so variant tags appear immediately
+                    setAllVulnAssessments(prev => [...prev, casted]);
+                    vuln.simplified_status = casted.simplified_status;
                 }
-            } else {
-                showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
             }
+            if (Array.isArray(data?.errors) && data.errors.length > 0) {
+                showMessage(`Some assessments failed: ${escape(JSON.stringify(data.errors))}`, 'error');
+            }
+        } else {
+            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
         }
 
         if (lastCasted) {
             const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(updatedAssessments);
+            const statusSummary = buildStatusSummary(updatedAssessments, vuln.packages_current);
             patchVuln(vuln.id, {
                 ...vuln,
                 assessments: updatedAssessments,
@@ -1074,7 +1320,36 @@ type VariantScopedSnapshot = {
                             </div>
 
                             {!readOnly && (
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {!isGhsaVuln && (
+                                        <span className="flex items-center gap-1.5 text-xs text-gray-400">
+                                            NVD source:
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`nvd-mode-${vuln.id}`}
+                                                    value="local"
+                                                    checked={nvdMode === "local"}
+                                                    onChange={() => setNvdMode("local")}
+                                                    disabled={refreshing}
+                                                    className="accent-cyan-500"
+                                                />
+                                                <span className="text-gray-300">Git repository</span>
+                                            </label>
+                                            <label className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="radio"
+                                                    name={`nvd-mode-${vuln.id}`}
+                                                    value="api"
+                                                    checked={nvdMode === "api"}
+                                                    onChange={() => setNvdMode("api")}
+                                                    disabled={refreshing}
+                                                    className="accent-cyan-500"
+                                                />
+                                                <span className="text-gray-300">API</span>
+                                            </label>
+                                        </span>
+                                    )}
                                     <button
                                         onClick={handleRefresh}
                                         disabled={refreshing}
@@ -1175,6 +1450,28 @@ type VariantScopedSnapshot = {
                                     <span className="font-bold mr-1">Aliases:</span>
                                     <code>{vuln.aliases.join(', ')}</code>
                                 </li>
+                                {vuln.euvd?.id && (
+                                    <li key="euvd">
+                                        <span className="font-bold mr-1">ENISA EUVD:</span>
+                                        {vuln.euvd.url ? (
+                                            <a
+                                                href={vuln.euvd.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-blue-400 hover:underline"
+                                            >
+                                                <code>{vuln.euvd.id}</code>
+                                            </a>
+                                        ) : (
+                                            <code>{vuln.euvd.id}</code>
+                                        )}
+                                        {vuln.euvd.known_exploited && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                                                EU KEV — Known Exploited
+                                            </span>
+                                        )}
+                                    </li>
+                                )}
                                 <li key="related_vulns">
                                     <span className="font-bold mr-1">Related vulnerabilities:</span>
                                     <code>{vuln.related_vulnerabilities.join(', ')}</code>
@@ -1316,6 +1613,19 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <h3 className="font-bold mb-2">Assessments</h3>
+                            {currentAssessmentRows.length > 0 && (
+                                <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOMs packages</h4>
+                                    {renderStatusTable(sortStatusRows(currentAssessmentRows))}
+                                </div>
+                            )}
+                            {deprecatedAssessmentRows.length > 0 && (
+                                <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on old packages (not present in current SBOMs)</h4>
+                                    {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
+                                </div>
+                            )}
+                            <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
                             <ol className="relative border-s border-gray-800">
                                 {isEditing && (
                                     <li className="ms-4 text-white pb-8">
@@ -1340,11 +1650,19 @@ type VariantScopedSnapshot = {
                                     const firstAssess = group.assessments[0]; // Use first assessment for content
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
+                                    const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
 
                                     return (
                                         <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
                                             <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
-                                            <time className="mb-1 text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
+                                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                                <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
+                                                {groupOrigins.map(origin => (
+                                                    <span key={origin} className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${originBadgeClass(origin)}`} title={`Assessment origin: ${origin}`}>
+                                                        {originLabel(origin)}
+                                                    </span>
+                                                ))}
+                                            </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);

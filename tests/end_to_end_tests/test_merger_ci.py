@@ -51,6 +51,17 @@ def init_files(tmp_path):
 
 
 @pytest.fixture()
+def init_files_vex(tmp_path):
+    files = {
+        "YOCTO_VEX_FOLDER": tmp_path / "yocto_vex",
+        "YOCTO_VEX": tmp_path / "yocto_vex" / "vex.json",
+    }
+    files["YOCTO_VEX_FOLDER"].mkdir()
+    write_demo_files(files)
+    return files
+
+
+@pytest.fixture()
 def app(init_files, monkeypatch):
     """Flask app with in-memory SQLite; all demo SBOM files are registered."""
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
@@ -264,6 +275,52 @@ def test_yocto_description(app, init_files):
     yocto_observations = [obs for obs in observations if obs.key == "Yocto Description"]
     assert len(yocto_observations) == 1
     assert yocto_observations[0].description == "Yocto-specfic description"
+
+
+# ---------------------------------------------------------------------------
+# yocto-vex end-to-end
+# ---------------------------------------------------------------------------
+
+def test_yocto_vex_e2e(init_files_vex, monkeypatch):
+    """yocto-vex files are registered, parsed and stored correctly."""
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    from src.bin.webapp import create_app
+    from src.extensions import db as _db
+
+    application = create_app()
+    application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
+    with application.app_context():
+        _db.create_all()
+        runner = application.test_cli_runner()
+        result = runner.invoke(args=[
+            "merge",
+            "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
+            "--yocto-vex", str(init_files_vex["YOCTO_VEX"]),
+        ])
+        assert result.exit_code == 0, result.output
+
+        ctrls = _run_main()
+        pkgs = ctrls.packages.to_dict()
+        vulns = ctrls.vulnerabilities.to_dict()
+        assessments = ctrls.assessments.to_dict()
+
+        assert "openssl@3.0.2::meta" in pkgs
+        assert "CVE-2022-0778" in vulns
+
+        # The patch-file should have been registered as an advisory URL
+        vuln = vulns["CVE-2022-0778"]
+        assert any("/patches/CVE-2022-0778.patch" in (u or "") for u in vuln.get("advisories", []))
+
+        # A "fixed" assessment should exist for the Patched issue
+        found_fixed = any(
+            a["status"] in ("fixed", "resolved") and "openssl@3.0.2::meta" in a.get("packages", [])
+            for a in assessments.values()
+            if vuln["id"] in a.get("vuln_id", "")
+        )
+        assert found_fixed, "Expected a 'fixed' assessment for CVE-2022-0778 / openssl@3.0.2::meta"
+
+        _db.drop_all()
 
 
 # ---------------------------------------------------------------------------

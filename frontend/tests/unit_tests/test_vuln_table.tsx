@@ -32,6 +32,24 @@ jest.mock('../../src/handlers/epss_progress', () => ({
     },
 }));
 
+// Mock EUVDProgressHandler to prevent unwanted fetch calls
+jest.mock('../../src/handlers/euvd_progress', () => ({
+    __esModule: true,
+    default: {
+        getProgress: jest.fn().mockResolvedValue(null),
+        getProgressPercentage: jest.fn().mockReturnValue(0),
+    },
+}));
+
+// Mock GHSAProgressHandler to prevent unwanted fetch calls
+jest.mock('../../src/handlers/ghsa_progress', () => ({
+    __esModule: true,
+    default: {
+        getProgress: jest.fn().mockResolvedValue(null),
+        getProgressPercentage: jest.fn().mockReturnValue(0),
+    },
+}));
+
 
 const getDOMRect = (width: number, height: number) => ({
     width,
@@ -592,6 +610,41 @@ describe('Vulnerability Table', () => {
 
         const pkg_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(pkg_xyz).toBeInTheDocument();
+    })
+
+    test('filter by variant', async () => {
+        // ARRANGE
+        const vulnerabilitiesWithVariants = vulnerabilities.map((vuln, index) => ({
+            ...vuln,
+            variants: index === 0 ? ['variant-a'] : index === 1 ? ['variant-b'] : ['variant-a', 'variant-b']
+        }));
+        render(<TableVulnerabilities vulnerabilities={vulnerabilitiesWithVariants} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const variantBtn = await screen.getByRole('button', { name: /^variants$/i });
+        expect(variantBtn).toBeInTheDocument();
+        await user.click(variantBtn);
+
+        // All variants are checked by default; unchecking variant-a removes rows
+        // that belong only to variant-a (the first vuln). Rows that also belong to
+        // variant-b stay visible.
+        const variantCheckbox = await screen.getByRole('checkbox', { name: 'variant-a' });
+        expect(variantCheckbox).toBeChecked();
+        await user.click(variantCheckbox);
+
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
+        }, { timeout: 5000 });
+
+        expect(await screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        expect(await screen.getByRole('cell', {name: /CVE-2024-56730/})).toBeInTheDocument();
+    })
+
+    test('variant filter is hidden when no vulnerability has variants', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     })
 
     test('filter out Exploitable', async () => {
@@ -1322,14 +1375,27 @@ describe('Vulnerability Table', () => {
     // Published Date Feature Tests
     // =========================================================================
 
-    test('published date filter button is disabled when NVD sync is not completed', async () => {
-        // NVD progress mock defaults to phase: 'idle', which means not completed
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+    test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {
+        // NVD progress mock defaults to phase: 'idle' (not completed). With no
+        // vulnerability carrying a published date, the filter has nothing to act on.
+        const noPublished = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={noPublished} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const publishedDateBtn = await screen.getByRole('button', { name: /published date/i });
         expect(publishedDateBtn).toBeInTheDocument();
         expect(publishedDateBtn).toBeDisabled();
-        expect(publishedDateBtn).toHaveAttribute('title', 'NVD sync in progress');
+        expect(publishedDateBtn).toHaveAttribute('title', 'No published dates available');
+    });
+
+    test('published date filter button is enabled when a published date exists even if NVD has not synced', async () => {
+        // NVD progress mock defaults to 'idle' (not completed), but the fixture
+        // vulnerabilities carry published dates (e.g. from an sbom-cve-check scan).
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const publishedDateBtn = await screen.getByRole('button', { name: /published date/i });
+        expect(publishedDateBtn).toBeInTheDocument();
+        expect(publishedDateBtn).not.toBeDisabled();
+        expect(publishedDateBtn).toHaveAttribute('title', 'Filter by published date');
     });
 
     test('published date filter button is enabled when NVD sync is completed', async () => {
@@ -1344,6 +1410,49 @@ describe('Vulnerability Table', () => {
         });
 
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
+            expect(publishedDateBtn).not.toBeDisabled();
+            expect(publishedDateBtn).toHaveAttribute('title', 'Filter by published date');
+        });
+    });
+
+    test('published date filter button is disabled while NVD sync is in progress even when published dates exist', async () => {
+        // An active NVD sync takes priority: the button is disabled and shows
+        // the sync tooltip, regardless of already-available published dates.
+        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+        NVDProgressHandler.getProgress.mockResolvedValueOnce({
+            in_progress: true,
+            phase: 'downloading',
+            current: 10,
+            total: 100,
+            message: 'Downloading',
+        });
+
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
+            expect(publishedDateBtn).toBeDisabled();
+            expect(publishedDateBtn).toHaveAttribute('title', 'NVD sync in progress');
+        });
+    });
+
+    test('published date filter button is enabled when NVD sync is completed even without published dates', async () => {
+        // A completed NVD sync makes the filter usable on its own, independent
+        // of whether the loaded vulnerabilities carry published dates.
+        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+        NVDProgressHandler.getProgress.mockResolvedValueOnce({
+            in_progress: false,
+            phase: 'completed',
+            current: 100,
+            total: 100,
+            message: 'Done',
+        });
+
+        const noPublished = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={noPublished} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         await waitFor(() => {
             const publishedDateBtn = screen.getByRole('button', { name: /published date/i });
@@ -2680,5 +2789,579 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         } finally {
             jest.useRealTimers();
         }
+    });
+});
+
+describe('Status helper, banner close, package filter, modal navigation, first scan date column', () => {
+    const vulnerabilities: Vulnerability[] = [
+        {
+            id: 'CVE-2010-1234',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['hardcoded'],
+            datasource: 'test',
+            packages: ['aaabbbccc@1.0.0'],
+            packages_current: ['aaabbbccc@1.0.0'],
+            urls: [],
+            texts: [{ title: 'description', content: 'A test vulnerability.' }],
+            severity: { severity: 'low', min_score: 3, max_score: 3, cvss: [] },
+            epss: { score: 0.1, percentile: 0.5 },
+            effort: {
+                optimistic: new Iso8601Duration('PT4H'),
+                likely: new Iso8601Duration('P1D'),
+                pessimistic: new Iso8601Duration('P3D'),
+            },
+            fix: { state: 'unknown' },
+            simplified_status: 'Pending Assessment',
+            assessments: [],
+            variants: [],
+            published: '2010-05-15T08:00:00Z',
+            first_scan_date: '2025-02-10T09:00:00Z',
+        },
+        {
+            id: 'CVE-2018-5678',
+            aliases: [],
+            related_vulnerabilities: [],
+            namespace: 'nvd:cve',
+            found_by: ['cve-finder'],
+            datasource: 'test',
+            packages: ['xxxyyyzzz@2.0.0'],
+            packages_current: ['xxxyyyzzz@2.0.0'],
+            urls: [],
+            texts: [{ title: 'description', content: 'Another vulnerability.' }],
+            severity: { severity: 'high', min_score: 8, max_score: 8, cvss: [] },
+            epss: { score: 0.5, percentile: 0.9 },
+            effort: {
+                optimistic: new Iso8601Duration(undefined),
+                likely: new Iso8601Duration(undefined),
+                pessimistic: new Iso8601Duration(undefined),
+            },
+            fix: { state: 'unknown' },
+            simplified_status: 'Exploitable',
+            assessments: [],
+            variants: [],
+            published: '2018-07-22T14:30:00Z',
+            first_scan_date: '2025-03-20T12:00:00Z',
+        },
+    ];
+
+    Element.prototype.getBoundingClientRect = jest.fn(function () {
+        return { width: 500, height: 500, top: 0, left: 0, bottom: 0, right: 0, x: 0, y: 0, toJSON: () => {} };
+    });
+
+    beforeEach(() => {
+        fetchMock.resetMocks();
+        // Reset progress handler mocks to avoid queued once-responses from previous describe blocks
+        const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+        const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+        NVDProgressHandler.getProgress.mockReset();
+        NVDProgressHandler.getProgress.mockResolvedValue(null);
+        EPSSProgressHandler.getProgress.mockReset();
+        EPSSProgressHandler.getProgress.mockResolvedValue(null);
+    });
+
+    test('status summary helper button opens and closes dropdown', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Find the status summary helper button (inside the Status column header)
+        const statusHelperBtn = await screen.getByRole('button', { name: /status summary helper/i });
+        expect(statusHelperBtn).toBeInTheDocument();
+
+        // Click to open
+        await user.click(statusHelperBtn);
+
+        const helpTitle = await screen.findByText('Status Summary');
+        expect(helpTitle).toBeInTheDocument();
+        expect(screen.getByText(/Status aggregates all assessment outcomes/i)).toBeInTheDocument();
+
+        // Close via click outside — the dropdown closes via a mousedown listener
+        fireEvent.mouseDown(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Status Summary')).not.toBeInTheDocument();
+        });
+    });
+
+    test('clicking outside status helper closes it', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const statusHelperBtn = await screen.getByRole('button', { name: /status summary helper/i });
+        await user.click(statusHelperBtn);
+
+        expect(await screen.findByText('Status Summary')).toBeInTheDocument();
+
+        // Click outside
+        await user.click(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Status Summary')).not.toBeInTheDocument();
+        });
+    });
+
+    test('banner can be dismissed via close button', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            NVDProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => { jest.advanceTimersByTime(5001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/NVD refresh complete/i)).toBeInTheDocument();
+            });
+
+            // Dismiss the banner using fireEvent (compatible with fake timers)
+            const closeBtn = screen.getByRole('button', { name: /dismiss/i });
+            await act(async () => { fireEvent.click(closeBtn); });
+
+            await waitFor(() => {
+                expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('package filter indicator shown when filterLabel is Package', async () => {
+        render(
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="aaabbbccc@1.0.0"
+            />
+        );
+
+        // Package indicator label should be visible
+        const packageLabel = await screen.findByText('Package:');
+        expect(packageLabel).toBeInTheDocument();
+
+        // The filter value appears in the indicator badge (may also appear in table cells)
+        expect(screen.getAllByText('aaabbbccc@1.0.0').length).toBeGreaterThan(0);
+    });
+
+    test('package filter indicator clear button removes the filter', async () => {
+        render(
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="aaabbbccc@1.0.0"
+            />
+        );
+
+        const user = userEvent.setup();
+        await screen.findByText('Package:');
+
+        // Click the times/clear button next to the package filter
+        const clearBtn = screen.getByTitle(/clear package filter/i);
+        await user.click(clearBtn);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Package:')).not.toBeInTheDocument();
+        });
+    });
+
+    test('first scan date column shows formatted date when enabled', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Enable First Scan Date column
+        const buttons = screen.getAllByRole('button', { name: /columns/i });
+        await user.click(buttons[0]);
+        const fsDateCheckbox = screen.getByRole('checkbox', { name: /^first scan date$/i });
+        await user.click(fsDateCheckbox);
+
+        // Column header should appear
+        await waitFor(() => {
+            expect(screen.getByRole('columnheader', { name: /first scan date/i })).toBeInTheDocument();
+        });
+
+        // The formatted dates from first_scan_date should be present in the table
+        // (the exact format depends on locale, but the year should be visible)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).toMatch(/2025/);
+        });
+    });
+
+    test('first scan date column shows Unknown for missing dates', async () => {
+        const vulnsNoScanDate = vulnerabilities.map(v => ({ ...v, first_scan_date: undefined }));
+        render(<TableVulnerabilities vulnerabilities={vulnsNoScanDate} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const buttons = screen.getAllByRole('button', { name: /columns/i });
+        await user.click(buttons[0]);
+        const fsDateCheckbox = screen.getByRole('checkbox', { name: /^first scan date$/i });
+        await user.click(fsDateCheckbox);
+
+        await waitFor(() => {
+            const unknownCells = screen.getAllByText('Unknown');
+            expect(unknownCells.length).toBeGreaterThanOrEqual(2);
+        });
+    });
+
+    test('opening a vulnerability from the table and navigating to next via modal arrows', async () => {
+        fetchMock.mockResponse(JSON.stringify([]));
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Click on the first CVE ID cell to open the modal
+        const idCells = screen.getAllByTitle('Click to view details');
+        await user.click(idCells[0]);
+
+        // Modal should open showing the first vulnerability
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+
+        // Click the Next button to navigate to the second vulnerability
+        const nextBtn = await screen.findByLabelText('Next vulnerability');
+        await user.click(nextBtn);
+
+        // Modal should now show the second vulnerability
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('close button on VulnModal calls the onClose callback updating table state', async () => {
+        fetchMock.mockResponse(JSON.stringify([]));
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+
+        // Open modal
+        const idCells = screen.getAllByTitle('Click to view details');
+        await user.click(idCells[0]);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
+        });
+
+        // Close modal via Escape key (triggers handleClose → onClose)
+        await user.keyboard('{Escape}');
+
+        // Modal should be dismissed — only one copy of the ID should exist now (in the table)
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBe(1);
+        });
+    });
+
+    test('published date cell shows fetching… when NVD in progress and no published date', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            NVDProgressHandler.getProgress.mockResolvedValue({
+                in_progress: true,
+                phase: 'bulk_nvd_refresh',
+                current: 3,
+                total: 10,
+                message: '',
+            });
+
+            // Vuln without published date
+            const vulnNoPub = {
+                ...vulnerabilities[0],
+                published: undefined,
+                id: 'CVE-2010-1234',
+            };
+
+            render(<TableVulnerabilities vulnerabilities={[vulnNoPub]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+
+            // Enable Published Date column
+            const user = userEvent.setup({ delay: null });
+            const columnsBtn = screen.getAllByRole('button', { name: /columns/i })[0];
+            await user.click(columnsBtn);
+            const pubDateCheck = screen.getByRole('checkbox', { name: /^published date$/i });
+            await user.click(pubDateCheck);
+
+            // Should show "fetching…" placeholder (line 845)
+            await waitFor(() => {
+                expect(screen.getByText('fetching…')).toBeInTheDocument();
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('first scan date column shows formatted date from first_scan_date field', async () => {
+        const vulnWithScanDate = {
+            ...vulnerabilities[0],
+            first_scan_date: '2025-02-10T09:00:00Z',
+        };
+
+        render(<TableVulnerabilities vulnerabilities={[vulnWithScanDate]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Enable First Scan Date column
+        const columnsBtn = screen.getAllByRole('button', { name: /columns/i })[0];
+        await user.click(columnsBtn);
+        const fsDateCheck = screen.getByRole('checkbox', { name: /^first scan date$/i });
+        await user.click(fsDateCheck);
+
+        // Column header should appear
+        await waitFor(() => {
+            expect(screen.getByRole('columnheader', { name: /first scan date/i })).toBeInTheDocument();
+        });
+
+        // Formatted date from first_scan_date should be visible (line 961)
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            // The date Feb 10, 2025 formatted in some locale
+            expect(html).toMatch(/2025/);
+            expect(html).toMatch(/Feb|02|10/);
+        });
+    });
+
+    test('fetchAllProgress console.errors when progress handlers reject', async () => {
+        const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            const EPSSProgressHandler = require('../../src/handlers/epss_progress').default;
+
+            NVDProgressHandler.getProgress.mockRejectedValueOnce(new Error('NVD network error'));
+            EPSSProgressHandler.getProgress.mockRejectedValueOnce(new Error('EPSS network error'));
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            await act(async () => { await Promise.resolve(); });
+
+            // The console.error calls for rejected progress fetches should have fired (lines 441, 443, 445)
+            expect(consoleSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Failed to fetch NVD refresh progress:'),
+                expect.any(Error)
+            );
+            expect(consoleSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Failed to fetch EPSS refresh progress:'),
+                expect.any(Error)
+            );
+        } finally {
+            jest.useRealTimers();
+            consoleSpy.mockRestore();
+        }
+    });
+
+    test('polling setInterval fires when progress is in_progress (lines 488/511)', async () => {
+        jest.useFakeTimers();
+        try {
+            const NVDProgressHandler = require('../../src/handlers/nvd_progress').default;
+            // First call: in_progress=true to start polling
+            // Second call (from interval): also returns in_progress=true
+            // Third call: completed
+            NVDProgressHandler.getProgress
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 1, total: 10, message: '' })
+                .mockResolvedValueOnce({ in_progress: true, phase: 'bulk_nvd_refresh', current: 5, total: 10, message: '' })
+                .mockResolvedValueOnce({ in_progress: false, phase: 'completed', current: 10, total: 10, message: '' });
+
+            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+            // Initial fetch
+            await act(async () => { await Promise.resolve(); });
+
+            // Advance time to trigger the setInterval (3000ms — line 511)
+            await act(async () => { jest.advanceTimersByTime(3001); });
+            await act(async () => { await Promise.resolve(); });
+
+            // Advance again to complete
+            await act(async () => { jest.advanceTimersByTime(3001); });
+            await act(async () => { await Promise.resolve(); });
+
+            await waitFor(() => {
+                expect(screen.getByText(/NVD refresh complete/i)).toBeInTheDocument();
+            });
+
+            expect(NVDProgressHandler.getProgress).toHaveBeenCalledTimes(3);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    test('click inside status helper dropdown does not close it (stopPropagation)', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const statusHelperBtn = screen.getByRole('button', { name: /status summary helper/i });
+        await user.click(statusHelperBtn);
+
+        const helpTitle = await screen.findByText('Status Summary');
+        expect(helpTitle).toBeTruthy();
+
+        // Click inside the dropdown
+        await user.click(helpTitle);
+
+        // Should remain open
+        expect(screen.queryByText('Status Summary')).toBeTruthy();
+    });
+
+    test('deselecting attack vector filter restores full list', async () => {
+        const vulnsWithVector = vulnerabilities.map(v => ({
+            ...v,
+            severity: {
+                ...v.severity,
+                cvss: [{ author: 'a', severity: 'low', base_score: 3, vector_string: 'CVSS:3.1/AV:N', version: '3.1', impact_score: 0, exploitability_score: 0, attack_vector: 'NETWORK' }]
+            }
+        }));
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithVector} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open More Filters
+        await user.click(screen.getByText('More'));
+
+        const networkCheckbox = await screen.findByRole('checkbox', { name: /network/i });
+
+        // Select
+        await user.click(networkCheckbox);
+        // Deselect — covers line 1433
+        await user.click(networkCheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('sort by published date column triggers sortingFn', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Enable Published Date column
+        const columnsBtn = screen.getAllByRole('button', { name: /columns/i })[0];
+        await user.click(columnsBtn);
+        const pubDateCheck = screen.getByRole('checkbox', { name: /^published date$/i });
+        await user.click(pubDateCheck);
+
+        // Click the header to sort
+        const pubDateHeader = await screen.findByRole('columnheader', { name: /published date/i });
+        await user.click(pubDateHeader);
+
+        // Click again to reverse sort
+        await user.click(pubDateHeader);
+
+        // Both vulns should still be visible
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('sort by first scan date column triggers sortingFn', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Enable First Scan Date column
+        const columnsBtn = screen.getAllByRole('button', { name: /columns/i })[0];
+        await user.click(columnsBtn);
+        const fsDateCheck = screen.getByRole('checkbox', { name: /^first scan date$/i });
+        await user.click(fsDateCheck);
+
+        // Click the header to sort
+        const fsDateHeader = await screen.findByRole('columnheader', { name: /first scan date/i });
+        await user.click(fsDateHeader);
+
+        // Click again to reverse sort
+        await user.click(fsDateHeader);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('severity score sort (sortSeverityByScoreFn) is invoked when custom severity filter is active', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Open the Severity filter dropdown, then click the "by score" checkbox
+        await user.click(screen.getByRole('button', { name: /severity/i }));
+        const byScoreCheckbox = await screen.findByRole('checkbox', { name: /by score/i });
+        await user.click(byScoreCheckbox);
+
+        // Now click the Severity column header to trigger sortSeverityByScoreFn
+        const severityHeader = screen.getByRole('columnheader', { name: /severity/i });
+        await user.click(severityHeader);
+        // Click again to reverse
+        await user.click(severityHeader);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('attack vector sort (sortAttackVectorFn) is invoked when sorting Attack Vector column', async () => {
+        const vulnsWithVector = vulnerabilities.map(v => ({
+            ...v,
+            severity: {
+                ...v.severity,
+                cvss: [{ author: 'a', severity: 'low', base_score: 3, vector_string: 'CVSS:3.1/AV:N', version: '3.1', impact_score: 0, exploitability_score: 0, attack_vector: 'NETWORK' }]
+            }
+        }));
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithVector} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Enable the Attack Vector column via the Columns button
+        const columnsBtn = screen.getAllByRole('button', { name: /columns/i })[0];
+        await user.click(columnsBtn);
+        const avCheck = screen.getByRole('checkbox', { name: /attack vector/i });
+        await user.click(avCheck);
+
+        // Click the Attack Vector column header to sort
+        const avHeader = await screen.findByRole('columnheader', { name: /attack vector/i });
+        await user.click(avHeader);
+        await user.click(avHeader);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        });
+    });
+
+    test('shortcut helper click-outside closes it in TableVulnerabilities', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const helperBtn = screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Keyboard Shortcuts')).toBeTruthy();
+
+        // Click outside
+        await user.click(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Keyboard Shortcuts')).toBeNull();
+        });
+    });
+
+    test('search syntax helper click-outside closes it in TableVulnerabilities', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeTruthy();
+
+        // Click outside
+        await user.click(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Search Syntax')).toBeNull();
+        });
     });
 });

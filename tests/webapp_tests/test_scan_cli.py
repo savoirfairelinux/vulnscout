@@ -137,6 +137,7 @@ class TestNvdScanCLI:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "Scan complete" in result.output
@@ -174,6 +175,7 @@ class TestNvdScanCLI:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "CVE-EXISTING-1" in result.output
@@ -190,6 +192,7 @@ class TestNvdScanCLI:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "Scan complete" in result.output
@@ -218,6 +221,7 @@ class TestNvdScanCLI:
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "nvd-scan", "--project", "NoCPE", "--variant", "NoCPEVar",
+            "--mode", "api",
         ])
         assert result.exit_code != 0
         assert "CPE" in result.output
@@ -232,6 +236,7 @@ class TestNvdScanCLI:
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
             "nvd-scan", "--project", ids["project_name"],
+            "--mode", "api",
         ])
         assert result.exit_code != 0
         assert "No scans found" in result.output
@@ -248,6 +253,7 @@ class TestNvdScanCLI:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "no CVEs" in result.output
@@ -420,6 +426,7 @@ class TestNvdScanCoverage:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "Scan complete" in result.output
@@ -473,6 +480,7 @@ class TestNvdScanCoverage:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
         assert "Scan complete" in result.output
@@ -507,6 +515,7 @@ class TestNvdScanCoverage:
             "nvd-scan",
             "--project", ids["project_name"],
             "--variant", ids["variant_name"],
+            "--mode", "api",
         ])
         assert result.exit_code == 0, result.output
 
@@ -544,6 +553,7 @@ class TestNvdScanCoverage:
                 "nvd-scan",
                 "--project", ids["project_name"],
                 "--variant", ids["variant_name"],
+                "--mode", "api",
             ])
         assert result.exit_code == 0, result.output
         assert "Scan complete" in result.output

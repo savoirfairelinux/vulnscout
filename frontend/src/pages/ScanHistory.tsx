@@ -1124,6 +1124,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     // Scan options
     const [excludeKernel, setExcludeKernel] = useState(true);
     const [showKernelHelp, setShowKernelHelp] = useState(false);
+    const [nvdScanMode, setNvdScanMode] = useState<"local" | "api">("local");
     const scanMenuRef = useRef<HTMLDivElement>(null);
 
     // Global Grype scan state — survives tab switches (per-variant)
@@ -1327,7 +1328,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanMenuOpen(false);
-        const opts = { excludeKernel };
+        const opts = { excludeKernel, nvdMode: nvdScanMode };
         const promises: Promise<void>[] = [];
         if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants, opts));
         if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants, opts));
@@ -1560,19 +1561,47 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                                         { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
                                         { key: 'scc', label: 'sbom-cve-check', icon: faCrosshairs, color: 'sky' },
                                     ] as const).map(({ key, label, icon, color }) => (
-                                        <label
-                                            key={key}
-                                            className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm"
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedScanTypes.has(key)}
-                                                onChange={() => toggleScanType(key)}
-                                                className="rounded accent-cyan-500"
-                                            />
-                                            <FontAwesomeIcon icon={icon} className={`text-${color}-400 w-4`} />
-                                            <span className="text-neutral-200">{label}</span>
-                                        </label>
+                                        <div key={key}>
+                                            <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedScanTypes.has(key)}
+                                                    onChange={() => toggleScanType(key)}
+                                                    className="rounded accent-cyan-500"
+                                                />
+                                                <FontAwesomeIcon icon={icon} className={`text-${color}-400 w-4`} />
+                                                <span className="text-neutral-200">{label}</span>
+                                            </label>
+                                            {key === 'nvd' && selectedScanTypes.has('nvd') && (
+                                                <div className="ml-6 mt-1 mb-1 pl-2 border-l border-orange-700/50">
+                                                    <div className="text-xs font-semibold text-sky-300 mb-1">NVD data source</div>
+                                                    <div className="flex gap-3">
+                                                        <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                                            <input
+                                                                type="radio"
+                                                                name="nvd-scan-mode"
+                                                                value="local"
+                                                                checked={nvdScanMode === "local"}
+                                                                onChange={() => setNvdScanMode("local")}
+                                                                className="accent-cyan-500"
+                                                            />
+                                                            <span className="text-neutral-200">Git repository</span>
+                                                        </label>
+                                                        <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                                            <input
+                                                                type="radio"
+                                                                name="nvd-scan-mode"
+                                                                value="api"
+                                                                checked={nvdScanMode === "api"}
+                                                                onChange={() => setNvdScanMode("api")}
+                                                                className="accent-cyan-500"
+                                                            />
+                                                            <span className="text-neutral-200">NVD REST API</span>
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                     ))}
                                 </div>
 

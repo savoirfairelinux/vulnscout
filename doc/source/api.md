@@ -760,6 +760,89 @@ Exports all visible scans, optionally filtered by variant or project.
 
 ---
 
+## NVD Refresh
+
+These endpoints update cached NVD data (description, CVSS scores, references) for vulnerabilities already present in the database. Unlike the NVD scan, refresh does not create new findings — it only enriches existing `Vulnerability` records.
+
+All refresh endpoints accept a `mode` field to select the NVD data source:
+
+- **`local`** (default) — reads from the local NVD-FKIE advisory database; no network calls, no API key needed.
+- **`api`** — queries the NVD REST API v2; requires network access and honours the `NVD_API_KEY` environment variable.
+
+### Refresh a Single CVE
+
+```
+POST /api/vulnerabilities/<cve_id>/nvd-refresh
+```
+
+Fetches NVD data for the given CVE and updates the stored description, CVSS scores, and references.
+
+**Request body:**
+```json
+{ "mode": "local" }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | `"local"` (default) or `"api"`. |
+
+**Response:** Updated vulnerability object.
+
+**Error responses:**
+
+| Code | `error_code` | Condition |
+|------|--------------|-----------|
+| `503` | `unavailable` | Local mode: CVE not found in the local database. API mode: NVD API unreachable or returned no data. |
+| `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
+| `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
+
+### Bulk NVD Refresh
+
+```
+POST /api/vulnerabilities/bulk-nvd-refresh
+```
+
+Triggers an asynchronous bulk refresh of NVD data for a list of CVE IDs. Returns `202 Accepted` immediately and runs in a background thread.
+
+**Request body:**
+```json
+{
+  "cve_ids": ["CVE-2024-1234", "CVE-2024-5678"],
+  "mode": "local"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cve_ids` | array of strings | CVE identifiers to refresh. Must match the pattern `CVE-YYYY-NNNNN`. |
+| `mode` | string | `"local"` (default) — no rate limit cap. `"api"` — capped at 1000 CVEs per request. |
+
+**Response:** `202 Accepted`
+```json
+{ "status": "started", "total": 42 }
+```
+
+Returns `409 Conflict` if a bulk refresh is already in progress. Returns `400` if `cve_ids` is empty or contains no valid identifiers, or if `mode` is `"api"` and more than 1000 IDs are supplied.
+
+Progress can be polled via `GET /api/nvd/progress`.
+
+### Cancel Bulk NVD Refresh
+
+```
+POST /api/vulnerabilities/cancel-nvd-refresh
+```
+
+Requests cancellation of an in-progress bulk NVD refresh. The running refresh stops after completing its current CVE.
+
+**Response:**
+```json
+{ "status": "cancelled" }
+```
+
+Returns `404` if no refresh is currently running.
+
+---
+
 ## Scan Triggers
 
 These endpoints trigger asynchronous vulnerability scans for a specific variant. Each returns `202 Accepted` immediately; use the corresponding `/status` endpoint to poll progress.
@@ -807,7 +890,16 @@ Status values: `"idle"` (no scan started), `"running"`, `"done"`, `"error"`.
 POST /api/variants/<variant_id>/nvd-scan
 ```
 
-For every active package with CPE identifiers, queries the NVD CVE API and creates findings for any matched CVEs. Respects the `NVD_API_KEY` environment variable for higher rate limits.
+Triggers a CVE scan for the given variant. Supports two modes controlled by the `?mode` query parameter:
+
+- **`local`** (default) — uses the local NVD-FKIE advisory database via the sbom-cve-check engine; no network calls, no rate limits.
+- **`api`** — queries the NVD REST API v2 using CPE identifiers from packages; honours the `NVD_API_KEY` environment variable and rate limits.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `mode` | string | `"local"` (default) or `"api"` — selects the NVD data source. |
 
 **Response:** `202 Accepted`
 ```json
@@ -820,7 +912,7 @@ For every active package with CPE identifiers, queries the NVD CVE API and creat
 GET /api/variants/<variant_id>/nvd-scan/status
 ```
 
-Same response shape as Grype status. `total` is the number of unique CPEs to query, `done_count` tracks progress.
+Same response shape as Grype status. In local mode `total` is the number of active packages; in API mode it is the number of unique CPEs to query. `done_count` advances per package or CPE respectively.
 
 ### Trigger OSV Scan
 
@@ -851,7 +943,7 @@ POST /api/variants/<variant_id>/sbom-cve-check-scan
 
 Runs a CVE scan powered by the sbom-cve-check engine. For every active package, the engine looks up candidate advisories from locally-cloned NVD-FKIE and CVEList V5 databases, applies product-name aliasing, evaluates version ranges locally, and records findings as a tool scan. No network calls are made during matching.
 
-The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/sbom_cve_check_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/sbom_cve_check_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
+The databases live at `SBOM_CVE_CHECK_DATABASES_DIR` inside the container (default: `/cache/vulnscout/local_databases`, inside the cache volume next to `vulnscout.db`). Set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` on the host to use a shared clone mounted at `/local_databases` instead. Set `SBOM_CVE_CHECK_AUTO_UPDATE=1` to let the engine clone the databases on first use and fetch fresh advisories before every scan.
 
 **Response:** `202 Accepted`
 ```json

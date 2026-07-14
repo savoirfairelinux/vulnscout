@@ -43,13 +43,86 @@ def _read_exclude_kernel() -> bool:
     return request.args.get("exclude_kernel", "true").strip().lower() != "false"
 
 
+def _resolve_grype_memlimit() -> str | None:
+    """Translate ``GRYPE_MEMLIMIT`` into a ``GOMEMLIMIT`` value.
+
+    Returns the string to assign to ``GOMEMLIMIT``, or ``None`` if no limit
+    should be applied.
+
+    Behaviour:
+
+    * ``GRYPE_MEMLIMIT=off`` / ``0`` / ``disabled``  → ``None`` (no limit).
+    * ``GRYPE_MEMLIMIT=<value>`` (e.g. ``"4GiB"``) → returned verbatim.
+    * ``GRYPE_MEMLIMIT`` unset / empty → auto mode: ~80 % of the memory
+      limit detected from the container's cgroup (v2 ``memory.max``, v1
+      ``memory.limit_in_bytes``) or from ``/proc/meminfo`` MemTotal.
+      Returned as a plain integer number of bytes (GOMEMLIMIT accepts that).
+    """
+    raw = os.environ.get("GRYPE_MEMLIMIT", "").strip()
+
+    if raw.lower() in ("off", "0", "disabled"):
+        return None
+
+    if raw:
+        return raw
+
+    # Auto mode: probe cgroup / proc for the available memory ceiling.
+    mem_bytes = 0
+
+    cg2 = "/sys/fs/cgroup/memory.max"
+    cg1 = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+    try:
+        with open(cg2) as fh:
+            val = fh.read().strip()
+        if val.isdigit() and int(val) > 0:
+            mem_bytes = int(val)
+    except OSError:
+        pass
+
+    if mem_bytes == 0:
+        try:
+            with open(cg1) as fh:
+                val = fh.read().strip()
+            # cgroup v1 uses a large sentinel (PAGE_COUNTER_MAX) when unconstrained
+            if val.isdigit() and 0 < int(val) < 9223372036854771712:
+                mem_bytes = int(val)
+        except OSError:
+            pass
+
+    if mem_bytes == 0:
+        try:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        mem_bytes = kb * 1024
+                        break
+        except OSError:
+            pass
+
+    if mem_bytes > 0:
+        return str(mem_bytes * 80 // 100)
+
+    return None
+
+
+def _read_nvd_mode() -> str:
+    """Read the ``mode`` request option for NVD operations (defaults to ``"local"``).
+
+    ``"local"`` uses the local NVD-FKIE advisory database (no network, no rate
+    limits).  ``"api"`` queries the NVD REST API v2 (requires network; optional
+    NVD_API_KEY env var increases rate limit).
+    """
+    return request.args.get("mode", "local").strip().lower()
+
+
 def init_app(app: Flask) -> None:
 
     # ------------------------------------------------------------------
     # Grype Scan
     # ------------------------------------------------------------------
 
-    _grype_scans_in_progress: dict = {}
+    _grype_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/grype-scan', methods=['POST'])
     def trigger_grype_scan(variant_id: str) -> ResponseReturnValue:
@@ -82,7 +155,7 @@ def init_app(app: Flask) -> None:
         # filter the grype output to only this variant's packages.  We query
         # here (in request context) because the background thread has no DB
         # session.
-        sbom_pkg_set: set = set()
+        sbom_pkg_set: set[tuple[str, str]] = set()
         sbom_scan_id = db.session.execute(
             db.select(Scan.id)
             .where(Scan.variant_id == variant_uuid)
@@ -157,7 +230,7 @@ def init_app(app: Flask) -> None:
                         orig_components = len(components)
                         kept = []
                         kept_refs = set()
-                        seen_nv: set = set()
+                        seen_nv: set[tuple[str, str]] = set()
                         kernel_modules_dropped = 0
                         for comp in components:
                             name = comp.get("name", "")
@@ -200,6 +273,13 @@ def init_app(app: Flask) -> None:
                         "[2/4] Running Grype vulnerability scanner…"
                     )
                     grype_out = os.path.join(grype_tmp, "grype_results.grype.json")
+                    grype_env = os.environ.copy()
+                    _gomemlimit = _resolve_grype_memlimit()
+                    if _gomemlimit is not None:
+                        grype_env["GOMEMLIMIT"] = _gomemlimit
+                        _grype_scans_in_progress[vid_str]["logs"].append(
+                            f"[2/4] Grype memory limit (GOMEMLIMIT): {_gomemlimit}"
+                        )
                     with open(grype_out, "w") as gf:
                         subprocess.run(
                             ["grype", "--add-cpes-if-none",
@@ -207,6 +287,7 @@ def init_app(app: Flask) -> None:
                             cwd=base_dir, check=True, text=True,
                             stdout=gf, stderr=subprocess.PIPE,
                             timeout=600,
+                            env=grype_env,
                         )
                     _grype_scans_in_progress[vid_str]["done_count"] = 2
 
@@ -310,16 +391,22 @@ def init_app(app: Flask) -> None:
     # NVD CPE Scan
     # ------------------------------------------------------------------
 
-    _nvd_scans_in_progress: dict = {}
+    _nvd_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/nvd-scan', methods=['POST'])
     def trigger_nvd_scan(variant_id: str) -> ResponseReturnValue:
-        """Trigger an NVD CPE-based vulnerability scan for the given variant.
+        """Trigger an NVD vulnerability scan for the given variant.
 
-        For every active package that has CPE identifiers, query the NVD CVE
-        API (``cpeName=…``) and create findings/observations for any CVEs
-        returned.  The result is stored as a tool scan.
+        Supports two modes (``?mode=local`` is the default):
+
+        * **local** — uses the local NVD-FKIE advisory database via the
+          sbom-cve-check engine; no network, no rate limits.
+        * **api** — queries the NVD REST API v2 using CPE identifiers from
+          packages; honours NVD_API_KEY and rate limits.
         """
+        from ..controllers.scc_engine import get_engine
+        from ..bin.cmd_vuln_scan import _SccBulkWriter
+
         variant_uuid, variant, err = validate_trigger(
             variant_id, _nvd_scans_in_progress, "NVD scan")
         if err is not None:
@@ -329,6 +416,7 @@ def init_app(app: Flask) -> None:
 
         vid_str = str(variant_uuid)
         exclude_kernel = _read_exclude_kernel()
+        nvd_mode = _read_nvd_mode()
         init_progress(_nvd_scans_in_progress, vid_str)
 
         def _run_nvd_scan() -> None:
@@ -337,15 +425,6 @@ def init_app(app: Flask) -> None:
 
         def _do_nvd_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
-                from ..controllers.nvd_db import NVD_DB
-                from ..models.vulnerability import Vulnerability as VulnModel
-                from ..models.metrics import Metrics as MetricsModel
-                from ..models.cvss import CVSS
-
-                nvd_api_key = os.getenv("NVD_API_KEY")
-                nvd = NVD_DB(nvd_api_key=nvd_api_key)
-
-                # 1. Get active packages
                 _nvd_scans_in_progress[vid_str]["logs"].append(
                     "Resolving active packages…"
                 )
@@ -355,187 +434,196 @@ def init_app(app: Flask) -> None:
                 if pkg_err:
                     return
 
-                # 2. Collect CPE names from packages
-                cpe_to_pkgs: dict = {}
-                for pkg in packages:
-                    for cpe in (pkg.cpe or []):
-                        parts = cpe.split(":")
-                        if len(parts) >= 6 and parts[4] != "*":
-                            cpe_to_pkgs.setdefault(cpe, []).append(pkg)
-
-                if not cpe_to_pkgs:
-                    set_error(_nvd_scans_in_progress, vid_str,
-                              "No packages with valid CPE identifiers")
-                    return
-
-                _nvd_scans_in_progress[vid_str]["logs"].append(
-                    f"Found {len(packages)} packages with "
-                    f"{len(cpe_to_pkgs)} unique CPEs to query"
-                )
-
-                # 3. Create a tool scan
-                scan = Scan.create(
-                    description="empty description",
-                    variant_id=variant_uuid,
-                    scan_type="tool",
-                    scan_source="nvd",
-                )
-                total_cpes = len(cpe_to_pkgs)
-                _nvd_scans_in_progress[vid_str]["total"] = total_cpes
-                cves_found: set = set()
-                observation_pairs: set = set()
-                assessed_findings: set = set()
-
-                for idx, (cpe_name, pkgs) in enumerate(
-                    cpe_to_pkgs.items(), 1
-                ):
-                    _nvd_scans_in_progress[vid_str]["progress"] = (
-                        f"{idx}/{total_cpes} CPEs"
-                    )
-                    _nvd_scans_in_progress[vid_str]["logs"].append(
-                        f"[{idx}/{total_cpes}] Querying {cpe_name}…"
-                    )
-                    try:
-                        cpe_parts = cpe_name.split(":")
-                        has_wildcards = (
-                            len(cpe_parts) >= 6
-                            and (cpe_parts[2] == "*"
-                                 or cpe_parts[3] == "*"
-                                 or cpe_parts[5] == "*")
-                        )
-                        nvd_vulns = nvd.api_get_cves_by_cpe(
-                            cpe_name,
-                            results_per_page=100,
-                            use_virtual_match=has_wildcards,
-                        )
-                    except Exception as e:
-                        log_entry = (
-                            f"[{idx}/{total_cpes}] ERROR "
-                            f"{cpe_name}: {str(e)[:200]}"
-                        )
-                        _nvd_scans_in_progress[vid_str]["logs"].append(log_entry)
-                        _nvd_scans_in_progress[vid_str]["done_count"] = idx
-                        print(f"[NVD Scan] Error querying CPE {cpe_name}: {e}", flush=True)
-                        continue
-
-                    cpe_cves = [
-                        v.get("cve", {}).get("id", "")
-                        for v in nvd_vulns
-                        if v.get("cve", {}).get("id")
-                    ]
-                    if cpe_cves:
-                        ids_str = ', '.join(cpe_cves[:10])
-                        ellip = '…' if len(cpe_cves) > 10 else ''
-                        log_entry = (
-                            f"[{idx}/{total_cpes}] {cpe_name} → "
-                            f"{len(cpe_cves)} CVE(s): {ids_str}{ellip}"
-                        )
-                    else:
-                        log_entry = (
-                            f"[{idx}/{total_cpes}] {cpe_name} → no CVEs"
-                        )
-                    _nvd_scans_in_progress[vid_str]["logs"].append(log_entry)
-                    _nvd_scans_in_progress[vid_str]["done_count"] = idx
-
-                    for nvd_vuln in nvd_vulns:
-                        cve = nvd_vuln.get("cve", {})
-                        cve_id = cve.get("id", "")
-                        if not cve_id:
-                            continue
-
-                        cves_found.add(cve_id)
-                        details = NVD_DB.extract_cve_details(cve)
-
-                        existing_vuln = db.session.get(VulnModel, cve_id.upper())
-                        if existing_vuln is None:
-                            existing_vuln = VulnModel.create_record(
-                                id=cve_id,
-                                description=details.get("description"),
-                                status=details.get("status"),
-                                publish_date=details.get("publish_date"),
-                                attack_vector=details.get("attack_vector"),
-                                links=details.get("links"),
-                                weaknesses=details.get("weaknesses"),
-                                nvd_last_modified=details.get("nvd_last_modified"),
-                            )
-                            existing_vuln.add_found_by("nvd")
-                        else:
-                            existing_vuln.add_found_by("nvd")
-                            _update = {}
-                            if not existing_vuln.description and details.get("description"):
-                                _update["description"] = details["description"]
-                            if not existing_vuln.status and details.get("status"):
-                                _update["status"] = details["status"]
-                            if not existing_vuln.publish_date and details.get("publish_date"):
-                                _update["publish_date"] = details["publish_date"]
-                            if not existing_vuln.attack_vector and details.get("attack_vector"):
-                                _update["attack_vector"] = details["attack_vector"]
-                            if not existing_vuln.links and details.get("links"):
-                                _update["links"] = details["links"]
-                            if not existing_vuln.weaknesses and details.get("weaknesses"):
-                                _update["weaknesses"] = details["weaknesses"]
-                            if _update:
-                                existing_vuln.update_record(**_update, commit=False)
-
-                        # Persist CVSS metrics
-                        if details.get("base_score") is not None:
-                            _cvss_v = details.get("cvss_version")
-                            _cvss_s = details["base_score"]
-                            _cvss_vec = details.get("cvss_vector")
-                            _dedup = (cve_id.upper(), _cvss_v, float(_cvss_s))
-                            if _dedup not in MetricsModel._seen:
-                                try:
-                                    MetricsModel.from_cvss(
-                                        CVSS(
-                                            version=_cvss_v or "",
-                                            vector_string=_cvss_vec or "",
-                                            author="nvd",
-                                            base_score=float(_cvss_s),
-                                            exploitability_score=(
-                                                float(details["cvss_exploitability"])
-                                                if details.get("cvss_exploitability") is not None
-                                                else 0
-                                            ),
-                                            impact_score=(
-                                                float(details["cvss_impact"])
-                                                if details.get("cvss_impact") is not None
-                                                else 0
-                                            ),
-                                        ),
-                                        existing_vuln.id,
-                                    )
-                                except Exception:
-                                    pass
-
-                        for pkg in pkgs:
-                            finding = Finding.get_or_create(pkg.id, cve_id)
-                            create_observation_and_assessment(
-                                finding, scan, variant_uuid, "nvd",
-                                observation_pairs, assessed_findings,
-                            )
-
-                db.session.commit()
-
-                done_logs = _nvd_scans_in_progress[vid_str].get("logs", [])
-                done_logs.append(
-                    f"✓ Scan complete — found {len(cves_found)} "
-                    f"unique CVEs across {total_cpes} CPEs"
-                )
-                _nvd_scans_in_progress[vid_str] = {
-                    "status": "done",
-                    "error": None,
-                    "progress": (
-                        f"Found {len(cves_found)} CVEs "
-                        f"across {total_cpes} CPEs"
-                    ),
-                    "logs": done_logs,
-                    "total": total_cpes,
-                    "done_count": total_cpes,
-                }
+                if nvd_mode == "api":
+                    _do_nvd_scan_api(vid_str, variant_uuid, list(packages))
+                else:
+                    _do_nvd_scan_local(vid_str, variant_uuid, list(packages))
 
             except Exception as e:
                 db.session.rollback()
                 set_error(_nvd_scans_in_progress, vid_str, str(e)[:500])
+
+        def _do_nvd_scan_local(
+            vid_str: str, variant_uuid: uuid.UUID, packages: list
+        ) -> None:
+            """NVD scan using the local NVD-FKIE advisory database."""
+            _nvd_scans_in_progress[vid_str]["logs"].append(
+                "Loading local NVD advisory database…"
+            )
+            try:
+                engine = get_engine()
+            except Exception as exc:
+                set_error(_nvd_scans_in_progress, vid_str,
+                          f"Failed to load local NVD database: {exc}")
+                return
+
+            scan = Scan.create(
+                description="empty description",
+                variant_id=variant_uuid,
+                scan_type="tool",
+                scan_source="nvd",
+            )
+
+            total = len(packages)
+            _nvd_scans_in_progress[vid_str]["total"] = total
+            writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+            seen_keys: set = set()
+
+            for idx, pkg in enumerate(packages, 1):
+                _nvd_scans_in_progress[vid_str]["progress"] = (
+                    f"{idx}/{total} packages"
+                )
+                try:
+                    for computed, status in engine.applicable_vulns(pkg):
+                        writer.add(pkg, computed, status, seen_keys)
+                except Exception as exc:
+                    _nvd_scans_in_progress[vid_str]["logs"].append(
+                        f"[{idx}/{total}] ERROR {pkg.name}: {str(exc)[:200]}"
+                    )
+                _nvd_scans_in_progress[vid_str]["done_count"] = idx
+
+            writer.flush()
+
+            cves_found = len(seen_keys)
+            done_logs = _nvd_scans_in_progress[vid_str].get("logs", [])
+            done_logs.append(
+                f"✓ Scan complete — found {cves_found} "
+                f"unique CVEs across {total} packages"
+            )
+            _nvd_scans_in_progress[vid_str] = {
+                "status": "done",
+                "error": None,
+                "progress": f"Found {cves_found} CVEs across {total} packages",
+                "logs": done_logs,
+                "total": total,
+                "done_count": total,
+            }
+
+        def _do_nvd_scan_api(
+            vid_str: str, variant_uuid: uuid.UUID, packages: list
+        ) -> None:
+            """NVD scan using the NVD REST API v2 (CPE-based)."""
+            from ..controllers.nvd_db import NVD_DB
+            from ..controllers.nvd_persist import persist_nvd_cve
+
+            nvd_api_key = os.getenv("NVD_API_KEY")
+            nvd = NVD_DB(nvd_api_key=nvd_api_key)
+
+            # Collect CPE names from packages
+            cpe_to_pkgs: dict[str, list[Package]] = {}
+            for pkg in packages:
+                for cpe in (pkg.cpe or []):
+                    parts = cpe.split(":")
+                    if len(parts) >= 6 and parts[4] != "*":
+                        cpe_to_pkgs.setdefault(cpe, []).append(pkg)
+
+            if not cpe_to_pkgs:
+                set_error(_nvd_scans_in_progress, vid_str,
+                          "No packages with valid CPE identifiers")
+                return
+
+            _nvd_scans_in_progress[vid_str]["logs"].append(
+                f"Found {len(packages)} packages with "
+                f"{len(cpe_to_pkgs)} unique CPEs to query"
+            )
+
+            scan = Scan.create(
+                description="empty description",
+                variant_id=variant_uuid,
+                scan_type="tool",
+                scan_source="nvd",
+            )
+            total_cpes = len(cpe_to_pkgs)
+            _nvd_scans_in_progress[vid_str]["total"] = total_cpes
+            cves_found: set[str] = set()
+            observation_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+            assessed_findings: set[tuple[uuid.UUID, uuid.UUID]] = set()
+
+            for idx, (cpe_name, pkgs) in enumerate(cpe_to_pkgs.items(), 1):
+                _nvd_scans_in_progress[vid_str]["progress"] = (
+                    f"{idx}/{total_cpes} CPEs"
+                )
+                _nvd_scans_in_progress[vid_str]["logs"].append(
+                    f"[{idx}/{total_cpes}] Querying {cpe_name}…"
+                )
+                try:
+                    cpe_parts = cpe_name.split(":")
+                    has_wildcards = (
+                        len(cpe_parts) >= 6
+                        and (cpe_parts[2] == "*"
+                             or cpe_parts[3] == "*"
+                             or cpe_parts[5] == "*")
+                    )
+                    nvd_vulns = nvd.api_get_cves_by_cpe(
+                        cpe_name,
+                        results_per_page=100,
+                        use_virtual_match=has_wildcards,
+                    )
+                except Exception as e:
+                    log_entry = (
+                        f"[{idx}/{total_cpes}] ERROR "
+                        f"{cpe_name}: {str(e)[:200]}"
+                    )
+                    _nvd_scans_in_progress[vid_str]["logs"].append(log_entry)
+                    _nvd_scans_in_progress[vid_str]["done_count"] = idx
+                    print(f"[NVD Scan] Error querying CPE {cpe_name}: {e}", flush=True)
+                    continue
+
+                cpe_cves = [
+                    v.get("cve", {}).get("id", "")
+                    for v in nvd_vulns
+                    if v.get("cve", {}).get("id")
+                ]
+                if cpe_cves:
+                    ids_str = ', '.join(cpe_cves[:10])
+                    ellip = '…' if len(cpe_cves) > 10 else ''
+                    log_entry = (
+                        f"[{idx}/{total_cpes}] {cpe_name} → "
+                        f"{len(cpe_cves)} CVE(s): {ids_str}{ellip}"
+                    )
+                else:
+                    log_entry = (
+                        f"[{idx}/{total_cpes}] {cpe_name} → no CVEs"
+                    )
+                _nvd_scans_in_progress[vid_str]["logs"].append(log_entry)
+                _nvd_scans_in_progress[vid_str]["done_count"] = idx
+
+                for nvd_vuln in nvd_vulns:
+                    cve = nvd_vuln.get("cve", {})
+                    cve_id = cve.get("id", "")
+                    if not cve_id:
+                        continue
+
+                    cves_found.add(cve_id)
+                    details = NVD_DB.extract_cve_details(cve)
+
+                    persist_nvd_cve(cve_id, details)
+
+                    for pkg in pkgs:
+                        finding = Finding.get_or_create(pkg.id, cve_id)
+                        create_observation_and_assessment(
+                            finding, scan, variant_uuid, "nvd",
+                            observation_pairs, assessed_findings,
+                        )
+
+            db.session.commit()
+
+            done_logs = _nvd_scans_in_progress[vid_str].get("logs", [])
+            done_logs.append(
+                f"✓ Scan complete — found {len(cves_found)} "
+                f"unique CVEs across {total_cpes} CPEs"
+            )
+            _nvd_scans_in_progress[vid_str] = {
+                "status": "done",
+                "error": None,
+                "progress": (
+                    f"Found {len(cves_found)} CVEs "
+                    f"across {total_cpes} CPEs"
+                ),
+                "logs": done_logs,
+                "total": total_cpes,
+                "done_count": total_cpes,
+            }
 
         thread = threading.Thread(
             target=_run_nvd_scan,
@@ -555,7 +643,7 @@ def init_app(app: Flask) -> None:
     # OSV Scan
     # ------------------------------------------------------------------
 
-    _osv_scans_in_progress: dict = {}
+    _osv_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/osv-scan', methods=['POST'])
     def trigger_osv_scan(variant_id: str) -> ResponseReturnValue:
@@ -601,8 +689,8 @@ def init_app(app: Flask) -> None:
                 # A package may carry several PURLs (e.g. generic + apk);
                 # query ALL of them so we don't miss vulnerabilities that
                 # are only indexed under a specific ecosystem PURL.
-                purl_to_pkgs: dict[str, list] = {}
-                pkgs_with_purls: set = set()
+                purl_to_pkgs: dict[str, list[Package]] = {}
+                pkgs_with_purls: set[uuid.UUID] = set()
                 for pkg in packages:
                     for purl in (pkg.purl or []):
                         purl_str = str(purl).strip()
@@ -631,9 +719,9 @@ def init_app(app: Flask) -> None:
                     scan_type="tool",
                     scan_source="osv",
                 )
-                vulns_found: set = set()
-                observation_pairs: set = set()
-                assessed_findings: set = set()
+                vulns_found: set[str] = set()
+                observation_pairs: set[tuple[uuid.UUID, uuid.UUID]] = set()
+                assessed_findings: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
                 for idx, (purl_str, pkgs) in enumerate(
                     purl_to_pkgs.items(), 1
@@ -757,7 +845,7 @@ def init_app(app: Flask) -> None:
     # sbom-cve-check Scan — local NVD-FKIE + CVEList with VEX
     # ------------------------------------------------------------------
 
-    _sbom_cve_check_scans_in_progress: dict = {}
+    _sbom_cve_check_scans_in_progress: dict[str, dict] = {}
 
     @app.route('/api/variants/<variant_id>/sbom-cve-check-scan', methods=['POST'])
     def trigger_sbom_cve_check_scan(variant_id: str) -> ResponseReturnValue:
@@ -860,8 +948,8 @@ def init_app(app: Flask) -> None:
                         f"{idx}/{total_pkgs} packages"
                     )
 
-                    persisted_ids: list = []
-                    seen_keys: set = set()
+                    persisted_ids: list[str] = []
+                    seen_keys: set[tuple[uuid.UUID, str]] = set()
                     try:
                         for computed, status in engine.applicable_vulns(pkg):
                             cve_id = writer.add(pkg, computed, status, seen_keys)

@@ -66,5 +66,5 @@ def main() -> ControllersCache:
     return _run_main()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

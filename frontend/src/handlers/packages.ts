@@ -60,13 +60,17 @@ class Packages {
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Package[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Package[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
         url.searchParams.set('format', 'list');
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
             url.searchParams.set('compare_variant_id', compareVariantId);
             if (operation) url.searchParams.set('operation', operation);
+        } else if (variantIds && variantIds.length >= 2) {
+            url.searchParams.set('variant_ids', variantIds.join(','));
+            if (multiOperation) url.searchParams.set('operation', multiOperation);
+            if (projectId) url.searchParams.set('project_id', projectId);
         } else if (variantId) {
             url.searchParams.set('variant_id', variantId);
         } else if (projectId) {

@@ -243,9 +243,9 @@ class ScansHandler {
         return await response.json();
     }
 
-    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true): Promise<{ ok: boolean; error?: string }> {
+    static async triggerNvdScan(variantId: string, excludeKernel: boolean = true, nvdMode: "local" | "api" = "local"): Promise<{ ok: boolean; error?: string }> {
         const response = await fetch(
-            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}`,
+            import.meta.env.VITE_API_URL + `/api/variants/${encodeURIComponent(variantId)}/nvd-scan?exclude_kernel=${excludeKernel}&mode=${nvdMode}`,
             { method: 'POST', mode: 'cors' }
         );
         if (response.ok || response.status === 202) return { ok: true };

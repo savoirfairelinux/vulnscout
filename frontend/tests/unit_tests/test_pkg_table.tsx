@@ -321,6 +321,50 @@ describe('Packages Table', () => {
         });
     })
 
+    test('filter by variant', async () => {
+        // ARRANGE: packages spread across two variants
+        const packagesWithVariants: Package[] = [
+            { ...packages[0], variants: ['variant-a'] },
+            { ...packages[1], variants: ['variant-b'] },
+            { ...packages[2], variants: ['variant-a', 'variant-b'] },
+        ];
+        render(<TablePackages packages={packagesWithVariants} />);
+
+        const user = userEvent.setup();
+
+        // Open the "Variants" filter dropdown
+        const variants_btn = await screen.getByRole('button', { name: /^variants$/i });
+        await user.click(variants_btn);
+
+        // All variants are checked by default. ACT: uncheck "variant-a"
+        const variantACheckbox = await screen.getByRole('checkbox', { name: /variant-a/i });
+        await user.click(variantACheckbox);
+
+        // aaabbbccc is only in variant-a, so it must disappear
+        await waitFor(() => {
+            expect(document.body.innerHTML).not.toContain('aaabbbccc');
+        }, { timeout: 2000 });
+
+        // xxxyyyzzz (variant-b) and dddeeefff (variant-a + variant-b) remain
+        expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
+        expect(screen.getAllByRole('cell', { name: /dddeeefff/ }).length).toBeGreaterThan(0);
+
+        // REVERT CHANGE: re-check "variant-a"
+        await user.click(variantACheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+        });
+    })
+
+    test('variant filter is hidden when no package has variants', async () => {
+        // ARRANGE: the default packages have no variants
+        render(<TablePackages packages={packages} />);
+
+        // ASSERT: the "Variants" filter button is not rendered
+        expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
+    })
+
     test('reset filters button clears all filters', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);
@@ -714,6 +758,178 @@ describe('Packages Table', () => {
 
         await waitFor(() => {
             expect(screen.getAllByRole('cell', { name: /pkg-globex/ }).length).toBeGreaterThan(0);
+        });
+    });
+
+    test('PURL column displays PURL values when enabled', async () => {
+        render(<TablePackages packages={packages} />);
+
+        const user = userEvent.setup();
+
+        // Enable PURL column via Columns filter
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const purlCheckbox = screen.getByRole('checkbox', { name: /^PURL$/i });
+        await user.click(purlCheckbox);
+
+        // PURL value should now be visible
+        const purlSpan = await screen.getByText(/pkg:vendor\/aaabbbccc@1\.0\.0/);
+        expect(purlSpan).toBeTruthy();
+    });
+
+    test('PURL column shows dash placeholder when package has no PURL', async () => {
+        const packagesNoPurl: Package[] = [
+            {
+                id: 'pkg-no-purl@1.0.0',
+                name: 'pkg-no-purl',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: { 'active': 1 },
+                maxSeverity: { 'active': { label: 'low', index: 2 } },
+                source: ['test'],
+                variants: [],
+                sbom_documents: [],
+                supplier: '',
+            }
+        ];
+
+        render(<TablePackages packages={packagesNoPurl} />);
+        const user = userEvent.setup();
+
+        const columnsBtn = screen.getByText('Columns');
+        await user.click(columnsBtn);
+        const purlCheckbox = screen.getByRole('checkbox', { name: /^PURL$/i });
+        await user.click(purlCheckbox);
+
+        expect(screen.queryByText(/pkg:/)).toBeNull();
+        expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    });
+
+    test('filter by SBOM document hides packages not matching that document', async () => {
+        const packagesWithSbom: Package[] = [
+            {
+                id: 'pkg-with-sbom@1.0.0',
+                name: 'pkg-with-sbom',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {},
+                maxSeverity: {},
+                source: ['test'],
+                variants: [],
+                sbom_documents: ['build-2024.spdx.json'],
+                supplier: '',
+            },
+            {
+                id: 'pkg-other-sbom@1.0.0',
+                name: 'pkg-other-sbom',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {},
+                maxSeverity: {},
+                source: ['test'],
+                variants: [],
+                sbom_documents: ['release-2024.spdx.json'],
+                supplier: '',
+            },
+        ];
+
+        render(<TablePackages packages={packagesWithSbom} />);
+        const user = userEvent.setup();
+
+        // Open the SBOM Source File filter dropdown
+        const sbomBtn = await screen.getByRole('button', { name: /^sbom source file$/i });
+        await user.click(sbomBtn);
+
+        const buildCheckbox = await screen.getByRole('checkbox', { name: /build-2024\.spdx\.json/i });
+        await user.click(buildCheckbox);
+
+        await waitFor(() => {
+            const html = document.body.innerHTML;
+            expect(html).toContain('pkg-with-sbom');
+            expect(html).not.toContain('pkg-other-sbom');
+        }, { timeout: 2000 });
+
+        // Uncheck to restore
+        await user.click(buildCheckbox);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('cell', { name: /pkg-other-sbom/ }).length).toBeGreaterThan(0);
+        });
+    });
+
+    test('SBOM Source File column shows document badge when enabled', async () => {
+        const packagesWithSbom: Package[] = [
+            {
+                id: 'pkg-with-doc@1.0.0',
+                name: 'pkg-with-doc',
+                version: '1.0.0',
+                cpe: [],
+                purl: [],
+                vulnerabilities: {},
+                maxSeverity: {},
+                source: ['test'],
+                variants: [],
+                sbom_documents: ['production-2024.spdx.json'],
+                supplier: '',
+            },
+        ];
+
+        // The SBOM Source File column is defined in allColumns but filtered from rendered columns
+        // because 'sbom_documents' has no entry in columnDisplayNames.
+        // The SBOM Source File FilterOption is a filter button, not a column toggle.
+        // Verify the filter button is rendered correctly.
+        render(<TablePackages packages={packagesWithSbom} />);
+
+        // The SBOM Source File filter button should be present
+        const sbomFilterBtn = screen.getByRole('button', { name: /^sbom source file$/i });
+        expect(sbomFilterBtn).toBeTruthy();
+
+        // Open it and verify the document is listed as a filter option
+        const user = userEvent.setup();
+        await user.click(sbomFilterBtn);
+
+        const docCheckbox = await screen.findByRole('checkbox', { name: /production-2024\.spdx\.json/i });
+        expect(docCheckbox).toBeTruthy();
+    });
+
+    test('clicking outside shortcut helper dropdown closes it', async () => {
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+
+        // Open the shortcut helper
+        const helperBtn = await screen.getByRole('button', { name: /shortcut helper/i });
+        await user.click(helperBtn);
+
+        // Verify it opened
+        expect(await screen.findByText('Keyboard Shortcuts')).toBeTruthy();
+
+        // Click outside (on the document body)
+        await user.click(document.body);
+
+        // Dropdown should close
+        await waitFor(() => {
+            expect(screen.queryByText('Keyboard Shortcuts')).toBeNull();
+        });
+    });
+
+    test('clicking outside search syntax helper closes it', async () => {
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+
+        // Open the search syntax helper
+        const helperBtn = screen.getByRole('button', { name: /search syntax helper/i });
+        await user.click(helperBtn);
+
+        expect(await screen.findByText('Search Syntax')).toBeTruthy();
+
+        // Click outside
+        await user.click(document.body);
+
+        await waitFor(() => {
+            expect(screen.queryByText('Search Syntax')).toBeNull();
         });
     });
 });

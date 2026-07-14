@@ -74,7 +74,8 @@ class TestSingleCveRefreshEndpoint:
                 "vulnerabilities": [{"cve": {"id": existing_cve_id}}]
             })
             MockNVD.extract_cve_details.return_value = mock_details
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 200
         data = resp.get_json()
         assert "vulnerabilities" in data
@@ -112,7 +113,8 @@ class TestSingleCveRefreshEndpoint:
                 "vulnerabilities": [{"cve": {"id": existing_cve_id}}]
             })
             MockNVD.extract_cve_details.return_value = mock_details
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 200
         vuln = resp.get_json()["vulnerabilities"][0]
         cvss_scores = vuln["severity"]["cvss"]
@@ -126,14 +128,16 @@ class TestSingleCveRefreshEndpoint:
         """503 when NVD returns 200 but no vulnerability data."""
         with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
             MockNVD.return_value.api_get_cve.return_value = (200, {"vulnerabilities": []})
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 503
 
     def test_single_refresh_503_on_nvd_failure(self, client, existing_cve_id):
         """503 when api_get_cve exhausts retries and returns a non-200/429/401/403 status."""
         with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
             MockNVD.return_value.api_get_cve.return_value = (0, {})
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 503
         data = resp.get_json()
         assert data["error_code"] == "unavailable"
@@ -143,7 +147,8 @@ class TestSingleCveRefreshEndpoint:
         """503 when an unexpected exception (e.g. network error) escapes api_get_cve."""
         with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
             MockNVD.return_value.api_get_cve.side_effect = OSError("network unreachable")
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 503
         data = resp.get_json()
         assert data["error_code"] == "unavailable"
@@ -153,7 +158,8 @@ class TestSingleCveRefreshEndpoint:
         """429 + rate_limited error_code when NVD throttles the request."""
         with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
             MockNVD.return_value.api_get_cve.return_value = (429, {})
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 429
         data = resp.get_json()
         assert data["error_code"] == "rate_limited"
@@ -166,9 +172,11 @@ class TestSingleCveRefreshEndpoint:
             MockNVD.return_value.api_get_cve.return_value = (429, {})
             os.environ.pop("NVD_API_KEY", None)
             try:
-                resp_no_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+                resp_no_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                                          json={"mode": "api"})
                 os.environ["NVD_API_KEY"] = "test-key-value"
-                resp_with_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+                resp_with_key = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                                            json={"mode": "api"})
             finally:
                 os.environ.pop("NVD_API_KEY", None)
         assert resp_no_key.get_json()["api_key_configured"] is False
@@ -181,5 +189,133 @@ class TestSingleCveRefreshEndpoint:
                 "vulnerabilities": [{"cve": {"id": existing_cve_id}}]
             })
             MockNVD.extract_cve_details.return_value = {}
-            resp = client.post(f"/api/vulnerabilities/{existing_cve_id.lower()}/nvd-refresh")
+            resp = client.post(f"/api/vulnerabilities/{existing_cve_id.lower()}/nvd-refresh",
+                               json={"mode": "api"})
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Single CVE refresh — mode parameter (local vs api)
+# ---------------------------------------------------------------------------
+
+class TestSingleCveRefreshMode:
+    """Tests for the ``mode`` parameter added by the local-nvd-fkie feature."""
+
+    def test_default_mode_is_local(self, client, existing_cve_id):
+        """When no mode is supplied, the local NVD-FKIE database is used."""
+        with patch("src.routes.vulnerabilities.get_cve_json") as mock_local:
+            mock_local.return_value = None  # not found in local DB → 503
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={},
+            )
+        mock_local.assert_called_once_with(existing_cve_id)
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data["error_code"] == "unavailable"
+
+    def test_explicit_local_mode_uses_local_db(self, client, existing_cve_id):
+        """mode='local' explicitly routes to the local NVD-FKIE database."""
+        with patch("src.routes.vulnerabilities.get_cve_json") as mock_local:
+            mock_local.return_value = None
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "local"},
+            )
+        mock_local.assert_called_once_with(existing_cve_id)
+        assert resp.status_code == 503
+
+    def test_local_mode_returns_200_when_cve_found(self, client, existing_cve_id):
+        """mode='local' returns 200 when the CVE is found in the local database."""
+        cve_obj = {"id": existing_cve_id}
+        with patch("src.routes.vulnerabilities.get_cve_json", return_value=cve_obj):
+            with patch("src.routes.vulnerabilities.extract_cve_details", return_value={}):
+                resp = client.post(
+                    f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                    json={"mode": "local"},
+                )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "vulnerabilities" in data
+
+    def test_api_mode_uses_nvd_rest_api(self, client, existing_cve_id):
+        """mode='api' calls NVD_DB.api_get_cve and does NOT call get_cve_json."""
+        with patch("src.routes.vulnerabilities.get_cve_json") as mock_local, \
+             patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (200, {
+                "vulnerabilities": [{"cve": {"id": existing_cve_id}}]
+            })
+            MockNVD.extract_cve_details.return_value = {}
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        mock_local.assert_not_called()
+        assert resp.status_code == 200
+
+    def test_api_mode_returns_429_on_rate_limit(self, client, existing_cve_id):
+        """mode='api' propagates a 429 rate-limit response with error_code."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (429, {})
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp.status_code == 429
+        data = resp.get_json()
+        assert data["error_code"] == "rate_limited"
+        assert "api_key_configured" in data
+
+    def test_api_mode_returns_503_on_network_exception(self, client, existing_cve_id):
+        """mode='api' catches network errors and returns 503 unavailable."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.side_effect = OSError("network down")
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data["error_code"] == "unavailable"
+
+    def test_api_mode_unauthorized_returns_4xx(self, client, existing_cve_id):
+        """mode='api' returns 401 with error_code unauthorized when NVD rejects key."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (401, {})
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp.status_code == 401
+        data = resp.get_json()
+        assert data["error_code"] == "unauthorized"
+
+    def test_api_mode_returns_503_on_empty_nvd_response(self, client, existing_cve_id):
+        """mode='api' returns 503 when NVD returns 200 but no vulnerability data."""
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (200, {"vulnerabilities": []})
+            resp = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp.status_code == 503
+
+    def test_api_mode_api_key_configured_reflects_env(self, client, existing_cve_id, monkeypatch):
+        """api_key_configured in error payload reflects NVD_API_KEY presence."""
+        monkeypatch.delenv("NVD_API_KEY", raising=False)
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (429, {})
+            resp_no_key = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp_no_key.get_json()["api_key_configured"] is False
+
+        monkeypatch.setenv("NVD_API_KEY", "mykey")
+        with patch("src.routes.vulnerabilities.NVD_DB") as MockNVD:
+            MockNVD.return_value.api_get_cve.return_value = (429, {})
+            resp_with_key = client.post(
+                f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                json={"mode": "api"},
+            )
+        assert resp_with_key.get_json()["api_key_configured"] is True

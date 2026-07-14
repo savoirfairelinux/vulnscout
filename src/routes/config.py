@@ -13,6 +13,12 @@ from ..helpers.verbose import verbose
 
 _CONFIG_FILE_DEFAULT = '/etc/vulnscout/config.env'
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+# Accepts: off | disabled | plain-bytes | <digits><unit>
+# Units: B, KiB/MiB/GiB/TiB/PiB/EiB  and their SI equivalents KB/MB/…
+_GRYPE_MEMLIMIT_RE = re.compile(
+    r'^(?:off|disabled|\d+(?:[KMGTPE]iB|[KMGTPE]B|B)?)$',
+    re.IGNORECASE,
+)
 
 
 def _config_file_path() -> str:
@@ -83,6 +89,8 @@ def init_app(app):
             all_projects = ProjectController.get_all()
             project = all_projects[0] if all_projects else None
 
+        grype_memlimit = os.environ.get('GRYPE_MEMLIMIT', '')
+
         return jsonify({
             "project": ProjectController.serialize(project) if project else None,
             "variant": VariantController.serialize(variant) if variant else None,
@@ -90,6 +98,7 @@ def init_app(app):
             "author_name": author_name,
             "client_name": client_name,
             "contact_email": contact_email,
+            "grype_memlimit": grype_memlimit,
         })
 
     @app.route('/api/config', methods=['PATCH'])
@@ -103,6 +112,7 @@ def init_app(app):
             "author_name": "AUTHOR_NAME",
             "client_name": "CLIENT_NAME",
             "contact_email": "CONTACT_EMAIL",
+            "grype_memlimit": "GRYPE_MEMLIMIT",
         }
 
         for key in data.keys():
@@ -125,6 +135,14 @@ def init_app(app):
             if key == "contact_email" and normalized_value:
                 if not _EMAIL_RE.match(normalized_value):
                     return jsonify({"error": "Invalid email address format for 'contact_email'."}), 400
+
+            if key == "grype_memlimit" and normalized_value:
+                if not _GRYPE_MEMLIMIT_RE.match(normalized_value):
+                    return jsonify({
+                        "error": "Invalid GRYPE_MEMLIMIT value. "
+                                 "Use a Go memory string (e.g. 4GiB, 512MiB, 1073741824) "
+                                 "or 'off' / 'disabled' to remove the cap."
+                    }), 400
 
             validated[key] = (env_key, normalized_value if normalized_value else None)
 

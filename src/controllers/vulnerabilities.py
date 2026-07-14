@@ -4,7 +4,6 @@
 import datetime
 import decimal
 import time
-import os
 import json
 import logging
 import typing
@@ -16,7 +15,8 @@ from typing import Optional
 from ..models import Vulnerability, Package, SBOMObservation
 from ..controllers.packages import PackagesController
 from ..controllers.epss_db import EPSS_DB
-from ..controllers.nvd_db import NVD_DB
+from ..controllers.scc_engine import get_cve_json
+from ..controllers.nvd_extract import api_weaknesses_to_list_str, api_references_filter_patches
 from ..helpers.verbose import verbose
 from ._base import to_dict_with_fallback
 from ..models.cvss import CVSS
@@ -126,7 +126,6 @@ class VulnerabilitiesController:
         are scoped to this variant so scores from one project/variant don't leak
         into another. Set by the process run from the latest scan's variant."""
         self.epss_api = EPSS_DB()
-        self.nvd_api = NVD_DB()
         self._preload_cache()
 
     def _preload_cache(self) -> None:
@@ -440,32 +439,22 @@ class VulnerabilitiesController:
         return None
 
     def fetch_published_dates(self):
-        """Fetch published dates for all vulnerabilities from local cache / GHSA API.
+        """Fetch published dates for all vulnerabilities from local NVD cache / GHSA API.
 
-        CVE-prefixed IDs are looked up from the local NVD SQLite cache (if
-        available).  GHSA-prefixed IDs are fetched from the GitHub Advisories
-        API via a thread pool.  All errors are silently caught so that a
-        single failure never aborts the whole run.
+        CVE-prefixed IDs are looked up from the local NVD-FKIE advisory database
+        via :func:`~src.controllers.scc_engine.get_cve_json`. GHSA-prefixed IDs
+        are fetched from the GitHub Advisories API via a thread pool. All errors
+        are silently caught so that a single failure never aborts the whole run.
         """
-        import sqlite3
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        nvd_db_path = os.path.join(
-            os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout"), "nvd.db"
-        )
-
-        # CVE vulns: try local NVD SQLite cache
+        # CVE vulns: look up from local NVD-FKIE database
         for vuln in self.vulnerabilities.values():
             if vuln.id.startswith("CVE-"):
                 try:
-                    conn = sqlite3.connect(nvd_db_path)
-                    cursor = conn.execute(
-                        "SELECT published FROM cves WHERE id = ?", (vuln.id,)
-                    )
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        vuln.published = row[0]
-                    conn.close()
+                    cve_json = get_cve_json(vuln.id)
+                    if cve_json and cve_json.get("published"):
+                        vuln.published = cve_json["published"]
                 except Exception:
                     pass
 
@@ -518,29 +507,38 @@ class VulnerabilitiesController:
         tracker = NVDProgressTracker
         tracker.start("nvd_enrichment")
 
-        # NVD lookups via API
-        nvd_api = NVD_DB()
+        # NVD lookups via local FKIE database
         DB_COMMIT_EVERY = 100
         done = 0
         for vuln in nvd_vulns:
             try:
-                result = nvd_api.fetch_cve_data(vuln.id)
-                if result and result.get("not_found"):
-                    # NVD has no record for this CVE (404 or empty result set).
-                    print(f"=== NVD: {vuln.id} not found in NVD database.", flush=True)
+                cve_json = get_cve_json(vuln.id)
+                if cve_json is None:
+                    print(f"=== NVD: {vuln.id} not found in local database.", flush=True)
                     try:
                         rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)
                         if rec is not None:
                             rec.update_record(nvd_fetched_at=datetime.datetime.utcnow(), commit=False)
                     except Exception as e:
                         verbose(f"[fetch_nvd_data not_found sentinel {vuln.id!r}] {e}")
-                elif result:
-                    if result.get("published"):
-                        vuln.published = result["published"]
-                    vuln.weaknesses = result.get("weaknesses")
-                    vuln.versions_data = result.get("versions_data")
-                    vuln.patch_url = result.get("patch_url")
-                    vuln.nvd_last_modified = result.get("lastModified")
+                else:
+                    if cve_json.get("published"):
+                        vuln.published = cve_json["published"]
+                    vuln.weaknesses = (
+                        api_weaknesses_to_list_str(cve_json["weaknesses"])
+                        if "weaknesses" in cve_json else None
+                    )
+                    # Fix scrapper for versions_data
+                    from typing import cast
+                    from ..helpers.fixs_scrapper import FixsScrapper, NvdCve
+                    fix_scrapper = FixsScrapper()
+                    fix_scrapper.search_in_nvd({"cve": cast(NvdCve, cve_json)})
+                    vuln.versions_data = fix_scrapper.list_per_packages()
+                    vuln.patch_url = (
+                        api_references_filter_patches(cve_json["references"])
+                        if "references" in cve_json else None
+                    )
+                    vuln.nvd_last_modified = cve_json.get("lastModified")
                     # Persist the enriched fields
                     try:
                         rec = self._db_record_cache.get(vuln.id) or Vulnerability.get_by_id(vuln.id)

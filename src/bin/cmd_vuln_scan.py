@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Vulnerability scanning commands: ``flask nvd-scan`` and ``flask osv-scan``."""
 
+from ..controllers.scc_engine import get_engine
 from ..controllers.nvd_db import NVD_DB
+from ..controllers.nvd_persist import persist_nvd_cve
 from ..controllers.osv_client import OSVClient
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..models.vulnerability import Vulnerability as VulnModel
 from ..models.metrics import Metrics as MetricsModel
-from ..models.cvss import CVSS
 from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.package import Package
 from ..extensions import db as _db
@@ -18,7 +19,6 @@ from ..helpers.active_scans import active_sbom_scan_ids_for_variant, active_pack
 from ..helpers.scan_filters import filter_scannable_packages
 from ._common import DEFAULT_VARIANT_NAME, resolve_project_variant
 import click
-import os
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import inspect as sa_inspect
@@ -100,25 +100,34 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
+@click.option("--mode", "-m", default="local", type=click.Choice(["local", "api"]),
+              help="NVD backend: 'local' (default, uses local NVD-FKIE DB) or 'api' (NVD REST API).")
 @with_appcontext
-def nvd_scan_command(project: str, variant: str | None) -> None:
-    """Run an NVD CPE-based vulnerability scan for the given project/variant.
+def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
+    """Run an NVD-based vulnerability scan for the given project/variant.
 
-    Queries the NVD API for every CPE found in the variant's active packages
-    and creates findings/observations in a new tool scan.
+    With ``--mode local`` (default) the local NVD-FKIE advisory database is
+    used (no network required). With ``--mode api`` the NVD REST API v2 is
+    queried per CPE (network required; set NVD_API_KEY for higher rate limits).
+    The result is stored as a tool scan with source ``nvd``.
     """
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
-    nvd_api_key = os.getenv("NVD_API_KEY")
-    nvd = NVD_DB(nvd_api_key=nvd_api_key)
-
     packages = _resolve_active_packages(variant_uuid)
 
-    # Collect CPE names from packages
-    # Accept any CPE with a non-wildcard product (parts[4]).
-    # Wildcard part/vendor/version are handled via virtualMatchString.
-    cpe_to_pkgs: dict = {}
+    if mode == "api":
+        _nvd_scan_api(variant_uuid, packages)
+    else:
+        _nvd_scan_local(variant_uuid, packages)
+
+
+def _nvd_scan_api(variant_uuid, packages) -> None:
+    """NVD scan using the NVD REST API v2 (CPE-based)."""
+    import os as _os
+    nvd = NVD_DB(nvd_api_key=_os.getenv("NVD_API_KEY"))
+
+    cpe_to_pkgs: dict[str, list] = {}
     for pkg in packages:
         for cpe in (pkg.cpe or []):
             parts = cpe.split(":")
@@ -126,18 +135,15 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
                 cpe_to_pkgs.setdefault(cpe, []).append(pkg)
 
     if not cpe_to_pkgs:
-        raise click.ClickException(
-            "No packages with valid CPE identifiers"
-        )
+        raise click.ClickException("No packages with valid CPE identifiers")
 
+    total_cpes = len(cpe_to_pkgs)
     click.echo(
-        f"Found {len(packages)} packages with "
-        f"{len(cpe_to_pkgs)} unique CPEs to query"
+        f"Found {len(packages)} packages with {total_cpes} unique CPEs to query"
     )
 
     scan = _create_tool_scan(variant_uuid, "nvd")
-    total_cpes = len(cpe_to_pkgs)
-    cves_found: set = set()
+    cves_found: set[str] = set()
     observation_pairs: set = set()
     assessed_findings: set = set()
 
@@ -147,106 +153,67 @@ def nvd_scan_command(project: str, variant: str | None) -> None:
             cpe_parts = cpe_name.split(":")
             has_wildcards = (
                 len(cpe_parts) >= 6
-                and (cpe_parts[2] == "*"
-                     or cpe_parts[3] == "*"
-                     or cpe_parts[5] == "*")
+                and (cpe_parts[2] == "*" or cpe_parts[3] == "*" or cpe_parts[5] == "*")
             )
             nvd_vulns = nvd.api_get_cves_by_cpe(
-                cpe_name,
-                results_per_page=100,
-                use_virtual_match=has_wildcards,
+                cpe_name, results_per_page=100, use_virtual_match=has_wildcards,
             )
-        except Exception as e:
-            click.echo(
-                f"[{idx}/{total_cpes}] ERROR {cpe_name}: {str(e)[:200]}",
-                err=True,
-            )
+        except Exception as exc:
+            click.echo(f"[{idx}/{total_cpes}] ERROR {cpe_name}: {str(exc)[:200]}", err=True)
             continue
 
         cpe_cves = [
-            v.get("cve", {}).get("id", "")
-            for v in nvd_vulns if v.get("cve", {}).get("id")
+            v.get("cve", {}).get("id", "") for v in nvd_vulns if v.get("cve", {}).get("id")
         ]
-        _echo_query_results(idx, total_cpes, cpe_name, cpe_cves, "CVE(s)", "no CVEs")
+        _echo_query_results(idx, total_cpes, cpe_name, cpe_cves, noun="CVE(s)", no_results="no CVEs")
 
         for nvd_vuln in nvd_vulns:
             cve = nvd_vuln.get("cve", {})
             cve_id = cve.get("id", "")
             if not cve_id:
                 continue
-
             cves_found.add(cve_id)
             details = NVD_DB.extract_cve_details(cve)
 
-            existing_vuln = _db.session.get(VulnModel, cve_id.upper())
-            if existing_vuln is None:
-                existing_vuln = VulnModel.create_record(
-                    id=cve_id,
-                    description=details.get("description"),
-                    status=details.get("status"),
-                    publish_date=details.get("publish_date"),
-                    attack_vector=details.get("attack_vector"),
-                    links=details.get("links"),
-                    weaknesses=details.get("weaknesses"),
-                    nvd_last_modified=details.get("nvd_last_modified"),
-                )
-                existing_vuln.add_found_by("nvd")
-            else:
-                existing_vuln.add_found_by("nvd")
-                _update = {}
-                if not existing_vuln.description and details.get("description"):
-                    _update["description"] = details["description"]
-                if not existing_vuln.status and details.get("status"):
-                    _update["status"] = details["status"]
-                if not existing_vuln.publish_date and details.get("publish_date"):
-                    _update["publish_date"] = details["publish_date"]
-                if not existing_vuln.attack_vector and details.get("attack_vector"):
-                    _update["attack_vector"] = details["attack_vector"]
-                if not existing_vuln.links and details.get("links"):
-                    _update["links"] = details["links"]
-                if not existing_vuln.weaknesses and details.get("weaknesses"):
-                    _update["weaknesses"] = details["weaknesses"]
-                if _update:
-                    existing_vuln.update_record(**_update, commit=False)
-
-            # Persist CVSS metrics
-            if details.get("base_score") is not None:
-                _cvss_v = details.get("cvss_version")
-                _cvss_s = details["base_score"]
-                _cvss_vec = details.get("cvss_vector")
-                _dedup = (cve_id.upper(), _cvss_v, float(_cvss_s))
-                if _dedup not in MetricsModel._seen:
-                    try:
-                        MetricsModel.from_cvss(
-                            CVSS(
-                                version=_cvss_v or "",
-                                vector_string=_cvss_vec or "",
-                                author="nvd",
-                                base_score=float(_cvss_s),
-                                exploitability_score=(
-                                    float(details["cvss_exploitability"])
-                                    if details.get("cvss_exploitability") is not None
-                                    else 0
-                                ),
-                                impact_score=(
-                                    float(details["cvss_impact"])
-                                    if details.get("cvss_impact") is not None
-                                    else 0
-                                ),
-                            ),
-                            existing_vuln.id,
-                        )
-                    except Exception:
-                        pass
+            persist_nvd_cve(cve_id, details)
 
             for pkg in pkgs:
                 _persist_finding(pkg.id, cve_id, scan.id, variant_uuid, "nvd",
                                  observation_pairs, assessed_findings)
 
     _db.session.commit()
+    cve_count = len(cves_found)
     click.echo(
-        f"✓ Scan complete — found {len(cves_found)} unique CVEs "
-        f"across {total_cpes} CPEs"
+        f"✓ Scan complete — found {cve_count} unique CVEs across {total_cpes} CPEs"
+    )
+
+
+def _nvd_scan_local(variant_uuid, packages) -> None:
+    """NVD scan using the local NVD-FKIE advisory database."""
+    click.echo("Loading local NVD advisory database…")
+    engine = get_engine()
+
+    scan = _create_tool_scan(variant_uuid, "nvd")
+    total = len(packages)
+    writer = _SccBulkWriter(scan.id, variant_uuid, packages)
+    seen_keys: set = set()
+
+    for idx, pkg in enumerate(packages, 1):
+        click.echo(f"[{idx}/{total}] Scanning {pkg.name} {pkg.version}…")
+        try:
+            for computed, status in engine.applicable_vulns(pkg):
+                writer.add(pkg, computed, status, seen_keys)
+        except Exception as exc:
+            click.echo(
+                f"[{idx}/{total}] ERROR {pkg.name}: {str(exc)[:200]}",
+                err=True,
+            )
+        writer.maybe_flush()
+
+    writer.flush()
+    click.echo(
+        f"✓ Scan complete — found {len(seen_keys)} unique CVEs "
+        f"across {total} packages"
     )
 
 

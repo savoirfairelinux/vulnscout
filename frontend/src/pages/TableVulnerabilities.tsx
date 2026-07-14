@@ -21,6 +21,8 @@ import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import GHSAProgressHandler from "../handlers/ghsa_progress";
 import type { GHSAProgress } from "../handlers/ghsa_progress";
+import EUVDProgressHandler from "../handlers/euvd_progress";
+import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type SourceBanner = { message: string; type: 'error' | 'success' } | null;
 
@@ -158,17 +160,21 @@ type PublishedDateFilterProps = {
     setDateFrom: (value: string) => void;
     setDateTo: (value: string) => void;
     nvdProgress: NVDProgress | null;
+    hasAnyPublishedDate: boolean;
 };
 
 function PublishedDateFilter({
     filterType, dateValue, daysValue, dateFrom, dateTo,
     setFilterType, setDateValue, setDaysValue, setDateFrom, setDateTo,
-    nvdProgress
+    nvdProgress, hasAnyPublishedDate
 }: Readonly<PublishedDateFilterProps>) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    const isDisabled = !nvdProgress || nvdProgress.in_progress || nvdProgress.phase !== 'completed';
+    // Disabled only while NVD is actively syncing, or when there is no
+    // published-date data at all (neither from NVD nor any other scan).
+    const nvdReady = !!nvdProgress && !nvdProgress.in_progress && nvdProgress.phase === 'completed';
+    const isDisabled = (nvdProgress?.in_progress ?? false) || (!nvdReady && !hasAnyPublishedDate);
     const hasActiveFilter = filterType !== '' && (dateValue || daysValue || (dateFrom && dateTo));
 
     useEffect(() => {
@@ -206,7 +212,9 @@ function PublishedDateFilter({
                         ? 'bg-sky-950'
                         : 'bg-sky-900 hover:bg-sky-950'
                 } text-white`}
-                title={isDisabled ? 'NVD sync in progress' : 'Filter by published date'}
+                title={isDisabled
+                    ? (nvdProgress?.in_progress ? 'NVD sync in progress' : 'No published dates available')
+                    : 'Filter by published date'}
             >
                 Published Date
                 {hasActiveFilter && <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>}
@@ -347,6 +355,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+    // Track variants the user has explicitly unchecked. All variants (including
+    // any discovered later) are considered selected unless present here, which
+    // avoids a first-render flash where variant rows briefly disappear.
+    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
     const [publishedDateValue, setPublishedDateValue] = useState<string>('');
     const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
@@ -355,10 +367,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
+    const [euvdProgress, setEuvdProgress] = useState<EUVDProgress | null>(null);
     const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
     const [nvdBanner, setNvdBanner] = useState<SourceBanner>(null);
     const [epssBanner, setEpssBanner] = useState<SourceBanner>(null);
     const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
+    const [euvdBanner, setEuvdBanner] = useState<SourceBanner>(null);
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
@@ -394,6 +408,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const prevGhsaInProgress = useRef<boolean | null>(null);
     const prevGhsaPhase = useRef<string | null>(null);
     const prevGhsaStartedAt = useRef<string | null>(null);
+    const prevEuvdInProgress = useRef<boolean | null>(null);
+    const prevEuvdPhase = useRef<string | null>(null);
+    const prevEuvdStartedAt = useRef<string | null>(null);
     const hasFetchedProgressOnce = useRef(false);
 
     const keyboardShortcuts = [
@@ -409,10 +426,19 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         { syntax: 'term1 term2', description: 'AND: both terms must match' },
         { syntax: 'term1 | term2', description: 'OR: either term matches' },
         { syntax: '-term', description: 'NOT: exclude rows with term' },
+        { syntax: 'only:text', description: 'Show a vuln only when all of its SBOM-affected packages contain text (e.g. only:native keeps vulns whose affected packages are all native)' },
     ];
 
     const hasAnyGhsaVuln = useMemo(
         () => vulnerabilities.some(v => v.id?.toUpperCase().startsWith('GHSA-')),
+        [vulnerabilities]
+    );
+
+    // Published dates can come from sources other than NVD (e.g. an
+    // sbom-cve-check scan). When at least one vulnerability already has a
+    // published date, the filter is usable even if NVD has never synced.
+    const hasAnyPublishedDate = useMemo(
+        () => vulnerabilities.some(v => !!v.published),
         [vulnerabilities]
     );
 
@@ -429,13 +455,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
     useRefreshProgressEffect(epssProgress, 'EPSS', prevEpssInProgress, prevEpssPhase, prevEpssStartedAt, setEpssBanner, onRefreshComplete, 'CVEs');
     useRefreshProgressEffect(ghsaProgress, 'GHSA', prevGhsaInProgress, prevGhsaPhase, prevGhsaStartedAt, setGhsaBanner, onRefreshComplete, 'advisories');
+    useRefreshProgressEffect(euvdProgress, 'EUVD', prevEuvdInProgress, prevEuvdPhase, prevEuvdStartedAt, setEuvdBanner, onRefreshComplete, 'CVEs');
 
-    const fetchAllProgress = useCallback(async () => {
-        const shouldPollGhsa = hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
-        const [nvd, epss, ghsa] = await Promise.allSettled([
+    const fetchAllProgress = useCallback(async (forceAll = false) => {
+        const shouldPollGhsa = forceAll || hasAnyGhsaVuln || Boolean(ghsaProgress?.in_progress);
+        const shouldPollEpss = forceAll || Boolean(epssProgress?.in_progress);
+        const shouldPollEuvd = forceAll || Boolean(euvdProgress?.in_progress);
+        const [nvd, epss, ghsa, euvd] = await Promise.allSettled([
             NVDProgressHandler.getProgress(),
-            EPSSProgressHandler.getProgress(),
+            shouldPollEpss ? EPSSProgressHandler.getProgress() : Promise.resolve(null),
             shouldPollGhsa ? GHSAProgressHandler.getProgress() : Promise.resolve(null),
+            shouldPollEuvd ? EUVDProgressHandler.getProgress() : Promise.resolve(null),
         ]);
         if (nvd.status === 'fulfilled') setNvdProgress(nvd.value);
         else console.error('Failed to fetch NVD refresh progress:', nvd.reason);
@@ -443,20 +473,22 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         else console.error('Failed to fetch EPSS refresh progress:', epss.reason);
         if (ghsa.status === 'fulfilled') setGhsaProgress(ghsa.value);
         else console.error('Failed to fetch GHSA refresh progress:', ghsa.reason);
-    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress]);
+        if (euvd.status === 'fulfilled') setEuvdProgress(euvd.value);
+        else console.error('Failed to fetch EUVD refresh progress:', euvd.reason);
+    }, [hasAnyGhsaVuln, ghsaProgress?.in_progress, epssProgress?.in_progress, euvdProgress?.in_progress]);
 
     // Fetch once on mount so we can recover progress if a refresh was already running.
     useEffect(() => {
         if (!hasFetchedProgressOnce.current) {
             hasFetchedProgressOnce.current = true;
-            void fetchAllProgress();
+            void fetchAllProgress(true);
         }
     }, [fetchAllProgress]);
 
     // Poll only while any refresh is actively running.
     useEffect(() => {
         const anyInProgress = Boolean(
-            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress
+            nvdProgress?.in_progress || epssProgress?.in_progress || ghsaProgress?.in_progress || euvdProgress?.in_progress
         );
         if (!anyInProgress) {
             return;
@@ -467,17 +499,18 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         }, 3000);
 
         return () => clearInterval(interval);
-    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, fetchAllProgress]);
+    }, [nvdProgress?.in_progress, epssProgress?.in_progress, ghsaProgress?.in_progress, euvdProgress?.in_progress, fetchAllProgress]);
 
-    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
+    const activeBanners = [nvdBanner, epssBanner, ghsaBanner, euvdBanner, generalBanner].filter((b): b is NonNullable<SourceBanner> => b !== null);
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
 
-    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa', refreshActivity?: boolean) => {
+    const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
         else if (source === 'epss') setEpssBanner({ message, type });
         else if (source === 'ghsa') setGhsaBanner({ message, type });
+        else if (source === 'euvd') setEuvdBanner({ message, type });
         else setGeneralBanner({ message, type });
 
         // Refresh progress immediately when the caller signals a refresh has
@@ -485,7 +518,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         // without idle background polling. This relies on an explicit flag
         // rather than parsing the user-facing banner text.
         if (source && refreshActivity) {
-            void fetchAllProgress();
+            void fetchAllProgress(true);
         }
     };
 
@@ -493,6 +526,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setNvdBanner(null);
         setEpssBanner(null);
         setGhsaBanner(null);
+        setEuvdBanner(null);
         setGeneralBanner(null);
     };
 
@@ -561,6 +595,25 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         [sources_list]
     );
 
+    const variants_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
+        vuln.variants.forEach(variant => {
+            if (!acc.includes(variant) && variant != '')
+                acc.push(variant)
+        });
+        return acc.sort();
+    }, []), [vulnerabilities])
+
+    // All variants are checked by default; a variant only leaves the selection
+    // once the user explicitly unchecks it. Deriving the selection during render
+    // (instead of populating it from an effect) prevents a first-render flash.
+    const selectedVariants = useMemo(
+        () => variants_list.filter(v => !deselectedVariants.includes(v)),
+        [variants_list, deselectedVariants]
+    );
+    const setSelectedVariants = useCallback((values: string[]) => {
+        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
+    }, [variants_list]);
+
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
         setModalVuln(vuln);
@@ -590,6 +643,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         'data_fetched_at': 'Last Fetched',
         'data_updated_at': 'Last Updated',
         'found_by': 'Sources',
+        'euvd': 'EU KEV',
         'actions': 'Actions'
     }), []);
 
@@ -752,7 +806,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                             <div className="space-y-1 text-gray-100">
                                 <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
                                 <p>Scope follows your active project, variant, and compare selection.</p>
-                                <p>Display shows top outcomes, for example: Exploitable, Pending Assessment.</p>
+                                <p>Display lists every distinct outcome, for example: Exploitable, Pending Assessment.</p>
                                 <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
                             </div>
                         </div>
@@ -762,9 +816,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             cell: info => {
                 const summary = getVulnerabilityStatusSummary(info.row.original);
                 const label = getTopStatusSummaryLabel(summary);
-                const details = summary.ordered.map(entry => entry.status).join(', ');
                 return (
-                    <div className="flex items-center justify-center h-full text-center" title={details}>
+                    <div className="flex items-center justify-center h-full text-center" title={label}>
                         <code>{label}</code>
                     </div>
                 );
@@ -980,6 +1033,29 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ),
             enableSorting: false
             }),
+            columnHelper.accessor('euvd', {
+            id: 'euvd',
+            header: () => <div className="flex items-center justify-center">EU KEV</div>,
+            cell: info => {
+                const euvd = info.getValue();
+                if (!euvd?.known_exploited) {
+                    return <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>;
+                }
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                            Known Exploited
+                        </span>
+                    </div>
+                );
+            },
+            sortingFn: (rowA, rowB) => {
+                const a = rowA.original.euvd?.known_exploited ? 1 : 0;
+                const b = rowB.original.euvd?.known_exploited ? 1 : 0;
+                return a - b;
+            },
+            size: 110
+            }),
             columnHelper.accessor(row => row, {
                 id: 'actions',
                 header: 'Actions',
@@ -1024,6 +1100,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
+            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -1115,7 +1192,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -1143,6 +1220,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedPackages([]);
+        setSelectedVariants(variants_list);
         setPublishedDateFilterType('');
         setPublishedDateValue('');
         setPublishedDaysValue('');
@@ -1313,7 +1391,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     'First Scan Date',
                     'Last Fetched',
                     'Last Updated',
-                    'Sources'
+                    'Sources',
+                    'EU KEV'
                 ]}
                 selected={visibleColumns}
                 setSelected={setVisibleColumns}
@@ -1355,6 +1434,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setSelected={setSelectedStatuses}
             />
 
+            {variants_list.length > 0 && (
+                <FilterOption
+                    label="Variants"
+                    options={variants_list}
+                    selected={selectedVariants}
+                    setSelected={setSelectedVariants}
+                />
+            )}
+
             {/* Published Date Filter Dropdown */}
             <PublishedDateFilter
                 filterType={publishedDateFilterType}
@@ -1368,6 +1456,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setDateFrom={setPublishedDateFrom}
                 setDateTo={setPublishedDateTo}
                 nvdProgress={nvdProgress}
+                hasAnyPublishedDate={hasAnyPublishedDate}
             />
 
             {/* More Filters dropdown — EPSS Range, Attack Vector, First Scan Date */}
@@ -1559,10 +1648,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             nvdProgress={nvdProgress}
             epssProgress={epssProgress}
             ghsaProgress={ghsaProgress}
+            euvdProgress={euvdProgress}
         />
 
         <TableGeneric
             fuseKeys={fuseKeys}
+            forAllValues={(vuln) => (vuln.packages_current?.length ? vuln.packages_current : vuln.packages)}
             hoverField="texts"
             search={search}
             columns={columns}

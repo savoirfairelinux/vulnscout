@@ -19,7 +19,7 @@ When the container starts with no arguments, it enters **daemon mode** — it st
 
 ```bash
 # The container starts in daemon mode by default
-docker run -d --name vulnscout sflinux/vulnscout:latest
+docker run -d --name vulnscout sflinux/vulnscout:v0.18
 
 # Then send commands to it
 docker exec vulnscout /scan/src/entrypoint.sh --serve
@@ -42,14 +42,14 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 |------|-------------|
 | `--add-spdx <path>` | Add an SPDX 2/3 SBOM file or archive (`.json`, `.spdx`, `.tar`, `.tar.gz`, `.tar.zst`) |
 | `--add-cve-check <path>` | Add a Yocto CVE check JSON file |
+| `--add-yocto-vex <path>` | Add a Yocto VEX JSON file (from `vex.bbclass`) |
 | `--add-openvex <path>` | Add an OpenVEX JSON file |
 | `--add-cdx <path>` | Add a CycloneDX file |
 | `--add-grype <path>` | Add a Grype results file (`.grype.json`) |
-| `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back |
+| `--perform-grype-scan` | Export current DB as CycloneDX, run Grype on it, and merge results back. Memory capped by `GRYPE_MEMLIMIT` (default: auto ~80 % of cgroup limit) |
 | `--perform-nvd-scan` | Run an NVD CPE-based vulnerability scan |
 | `--perform-osv-scan` | Run an OSV PURL-based vulnerability scan |
 | `--perform-sbom-cve-check-scan` | Run a CVE scan using local sbom-cve-check databases |
-| `--clear-inputs` | Remove all staged input files |
 
 ### Scan & Output Commands
 
@@ -136,7 +136,7 @@ The following paths inside the container are relevant:
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
 | `/etc/vulnscout/config.env` | Persistent configuration file |
-| `/cache/vulnscout/sbom_cve_check_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/sbom_cve_check_databases`) |
+| `/cache/vulnscout/local_databases/` | Local sbom-cve-check advisory database clones (NVD-FKIE + CVEList), stored inside the cache volume next to `vulnscout.db`. Override the host path with `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` (then mounted at `/local_databases`) |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 
 ---
@@ -149,6 +149,7 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \
   --add-spdx /scan/inputs/sbom.spdx.json \
   --add-cve-check /scan/inputs/cve-check.json \
+  --add-yocto-vex /scan/inputs/vex.json \
   --serve
 ```
 
@@ -177,7 +178,7 @@ docker exec vulnscout /scan/src/entrypoint.sh \
   --perform-sbom-cve-check-scan
 ```
 
-> By default the sbom-cve-check databases live in `/cache/vulnscout/sbom_cve_check_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/sbom_cve_check_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
+> By default the sbom-cve-check databases live in `/cache/vulnscout/local_databases` (inside the cache volume, next to `vulnscout.db`); set `$VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` to use a shared host clone mounted at `/local_databases` instead. With `SBOM_CVE_CHECK_AUTO_UPDATE=1` the databases are cloned automatically on first use and refreshed before every scan.
 
 **Set persistent configuration:**
 ```bash

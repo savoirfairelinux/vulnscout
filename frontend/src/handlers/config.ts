@@ -5,6 +5,7 @@ type AppConfig = {
     author_name: string;
     client_name: string;
     contact_email: string;
+    grype_memlimit: string;
 };
 
 export type { AppConfig };
@@ -32,6 +33,7 @@ class Config {
                     : "vulnscout",
             client_name: typeof data?.client_name === "string" ? data.client_name : "",
             contact_email: typeof data?.contact_email === "string" ? data.contact_email : "",
+            grype_memlimit: typeof data?.grype_memlimit === "string" ? data.grype_memlimit : "",
         };
     }
 
@@ -48,6 +50,7 @@ class Config {
         author_name?: string;
         client_name?: string;
         contact_email?: string;
+        grype_memlimit?: string;
     }): Promise<AppConfig> {
         const response = await fetch(import.meta.env.VITE_API_URL + "/api/config", {
             method: "PATCH",

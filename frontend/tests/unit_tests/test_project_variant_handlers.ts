@@ -380,6 +380,59 @@ describe('Packages.list with filtering params', () => {
         expect(calledUrl).toContain('variant_id=var-1');
         expect(calledUrl).not.toContain('project_id');
     });
+
+    test('list(...variantIds, multiOperation) uses variant_ids, operation and project_id', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Packages.list(undefined, 'proj-1', undefined, undefined, ['v1', 'v2'], 'intersection');
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_ids=v1,v2');
+        expect(calledUrl).toContain('operation=intersection');
+        expect(calledUrl).toContain('project_id=proj-1');
+        expect(calledUrl).not.toContain('variant_id=');
+    });
+
+    test('list(...variantIds) without multiOperation omits operation', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Packages.list(undefined, 'proj-1', undefined, undefined, ['v1', 'v2']);
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_ids=v1,v2');
+        expect(calledUrl).toContain('project_id=proj-1');
+        expect(calledUrl).not.toContain('operation=');
+    });
+
+    test('list with a single variantIds entry falls back to project scope', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Packages.list(undefined, 'proj-1', undefined, undefined, ['v1']);
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).not.toContain('variant_ids=');
+        expect(calledUrl).toContain('project_id=proj-1');
+    });
+
+    test('compare mode takes priority over variant_ids', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Packages.list('var-1', 'proj-1', 'var-2', 'difference', ['v1', 'v2', 'v3'], 'union');
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_id=var-1');
+        expect(calledUrl).toContain('compare_variant_id=var-2');
+        expect(calledUrl).toContain('operation=difference');
+        expect(calledUrl).not.toContain('variant_ids=');
+    });
 });
 
 
@@ -441,6 +494,59 @@ describe('Vulnerabilities.list with filtering params', () => {
         const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
         expect(calledUrl).toContain('variant_id=var-1');
         expect(calledUrl).not.toContain('project_id');
+    });
+
+    test('list(...variantIds, multiOperation) uses variant_ids, operation and project_id', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Vulnerabilities.list(undefined, 'proj-1', undefined, undefined, ['v1', 'v2'], 'intersection');
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_ids=v1,v2');
+        expect(calledUrl).toContain('operation=intersection');
+        expect(calledUrl).toContain('project_id=proj-1');
+        expect(calledUrl).not.toContain('variant_id=');
+    });
+
+    test('list(...variantIds) without multiOperation omits operation', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Vulnerabilities.list(undefined, 'proj-1', undefined, undefined, ['v1', 'v2']);
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_ids=v1,v2');
+        expect(calledUrl).toContain('project_id=proj-1');
+        expect(calledUrl).not.toContain('operation=');
+    });
+
+    test('list with a single variantIds entry falls back to project scope', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Vulnerabilities.list(undefined, 'proj-1', undefined, undefined, ['v1']);
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).not.toContain('variant_ids=');
+        expect(calledUrl).toContain('project_id=proj-1');
+    });
+
+    test('compare mode takes priority over variant_ids', async () => {
+        fetchMock.mockImplementationOnce(() =>
+            Promise.resolve({ json: () => Promise.resolve([]) } as Response)
+        );
+
+        await Vulnerabilities.list('var-1', 'proj-1', 'var-2', 'difference', ['v1', 'v2', 'v3'], 'union');
+
+        const calledUrl = decodeURIComponent((fetchMock.mock.calls[0] as any[])[0]);
+        expect(calledUrl).toContain('variant_id=var-1');
+        expect(calledUrl).toContain('compare_variant_id=var-2');
+        expect(calledUrl).toContain('operation=difference');
+        expect(calledUrl).not.toContain('variant_ids=');
     });
 });
 

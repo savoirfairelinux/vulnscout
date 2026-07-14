@@ -10,6 +10,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.18.0] - 2026-07-14
+
+### Added
+- Scan: local NVD mode via a cloned Git cache, now the default, alongside the existing NVD API.
+- Config: `GRYPE_MEMLIMIT` to cap Grype RAM consumption, available thorugh CLI and web dashboard.
+- Transfer: assessment transfer tab with fuzzy version matching.
+- Export: import custom report templates from the Export tab.
+- SBOM: Yocto VEX input parser.
+- Enrichment: support for ENISA EUVD.
+- Vuln modal: break down current status by variant and package.
+- Vuln modal: recap current assessment status per variant.
+- Vuln modal: tag each assessment history entry with its origin.
+- Filters: variants multi-select filter on data tables, defaulting to all variants.
+- Scope selector: support selecting multiple variants; select all by default.
+- Search: `only:<regex>` operator to filter by every affected package.
+
+### Changed
+- Copy: rework copy-assessments matching into 4 semver options; expand copy-review rows by default.
+- Review: sort exported vulnerabilities by timestamp.
+- Vuln modal: renamed labels for clarity.
+- Assessments: enforce `variant_id`; batch multi-variant adds into a single request.
+- Database: extract refresh metadata into a `vuln_refresh` table.
+- Scans: cache the scan-tab list and finish the prefetch refactor; speed up scan-tab list serialization.
+- Routes: remove the legacy OpenVEX file-writing artifact.
+- Typing: annotate routes.
+
+### Fixed
+- Frontend: display the full list of statuses.
+- CLI: accept both bare and `--` prefix for all commands.
+- Copy: show already-assessed target findings in Same Versions mode; only propose copies for vulns in the target's pool.
+- Vuln modal: prevent premature loading state while variants are still resolving; dedupe per-variant requests on navigation; recompute status summary after editing or deleting an assessment.
+- Review: exclude old-package assessments from vuln status; preserve impact statement when editing false-positive assessments; keep deprecated packages editable in the edit popup; filter valid variants and block incompatible package/variant combos in the edit popup; persist "Apply to variants" changes when editing an assessment.
+- Table: stop filtered rows blinking.
+- Filters: fix published-date filter when dates exist.
+
+---
+
 ## [0.17.1] - 2026-06-30
 
 ### Fixed

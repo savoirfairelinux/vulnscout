@@ -57,7 +57,7 @@ class TestApplyCvssUpdate:
         existing.score = 5.0
         existing.vector = "old-vector"
         mock_db = self._make_db()
-        mock_db.session.execute.return_value.scalar_one_or_none.return_value = existing
+        mock_db.session.execute.return_value.scalars.return_value.first.return_value = existing
 
         with patch("src.controllers.nvd_apply.Metrics"):
             apply_cvss_update(rec, {
@@ -73,7 +73,7 @@ class TestApplyCvssUpdate:
         """When no Metrics row exists, a new one is added to the session."""
         rec = self._make_rec()
         mock_db = self._make_db()
-        mock_db.session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_db.session.execute.return_value.scalars.return_value.first.return_value = None
 
         with patch("src.controllers.nvd_apply.Metrics") as MockMetrics:
             apply_cvss_update(rec, {
@@ -97,7 +97,7 @@ class TestApplyCvssUpdate:
         existing.score = 8.1
         existing.vector = vector
         mock_db = self._make_db()
-        mock_db.session.execute.return_value.scalar_one_or_none.return_value = existing
+        mock_db.session.execute.return_value.scalars.return_value.first.return_value = existing
 
         with patch("src.controllers.nvd_apply.Metrics"):
             apply_cvss_update(rec, {

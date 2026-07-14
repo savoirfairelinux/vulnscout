@@ -19,6 +19,8 @@ from collections import defaultdict
 from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
+from .datetime_utils import normalize_timestamp_for_sort
+
 if TYPE_CHECKING:
     from ..models.variant import Variant as _Variant
     from ..models.assessment import Assessment as _Assessment
@@ -124,11 +126,23 @@ def build_openvex_doc(
             })
         stmt["products"] = products
         stmt.setdefault("action_statement_timestamp", "")
-        stmt["scanners"] = list({
+        stmt["scanners"] = sorted({
             assess.source or "local_user_data",
             assess.origin or "local_user_data",
         })
         statements.append(stmt)
+
+    # Deterministic ordering so the exported file is stable in git and
+    # identical between developers regardless of import history: sort by the
+    # assessment date first, then by vulnerability name and product ids as
+    # stable tie-breakers.
+    statements.sort(
+        key=lambda s: (
+            normalize_timestamp_for_sort(s.get("timestamp")),
+            s.get("vulnerability", {}).get("name") or "",
+            tuple(p.get("@id", "") for p in s.get("products", [])),
+        )
+    )
 
     return {
         "@context": "https://openvex.dev/ns/v0.2.0",
@@ -281,6 +295,17 @@ def import_statements(
         status_notes = stmt.get("status_notes", "")
         workaround = stmt.get("action_statement", "")
 
+        # Preserve the original assessment date so exports remain ordered by
+        # the date of the custom assessment and stay reproducible when two
+        # developers import each other's assessments.
+        imported_ts: "_dt | None" = None
+        raw_ts = stmt.get("timestamp")
+        if isinstance(raw_ts, str) and raw_ts:
+            try:
+                imported_ts = _dt.fromisoformat(raw_ts)
+            except (ValueError, TypeError):
+                imported_ts = None
+
         for pkg_string_id in pkg_ids:
             try:
                 if "@" in pkg_string_id:
@@ -316,6 +341,7 @@ def import_statements(
                     impact_statement=impact_statement,
                     workaround=workaround,
                     responses=[],
+                    timestamp=imported_ts,
                     commit=True,
                 )
                 created.append(db_a.to_dict())

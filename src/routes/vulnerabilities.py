@@ -3,15 +3,15 @@
 
 import datetime
 import decimal
-import os
 import dataclasses
 import typing
 import re
 import urllib.error
 import uuid
 
-from flask import jsonify, request
-from sqlalchemy import func, select
+from flask import jsonify, request, Flask
+from flask.typing import ResponseReturnValue
+from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.orm import selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
@@ -28,7 +28,9 @@ from ..models import (
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..extensions import db
+from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_db import NVD_DB
+from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.vulnerabilities import VulnerabilitiesController
@@ -50,7 +52,7 @@ TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
-def _sbom_pkg_filter(pkg_ids):
+def _sbom_pkg_filter(pkg_ids: set[uuid.UUID]) -> "ColumnElement[bool] | None":
     """Return a SQLAlchemy filter clause restricting tool-scan findings to SBOM packages.
 
     Assumes the query already joins ``Finding`` and ``Scan``.  When
@@ -65,6 +67,24 @@ def _sbom_pkg_filter(pkg_ids):
     )
 
 
+def _vuln_ids_for_scans(scan_ids: list[uuid.UUID]) -> set[str]:
+    """Vuln IDs from *scan_ids*, filtering tool scans to active SBOM packages."""
+    if not scan_ids:
+        return set()
+    _pkg_ids = active_package_ids_for_scans(scan_ids)
+    q = (
+        db.select(Vulnerability.id)
+        .join(Finding, Vulnerability.id == Finding.vulnerability_id)
+        .join(Observation, Finding.id == Observation.finding_id)
+        .join(Scan, Observation.scan_id == Scan.id)
+        .where(Observation.scan_id.in_(scan_ids))
+    )
+    _flt = _sbom_pkg_filter(_pkg_ids)
+    if _flt is not None:
+        q = q.where(_flt)
+    return set(db.session.execute(q.distinct()).scalars().all())
+
+
 # Formats that are exclusively vulnerability scanners (never pure package BOMs)
 # Mapping from SBOMDocument.format to the found_by string exposed by the API
 _FORMAT_TO_FOUND_BY: dict[str, str] = {
@@ -73,6 +93,7 @@ _FORMAT_TO_FOUND_BY: dict[str, str] = {
     "spdx": "spdx3",
     "cdx": "cyclonedx",
     "openvex": "openvex",
+    "yocto_vex": "yocto_vex",
 }
 
 # Mapping from Scan.scan_source to the found_by string for tool scans
@@ -97,7 +118,7 @@ class _ScopedOverrides:
 
 
 def _variant_scoped_metrics_and_effort_overrides(
-    records: list[Vulnerability], variant_uuid
+    records: list[Vulnerability], variant_uuid: uuid.UUID
 ) -> dict[str, _ScopedOverrides]:
     """Build response-level overrides for variant-scoped metrics/effort.
 
@@ -182,7 +203,7 @@ def _apply_variant_scoped_overrides_to_vuln_dicts(
         vuln["effort"] = effort_to_dict(scoped.effort)
 
 
-def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
+def _variant_ids_for_vulnerability(vulnerability_id: str) -> list[uuid.UUID | None]:
     """Return distinct variant IDs where a vulnerability is observed."""
     rows = db.session.execute(
         db.select(Scan.variant_id)
@@ -195,10 +216,10 @@ def _variant_ids_for_vulnerability(vulnerability_id: str) -> list:
 
 
 def _populate_found_by(
-    records: list,
-    variant_uuid=None,
-    project_uuid=None,
-    active_scan_ids: list | None = None,
+    records: list[Vulnerability],
+    variant_uuid: uuid.UUID | None = None,
+    project_uuid: uuid.UUID | None = None,
+    active_scan_ids: list[uuid.UUID] | None = None,
 ) -> None:
     """Populate transient found_by with factual provenance.
 
@@ -270,18 +291,22 @@ def _populate_found_by(
             record.add_found_by(scanner)
 
 
-def init_app(app):
+def init_app(app: Flask) -> None:
 
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
 
     @app.route('/api/vulnerabilities')
-    def index_vulns():
+    def index_vulns() -> ResponseReturnValue:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
+        variant_ids = request.args.get('variant_ids')
         variant_scoped_overrides: dict[str, _ScopedOverrides] = {}
-        current_scan_ids: list = []
+        current_scan_ids: list[uuid.UUID] = []
+        records: list[Vulnerability] = []
+        _scope_variant: uuid.UUID | None = None
+        _scope_project: uuid.UUID | None = None
         if variant_id and compare_variant_id:
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -303,23 +328,6 @@ def init_app(app):
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
             )
-
-            def _vuln_ids_for_scans(scan_ids):
-                """Vuln IDs from *scan_ids*, filtering tool scans to active packages."""
-                if not scan_ids:
-                    return set()
-                _pkg_ids = active_package_ids_for_scans(scan_ids)
-                q = (
-                    db.select(Vulnerability.id)
-                    .join(Finding, Vulnerability.id == Finding.vulnerability_id)
-                    .join(Observation, Finding.id == Observation.finding_id)
-                    .join(Scan, Observation.scan_id == Scan.id)
-                    .where(Observation.scan_id.in_(scan_ids))
-                )
-                _flt = _sbom_pkg_filter(_pkg_ids)
-                if _flt is not None:
-                    q = q.where(_flt)
-                return set(db.session.execute(q.distinct()).scalars().all())
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
             operation = request.args.get('operation', 'difference')
@@ -356,6 +364,43 @@ def init_app(app):
                         query = query.where(~Vulnerability.id.in_(list(base_ids)))
                     records = list(db.session.execute(query).scalars().all())
             variant_scoped_overrides = _variant_scoped_metrics_and_effort_overrides(records, compare_uuid)
+        elif variant_ids:
+            # Multi-variant mode: union or intersection of the vulnerabilities
+            # present in two or more selected variants.
+            raw_ids = [s.strip() for s in variant_ids.split(',') if s.strip()]
+            parsed_uuids: list[uuid.UUID] = []
+            for raw_id in raw_ids:
+                parsed, err = parse_uuid_or_400(raw_id, "variant_ids")
+                if err:
+                    return err
+                if parsed is None:
+                    return {"error": "Internal error"}, 500
+                parsed_uuids.append(parsed)
+            operation = request.args.get('operation', 'union')
+            _scope_variant = None
+            _scope_project = None
+            opts = (
+                selectinload(Vulnerability.findings).selectinload(Finding.package),
+                selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
+                selectinload(Vulnerability.metrics),
+            )
+            per_variant_scan_ids = {u: active_scan_ids_for_variant(u) for u in parsed_uuids}
+            current_scan_ids = []
+            for _ids in per_variant_scan_ids.values():
+                current_scan_ids.extend(_ids)
+            id_sets = [_vuln_ids_for_scans(per_variant_scan_ids[u]) for u in parsed_uuids]
+            if not id_sets:
+                result_ids: list = []
+            elif operation == 'intersection':
+                result_ids = list(set.intersection(*id_sets))
+            else:  # union (default)
+                result_ids = list(set.union(*id_sets))
+            records = list(db.session.execute(
+                select(Vulnerability)
+                .options(*opts)
+                .where(Vulnerability.id.in_(result_ids))
+                .order_by(Vulnerability.id)
+            ).scalars().all()) if result_ids else []
         elif variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -573,7 +618,7 @@ def init_app(app):
                     if te:
                         opti, like, pess = te
 
-                        def _h(v):
+                        def _h(v: int | None) -> Iso8601Duration | None:
                             if v is None:
                                 return None
                             return Iso8601Duration(f"PT{v}H")
@@ -697,7 +742,7 @@ def init_app(app):
                 raise ValueError("Unknown format", fmt)
 
     @app.get('/api/vulnerabilities/<id>')
-    def get_vuln(id):
+    def get_vuln(id: str) -> ResponseReturnValue:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -708,6 +753,8 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
         else:
@@ -723,7 +770,7 @@ def init_app(app):
         return response
 
     @app.get('/api/vulnerabilities/<id>/variant-snapshots')
-    def get_vuln_variant_snapshots(id):
+    def get_vuln_variant_snapshots(id: str) -> ResponseReturnValue:
         """Return variant-scoped effort and custom CVSS for every variant that
         observes this vulnerability, in a single response.
 
@@ -745,7 +792,7 @@ def init_app(app):
             ).scalars().all())
             variant_uuids = [v for v in variant_uuids if v in allowed]
 
-        snapshots = []
+        snapshots: list[dict] = []
         for variant_uuid in variant_uuids:
             if variant_uuid is None:
                 continue
@@ -766,7 +813,7 @@ def init_app(app):
         return jsonify(snapshots)
 
     @app.patch('/api/vulnerabilities/<id>')
-    def patch_vuln(id):
+    def patch_vuln(id: str) -> ResponseReturnValue:
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -774,7 +821,7 @@ def init_app(app):
         payload_data = request.get_json()
         if payload_data is None:
             return {"error": "Invalid request data"}, 400
-        response_variant_id = None
+        response_variant_id: uuid.UUID | None = None
         _updated_effort: Effort | None = None
 
         if "effort" in payload_data:
@@ -846,15 +893,15 @@ def init_app(app):
         return response
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
-    def update_vulns_batch():
+    def update_vulns_batch() -> ResponseReturnValue:
         payload_data = request.get_json()
         if (not payload_data
                 or "vulnerabilities" not in payload_data
                 or not isinstance(payload_data["vulnerabilities"], list)):
             return {"error": "Invalid request data. Expected: {vulnerabilities: [...]}"}, 400
 
-        results = []
-        errors = []
+        results: list[dict] = []
+        errors: list[dict] = []
 
         for item in payload_data["vulnerabilities"]:
             if not isinstance(item, dict) or "id" not in item:
@@ -866,7 +913,7 @@ def init_app(app):
                 errors.append({"id": item["id"], "error": "Vulnerability not found"})
                 continue
 
-            response_variant_id = None
+            response_variant_id: uuid.UUID | None = None
             _updated_effort: Effort | None = None
 
             if "effort" in item:
@@ -959,44 +1006,56 @@ def init_app(app):
         return response, 200 if results else 400
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
-    def refresh_single_cve(cve_id):
+    def refresh_single_cve(cve_id: str) -> ResponseReturnValue:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
             return jsonify({"error": "CVE not found"}), 404
 
-        api_key = os.getenv("NVD_API_KEY")
-        try:
-            nvd = NVD_DB(nvd_api_key=api_key)
-            status_code, data = nvd.api_get_cve(cve_id_upper, max_retries=0)
-        except Exception as e:
-            return jsonify({
-                "error": f"NVD API unavailable: {e}",
-                "error_code": "unavailable",
-                "api_key_configured": bool(api_key),
-            }), 503
+        body = request.get_json(force=True, silent=True) or {}
+        mode = body.get("mode", "local")  # "local" (default) or "api"
 
-        if status_code == 429:
-            return jsonify({
-                "error": "NVD API rate limit exceeded",
-                "error_code": "rate_limited",
-                "api_key_configured": bool(api_key),
-            }), 429
-        if status_code in (401, 403):
-            return jsonify({
-                "error": f"NVD API rejected credentials (HTTP {status_code})",
-                "error_code": "unauthorized",
-                "api_key_configured": bool(api_key),
-            }), status_code
-        if status_code != 200 or not data.get("vulnerabilities"):
-            return jsonify({
-                "error": "NVD API returned no data for this CVE",
-                "error_code": "unavailable",
-                "api_key_configured": bool(api_key),
-            }), 503
-
-        cve = data["vulnerabilities"][0]["cve"]
-        details = NVD_DB.extract_cve_details(cve)
+        if mode == "api":
+            import os as _os
+            api_key = _os.getenv("NVD_API_KEY")
+            api_key_configured = bool(api_key)
+            try:
+                nvd = NVD_DB(nvd_api_key=api_key)
+                status_code, data_api = nvd.api_get_cve(cve_id_upper, max_retries=0)
+            except Exception as e:
+                return jsonify({
+                    "error": f"NVD API unavailable: {e}",
+                    "error_code": "unavailable",
+                    "api_key_configured": api_key_configured,
+                }), 503
+            if status_code == 429:
+                return jsonify({
+                    "error": "NVD API rate limit exceeded",
+                    "error_code": "rate_limited",
+                    "api_key_configured": api_key_configured,
+                }), 429
+            if status_code in (401, 403):
+                return jsonify({
+                    "error": f"NVD API rejected credentials (HTTP {status_code})",
+                    "error_code": "unauthorized",
+                    "api_key_configured": api_key_configured,
+                }), status_code
+            if status_code != 200 or not data_api.get("vulnerabilities"):
+                return jsonify({
+                    "error": "NVD API returned no data for this CVE",
+                    "error_code": "unavailable",
+                    "api_key_configured": api_key_configured,
+                }), 503
+            cve_obj = data_api["vulnerabilities"][0]["cve"]
+            details = NVD_DB.extract_cve_details(cve_obj)
+        else:
+            cve_obj = get_cve_json(cve_id_upper)
+            if cve_obj is None:
+                return jsonify({
+                    "error": "CVE not found in local NVD database",
+                    "error_code": "unavailable",
+                }), 503
+            details = extract_cve_details(cve_obj)
         now = datetime.datetime.now(datetime.timezone.utc)
         apply_nvd_update(rec, details, now)
 
@@ -1053,7 +1112,7 @@ def init_app(app):
         return jsonify({"vulnerabilities": [data]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
-    def refresh_single_cve_epss(cve_id):
+    def refresh_single_cve_epss(cve_id: str) -> ResponseReturnValue:
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1088,7 +1147,7 @@ def init_app(app):
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
 
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
-    def refresh_single_ghsa(ghsa_id):
+    def refresh_single_ghsa(ghsa_id: str) -> ResponseReturnValue:
         ghsa_id_upper = ghsa_id.upper()
         if not _GHSA_RE.match(ghsa_id_upper):
             return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400

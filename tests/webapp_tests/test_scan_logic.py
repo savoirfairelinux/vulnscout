@@ -128,7 +128,7 @@ class TestDoNvdScan:
         ]
 
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         # Check the scan status was set to done
@@ -157,7 +157,7 @@ class TestDoNvdScan:
         mock_nvd.api_get_cves_by_cpe.return_value = []
 
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_status = client.get(
@@ -175,7 +175,7 @@ class TestDoNvdScan:
         mock_nvd.api_get_cves_by_cpe.side_effect = Exception("NVD timeout")
 
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_status = client.get(
@@ -339,7 +339,7 @@ class TestNvdScanNoCpes:
         client = app_no_cpe.test_client()
         vid = app_no_cpe._test_ids["variant_id"]
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/nvd-scan")
+            resp = client.post(f"/api/variants/{vid}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_s = client.get(f"/api/variants/{vid}/nvd-scan/status")
@@ -446,7 +446,7 @@ class TestNvdScanNoPackages:
         client = app_no_pkgs.test_client()
         vid = app_no_pkgs._test_ids["variant_id"]
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{vid}/nvd-scan")
+            resp = client.post(f"/api/variants/{vid}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_s = client.get(f"/api/variants/{vid}/nvd-scan/status")
@@ -530,7 +530,7 @@ class TestNvdScanExistingVuln:
         ]
 
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_s = client.get(
@@ -599,7 +599,7 @@ class TestNvdScanManyCves:
         ]
 
         with _make_sync_thread_patch():
-            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan")
+            resp = client.post(f"/api/variants/{ids['variant_id']}/nvd-scan?mode=api")
         assert resp.status_code == 202
 
         resp_s = client.get(

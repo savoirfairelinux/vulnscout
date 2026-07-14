@@ -64,17 +64,22 @@ def test_nvd_initial_populate_sets_nvd_data_updated_at(app):
 
     ctrl = _make_controller(app, cve_id)
 
-    fake_result = {
-        "published": "2020-05-01",
-        "weaknesses": ["CWE-787"],
-        "versions_data": {},
-        "patch_url": [],
-        "lastModified": "2020-06-01",
+    fake_cve_json = {
+        "id": cve_id,
+        "published": "2020-05-01T00:00:00.000",
+        "lastModified": "2020-06-01T00:00:00.000",
+        "vulnStatus": "Analyzed",
+        "weaknesses": [
+            {"source": "nvd", "type": "Primary",
+             "description": [{"lang": "en", "value": "CWE-787"}]}
+        ],
+        "references": [],
+        "descriptions": [{"lang": "en", "value": "test description"}],
     }
 
     with app.app_context():
-        with patch("src.controllers.vulnerabilities.NVD_DB") as MockNVD:
-            MockNVD.return_value.fetch_cve_data.return_value = fake_result
+        with patch("src.controllers.vulnerabilities.get_cve_json",
+                   return_value=fake_cve_json):
             ctrl.fetch_nvd_data()
             db.session.commit()
 
@@ -84,7 +89,7 @@ def test_nvd_initial_populate_sets_nvd_data_updated_at(app):
 
 
 def test_nvd_not_found_does_not_set_nvd_data_updated_at(app):
-    """fetch_nvd_data() does NOT stamp nvd_data_updated_at for a not_found sentinel."""
+    """fetch_nvd_data() does NOT stamp nvd_data_updated_at for a CVE not found in local DB."""
     cve_id = "CVE-2020-35492"
 
     with app.app_context():
@@ -96,8 +101,7 @@ def test_nvd_not_found_does_not_set_nvd_data_updated_at(app):
     ctrl = _make_controller(app, cve_id)
 
     with app.app_context():
-        with patch("src.controllers.vulnerabilities.NVD_DB") as MockNVD:
-            MockNVD.return_value.fetch_cve_data.return_value = {"not_found": True}
+        with patch("src.controllers.vulnerabilities.get_cve_json", return_value=None):
             ctrl.fetch_nvd_data()
             db.session.commit()
 
@@ -133,10 +137,8 @@ def test_ghsa_initial_populate_sets_ghsa_data_updated_at(app):
         ctrl._db_record_cache = {}
 
         with patch.object(VulnerabilitiesController, "_fetch_ghsa_published",
-                          return_value="2023-06-15T00:00:00Z"), \
-             patch("src.controllers.vulnerabilities.NVD_DB") as MockNVD:
-            # No CVE-prefixed IDs → NVD fetch skipped
-            MockNVD.return_value.fetch_cve_data.return_value = None
+                          return_value="2023-06-15T00:00:00Z"):
+            # No CVE-prefixed IDs → NVD (get_cve_json) path skipped entirely
             ctrl.fetch_nvd_data()
             db.session.commit()
 

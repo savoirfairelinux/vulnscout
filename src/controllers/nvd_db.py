@@ -1,25 +1,44 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
+"""NVD CVE data client — supports both local (NVD-FKIE) and REST API modes.
+
+The preferred mode is **local**: CVE data is sourced from the local NVD-FKIE
+git feed managed by sbom-cve-check (see
+:func:`~src.controllers.scc_engine.get_cve_json`).  No network calls, no rate
+limits, no API key needed.
+
+The **api** mode queries the NVD REST API v2 directly.  An optional API key
+(``NVD_API_KEY`` env var or constructor param) increases the rate limit from
+5 to 50 requests per 30 seconds.
+"""
 
 import json
 import os
 import urllib.request
 import urllib.parse
 import urllib.error
+import time
+from typing import Optional, Tuple
+
 from ..helpers.fixs_scrapper import FixsScrapper
 from ..helpers.base_api_client import BaseAPIClient
-from typing import Optional, Tuple
-import time
+from .nvd_extract import extract_cve_details, api_weaknesses_to_list_str, api_references_filter_patches
 
 
 class NVD_DB(BaseAPIClient):
-    """
-    API client for NVD (National Vulnerability Database).
-    Fetches CVE data directly from the NVD API without local caching.
+    """NVD CVE data client.
+
+    Re-exports the pure extraction helpers as static methods so existing call
+    sites that use ``NVD_DB.extract_cve_details(cve)`` continue to work.
+    Also provides the full NVD REST API v2 client for *api* mode.
     """
 
     # HTTP status codes that should not be retried (permanent client errors)
     _NON_RETRYABLE_STATUSES = {400, 403, 404}
+
+    # Pure extraction helpers — available as both static class methods and
+    # module-level functions (imported from nvd_extract).
+    extract_cve_details = staticmethod(extract_cve_details)
 
     def __init__(self, nvd_api_key: Optional[str] = None):
         super().__init__()
@@ -27,15 +46,15 @@ class NVD_DB(BaseAPIClient):
         self.nvd_api_key = api_key or None
 
     def _call_nvd_api(self, params: dict | None = None) -> Tuple[int, dict, dict[str, str]]:
-        """
-        Call the NVD API and return status, JSON body, and response headers.
-        Header names are normalized to lower-case for case-insensitive lookup.
+        """Call the NVD REST API and return (status, body, headers).
+
+        Header names are normalised to lower-case for case-insensitive lookup.
         """
         if params is None:
             params = {}
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0?" + urllib.parse.urlencode(params)
 
-        headers = {
+        headers: dict[str, str] = {
             'User-Agent': 'vulnscout/1.0 (https://github.com/savoirfairelinux/vulnscout)',
             'Accept': 'application/json',
         }
@@ -62,42 +81,40 @@ class NVD_DB(BaseAPIClient):
                     flush=True,
                 )
                 resp_json = {}
-
             return resp_status, resp_json, resp_headers
 
         except urllib.error.HTTPError as e:
             body_preview = b""
-            resp_headers = {}
+            resp_headers_err: dict[str, str] = {}
             try:
                 body_preview = e.read(200)
             except Exception:
                 pass
             try:
                 if e.headers:
-                    resp_headers = {k.lower(): v for k, v in e.headers.items()}
+                    resp_headers_err = {k.lower(): v for k, v in e.headers.items()}
             except Exception:
                 pass
-            if e.code not in {429}:  # 429 = rate-limited, expected under load
+            if e.code not in {429}:
                 print(
                     f"NVD API HTTP {e.code} for URL: {url} — {e.reason}. "
                     f"Body preview: {body_preview!r}",
                     flush=True,
                 )
-            return e.code, {}, resp_headers
-        except Exception as e:
-            print(f"Error calling NVD API: {e}", flush=True)
-            raise e
+            return e.code, {}, resp_headers_err
+        except Exception as exc:
+            print(f"Error calling NVD API: {exc}", flush=True)
+            raise exc
 
     def api_get_cve(self, cve_id: str, max_retries: int = 3) -> Tuple[int, dict]:
-        """
-        Call the NVD API to get a specific CVE.
+        """Call the NVD API to get a specific CVE.
 
-        *max_retries* caps the number of retry attempts (default 3).
-        Pass ``max_retries=0`` for a single non-blocking attempt suitable
-        for user-triggered, synchronous request contexts.
+        *max_retries* caps retry attempts (default 3).  Pass ``max_retries=0``
+        for a single non-blocking attempt suitable for synchronous contexts.
         """
         retry = 0
         status = 0
+        data: dict = {}
         while retry <= max_retries:
             time.sleep(10 * retry)
             status, data, _ = self._call_nvd_api({"cveId": cve_id.strip()})
@@ -117,15 +134,8 @@ class NVD_DB(BaseAPIClient):
     ) -> list[dict]:
         """Query the NVD API for CVEs matching a CPE name.
 
-        When *use_virtual_match* is ``True`` the ``virtualMatchString``
-        parameter is sent instead of ``cpeName``.  This is required when
-        the CPE contains wildcard fields (e.g. vendor ``*``) because the
-        NVD ``cpeName`` parameter expects an entry from its CPE
-        dictionary, whereas ``virtualMatchString`` performs pattern
-        matching against CVE match criteria.
-
-        Returns a (possibly empty) list of CVE items from the NVD response.
-        Handles pagination transparently.
+        When *use_virtual_match* is ``True`` the ``virtualMatchString`` param is
+        sent instead of ``cpeName``.  Handles pagination transparently.
         """
         all_vulns: list[dict] = []
         start_index = 0
@@ -135,15 +145,10 @@ class NVD_DB(BaseAPIClient):
             status = 0
             data: dict = {}
             while retry <= 3:
-                # Rate-limit: skip sleep for the very first request of this CPE,
-                # sleep between retries / pagination pages.
                 if not first_request or retry > 0:
                     time.sleep(max(6, 10 * retry))
                 first_request = False
-                param_key = (
-                    "virtualMatchString" if use_virtual_match
-                    else "cpeName"
-                )
+                param_key = "virtualMatchString" if use_virtual_match else "cpeName"
                 status, data, _ = self._call_nvd_api({
                     param_key: cpe_name,
                     "startIndex": start_index,
@@ -170,132 +175,18 @@ class NVD_DB(BaseAPIClient):
         return self._call_nvd_api({"cveId": cve_id.strip()})
 
     def api_weaknesses_to_list_str(self, weaknesses: list) -> list[str]:
-        """
-        Convert a list of weaknesses obtained from API to a list of strings.
-        """
-        weaks = set([x["value"] for publisher in weaknesses for x in publisher["description"]])
-        return list(weaks)
+        """Convert a list of weakness objects to a list of CWE strings."""
+        return api_weaknesses_to_list_str(weaknesses)
 
     def api_references_filter_patches(self, references: list) -> list[str]:
-        """
-        Filter a list of references to get only the ones related to git patches.
-        """
-        return [x["url"] for x in references if "tags" in x and "Patch" in x["tags"]]
-
-    @staticmethod
-    def extract_cve_details(cve: dict) -> dict:
-        """Extract description, severity, links, weaknesses from an NVD CVE dict.
-
-        *cve* is the ``vulnerabilities[n]["cve"]`` object returned by the
-        NVD API v2.0.  Returns a dict with keys usable by
-        ``Vulnerability.update_record`` / ``create_record``.
-        """
-        # Description — prefer English
-        description = None
-        for desc in cve.get("descriptions", []):
-            if desc.get("lang", "").startswith("en"):
-                description = desc.get("value")
-                break
-        if description is None:
-            descs = cve.get("descriptions", [])
-            if descs:
-                description = descs[0].get("value")
-
-        # Severity label + base score — try CVSS v3.1, v3.0, v4.0, v2.0
-        severity = None
-        base_score = None
-        attack_vector = None
-        cvss_version = None
-        cvss_vector = None
-        cvss_exploitability = None
-        cvss_impact = None
-        metrics = cve.get("metrics", {})
-        _metric_version_map = {
-            "cvssMetricV31": "3.1",
-            "cvssMetricV30": "3.0",
-            "cvssMetricV40": "4.0",
-            "cvssMetricV2": "2.0",
-        }
-        for metric_key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV40", "cvssMetricV2"):
-            metric_list = metrics.get(metric_key, [])
-            if metric_list:
-                primary = next(
-                    (m for m in metric_list if m.get("type") == "Primary"),
-                    metric_list[0],
-                )
-                cvss_data = primary.get("cvssData", {})
-                severity = (
-                    primary.get("baseSeverity")
-                    or cvss_data.get("baseSeverity")
-                    or ""
-                ).lower() or None
-                base_score = cvss_data.get("baseScore")
-                attack_vector = cvss_data.get("attackVector")
-                cvss_version = _metric_version_map.get(metric_key)
-                cvss_vector = cvss_data.get("vectorString")
-                cvss_exploitability = primary.get("exploitabilityScore")
-                cvss_impact = primary.get("impactScore")
-                break
-
-        # References / links
-        links = [
-            ref.get("url")
-            for ref in cve.get("references", [])
-            if ref.get("url")
-        ]
-        # Always include the NVD detail page
-        cve_id = cve.get("id", "")
-        nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
-        if nvd_url not in links:
-            links.insert(0, nvd_url)
-
-        # Published date
-        published = cve.get("published")
-        publish_date = None
-        if published:
-            try:
-                import datetime
-                publish_date = datetime.date.fromisoformat(str(published)[:10])
-            except ValueError:
-                pass
-
-        # Weaknesses
-        weaknesses = []
-        for w in cve.get("weaknesses", []):
-            for d in w.get("description", []):
-                val = d.get("value", "")
-                if val and val not in weaknesses:
-                    weaknesses.append(val)
-
-        return {
-            "description": description,
-            "status": severity,
-            "base_score": base_score,
-            "attack_vector": attack_vector,
-            "cvss_version": cvss_version,
-            "cvss_vector": cvss_vector,
-            "cvss_exploitability": cvss_exploitability,
-            "cvss_impact": cvss_impact,
-            "links": links,
-            "publish_date": publish_date,
-            "weaknesses": weaknesses or None,
-            "nvd_last_modified": cve.get("lastModified"),
-        }
+        """Filter a list of references to only those tagged as patches."""
+        return api_references_filter_patches(references)
 
     def fetch_cve_data(self, cve_id: str) -> Optional[dict]:
-        """
-        Fetch and parse NVD data for a single CVE directly from the API.
+        """Fetch and parse NVD REST API data for a single CVE.
 
-        Returns a dict with keys:
-            published, lastModified, weaknesses, versions_data, patch_url
-
-        Returns None on transient/connection failures (caller should retry later).
-        Returns {"not_found": True} when NVD definitively has no record for this
-        CVE (200 with empty result set) — caller should persist a sentinel so
-        the CVE is not re-queried on every restart.
-
-        Note: NVD API v2 always returns HTTP 200 for CVE queries — a 404 is
-        never a "CVE not found" signal but always a network/proxy problem.
+        Returns ``None`` on transient failures; ``{"not_found": True}`` when the
+        CVE is definitively absent from NVD.
         """
         try:
             status, data = self.api_get_cve(cve_id)
@@ -326,15 +217,15 @@ class NVD_DB(BaseAPIClient):
                 "published": cve.get("published"),
                 "lastModified": cve.get("lastModified"),
                 "weaknesses": (
-                    self.api_weaknesses_to_list_str(cve["weaknesses"])
+                    api_weaknesses_to_list_str(cve["weaknesses"])
                     if "weaknesses" in cve else []
                 ),
                 "versions_data": fix_scrapper.list_per_packages(),
                 "patch_url": (
-                    self.api_references_filter_patches(cve["references"])
+                    api_references_filter_patches(cve["references"])
                     if "references" in cve else []
                 ),
             }
-        except Exception as e:
-            print(f"Error fetching NVD data for {cve_id}: {e}", flush=True)
+        except Exception as exc:
+            print(f"Error fetching NVD data for {cve_id}: {exc}", flush=True)
             return None

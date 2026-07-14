@@ -41,6 +41,34 @@ def write_demo_files(files):
         with open(_os.path.join(_DATA_DIR, "yocto.json"), "r") as f:
             files["YOCTO_CVE_CHECKER"].write_text(f.read())
 
+    if "YOCTO_VEX" in files:
+        files["YOCTO_VEX"].write_text(json.dumps({
+            "version": "1",
+            "package": [
+                {
+                    "name": "openssl",
+                    "version": "3.0.2",
+                    "layer": "meta",
+                    "cpes": ["cpe:2.3:a:openssl:openssl:3.0.2:*:*:*:*:*:*:*"],
+                    "products": [
+                        {"product": "openssl", "cvesInRecord": "Yes"}
+                    ],
+                    "issue": [
+                        {
+                            "id": "CVE-2022-0778",
+                            "summary": "Infinite loop in BN_mod_sqrt()",
+                            "scorev3": "7.5",
+                            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                            "detail": "fixed-version: Fixed in 3.0.3",
+                            "patch-file": "/patches/CVE-2022-0778.patch",
+                            "status": "Patched",
+                            "link": "https://nvd.nist.gov/vuln/detail/CVE-2022-0778"
+                        }
+                    ]
+                }
+            ]
+        }))
+
     if "TIME_ESTIMATES_PATH" in files:
         with open(_os.path.join(_DATA_DIR, "time_estimates.json"), "r") as f:
             files["TIME_ESTIMATES_PATH"].write_text(f.read())

@@ -7,14 +7,12 @@ from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
-from ..views.openvex import OpenVex
-from ..controllers import ControllersCache
-from ..helpers.verbose import verbose
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
+from ._scan_diff import invalidate_scan_list_cache
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -28,8 +26,6 @@ from ..helpers.assessment_io import (
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import select
-
-OPENVEX_FILE = "/scan/outputs/openvex.json"
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -91,25 +87,8 @@ def _create_assessment_record(
 
 def init_app(app: Flask) -> None:
 
-    if "OPENVEX_FILE" not in app.config:
-        app.config["OPENVEX_FILE"] = OPENVEX_FILE
-
     def _get_all_db_assessments() -> list["DBAssessment"]:
         return DBAssessment.get_all()
-
-    def _save_openvex() -> None:
-        """Re-generate and save the OpenVEX file from current DB state."""
-        try:
-            import json
-
-            ctrls = ControllersCache()
-            ctrls.packages._preload_cache()
-
-            vex = OpenVex(ctrls)
-            with open(app.config["OPENVEX_FILE"], "w") as f:
-                f.write(json.dumps(vex.to_dict(), indent=2))
-        except Exception as e:
-            verbose(f"[_save_openvex] {e}")
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
@@ -262,7 +241,6 @@ def init_app(app: Flask) -> None:
                     "errors": total_errors,
                 }, 400
 
-            _save_openvex()
             return {
                 "status": "success",
                 "imported": len(total_created),
@@ -295,7 +273,6 @@ def init_app(app: Flask) -> None:
                 }, 400
 
             created, errors, skipped = _import_openvex_statements(data["statements"], variant.id)
-            _save_openvex()
             return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
         return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
@@ -556,8 +533,6 @@ def init_app(app: Flask) -> None:
         variant_by_name = build_variant_by_name_map()
         result = import_custom_data(data, variant_by_name, variant_id)
 
-        _save_openvex()
-
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code
 
@@ -607,6 +582,62 @@ def init_app(app: Flask) -> None:
                     })
         return variants_out, 200
 
+    @app.route('/api/vulnerabilities/<vuln_id>/variant-active-packages')
+    def list_variant_active_packages(vuln_id: str) -> ResponseReturnValue:
+        """For each variant affected by this vulnerability, return the subset of
+        the vulnerability's packages still present in that variant's active SBOM.
+
+        Lets the front-end classify deprecated (variant, package) pairs in a
+        single request instead of one ``/api/packages`` call per variant.
+        """
+        from ..models.observation import Observation
+        from ..models.scan import Scan
+        from ..models.variant import Variant as DBVariant
+        from ..helpers.active_scans import (
+            active_sbom_scan_ids_for_variant,
+            active_package_ids_for_scans,
+        )
+
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        findings = Finding.get_by_vulnerability(vuln_id)
+        # package_id -> string_id for the packages affected by this vulnerability
+        pkg_string_by_id: dict[UUID, str] = {}
+        for f in findings:
+            if f.package_id and f.package:
+                pkg_string_by_id[f.package_id] = f.package.string_id
+
+        # Distinct variants with a finding for this vuln (Observation -> Scan -> Variant)
+        seen_variant_ids: set[UUID] = set()
+        variant_ids: list[UUID] = []
+        for finding in findings:
+            for obs in Observation.get_by_finding(finding.id):
+                scan = db.session.get(Scan, obs.scan_id)
+                if scan is None or scan.variant_id in seen_variant_ids:
+                    continue
+                seen_variant_ids.add(scan.variant_id)
+                if project_uuid is not None:
+                    variant = db.session.get(DBVariant, scan.variant_id)
+                    if variant is None or variant.project_id != project_uuid:
+                        continue
+                variant_ids.append(scan.variant_id)
+
+        result = []
+        vuln_pkg_ids = set(pkg_string_by_id.keys())
+        for vid in variant_ids:
+            active_ids = active_package_ids_for_scans(
+                active_sbom_scan_ids_for_variant(vid),
+                restrict_to_package_ids=vuln_pkg_ids,
+            )
+            active_packages = [sid for pid, sid in pkg_string_by_id.items() if pid in active_ids]
+            result.append({"variant_id": str(vid), "active_packages": active_packages})
+        return result, 200
+
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
         payload_data = request.get_json()
@@ -628,11 +659,11 @@ def init_app(app: Flask) -> None:
 
         # Resolve variant_id once — same for all packages in this request
         variant_id_raw = payload_data.get('variant_id') or None
-        variant_id = None
-        if variant_id_raw:
-            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-            if err:
-                return err
+        if not variant_id_raw:
+            return {"error": "variant_id is required"}, 400
+        variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+        if err:
+            return err
 
         # Persist to DB — one Assessment record per package
         # Use a single timestamp so grouped rows share the exact same value.
@@ -661,7 +692,6 @@ def init_app(app: Flask) -> None:
         if not created:
             return {"error": "No valid package found"}, 400
 
-        _save_openvex()
         response_body = {"status": "success", "assessments": created, "assessment": created[0]}
         return response_body, 200
 
@@ -695,14 +725,15 @@ def init_app(app: Flask) -> None:
                     continue
 
                 vuln_id = assessment.vuln_id
-                # Parse optional variant_id from the raw item
+                # variant_id is required for every batch item
                 variant_id_raw = item.get('variant_id') or None
-                variant_id = None
-                if variant_id_raw:
-                    variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-                    if err:
-                        errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
-                        continue
+                if not variant_id_raw:
+                    errors.append({"vuln_id": vuln_id, "error": "variant_id is required"})
+                    continue
+                variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+                if err:
+                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                    continue
                 pkg_list = assessment.packages or []
                 if not pkg_list:
                     errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
@@ -722,9 +753,12 @@ def init_app(app: Flask) -> None:
                         if finding is None:
                             finding = Finding.get_or_create(db_pkg.id, vuln_id)
                             finding_cache[f_key] = finding
-                        # Always create a new record — never overwrite an existing assessment
+                        # Always create a new record — never overwrite an existing assessment.
+                        # Honour the per-item timestamp so rows added for the same action
+                        # (e.g. one assessment across several variants) share a value.
                         db_a = _create_assessment_record(
-                            assessment, finding.id, variant_id)
+                            assessment, finding.id, variant_id,
+                            timestamp=getattr(assessment, 'timestamp', None))
                         results.append(db_a.to_dict())
                     except Exception as e:
                         errors.append({"vuln_id": vuln_id, "error": str(e)})
@@ -739,8 +773,6 @@ def init_app(app: Flask) -> None:
         if errors:
             response["errors"] = errors
             response["error_count"] = len(errors)
-        if results:
-            _save_openvex()
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
@@ -752,6 +784,8 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+
+        was_non_custom = (existing.origin or "") != "custom"
 
         # Reconstruct Assessment DTO for validation
         mem_assess = DBAssessment.from_dict(existing.to_dict())
@@ -792,7 +826,10 @@ def init_app(app: Flask) -> None:
             workaround=getattr(mem_assess, "workaround", None),
             responses=list(mem_assess.responses or []),
         )
-        _save_openvex()
+        # Editing an automated assessment removes it from the scan-history
+        # counts (it becomes custom-origin), so refresh the cached list view.
+        if was_non_custom:
+            invalidate_scan_list_cache()
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
@@ -800,8 +837,12 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        # A non-custom assessment contributes to the scan-history counts, so
+        # its removal must invalidate the cached list view.
+        was_non_custom = (existing.origin or "") != "custom"
         existing.delete()
-        _save_openvex()
+        if was_non_custom:
+            invalidate_scan_list_cache()
         return {"status": "success", "message": "Assessment deleted successfully"}, 200
 
 

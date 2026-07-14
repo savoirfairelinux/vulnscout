@@ -23,11 +23,15 @@ from flask.typing import ResponseReturnValue
 from ..models import Vulnerability
 from ..extensions import db
 from ..controllers.nvd_db import NVD_DB
+from ..controllers.scc_engine import get_cve_json, get_engine as _get_scc_engine
+from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update, apply_cvss_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.nvd_progress import NVDProgressTracker
 from ..controllers.epss_progress import EPSSProgressTracker
 from ..controllers.ghsa_progress import GHSAProgressTracker
+from ..controllers.euvd_progress import EUVDProgressTracker
+from ..controllers.euvd_db import EUVD_DB
 from ..controllers.vulnerabilities import VulnerabilitiesController
 
 _EPSS_BATCH_SIZE = 100
@@ -40,10 +44,13 @@ _MAX_GHSA_IDS = 500
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 _GHSA_COMMIT_EVERY = 20
 _GHSA_SLEEP_INTERVAL = 1.0
+# EUVD enrichment annotates from already-cached ENISA dumps (no per-CVE network
+# call), so it is fast; commit in larger batches than the network-bound refreshes.
+_EUVD_COMMIT_EVERY = 200
 
 
 def _nvd_sleep_interval() -> float:
-    """Return seconds to sleep between NVD API calls based on key presence.
+    """Seconds to sleep between NVD REST API calls based on key presence.
 
     Without an API key: 5 req / 30 s → 6 s per call.
     With an API key:   50 req / 30 s → 0.6 s per call.
@@ -75,7 +82,11 @@ def init_app(app: Flask) -> None:
     def bulk_nvd_refresh() -> ResponseReturnValue:
         """Trigger a bulk NVD refresh for a list of CVE IDs.
 
-        Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
+        Body: ``{"cve_ids": ["CVE-A", ...], "mode": "local"|"api"}``
+
+        ``mode`` defaults to ``"local"`` (uses the local NVD-FKIE database;
+        no rate limits, no API key needed).  Pass ``"api"`` to use the NVD
+        REST API instead (respects rate limits and NVD_API_KEY if set).
 
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
@@ -90,8 +101,14 @@ def init_app(app: Flask) -> None:
         cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
         if not cve_ids:
             return jsonify({"error": "cve_ids must contain valid CVE identifiers (e.g. CVE-2024-1234)"}), 400
-        if len(cve_ids) > _MAX_CVE_IDS:
-            return jsonify({"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries"}), 400
+
+        mode = body.get("mode", "local")  # "local" (default) or "api"
+        # The cap exists to avoid burning NVD API rate-limit quota. Local mode
+        # hits no external service, so the limit does not apply there.
+        if mode == "api" and len(cve_ids) > _MAX_CVE_IDS:
+            return jsonify(
+                {"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries when using NVD API mode"}
+            ), 400
 
         total = len(cve_ids)
         if not NVDProgressTracker.start_if_idle("bulk_nvd_refresh"):
@@ -100,11 +117,23 @@ def init_app(app: Flask) -> None:
 
         def _run() -> None:
             with app.app_context():
-                sleep_between = _nvd_sleep_interval()
-                nvd_api_key = os.getenv("NVD_API_KEY")
-                nvd = NVD_DB(nvd_api_key=nvd_api_key)
                 done = 0
                 try:
+                    if mode == "api":
+                        sleep_between = _nvd_sleep_interval()
+                        nvd_api_key = os.getenv("NVD_API_KEY")
+                        nvd = NVD_DB(nvd_api_key=nvd_api_key)
+                    else:
+                        # Pre-warm the engine once (fetches latest advisories if
+                        # auto-update is on) so individual CVE lookups in the loop
+                        # below reuse the cached engine without re-fetching.
+                        try:
+                            _get_scc_engine()
+                        except Exception as exc:
+                            NVDProgressTracker.error(
+                                f"Failed to load local NVD database: {exc}"
+                            )
+                            return
                     for cve_id in cve_ids:
                         if NVDProgressTracker.is_cancelled():
                             _safe_commit("bulk NVD refresh cancel")
@@ -113,20 +142,35 @@ def init_app(app: Flask) -> None:
 
                         try:
                             now = datetime.datetime.now(datetime.timezone.utc)
-                            status_code, data = nvd.api_get_cve(cve_id, max_retries=2)
-                            if status_code == 200 and data.get("vulnerabilities"):
-                                cve = data["vulnerabilities"][0]["cve"]
-                                details = NVD_DB.extract_cve_details(cve)
-                                rec = db.session.get(Vulnerability, cve_id)
-                                if rec is not None:
-                                    apply_nvd_update(rec, details, now)
-                                    apply_cvss_update(rec, details, db)
+                            if mode == "api":
+                                status_code, data_api = nvd.api_get_cve(cve_id, max_retries=2)
+                                if status_code == 200 and data_api.get("vulnerabilities"):
+                                    cve_obj = data_api["vulnerabilities"][0]["cve"]
+                                    details = NVD_DB.extract_cve_details(cve_obj)
+                                    rec = db.session.get(Vulnerability, cve_id)
+                                    if rec is not None:
+                                        apply_nvd_update(rec, details, now)
+                                        apply_cvss_update(rec, details, db)
+                                else:
+                                    print(
+                                        f"[bulk NVD refresh] {cve_id}: status={status_code}, "
+                                        "skipping",
+                                        flush=True,
+                                    )
                             else:
-                                print(
-                                    f"[bulk NVD refresh] {cve_id}: status={status_code}, "
-                                    "skipping",
-                                    flush=True,
-                                )
+                                cve_obj = get_cve_json(cve_id)
+                                if cve_obj is not None:
+                                    details = extract_cve_details(cve_obj)
+                                    rec = db.session.get(Vulnerability, cve_id)
+                                    if rec is not None:
+                                        apply_nvd_update(rec, details, now)
+                                        apply_cvss_update(rec, details, db)
+                                else:
+                                    print(
+                                        f"[bulk NVD refresh] {cve_id}: not found in local "
+                                        "NVD database, skipping",
+                                        flush=True,
+                                    )
                         except Exception as exc:
                             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
 
@@ -137,7 +181,7 @@ def init_app(app: Flask) -> None:
                         )
                         if done % _NVD_COMMIT_EVERY == 0:
                             _safe_commit("bulk NVD refresh")
-                        if done < total:
+                        if mode == "api" and done < total:
                             time.sleep(sleep_between)
 
                     _safe_commit("bulk NVD refresh final")
@@ -369,3 +413,105 @@ def init_app(app: Flask) -> None:
         if GHSAProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
         return jsonify({"error": "No bulk GHSA refresh is currently in progress"}), 409
+
+    @app.route('/api/vulnerabilities/bulk-euvd-refresh', methods=['POST'])
+    def bulk_euvd_refresh() -> ResponseReturnValue:
+        """Trigger a bulk ENISA EUVD enrichment for a list of CVE IDs.
+
+        Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
+
+        Unlike NVD/EPSS/GHSA this performs no per-CVE network call: it loads two
+        already-cached ENISA dumps once — the full CVE -> EUVD id mapping (the
+        *alias*, present for every published CVE ENISA tracks) and the EU KEV
+        dump (the *known-exploited* flag) — and annotates each selected CVE.
+
+        Returns 202 immediately and runs the enrichment in a background thread.
+        Returns 409 if an enrichment is already in progress.
+        Returns 400 if cve_ids is empty or contains no valid CVE identifiers.
+        """
+        body = request.get_json(force=True, silent=True) or {}
+        raw_ids = body.get("cve_ids", [])
+        if not raw_ids or not isinstance(raw_ids, list):
+            return jsonify({"error": "cve_ids must be a non-empty list"}), 400
+
+        cve_ids = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
+        cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
+        if not cve_ids:
+            return jsonify({"error": "cve_ids must contain valid CVE identifiers (e.g. CVE-2024-1234)"}), 400
+
+        total = len(cve_ids)
+        if not EUVDProgressTracker.start_if_idle("bulk_euvd_refresh"):
+            return jsonify({"error": "A bulk EUVD refresh is already in progress"}), 409
+        EUVDProgressTracker.update("bulk_euvd_refresh", 0, total, f"Starting bulk EUVD refresh: 0/{total}")
+
+        def _run() -> None:
+            with app.app_context():
+                try:
+                    EUVDProgressTracker.update(
+                        "bulk_euvd_refresh", 0, total, "Loading ENISA EUVD CVE mapping…")
+                    euvd = EUVD_DB()
+                    full_map = euvd.get_full_mapping()
+                    if not full_map:
+                        EUVDProgressTracker.error("ENISA EUVD CVE mapping unavailable or empty")
+                        return
+                    kev_map = euvd.get_mapping()
+
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    done = 0
+                    matched = 0
+                    kev_matched = 0
+                    for cve_id in cve_ids:
+                        if EUVDProgressTracker.is_cancelled():
+                            _safe_commit("bulk EUVD refresh cancel")
+                            EUVDProgressTracker.mark_cancelled()
+                            return
+
+                        kev = kev_map.get(cve_id)
+                        euvd_id = full_map.get(cve_id) or (kev["euvd_id"] if kev else None)
+                        if euvd_id:
+                            rec = db.session.get(Vulnerability, cve_id)
+                            if rec is not None:
+                                known_exploited = kev is not None
+                                rec.update_record(
+                                    euvd_id=euvd_id,
+                                    euvd_known_exploited=known_exploited,
+                                    euvd_kev_sources=(kev.get("sources") or []) if kev else [],
+                                    euvd_date_added=kev.get("date_added") if kev else None,
+                                    euvd_fetched_at=now,
+                                    euvd_data_updated_at=now,
+                                    commit=False,
+                                )
+                                matched += 1
+                                if known_exploited:
+                                    kev_matched += 1
+
+                        done += 1
+                        EUVDProgressTracker.update(
+                            "bulk_euvd_refresh", done, total,
+                            f"EUVD refresh: {done}/{total}",
+                        )
+                        if done % _EUVD_COMMIT_EVERY == 0:
+                            _safe_commit("bulk EUVD refresh")
+
+                    _safe_commit("bulk EUVD refresh final")
+                    EUVDProgressTracker.complete(
+                        f"EUVD enrichment complete "
+                        f"({matched}/{total} matched, {kev_matched} known exploitable)"
+                    )
+                except Exception as exc:
+                    print(f"[bulk EUVD refresh] unhandled error: {exc}", flush=True)
+                    EUVDProgressTracker.error(str(exc)[:200])
+
+        threading.Thread(target=_run, name="bulk-euvd-refresh", daemon=True).start()
+        return jsonify({"status": "started", "total": total}), 202
+
+    @app.route('/api/vulnerabilities/cancel-euvd-refresh', methods=['POST'])
+    def cancel_euvd_refresh() -> ResponseReturnValue:
+        """Request cancellation of an in-progress bulk EUVD refresh.
+
+        Returns 200 when the cancellation was accepted (refresh was running).
+        Returns 409 when no bulk EUVD refresh is currently in progress.
+        """
+        if EUVDProgressTracker.cancel():
+            return jsonify({"status": "cancelling"}), 200
+        return jsonify({"error": "No bulk EUVD refresh is currently in progress"}), 409

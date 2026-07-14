@@ -113,3 +113,111 @@ describe("NvdRefreshHandler.triggerSingleRefresh", () => {
         }
     });
 });
+
+describe("NvdRefreshHandler.triggerSingleRefresh — mode parameter", () => {
+    it("sends mode:local by default in the request body", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                vulnerabilities: [{
+                    id: "CVE-2024-0001",
+                    found_by: [], datasource: "nvd", namespace: "nvd",
+                    aliases: [], related_vulnerabilities: [], urls: [],
+                    texts: {}, fix: {},
+                    severity: { severity: "high", min_score: 8.1, max_score: 8.1, cvss: [] },
+                    epss: {}, effort: {}, advisories: [], packages: [],
+                }]
+            }),
+        } as Response);
+
+        await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001");
+
+        expect(mockFetch).toHaveBeenCalledWith(
+            expect.stringContaining("/api/vulnerabilities/CVE-2024-0001/nvd-refresh"),
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ mode: "local" }),
+            }),
+        );
+    });
+
+    it("sends mode:api when explicitly passed", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                vulnerabilities: [{
+                    id: "CVE-2024-0002",
+                    found_by: [], datasource: "nvd", namespace: "nvd",
+                    aliases: [], related_vulnerabilities: [], urls: [],
+                    texts: {}, fix: {},
+                    severity: { severity: "medium", min_score: 5.0, max_score: 5.0, cvss: [] },
+                    epss: {}, effort: {}, advisories: [], packages: [],
+                }]
+            }),
+        } as Response);
+
+        await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0002", "api");
+
+        const callArg = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+        expect(callArg.mode).toBe("api");
+    });
+
+    it("returns kind:error code:rate_limited on 429 in api mode", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 429,
+            json: async () => ({ error_code: "rate_limited", api_key_configured: true }),
+        } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001", "api");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("rate_limited");
+        }
+    });
+
+    it("returns kind:error code:unauthorized on 401 in api mode", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 401,
+            json: async () => ({ error_code: "unauthorized", api_key_configured: true }),
+        } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001", "api");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("unauthorized");
+        }
+    });
+
+    it("returns kind:error code:unavailable on 503 in api mode", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 503,
+            json: async () => ({ error_code: "unavailable", api_key_configured: false }),
+        } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001", "api");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("unavailable");
+            expect(result.apiKeyConfigured).toBe(false);
+        }
+    });
+
+    it("returns kind:error code:unavailable on 503 in local mode", async () => {
+        mockFetch.mockResolvedValueOnce({
+            ok: false,
+            status: 503,
+            json: async () => ({ error_code: "unavailable" }),
+        } as Response);
+
+        const result = await NvdRefreshHandler.triggerSingleRefresh("CVE-2024-0001", "local");
+        expect(result.kind).toBe("error");
+        if (result.kind === "error") {
+            expect(result.code).toBe("unavailable");
+        }
+    });
+});

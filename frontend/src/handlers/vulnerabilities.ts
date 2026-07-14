@@ -62,6 +62,13 @@ type Vulnerability = {
     fix: {
         state: string;
     };
+    euvd?: {
+        id: string | null;
+        known_exploited: boolean;
+        sources: string[];
+        date_added: string | null;
+        url: string | null;
+    };
     simplified_status: string;
     status_summary?: StatusSummary;
     assessments: Assessment[];
@@ -98,7 +105,17 @@ const getStatusSummaryEntries = (counts: Record<string, number>): { status: stri
         });
 }
 
-const buildStatusSummary = (assessments: Assessment[]): StatusSummary => {
+const buildStatusSummary = (assessments: Assessment[], currentPackages?: string[]): StatusSummary => {
+    if (currentPackages && currentPackages.length > 0 && assessments.length > 0) {
+        const currentSet = new Set(currentPackages);
+        const filtered = assessments.filter(a =>
+            a.packages.length === 0 || a.packages.some(p => currentSet.has(p))
+        );
+        if (filtered.length > 0) {
+            assessments = filtered;
+        }
+    }
+
     if (assessments.length === 0) {
         return {
             counts: { unknown: 1 },
@@ -160,13 +177,8 @@ const getVulnerabilityStatusSummary = (vulnerability: Pick<Vulnerability, 'statu
     return vulnerability.status_summary ?? buildFallbackStatusSummary(vulnerability.simplified_status);
 }
 
-const getTopStatusSummaryLabel = (summary: StatusSummary, maxItems = 2): string => {
-    const top = summary.ordered.slice(0, maxItems).map((entry) => entry.status);
-    const hiddenCount = summary.ordered.length - top.length;
-    if (hiddenCount > 0) {
-        top.push(`+${hiddenCount} more`);
-    }
-    return top.join(', ');
+const getTopStatusSummaryLabel = (summary: StatusSummary): string => {
+    return summary.ordered.map((entry) => entry.status).join(', ');
 }
 
 const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {
@@ -258,17 +270,30 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.data_fetched_at === "string") vuln.data_fetched_at = data.data_fetched_at
     if (typeof data?.data_updated_at === "string") vuln.data_updated_at = data.data_updated_at
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
+    if (data?.euvd && typeof data.euvd === "object") {
+        vuln.euvd = {
+            id: typeof data.euvd.id === "string" ? data.euvd.id : null,
+            known_exploited: Boolean(data.euvd.known_exploited),
+            sources: asStringArray(data.euvd.sources),
+            date_added: typeof data.euvd.date_added === "string" ? data.euvd.date_added : null,
+            url: typeof data.euvd.url === "string" ? data.euvd.url : null,
+        }
+    }
     return vuln
 }
 
 class Vulnerabilities {
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string): Promise<Vulnerability[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
         url.searchParams.set('format', 'list');
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
             url.searchParams.set('compare_variant_id', compareVariantId);
             if (operation) url.searchParams.set('operation', operation);
+        } else if (variantIds && variantIds.length >= 2) {
+            url.searchParams.set('variant_ids', variantIds.join(','));
+            if (multiOperation) url.searchParams.set('operation', multiOperation);
+            if (projectId) url.searchParams.set('project_id', projectId);
         } else if (variantId) {
             url.searchParams.set('variant_id', variantId);
         } else if (projectId) {
@@ -323,7 +348,7 @@ class Vulnerabilities {
                 return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
             });
             const vulnAssessments = assessments_per_vuln[vuln.id];
-            const statusSummary = buildStatusSummary(vulnAssessments);
+            const statusSummary = buildStatusSummary(vulnAssessments, vuln.packages_current);
             return {
                 ...vuln,
                 simplified_status: statusSummary.dominant_status,
@@ -339,7 +364,7 @@ class Vulnerabilities {
                 const assessments = [...vuln.assessments, assessment].sort((a, b) => {
                     return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
                 });
-                const statusSummary = buildStatusSummary(assessments);
+                const statusSummary = buildStatusSummary(assessments, vuln.packages_current);
                 return {
                     ...vuln,
                     simplified_status: statusSummary.dominant_status,

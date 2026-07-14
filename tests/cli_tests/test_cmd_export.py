@@ -232,3 +232,23 @@ class TestCmdExportVariantScoping:
         ])
         assert result.exit_code == 0
         assert "not found" in result.output.lower()
+
+    def test_known_variant_id_scopes_export(self, app, tmp_path):
+        """Line 67: valid UUID found in DB → scope = compute_export_scope(variant_id=vid)."""
+        from src.models.project import Project
+        from src.models.variant import Variant
+
+        with app.app_context():
+            proj = Project.create("ExportScopeProj2")
+            var = Variant.create("v1", proj.id)
+            _db.session.commit()
+            var_id = str(var.id)
+
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export", "--format", "spdx2",
+            "--output-dir", str(tmp_path),
+            "--variant-id", var_id,
+        ])
+        assert result.exit_code == 0, result.output
+        assert "not found" not in result.output.lower()

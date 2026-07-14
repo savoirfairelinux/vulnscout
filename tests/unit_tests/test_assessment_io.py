@@ -22,6 +22,9 @@ from src.helpers.assessment_io import (
     import_archive_bytes,
     import_directory,
     build_variant_by_name_map,
+    build_openvex_doc,
+    build_openvex_archive,
+    import_statements,
 )
 
 
@@ -425,3 +428,380 @@ class TestBuildVariantByNameMap:
             result = build_variant_by_name_map(None)
         
         assert "global-variant" in result
+
+
+# ---------------------------------------------------------------------------
+# _get_vuln_info() — fallback URL branches
+# ---------------------------------------------------------------------------
+
+class TestGetVulnInfoFallbackUrls:
+    """Test the CVE/GHSA fallback URL logic inside _get_vuln_info."""
+
+    def _mock_vuln(self, **kwargs):
+        v = mock.MagicMock()
+        v.description = kwargs.get("description", "")
+        v.aliases = kwargs.get("aliases", [])
+        v.urls = kwargs.get("urls", None)
+        v.links = kwargs.get("links", None)
+        return v
+
+    def test_cve_with_no_url_gets_nvd_fallback(self):
+        """GIVEN a CVE that exists but has empty urls and links WHEN fetched THEN NVD URL."""
+        cache = {}
+        vuln = self._mock_vuln(urls=[], links=[])
+        with mock.patch("src.models.vulnerability.Vulnerability.get_by_id", return_value=vuln):
+            result = _get_vuln_info("CVE-2021-1234", cache)
+        assert result["url"] == "https://nvd.nist.gov/vuln/detail/CVE-2021-1234"
+
+    def test_cve_with_none_urls_and_none_links_gets_nvd_fallback(self):
+        """GIVEN a CVE with urls=None and links=None WHEN fetched THEN NVD URL."""
+        cache = {}
+        vuln = self._mock_vuln(urls=None, links=None)
+        with mock.patch("src.models.vulnerability.Vulnerability.get_by_id", return_value=vuln):
+            result = _get_vuln_info("CVE-2099-0001", cache)
+        assert result["url"] == "https://nvd.nist.gov/vuln/detail/CVE-2099-0001"
+
+    def test_ghsa_with_no_url_gets_github_fallback(self):
+        """GIVEN a GHSA that exists but has no URLs WHEN fetched THEN GitHub URL."""
+        cache = {}
+        vuln = self._mock_vuln(urls=[], links=[])
+        with mock.patch("src.models.vulnerability.Vulnerability.get_by_id", return_value=vuln):
+            result = _get_vuln_info("GHSA-ABCD-1234-XY78", cache)
+        assert result["url"] == "https://github.com/advisories/GHSA-ABCD-1234-XY78"
+
+    def test_vuln_with_url_in_urls_list(self):
+        """GIVEN a vuln with a non-empty urls list WHEN fetched THEN first URL is returned."""
+        cache = {}
+        vuln = self._mock_vuln(urls=["https://example.com/first", "https://example.com/second"])
+        with mock.patch("src.models.vulnerability.Vulnerability.get_by_id", return_value=vuln):
+            result = _get_vuln_info("CVE-2021-9999", cache)
+        assert result["url"] == "https://example.com/first"
+
+
+# ---------------------------------------------------------------------------
+# build_openvex_doc() tests
+# ---------------------------------------------------------------------------
+
+_EMPTY_VULN_INFO = {"description": "", "aliases": [], "url": ""}
+
+
+class TestBuildOpenvexDoc:
+    """Unit tests for build_openvex_doc."""
+
+    def test_empty_assessments_produces_empty_statements(self):
+        """GIVEN no assessments WHEN building doc THEN statements list is empty."""
+        doc = build_openvex_doc([], "test-author")
+        assert doc["statements"] == []
+        assert doc["author"] == "test-author"
+        assert "openvex" in doc["@context"]
+
+    def test_custom_now_iso_used(self):
+        """GIVEN a custom now_iso WHEN building doc THEN timestamp equals it."""
+        doc = build_openvex_doc([], "author", now_iso="2025-06-01T00:00:00Z")
+        assert doc["timestamp"] == "2025-06-01T00:00:00Z"
+
+    def test_assessment_with_none_to_openvex_dict_is_skipped(self):
+        """GIVEN assessment whose to_openvex_dict returns None WHEN building doc THEN skipped."""
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = None
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        assert doc["statements"] == []
+
+    def test_product_without_at_sign(self):
+        """GIVEN a package string with no '@' WHEN building doc THEN version is empty string."""
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "affected"}
+        assess.vuln_id = "CVE-2021-1234"
+        assess.packages = ["libfoo"]
+        assess.source = "scanner"
+        assess.origin = "scanner"
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        stmt = doc["statements"][0]
+        assert len(stmt["products"]) == 1
+        prod = stmt["products"][0]
+        assert prod["@id"] == "libfoo"
+        assert "libfoo" in prod["identifiers"]["purl"]
+        assert prod["identifiers"]["purl"].endswith("@")
+
+    def test_product_with_at_sign(self):
+        """GIVEN a package string with '@' WHEN building doc THEN name and version split correctly."""
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "fixed"}
+        assess.vuln_id = "CVE-2021-5678"
+        assess.packages = ["mylib@2.0.1"]
+        assess.source = "scanner"
+        assess.origin = "scanner"
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        prod = doc["statements"][0]["products"][0]
+        assert prod["@id"] == "mylib@2.0.1"
+        assert "mylib" in prod["identifiers"]["cpe23"]
+        assert "2.0.1" in prod["identifiers"]["cpe23"]
+
+    def test_none_source_and_origin_default_to_local_user_data(self):
+        """GIVEN assessment with None source and origin WHEN building doc THEN scanners contains default."""
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "under_investigation"}
+        assess.vuln_id = "CVE-2021-0001"
+        assess.packages = ["pkg@1.0"]
+        assess.source = None
+        assess.origin = None
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        scanners = doc["statements"][0]["scanners"]
+        assert "local_user_data" in scanners
+
+    def test_vuln_cache_reused_across_assessments(self):
+        """GIVEN shared vuln_cache WHEN building doc THEN DB queried only once per vuln_id."""
+        cache = {}
+        assess1 = mock.MagicMock()
+        assess1.to_openvex_dict.return_value = {"status": "affected"}
+        assess1.vuln_id = "CVE-2021-1111"
+        assess1.packages = ["pkg@1.0"]
+        assess1.source = "s"
+        assess1.origin = "o"
+        assess2 = mock.MagicMock()
+        assess2.to_openvex_dict.return_value = {"status": "fixed"}
+        assess2.vuln_id = "CVE-2021-1111"
+        assess2.packages = ["pkg@2.0"]
+        assess2.source = "s"
+        assess2.origin = "o"
+        with mock.patch("src.models.vulnerability.Vulnerability.get_by_id", return_value=None) as mock_get:
+            build_openvex_doc([assess1, assess2], "author", vuln_cache=cache)
+        # Queried only once because cache is reused
+        mock_get.assert_called_once_with("CVE-2021-1111")
+
+    def test_action_statement_timestamp_default_added(self):
+        """GIVEN assessment whose dict lacks action_statement_timestamp WHEN building doc THEN default added."""
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "not_affected"}
+        assess.vuln_id = "CVE-2021-0002"
+        assess.packages = ["pkg@1.0"]
+        assess.source = "s"
+        assess.origin = "o"
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([assess], "author")
+        assert "action_statement_timestamp" in doc["statements"][0]
+
+    def _make_assessment(self, vuln_id, pkg, ts):
+        assess = mock.MagicMock()
+        assess.to_openvex_dict.return_value = {"status": "affected", "timestamp": ts}
+        assess.vuln_id = vuln_id
+        assess.packages = [pkg]
+        assess.source = "s"
+        assess.origin = "o"
+        return assess
+
+    def test_statements_ordered_by_assessment_date(self):
+        """GIVEN assessments in arbitrary order WHEN building doc THEN statements sorted by date."""
+        a_new = self._make_assessment("CVE-2021-0003", "pkg@1.0", "2025-03-01T00:00:00+00:00")
+        a_old = self._make_assessment("CVE-2021-0001", "pkg@1.0", "2025-01-01T00:00:00+00:00")
+        a_mid = self._make_assessment("CVE-2021-0002", "pkg@1.0", "2025-02-01T00:00:00+00:00")
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([a_new, a_old, a_mid], "author")
+        names = [s["vulnerability"]["name"] for s in doc["statements"]]
+        assert names == ["CVE-2021-0001", "CVE-2021-0002", "CVE-2021-0003"]
+
+    def test_equal_dates_ordered_by_vuln_then_package(self):
+        """GIVEN assessments with equal dates WHEN building doc THEN tie-broken deterministically."""
+        ts = "2025-01-01T00:00:00+00:00"
+        a_b = self._make_assessment("CVE-2021-0002", "zlib@1.0", ts)
+        a_a2 = self._make_assessment("CVE-2021-0001", "zlib@2.0", ts)
+        a_a1 = self._make_assessment("CVE-2021-0001", "zlib@1.0", ts)
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc = build_openvex_doc([a_b, a_a2, a_a1], "author")
+        keys = [
+            (s["vulnerability"]["name"], s["products"][0]["@id"])
+            for s in doc["statements"]
+        ]
+        assert keys == [
+            ("CVE-2021-0001", "zlib@1.0"),
+            ("CVE-2021-0001", "zlib@2.0"),
+            ("CVE-2021-0002", "zlib@1.0"),
+        ]
+
+    def test_ordering_independent_of_input_order(self):
+        """GIVEN the same assessments in two different orders THEN identical output ordering."""
+        specs = [
+            ("CVE-2021-0003", "pkg@1.0", "2025-03-01T00:00:00+00:00"),
+            ("CVE-2021-0001", "pkg@1.0", "2025-01-01T00:00:00+00:00"),
+            ("CVE-2021-0002", "pkg@1.0", "2025-02-01T00:00:00+00:00"),
+        ]
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            doc1 = build_openvex_doc(
+                [self._make_assessment(*s) for s in specs], "author"
+            )
+            doc2 = build_openvex_doc(
+                [self._make_assessment(*s) for s in reversed(specs)], "author"
+            )
+        names1 = [s["vulnerability"]["name"] for s in doc1["statements"]]
+        names2 = [s["vulnerability"]["name"] for s in doc2["statements"]]
+        assert names1 == names2
+
+
+# ---------------------------------------------------------------------------
+# build_openvex_archive() tests
+# ---------------------------------------------------------------------------
+
+class TestBuildOpenvexArchive:
+    """Unit tests for build_openvex_archive."""
+
+    def test_empty_assessments_returns_empty_tar(self):
+        """GIVEN no assessments WHEN building archive THEN tar.gz with no members."""
+        result = build_openvex_archive([], {}, "author")
+        buf = io.BytesIO(result)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            assert len(tar.getmembers()) == 0
+
+    def test_assessment_without_variant_goes_to_unassigned(self):
+        """GIVEN assessment with variant_id=None WHEN building archive THEN unassigned.json."""
+        assess = mock.MagicMock()
+        assess.variant_id = None
+        assess.to_openvex_dict.return_value = {"status": "affected"}
+        assess.vuln_id = "CVE-2021-1234"
+        assess.packages = ["pkg@1.0"]
+        assess.source = "s"
+        assess.origin = "o"
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            result = build_openvex_archive([assess], {}, "author")
+        buf = io.BytesIO(result)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert "unassigned.json" in names
+
+    def test_assessment_with_variant_uses_variant_name(self):
+        """GIVEN assessment with known variant WHEN building archive THEN file named after variant."""
+        import uuid as _uuid
+        vid = str(_uuid.uuid4())
+        assess = mock.MagicMock()
+        assess.variant_id = vid
+        assess.to_openvex_dict.return_value = {"status": "fixed"}
+        assess.vuln_id = "CVE-2021-5678"
+        assess.packages = ["lib@0.1"]
+        assess.source = "s"
+        assess.origin = "o"
+        variant_names = {vid: "my-variant"}
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            result = build_openvex_archive([assess], variant_names, "author")
+        buf = io.BytesIO(result)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert "my-variant.json" in names
+
+    def test_variant_name_with_slash_is_sanitized(self):
+        """GIVEN a variant name with '/' WHEN building archive THEN slashes become underscores."""
+        import uuid as _uuid
+        vid = str(_uuid.uuid4())
+        assess = mock.MagicMock()
+        assess.variant_id = vid
+        assess.to_openvex_dict.return_value = None  # skipped
+        assess.packages = []
+        variant_names = {vid: "board/arch"}
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
+            result = build_openvex_archive([assess], variant_names, "author")
+        buf = io.BytesIO(result)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert "board_arch.json" in names
+
+    def test_json_content_is_valid_openvex(self):
+        """GIVEN an archive built from one assessment WHEN extracting THEN JSON is valid OpenVEX."""
+        assess = mock.MagicMock()
+        assess.variant_id = None
+        assess.to_openvex_dict.return_value = {"status": "not_affected"}
+        assess.vuln_id = "CVE-2021-9999"
+        assess.packages = ["pkg@2.0"]
+        assess.source = "scanner"
+        assess.origin = "custom"
+        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value={"description": "d", "aliases": [], "url": "https://example.com"}):
+            result = build_openvex_archive([assess], {}, "author", now_iso="2025-01-01T00:00:00Z")
+        buf = io.BytesIO(result)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            member = tar.getmembers()[0]
+            doc = json.load(tar.extractfile(member))
+        assert is_openvex_doc(doc)
+        assert doc["author"] == "author"
+        assert doc["timestamp"] == "2025-01-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# import_statements() — unit tests for early-exit paths (no DB needed)
+# ---------------------------------------------------------------------------
+
+class TestImportStatementsUnit:
+    """Unit tests for import_statements early-exit branches (no DB calls)."""
+
+    def _variant_id(self):
+        import uuid as _uuid
+        return _uuid.uuid4()
+
+    def test_non_dict_statement_is_skipped(self):
+        """GIVEN a list with non-dict items WHEN importing THEN they are silently skipped."""
+        variant_id = self._variant_id()
+        # All non-dict, so nothing to process → empty results
+        created, errors, skipped = import_statements(["not-a-dict", 42, None], variant_id)
+        assert created == []
+        assert errors == []
+        assert skipped == 0
+
+    def test_missing_vulnerability_name_appends_error(self):
+        """GIVEN a statement with an empty vulnerability object WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": {}, "status": "affected", "products": [{"@id": "pkg@1.0"}]}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+        assert "Missing vulnerability name" in errors[0]["error"]
+
+    def test_vulnerability_not_dict_is_missing_name(self):
+        """GIVEN a statement where vulnerability is not a dict WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": "not-a-dict", "status": "affected", "products": [{"@id": "pkg@1.0"}]}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+        assert "Missing vulnerability name" in errors[0]["error"]
+
+    def test_missing_status_appends_error(self):
+        """GIVEN a statement with no status key WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": {"name": "CVE-2021-1234"}, "products": [{"@id": "pkg@1.0"}]}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+        assert errors[0]["vuln_id"] == "CVE-2021-1234"
+        assert "Missing status" in errors[0]["error"]
+
+    def test_empty_status_appends_error(self):
+        """GIVEN a statement with falsy status WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": {"name": "CVE-2021-1234"}, "status": "", "products": [{"@id": "pkg@1.0"}]}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+
+    def test_no_products_appends_error(self):
+        """GIVEN a statement with empty products list WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": {"name": "CVE-2021-1234"}, "status": "affected", "products": []}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+        assert "No products" in errors[0]["error"]
+
+    def test_products_with_only_unsupported_types_appends_error(self):
+        """GIVEN products list with only ints (no dicts or strings) WHEN importing THEN error appended."""
+        variant_id = self._variant_id()
+        stmt = {"vulnerability": {"name": "CVE-2021-1234"}, "status": "affected", "products": [42, True]}
+        created, errors, skipped = import_statements([stmt], variant_id)
+        assert len(errors) == 1
+        assert "No products" in errors[0]["error"]
+
+    def test_mixed_statements_accumulates_errors(self):
+        """GIVEN multiple bad statements WHEN importing THEN all errors collected."""
+        variant_id = self._variant_id()
+        statements = [
+            "not-a-dict",
+            {"vulnerability": {}, "status": "affected", "products": [{"@id": "p@1.0"}]},
+            {"vulnerability": {"name": "CVE-X"}, "products": [{"@id": "p@1.0"}]},  # no status
+        ]
+        created, errors, skipped = import_statements(statements, variant_id)
+        assert created == []
+        assert len(errors) == 2  # vuln name missing + status missing

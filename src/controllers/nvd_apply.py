@@ -22,7 +22,7 @@ def apply_cvss_update(rec, details: dict, db) -> None:
             Metrics.version == cvss_version,
             Metrics.variant_id.is_(None),
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing is not None:
         if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
             existing.score = base_score
