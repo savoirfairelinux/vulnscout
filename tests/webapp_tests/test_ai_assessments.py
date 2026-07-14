@@ -266,7 +266,7 @@ def test_ai_visible_on_per_vuln_endpoint(client):
     assert any(a["origin"] == "ai" for a in data)
 
 
-def test_patch_ai_row_returns_400(client):
+def test_patch_ai_row_updates_and_keeps_ai_origin(client):
     aid = _get_first_ai_id(client)
     resp = client.patch(
         f"/api/assessments/{aid}",
@@ -275,10 +275,39 @@ def test_patch_ai_row_returns_400(client):
             "justification": "component_not_present",
         },
     )
-    assert resp.status_code == 400
-    assert json.loads(resp.data)["error"] == (
-        "Use the AI approve/reject endpoints for pending AI assessments"
+    assert resp.status_code == 200
+    body = json.loads(resp.data)["assessment"]
+    assert body["status"] == "not_affected"
+    assert body["justification"] == "component_not_present"
+    # Editing a pending AI assessment directly must not auto-approve it.
+    assert body["origin"] == "ai"
+
+    # Still excluded from normal listings / scan-history counts until approved.
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert all(a["id"] != aid for a in listed)
+
+
+def test_patch_ai_row_then_approve_promotes_to_custom(client):
+    aid = _get_first_ai_id(client)
+    patch_resp = client.patch(
+        f"/api/assessments/{aid}",
+        json={
+            "status": "not_affected",
+            "justification": "component_not_present",
+        },
     )
+    assert patch_resp.status_code == 200
+
+    approve_resp = client.post(f"/api/assessments/{aid}/approve")
+    assert approve_resp.status_code == 200
+    approved = json.loads(approve_resp.data)["assessments"]
+    assert any(a["id"] == aid and a["origin"] == "custom" for a in approved)
+
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    listed_row = next(a for a in listed if a["id"] == aid)
+    assert listed_row["origin"] == "custom"
+    assert listed_row["status"] == "not_affected"
+    assert listed_row["justification"] == "component_not_present"
 
 
 def test_delete_ai_row_returns_400(client):
