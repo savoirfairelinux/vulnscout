@@ -815,9 +815,10 @@ def init_app(app: Flask) -> None:
             return {"error": "Assessment not found"}, 404
 
         was_non_custom = (existing.origin or "") != "custom"
-
-        if existing.origin == "ai":
-            return {"error": "Use the AI approve/reject endpoints for pending AI assessments"}, 400
+        # Editing a pending AI assessment directly must not silently approve
+        # it: keep its origin as "ai" so it stays pending until the user
+        # explicitly approves/rejects it via the dedicated endpoints.
+        new_origin = "ai" if existing.origin == "ai" else "custom"
 
         # Reconstruct Assessment DTO for validation
         mem_assess = DBAssessment.from_dict(existing.to_dict())
@@ -851,7 +852,7 @@ def init_app(app: Flask) -> None:
 
         existing.update(
             status=mem_assess.status,
-            origin="custom",
+            origin=new_origin,
             status_notes=mem_assess.status_notes,
             justification=mem_assess.justification,
             impact_statement=mem_assess.impact_statement,
@@ -860,7 +861,9 @@ def init_app(app: Flask) -> None:
         )
         # Editing an automated assessment removes it from the scan-history
         # counts (it becomes custom-origin), so refresh the cached list view.
-        if was_non_custom:
+        # A pending AI row that stays "ai" after editing has not changed its
+        # scan-history membership, so no cache refresh is needed in that case.
+        if was_non_custom and new_origin == "custom":
             invalidate_scan_list_cache()
         return {"status": "success", "assessment": existing.to_dict()}, 200
 
