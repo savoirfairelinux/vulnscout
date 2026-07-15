@@ -27,7 +27,7 @@ type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
     | { type: 'update'; vulnId: string; ids: string[]; data: EditAssessmentData };
 
-type ReviewTab = 'assessments' | 'time-estimates' | 'custom-cvss';
+type ReviewTab = 'assessments' | 'ai-assessments' | 'time-estimates' | 'custom-cvss';
 
 type Props = {
     variantId?: string;
@@ -118,6 +118,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<Assessment[]>([]);
+    const [aiAssessments, setAiAssessments] = useState<Assessment[]>([]);
     const [timeEstimates, setTimeEstimates] = useState<ReviewTimeEstimate[]>([]);
     const [customCvss, setCustomCvss] = useState<ReviewCustomCvss[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
@@ -244,17 +245,19 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setError(null);
         Promise.all([
             Assessments.listReview(variantId, projectId),
+            Assessments.listReviewAi(variantId, projectId),
             Assessments.listReviewTimeEstimates(variantId, projectId),
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
-            .then(([reviewData, teData, cvssData]) => {
+            .then(([reviewData, aiData, teData, cvssData]) => {
                 setAssessments(groupAssessments(reviewData));
+                setAiAssessments(groupAssessments(aiData));
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 // Build tooltip descriptions from vuln_texts included in the response
                 const descMap: Record<string, { title: string; content: string }[]> = {};
-                for (const a of reviewData) {
+                for (const a of [...reviewData, ...aiData]) {
                     if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
                         descMap[a.vuln_id] = a.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
@@ -335,36 +338,36 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const statusList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             if (a.simplified_status) set.add(a.simplified_status);
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const justificationList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             if (a.justification) set.add(a.justification.replace(/_/g, " "));
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const supplierList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             for (const pkg of a.packages) {
                 const name = extractSupplierName(splitPkgId(pkg).supplier);
                 if (name) set.add(name);
             }
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
     const variantList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
             for (const vid of vids) {
                 const name = variantNames[vid];
@@ -372,7 +375,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         }
         return [...set].sort();
-    }, [assessments, variantNames]);
+    }, [assessments, aiAssessments, variantNames]);
 
     // All variants are checked by default; a variant only leaves the selection
     // once the user explicitly unchecks it. Deriving the selection during render
@@ -905,6 +908,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
     ], [handleVulnClick, variantNames]);
 
+    const aiColumns = useMemo(() => columns.filter(c => c.id !== 'actions'), [columns]);
+
     const teColumns = useMemo(() => [
         teColumnHelper.accessor("vuln_id", {
             id: 'te_vuln_id',
@@ -1065,7 +1070,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         );
     }
 
-    const filteredAssessments = assessments.filter((a) => {
+    const filterReviewRows = (list: Assessment[]) => list.filter((a) => {
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -1083,6 +1088,47 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
         return true;
     });
+
+    const filteredAssessments = filterReviewRows(assessments);
+    const filteredAiAssessments = filterReviewRows(aiAssessments);
+
+    /** Shared renderer for the "assessments" and "ai-assessments" tabs: both
+     * show the same empty-state shape and the same TableGeneric<ReviewRow>
+     * setup, differing only in which rows/columns/copy are passed in. */
+    const renderAssessmentsTable = (
+        rows: Assessment[],
+        cols: any[],
+        emptyTitle: string,
+        emptyBody: string,
+    ) => (
+        rows.length === 0 ? (
+            <div className="text-center py-10 text-gray-400">
+                <p className="text-lg">{emptyTitle}</p>
+                <p className="text-sm mt-2">{emptyBody}</p>
+            </div>
+        ) : (
+            <TableGeneric<ReviewRow>
+                columns={cols}
+                data={rows.map(a => ({
+                    ...a,
+                    texts: vulnDescriptions[a.vuln_id] ?? [],
+                    _allIds: (a as any)._allIds ?? [a.id],
+                    _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                    _assessments: (a as any)._assessments ?? [a],
+                    extractedSuppliers: [...new Set(
+                        a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+                    )],
+                }))}
+                search={search}
+                fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
+                forAllValues={(row) => row.packages}
+                estimateRowHeight={50}
+                hasPagination={true}
+                hoverField="texts"
+                hoverIdField="vuln_id"
+            />
+        )
+    );
 
     return (
         <div>
@@ -1119,7 +1165,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     )}
                 </div>
 
-                {activeTab === 'assessments' && (
+                {(activeTab === 'assessments' || activeTab === 'ai-assessments') && (
                     <>
                         <FilterOption
                             label="Status"
@@ -1280,38 +1326,30 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 >
                     Custom CVSS{customCvss.length > 0 ? ` (${customCvss.length})` : ''}
                 </button>
+                <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                        activeTab === 'ai-assessments'
+                            ? 'bg-sky-800 text-white border-b-2 border-sky-400'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    }`}
+                    onClick={() => setActiveTab('ai-assessments')}
+                >
+                    AI Assessments{aiAssessments.length > 0 ? ` (${aiAssessments.length})` : ''}
+                </button>
             </div>
 
-            {activeTab === 'assessments' && (
-                assessments.length === 0 ? (
-                    <div className="text-center py-10 text-gray-400">
-                        <p className="text-lg">No handmade assessments found</p>
-                        <p className="text-sm mt-2">
-                            Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.
-                        </p>
-                    </div>
-                ) : (
-                    <TableGeneric<ReviewRow>
-                        columns={columns}
-                        data={filteredAssessments.map(a => ({
-                            ...a,
-                            texts: vulnDescriptions[a.vuln_id] ?? [],
-                            _allIds: (a as any)._allIds ?? [a.id],
-                            _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
-                            _assessments: (a as any)._assessments ?? [a],
-                            extractedSuppliers: [...new Set(
-                                a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
-                            )],
-                        }))}
-                        search={search}
-                        fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
-                        forAllValues={(row) => row.packages}
-                        estimateRowHeight={50}
-                        hasPagination={true}
-                        hoverField="texts"
-                        hoverIdField="vuln_id"
-                    />
-                )
+            {activeTab === 'assessments' && renderAssessmentsTable(
+                filteredAssessments,
+                columns,
+                "No handmade assessments found",
+                "Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.",
+            )}
+
+            {activeTab === 'ai-assessments' && renderAssessmentsTable(
+                filteredAiAssessments,
+                aiColumns,
+                "No AI-generated assessments found",
+                "Pending assessments suggested by AI will appear here until approved or rejected.",
             )}
 
             {activeTab === 'time-estimates' && (

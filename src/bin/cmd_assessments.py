@@ -51,7 +51,7 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
     else:
         variants = DBVariant.get_by_project(project_obj.id)
 
-    handmade = DBAssessment.get_handmade([v.id for v in variants])
+    handmade = DBAssessment.get_by_origin([v.id for v in variants])
     if not handmade:
         click.echo("No custom assessments to export.", err=True)
         raise SystemExit(1)

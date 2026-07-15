@@ -143,13 +143,10 @@ def init_app(app: Flask) -> None:
             return {a["id"]: a for a in assessments}
         return assessments
 
-    @app.route('/api/assessments/review')
-    def review_assessments() -> ResponseReturnValue:
-        """Return assessments not linked to any scan (handmade via the web UI).
-
-        Each assessment dict is enriched with a ``vuln_texts`` key mapping to the
-        vulnerability's ``texts`` dict so the front-end can display tooltips
-        without extra requests.
+    def _review_assessments_by_origin(origin: str) -> ResponseReturnValue:
+        """Return assessments matching ``origin``, enriched with a ``vuln_texts``
+        key mapping to the vulnerability's ``texts`` dict so the front-end can
+        display tooltips without extra requests.
         """
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
@@ -162,7 +159,7 @@ def init_app(app: Flask) -> None:
             if vid is None:
                 return {"error": "Internal error"}, 500
             variant_ids = [vid]
-            assessments = DBAssessment.get_handmade([vid])
+            assessments = DBAssessment.get_by_origin([vid], origin=origin)
         elif project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
@@ -170,10 +167,10 @@ def init_app(app: Flask) -> None:
             if pid is None:
                 return {"error": "Internal error"}, 500
             variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
-            assessments = DBAssessment.get_handmade(variant_ids)
+            assessments = DBAssessment.get_by_origin(variant_ids, origin=origin)
         else:
             variant_ids = None
-            assessments = DBAssessment.get_handmade()
+            assessments = DBAssessment.get_by_origin(origin=origin)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB pass)
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
@@ -188,6 +185,16 @@ def init_app(app: Flask) -> None:
         annotate_assessments_outdated(assessments_serialized)
         return assessments_serialized
 
+    @app.route('/api/assessments/review')
+    def review_assessments() -> ResponseReturnValue:
+        """Return assessments not linked to any scan (handmade via the web UI)."""
+        return _review_assessments_by_origin("custom")
+
+    @app.route('/api/assessments/review/ai')
+    def review_ai_assessments() -> ResponseReturnValue:
+        """Return pending AI-generated assessments (``origin == 'ai'``)."""
+        return _review_assessments_by_origin("ai")
+
     @app.route('/api/assessments/review/export')
     def export_review_openvex() -> ResponseReturnValue:
         """Export handmade (review) assessments as a .tar.gz containing one
@@ -196,7 +203,7 @@ def init_app(app: Flask) -> None:
         """
         from ..models.variant import Variant as DBVariant
 
-        handmade = DBAssessment.get_handmade()
+        handmade = DBAssessment.get_by_origin()
         if not handmade:
             return {"error": "No review assessments to export"}, 404
 

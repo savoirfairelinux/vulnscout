@@ -893,7 +893,7 @@ def test_export_import_roundtrip_directory(app, tmp_path):
     with app.app_context():
         from src.extensions import db as _db
         from src.models.assessment import Assessment
-        for a in Assessment.get_handmade():
+        for a in Assessment.get_by_origin():
             a.delete()
         _db.session.commit()
 
@@ -925,7 +925,7 @@ def test_export_import_roundtrip(app, tmp_path):
     with app.app_context():
         from src.extensions import db as _db
         from src.models.assessment import Assessment
-        for a in Assessment.get_handmade():
+        for a in Assessment.get_by_origin():
             a.delete()
         _db.session.commit()
 
@@ -958,7 +958,7 @@ def test_export_import_roundtrip_compress(app, tmp_path):
     with app.app_context():
         from src.extensions import db as _db
         from src.models.assessment import Assessment
-        for a in Assessment.get_handmade():
+        for a in Assessment.get_by_origin():
             a.delete()
         _db.session.commit()
 

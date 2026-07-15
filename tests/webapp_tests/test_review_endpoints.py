@@ -79,6 +79,24 @@ def _create_handmade_assessment(client, vuln_id="CVE-2020-35492",
     return resp
 
 
+def _create_ai_assessment(client, vuln_id="CVE-2020-35492",
+                           packages=None, status="affected",
+                           variant_id=VARIANT_UUID, **extra):
+    """Helper – create a pending AI-generated assessment via POST."""
+    payload = {
+        "packages": packages or ["cairo@1.16.0"],
+        "status": status,
+        "variant_id": variant_id,
+        "ai_generated": True,
+    }
+    payload.update(extra)
+    resp = client.post(
+        f"/api/vulnerabilities/{vuln_id}/assessments",
+        json=payload,
+    )
+    return resp
+
+
 # ── GET /api/assessments/review ──────────────────────────────────────────
 
 def test_review_list_empty(client):
@@ -287,6 +305,91 @@ class TestReviewListTexts:
                 "title": "yocto"
             },
         ]
+
+
+# ── GET /api/assessments/review/ai ────────────────────────────────────────
+
+def test_review_ai_list_empty(client):
+    """No pending AI assessments yet → empty list."""
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    assert json.loads(resp.data) == []
+
+
+def test_review_ai_list_after_create(client):
+    """After creating an AI-generated assessment it appears in the AI review list."""
+    _create_ai_assessment(client)
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    assert all(a["origin"] == "ai" for a in data)
+
+
+def test_review_ai_does_not_leak_into_custom_review(client):
+    """AI-origin assessments must not appear in the custom /review list, and
+    custom assessments must not appear in the AI review list."""
+    _create_ai_assessment(client)
+    _create_handmade_assessment(client, vuln_id="CVE-2020-35492", packages=["abc@1.2.3"])
+
+    custom_resp = client.get("/api/assessments/review")
+    ai_resp = client.get("/api/assessments/review/ai")
+    assert custom_resp.status_code == 200
+    assert ai_resp.status_code == 200
+
+    custom_data = json.loads(custom_resp.data)
+    ai_data = json.loads(ai_resp.data)
+
+    assert all(a["origin"] == "custom" for a in custom_data)
+    assert all(a["origin"] == "ai" for a in ai_data)
+    assert len(custom_data) >= 1
+    assert len(ai_data) >= 1
+
+
+def test_review_ai_list_by_variant(client):
+    _create_ai_assessment(client)
+    resp = client.get(f"/api/assessments/review/ai?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+
+
+def test_review_ai_list_by_variant_invalid(client):
+    resp = client.get("/api/assessments/review/ai?variant_id=not-a-uuid")
+    assert resp.status_code == 400
+
+
+def test_review_ai_list_by_project(client):
+    _create_ai_assessment(client)
+    resp = client.get(f"/api/assessments/review/ai?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+
+
+def test_review_ai_list_by_project_invalid(client):
+    resp = client.get("/api/assessments/review/ai?project_id=bad")
+    assert resp.status_code == 400
+
+
+def test_review_ai_list_by_project_no_variants(client):
+    """Project with no variants → empty list."""
+    fake_project = str(uuid.uuid4())
+    resp = client.get(f"/api/assessments/review/ai?project_id={fake_project}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data == []
+
+
+def test_review_ai_list_includes_vuln_texts(client):
+    """Each entry is enriched with a vuln_texts key, same as /review."""
+    _create_ai_assessment(client)
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    assert "vuln_texts" in data[0]
+    assert isinstance(data[0]["vuln_texts"], list)
 
 
 # ── GET /api/assessments (project_id path) ───────────────────────────────

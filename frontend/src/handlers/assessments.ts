@@ -172,6 +172,18 @@ class Assessments {
     }
 
     /**
+     * Fetch pending AI-generated assessments (``origin == 'ai'``) for the review tab.
+     */
+    static async listReviewAi(variantId?: string, projectId?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/ai", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        return data.flatMap(asAssessment);
+    }
+
+    /**
      * Fetch vulnerabilities with non-zero time estimates for the review tab.
      */
     static async listReviewTimeEstimates(variantId?: string, projectId?: string): Promise<ReviewTimeEstimate[]> {

@@ -521,7 +521,7 @@ def init_app(app: Flask) -> None:
         else:
             target_observed_finding_ids = set()
 
-        source_assessments = DBAssessment.get_handmade([source_uuid])
+        source_assessments = DBAssessment.get_by_origin([source_uuid])
 
         # ---- exact mode: original flat-operations behavior ----
         if match_mode == "exact":
@@ -606,7 +606,7 @@ def init_app(app: Flask) -> None:
             }, None
 
         # Batch-load existing custom assessments for the target variant once
-        target_custom_assessments = DBAssessment.get_handmade([target_uuid])
+        target_custom_assessments = DBAssessment.get_by_origin([target_uuid])
         target_customs_by_finding: dict = {}
         for a in target_custom_assessments:
             if a.finding_id is not None:
@@ -862,7 +862,7 @@ def init_app(app: Flask) -> None:
             target_pkg_ids = active_package_ids_for_scans(
                 active_sbom_scan_ids_for_variant(target_uuid))
 
-            source_assessments = DBAssessment.get_handmade([source_uuid])
+            source_assessments = DBAssessment.get_by_origin([source_uuid])
             source_assessment_by_id = {str(a.id): a for a in source_assessments}
 
             copied = 0
