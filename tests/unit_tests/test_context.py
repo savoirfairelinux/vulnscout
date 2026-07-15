@@ -101,6 +101,13 @@ class TestVariantContextModel:
         assert vc.threat_model == "New"
         assert vc.environment is None
 
+    def test_upsert_codebase_path(self, app, variant):
+        from src.models.variant_context import VariantContext
+        vc = VariantContext.upsert(variant.id, codebase_path="/home/user/src/proj")
+        assert vc.codebase_path == "/home/user/src/proj"
+        vc = VariantContext.upsert(variant.id, codebase_path=None)
+        assert vc.codebase_path is None
+
     def test_get_by_variant(self, app, variant):
         from src.models.variant_context import VariantContext
         assert VariantContext.get_by_variant(variant.id) is None
@@ -116,11 +123,12 @@ class TestVariantContextModel:
 
     def test_to_dict(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, threat_model="T", risks="R")
+        vc = VariantContext.upsert(variant.id, threat_model="T", risks="R", codebase_path="/src")
         d = vc.to_dict()
         assert d["variant_id"] == str(variant.id)
         assert d["threat_model"] == "T"
         assert d["risks"] == "R"
+        assert d["codebase_path"] == "/src"
         assert d["files"] == []
 
 
@@ -223,6 +231,11 @@ class TestVariantContextController:
         vc = VariantContextController.upsert(str(variant.id), environment=None)
         assert vc.environment is None
 
+    def test_upsert_codebase_path(self, app, variant):
+        from src.controllers.context import VariantContextController
+        vc = VariantContextController.upsert(str(variant.id), codebase_path="/home/user/src")
+        assert vc.codebase_path == "/home/user/src"
+
     def test_get_or_create_creates_row(self, app, variant):
         from src.controllers.context import VariantContextController
         vc = VariantContextController.get_or_create(str(variant.id))
@@ -263,7 +276,7 @@ class TestGetMergedContext:
         from src.models.project_context import ProjectContext
         from src.models.variant_context import VariantContext
         ProjectContext.upsert(project.id, description="proj desc")
-        VariantContext.upsert(variant.id, threat_model="CVSS >= 7")
+        VariantContext.upsert(variant.id, threat_model="CVSS >= 7", codebase_path="/src/repo")
         resp = client.get(
             f"/api/context?project_id={project.id}&variant_id={variant.id}"
         )
@@ -271,6 +284,7 @@ class TestGetMergedContext:
         data = resp.get_json()
         assert data["description"] == "proj desc"
         assert data["threat_model"] == "CVSS >= 7"
+        assert data["codebase_path"] == "/src/repo"
 
     def test_400_when_project_id_missing(self, client, variant):
         resp = client.get(f"/api/context?variant_id={variant.id}")
@@ -377,6 +391,18 @@ class TestPutVariantContext:
             json={"threat_model": "T2"},
         )
         assert resp.get_json()["environment"] is None
+
+    def test_codebase_path_saved_and_cleared(self, client, variant):
+        resp = client.put(
+            f"/api/variants/{variant.id}/context",
+            json={"codebase_path": "/home/user/src/proj"},
+        )
+        assert resp.get_json()["codebase_path"] == "/home/user/src/proj"
+        resp = client.put(
+            f"/api/variants/{variant.id}/context",
+            json={"codebase_path": None},
+        )
+        assert resp.get_json()["codebase_path"] is None
 
     def test_404_when_variant_not_found(self, client):
         resp = client.put(

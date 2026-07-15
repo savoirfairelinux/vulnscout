@@ -30,6 +30,7 @@ def upgrade():
         sa.Column('id', sa.Uuid(), nullable=False),
         sa.Column('variant_id', sa.Uuid(), nullable=False),
         sa.Column('variant_description', sa.Text(), nullable=True),
+        sa.Column('codebase_path', sa.Text(), nullable=True),
         sa.Column('environment', sa.Text(), nullable=True),
         sa.Column('threat_model', sa.Text(), nullable=True),
         sa.Column('risks', sa.Text(), nullable=True),

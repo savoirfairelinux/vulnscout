@@ -47,6 +47,7 @@ function AIContext() {
     // Form fields
     const [description, setDescription] = useState<string>('');
     const [variantDescription, setVariantDescription] = useState<string>('');
+    const [codebasePath, setCodebasePath] = useState<string>('');
     const [environment, setEnvironment] = useState<string>('');
     const [threatModel, setThreatModel] = useState<string>('');
     const [risks, setRisks] = useState<string>('');
@@ -80,6 +81,7 @@ function AIContext() {
 
     const clearVariantFields = () => {
         setVariantDescription('');
+        setCodebasePath('');
         setEnvironment('');
         setThreatModel('');
         setRisks('');
@@ -111,6 +113,7 @@ function AIContext() {
                     if (unmountedRef.current) return;
                     setDescription(ctx.description ?? '');
                     setVariantDescription(ctx.variant_description ?? '');
+                    setCodebasePath(ctx.codebase_path ?? '');
                     setEnvironment(ctx.environment ?? '');
                     setThreatModel(ctx.threat_model ?? '');
                     setRisks(ctx.risks ?? '');
@@ -164,6 +167,7 @@ function AIContext() {
         if (selectedVariantId) {
             const fields: VariantContextData = {
                 variant_description: variantDescription.trim() || null,
+                codebase_path: codebasePath.trim() || null,
                 environment: environment.trim() || null,
                 threat_model: threatModel.trim() || null,
                 risks: risks.trim() || null,
@@ -316,6 +320,23 @@ function AIContext() {
                     onChange={e => setVariantDescription(e.target.value)}
                     disabled={!variantSelected}
                     placeholder={variantSelected ? "Describe this variant..." : "Select a variant to enable"}
+                />
+            </div>
+
+            {/* Codebase Path */}
+            <div>
+                <label className={labelClass} htmlFor="ai-codebase-path">
+                    Codebase Path <span className="text-neutral-400 font-normal">(source code location on the local machine)</span>
+                </label>
+                <input
+                    id="ai-codebase-path"
+                    aria-label="Codebase Path"
+                    type="text"
+                    className={inputClass}
+                    value={codebasePath}
+                    onChange={e => setCodebasePath(e.target.value)}
+                    disabled={!variantSelected}
+                    placeholder={variantSelected ? "e.g. /home/user/src/myproject" : "Select a variant to enable"}
                 />
             </div>
 
