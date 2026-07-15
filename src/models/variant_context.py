@@ -104,6 +104,7 @@ class VariantContext(Base):
         ForeignKey("variants.id", ondelete="CASCADE"), nullable=False
     )
     variant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    codebase_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str | None] = mapped_column(Text, nullable=True)
     threat_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -119,6 +120,7 @@ class VariantContext(Base):
         return {
             "variant_id": str(self.variant_id),
             "variant_description": self.variant_description,
+            "codebase_path": self.codebase_path,
             "environment": self.environment,
             "threat_model": self.threat_model,
             "risks": self.risks,
@@ -140,6 +142,7 @@ class VariantContext(Base):
     def upsert(
         variant_id: uuid.UUID,
         variant_description: str | None = None,
+        codebase_path: str | None = None,
         environment: str | None = None,
         threat_model: str | None = None,
         risks: str | None = None,
@@ -148,6 +151,7 @@ class VariantContext(Base):
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
             existing.variant_description = variant_description
+            existing.codebase_path = codebase_path
             existing.environment = environment
             existing.threat_model = threat_model
             existing.risks = risks
@@ -157,6 +161,7 @@ class VariantContext(Base):
         vc = VariantContext(
             variant_id=variant_id,
             variant_description=variant_description,
+            codebase_path=codebase_path,
             environment=environment,
             threat_model=threat_model,
             risks=risks,

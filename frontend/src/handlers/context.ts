@@ -5,6 +5,7 @@ type ProjectContext = {
 
 type VariantContextData = {
     variant_description: string | null;
+    codebase_path: string | null;
     environment: string | null;
     threat_model: string | null;
     risks: string | null;

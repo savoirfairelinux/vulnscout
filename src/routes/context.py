@@ -56,6 +56,7 @@ def init_app(app):
             "description": pc.description if pc else None,
             "variant_id": str(variant_uuid),
             "variant_description": vc.variant_description if vc else None,
+            "codebase_path": vc.codebase_path if vc else None,
             "environment": vc.environment if vc else None,
             "threat_model": vc.threat_model if vc else None,
             "risks": vc.risks if vc else None,
@@ -105,6 +106,7 @@ def init_app(app):
             vc = VariantContextController.upsert(
                 variant_uuid,
                 variant_description=body.get('variant_description'),
+                codebase_path=body.get('codebase_path'),
                 environment=body.get('environment'),
                 threat_model=body.get('threat_model'),
                 risks=body.get('risks'),
