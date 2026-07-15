@@ -717,11 +717,14 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_handmade(variant_ids: list[uuid.UUID] | None = None) -> list["Assessment"]:
-        """Return assessments created/edited via the web UI (``origin='custom'``)."""
+    def get_by_origin(variant_ids: list[uuid.UUID] | None = None, origin: str = "custom") -> list["Assessment"]:
+        """Return assessments matching ``origin`` (``'custom'`` = created/edited
+        via the web UI, ``'ai'`` = pending AI-generated suggestions), optionally
+        restricted to the given ``variant_ids``.
+        """
         query = (
             db.select(Assessment)
-            .where(Assessment.origin == "custom")
+            .where(Assessment.origin == origin)
             .options(joinedload(Assessment.finding).joinedload(Finding.package))
             .order_by(Assessment.timestamp.desc())
         )

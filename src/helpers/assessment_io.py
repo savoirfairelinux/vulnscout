@@ -173,7 +173,7 @@ def build_openvex_archive(
     ----------
     handmade_assessments:
         List of DB ``Assessment`` objects (usually from
-        ``Assessment.get_handmade()``).
+        ``Assessment.get_by_origin()``).
     variant_names:
         Mapping ``str(variant_id) → variant_name`` used to name the files.
     author:
@@ -519,7 +519,7 @@ def build_custom_data_export(
     from ..models.iso8601_duration import Iso8601Duration
     from ..models.variant import Variant as DBVariant
 
-    handmade = DBAssessment.get_handmade(variant_ids)
+    handmade = DBAssessment.get_by_origin(variant_ids)
 
     variant_name_by_id: dict[str, str] = {}
     variant_uuid_set: set[_uuid.UUID] = {

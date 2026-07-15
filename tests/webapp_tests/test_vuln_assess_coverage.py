@@ -94,7 +94,7 @@ class TestAssessmentsProjectIdPaths:
         assert isinstance(data, list)
 
     def test_review_assessments_no_filter(self, client):
-        """Line 336: no variant/project → get_handmade() with no args."""
+        """Line 336: no variant/project → get_by_origin() with no args."""
         resp = client.get("/api/assessments/review")
         assert resp.status_code == 200
         assert isinstance(json.loads(resp.data), list)
