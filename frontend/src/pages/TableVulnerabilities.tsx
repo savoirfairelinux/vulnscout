@@ -1,6 +1,7 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
+import Assessments from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
@@ -390,6 +391,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showStatusHelper, setShowStatusHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
+    const [onlyAiSuggestions, setOnlyAiSuggestions] = useState<boolean>(false);
+    const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -450,6 +453,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
+    // excluded from the vulnerabilities' assessments array by the backend, so they must
+    // be fetched separately. Scope to the selected variant, else the project.
+    useEffect(() => {
+        let cancelled = false;
+        if (!variantId && !projectId) {
+            setAiSuggestionVulnIds(new Set());
+            return;
+        }
+        Assessments.listReviewAi(variantId, projectId)
+            .then(assessments => {
+                if (cancelled) return;
+                setAiSuggestionVulnIds(new Set(assessments.map(a => a.vuln_id)));
+            })
+            .catch(() => {
+                if (!cancelled) setAiSuggestionVulnIds(new Set());
+            });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
 
     // Update per-source banners with live progress; reload data when each refresh completes
     useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
@@ -1111,6 +1134,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
+            if (onlyAiSuggestions && !aiSuggestionVulnIds.has(el.id)) return false;
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length) {
                 const summary = getVulnerabilityStatusSummary(el);
@@ -1211,7 +1235,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, onlyAiSuggestions, aiSuggestionVulnIds]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -1498,7 +1522,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     <FontAwesomeIcon icon={faFilter} />
                     More
-                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0) && (
+                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0 || onlyAiSuggestions) && (
                         <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>
                     )}
                     <FontAwesomeIcon icon={faCaretDown} />
@@ -1594,6 +1618,25 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                                         })
                                     )}
                                 </div>
+                            </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* AI Suggestion Filter */}
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        id="ai-suggestion-filter"
+                                        checked={onlyAiSuggestions}
+                                        onChange={() => setOnlyAiSuggestions(!onlyAiSuggestions)}
+                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                    />
+                                    <label htmlFor="ai-suggestion-filter" className="text-sm font-semibold">Has AI suggestion</label>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1 ml-6">
+                                    Only show vulnerabilities with a pending AI suggestion in the current scope.
+                                </p>
                             </div>
                         </div>
                     </div>
