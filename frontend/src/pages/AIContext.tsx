@@ -326,7 +326,7 @@ function AIContext() {
             {/* Codebase Path */}
             <div>
                 <label className={labelClass} htmlFor="ai-codebase-path">
-                    Codebase Path <span className="text-neutral-400 font-normal">(source code location on the local machine)</span>
+                    Codebase Path <span className="text-neutral-400 font-normal">(source code location(s) on the local machine; separate multiple paths with a semicolon)</span>
                 </label>
                 <input
                     id="ai-codebase-path"
@@ -336,7 +336,7 @@ function AIContext() {
                     value={codebasePath}
                     onChange={e => setCodebasePath(e.target.value)}
                     disabled={!variantSelected}
-                    placeholder={variantSelected ? "e.g. /home/user/src/myproject" : "Select a variant to enable"}
+                    placeholder={variantSelected ? "e.g. /home/user/src/myproject;/home/user/src/otherproject" : "Select a variant to enable"}
                 />
             </div>
 
