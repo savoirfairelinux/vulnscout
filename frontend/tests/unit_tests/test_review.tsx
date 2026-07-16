@@ -145,6 +145,7 @@ const CUSTOM_CVSS = [
 type NetworkOpts = {
     te?: unknown[];
     cvss?: unknown[];
+    aiReviewList?: unknown[];
     variants?: unknown[];
     projects?: unknown[];
     packages?: unknown[];
@@ -162,7 +163,7 @@ type NetworkOpts = {
  */
 function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
     const {
-        te = [], cvss = [],
+        te = [], cvss = [], aiReviewList = [],
         variants = VARIANTS, projects = PROJECTS,
         // Every variant ships the shared package by default so the editor's
         // package/variant compatibility gate does not disable the checkboxes.
@@ -188,6 +189,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ version: 1, assessments: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
+            if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
             if (/\/api\/vulnerabilities\/[^/]+\/variants/.test(url)) return JSON.stringify(variants);
@@ -478,6 +480,85 @@ describe('Review — rendering columns and tabs', () => {
         await screen.findByTitle('Edit assessment');
         await user.click(screen.getByText('Custom CVSS'));
         await screen.findByText('No custom CVSS scores found');
+    });
+});
+
+// ===========================================================================
+// AI Assessments tab
+// ===========================================================================
+
+describe('Review — AI Assessments tab', () => {
+    test('switches to the AI Assessments tab and renders pending rows with actions', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText(/AI Assessments \(1\)/));
+
+        expect(await screen.findByTitle('Approve AI suggestion')).toBeInTheDocument();
+        expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
+    });
+
+    test('shows the AI assessments empty state when there are none pending', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+
+        await screen.findByText('No AI-generated assessments found');
+    });
+
+    test('approving a pending AI row calls approveAi with all grouped ids and refreshes the lists', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(await screen.findByTitle('Approve AI suggestion'));
+
+        await screen.findByText('AI assessment approved!');
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
+    });
+
+    test('rejecting a pending AI row calls rejectAi with all grouped ids and refreshes the lists', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(await screen.findByTitle('Reject AI suggestion'));
+
+        await screen.findByText('AI assessment rejected.');
+        expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/reject'))).toBe(true);
+    });
+
+    test('reports an error when approving a pending AI row fails', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(await screen.findByTitle('Approve AI suggestion'));
+
+        await screen.findByText(/Failed to approve AI assessment/);
+    });
+
+    test('reports an error when rejecting a pending AI row fails', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(await screen.findByTitle('Reject AI suggestion'));
+
+        await screen.findByText(/Failed to reject AI assessment/);
     });
 });
 

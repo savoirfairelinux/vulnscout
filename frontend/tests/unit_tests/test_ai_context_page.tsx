@@ -486,14 +486,54 @@ describe('AIContext page', () => {
         });
 
         fireEvent.change(screen.getByLabelText("Variant Description"), { target: { value: 'New variant desc' } });
+        fireEvent.change(screen.getByLabelText("Codebase Path"), { target: { value: '/home/user/src/myproject' } });
         fireEvent.change(screen.getByLabelText("Environment"), { target: { value: 'Linux runtime' } });
         fireEvent.change(screen.getByLabelText("Risks"), { target: { value: 'Some risk' } });
         fireEvent.change(screen.getByLabelText("Other Information"), { target: { value: 'Extra info' } });
 
         expect(screen.getByLabelText("Variant Description")).toHaveValue('New variant desc');
+        expect(screen.getByLabelText("Codebase Path")).toHaveValue('/home/user/src/myproject');
         expect(screen.getByLabelText("Environment")).toHaveValue('Linux runtime');
         expect(screen.getByLabelText("Risks")).toHaveValue('Some risk');
         expect(screen.getByLabelText("Other Information")).toHaveValue('Extra info');
+    });
+
+    test('loads and saves the codebase path from an existing variant context', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
+        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            project_id: 'p1', description: null, variant_id: 'v1',
+            variant_description: null, codebase_path: '/existing/path', environment: null,
+            threat_model: 'TM', risks: null, other_info: null, files: []
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: 'desc' }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            variant_id: 'v1', variant_description: null, codebase_path: '/updated/path',
+            environment: null, threat_model: 'TM', risks: null, other_info: null, files: []
+        }));
+
+        render(<AIContext />);
+        await screen.findByRole('option', { name: 'Project A' });
+        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
+        await screen.findByRole('option', { name: 'Variant 1' });
+        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText("Codebase Path")).toHaveValue('/existing/path');
+        });
+
+        fireEvent.change(screen.getByLabelText("Project Description"), { target: { value: 'desc' } });
+        fireEvent.change(screen.getByLabelText("Codebase Path"), { target: { value: '/updated/path' } });
+        fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            const call = fetchMock.mock.calls.find(c =>
+                String(c[0]).includes('/api/variants/v1/context') && (c[1] as any)?.method === 'PUT'
+            );
+            expect(call).toBeDefined();
+            expect(JSON.parse((call![1] as any).body)).toMatchObject({ codebase_path: '/updated/path' });
+        });
     });
 
     test('shows error banner when variant load fails', async () => {
