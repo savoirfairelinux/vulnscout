@@ -71,7 +71,7 @@ function useRefreshProgressEffect(
     }, [progress, onRefreshComplete]);
 }
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -613,6 +613,22 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const setSelectedVariants = useCallback((values: string[]) => {
         setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
     }, [variants_list]);
+
+    // Distinct raw package ids across all vulnerabilities, sorted by display label.
+    // Currently selected packages are always included so a stale or absent
+    // preselection (e.g. from filterValue) can still be unchecked by the user.
+    const packages_list = useMemo(() => {
+        const pkgSet = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            vuln.packages_current.forEach(pkg => {
+                if (pkg !== '') pkgSet.add(pkg);
+            });
+        });
+        selectedPackages.forEach(pkg => {
+            if (pkg !== '') pkgSet.add(pkg);
+        });
+        return Array.from(pkgSet).sort((a, b) => formatPkgId(a).localeCompare(formatPkgId(b)));
+    }, [vulnerabilities, selectedPackages]);
 
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -1437,6 +1453,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setSelected={setSelectedStatuses}
             />
 
+            <FilterOption
+                label="Packages"
+                options={packages_list}
+                selected={selectedPackages}
+                setSelected={setSelectedPackages}
+                searchable
+                formatLabel={formatPkgId}
+            />
+
             {variants_list.length > 0 && (
                 <FilterOption
                     label="Variants"
@@ -1575,20 +1600,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 )}
             </div>
 
-            {/* Package indicator (no dropdown, just display) */}
-            {selectedPackages.length > 0 && (
-                <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
-                    <span className="font-semibold">Package:</span>
-                    <span>{selectedPackages.join(', ')}</span>
-                    <button
-                        className="ml-1 text-white hover:text-red-400"
-                        title="Clear package filter"
-                        onClick={() => setSelectedPackages([])}
-                    >
-                        <FontAwesomeIcon icon={faTimes} />
-                    </button>
-                </div>
-            )}
+            {/* Package selection is handled by the Packages filter dropdown above */}
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button

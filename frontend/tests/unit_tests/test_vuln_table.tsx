@@ -1014,6 +1014,91 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('filter by packages dropdown', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        expect(packagesBtn).toBeInTheDocument();
+        await user.click(packagesBtn);
+
+        // All packages from the vulnerabilities are listed as options
+        const pkgCheckbox = await screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
+        expect(await screen.getByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' })).toBeInTheDocument();
+        expect(await screen.getByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeInTheDocument();
+
+        // ACT - Select one package
+        await user.click(pkgCheckbox);
+
+        // ASSERT - Only the vulnerability affecting that package remains
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2024-56730/})).toBeNull();
+        }, { timeout: 5000 });
+
+        expect(await screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+    })
+
+    test('search inside packages filter narrows options', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+
+        // ACT - Search inside the dropdown
+        const pkgSearch = await screen.getByRole('searchbox', { name: /search packages/i });
+        await user.type(pkgSearch, 'linux');
+
+        // ASSERT - Only matching package options are shown
+        expect(await screen.getByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).toBeNull();
+        expect(screen.queryByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' })).toBeNull();
+
+        // No-match search shows an empty-state message
+        await user.clear(pkgSearch);
+        await user.type(pkgSearch, 'does-not-exist');
+        expect(await screen.findByText(/no match found/i)).toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeNull();
+    })
+
+    test('package from SBOM table show vulnerabilities is pre-checked', async () => {
+        // ARRANGE - Same props the SBOM table handoff produces (raw package id)
+        render(
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        const user = userEvent.setup();
+
+        // ASSERT - Table is filtered to the vulnerability of that package
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        });
+
+        // ASSERT - The package is checked inside the Packages filter dropdown
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        const pkgCheckbox = await screen.getByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' });
+        expect(pkgCheckbox).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).not.toBeChecked();
+
+        // Unchecking it restores the full table
+        await user.click(pkgCheckbox);
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+        });
+    })
+
     test('multiple source selection works', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -2931,7 +3016,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         }
     });
 
-    test('package filter indicator shown when filterLabel is Package', async () => {
+    test('packages filter dropdown reflects active Package filter prop', async () => {
         render(
             <TableVulnerabilities
                 vulnerabilities={vulnerabilities}
@@ -2943,15 +3028,20 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             />
         );
 
-        // Package indicator label should be visible
-        const packageLabel = await screen.findByText('Package:');
-        expect(packageLabel).toBeInTheDocument();
+        // Table is filtered down to the package's vulnerability
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
 
-        // The filter value appears in the indicator badge (may also appear in table cells)
-        expect(screen.getAllByText('aaabbbccc@1.0.0').length).toBeGreaterThan(0);
+        // The Packages dropdown shows the package as checked
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        expect(screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).toBeChecked();
     });
 
-    test('package filter indicator clear button removes the filter', async () => {
+    test('unchecking package in dropdown removes the filter', async () => {
         render(
             <TableVulnerabilities
                 vulnerabilities={vulnerabilities}
@@ -2964,14 +3054,18 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         );
 
         const user = userEvent.setup();
-        await screen.findByText('Package:');
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
 
-        // Click the times/clear button next to the package filter
-        const clearBtn = screen.getByTitle(/clear package filter/i);
-        await user.click(clearBtn);
+        // Uncheck the package inside the Packages dropdown
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        const pkgCheckbox = screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
+        await user.click(pkgCheckbox);
 
         await waitFor(() => {
-            expect(screen.queryByText('Package:')).not.toBeInTheDocument();
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
         });
     });
 
