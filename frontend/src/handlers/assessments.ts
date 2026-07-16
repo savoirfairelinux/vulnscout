@@ -209,13 +209,22 @@ class Assessments {
         return data;
     }
 
-    /** Approve a pending AI assessment group and return the promoted assessments. */
-    static async approveAi(assessmentId: string): Promise<Assessment[]> {
+    /** Approve a pending AI assessment group and return the promoted assessments.
+     *
+     * A grouped review row can span multiple variants, so pass every assessment
+     * id in the row via ``ids`` to approve them all. When omitted, the backend
+     * falls back to grouping by the addressed assessment's (vuln, variant). */
+    static async approveAi(assessmentId: string, ids?: string[]): Promise<Assessment[]> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
             window.location.href
         );
-        const response = await fetch(url.toString(), { method: "POST", mode: "cors" });
+        const response = await fetch(url.toString(), {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
+        });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);
@@ -225,13 +234,22 @@ class Assessments {
         return data.assessments.flatMap(asAssessment);
     }
 
-    /** Reject a pending AI assessment group and return the deleted assessment ids. */
-    static async rejectAi(assessmentId: string): Promise<string[]> {
+    /** Reject a pending AI assessment group and return the deleted assessment ids.
+     *
+     * A grouped review row can span multiple variants, so pass every assessment
+     * id in the row via ``ids`` to reject them all. When omitted, the backend
+     * falls back to grouping by the addressed assessment's (vuln, variant). */
+    static async rejectAi(assessmentId: string, ids?: string[]): Promise<string[]> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reject`,
             window.location.href
         );
-        const response = await fetch(url.toString(), { method: "POST", mode: "cors" });
+        const response = await fetch(url.toString(), {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
+        });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);

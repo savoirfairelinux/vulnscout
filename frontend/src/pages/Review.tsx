@@ -579,7 +579,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            await Assessments.approveAi(row._allIds[0]);
+            await Assessments.approveAi(row._allIds[0], row._allIds);
             await refreshAssessmentLists();
             showMessage('AI assessment approved!', 'success');
         } catch (e) {
@@ -589,7 +589,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
-            await Assessments.rejectAi(row._allIds[0]);
+            await Assessments.rejectAi(row._allIds[0], row._allIds);
             await refreshAssessmentLists();
             showMessage('AI assessment rejected.', 'success');
         } catch (e) {

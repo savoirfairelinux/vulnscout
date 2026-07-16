@@ -104,6 +104,41 @@ def _pending_ai_group(assessment: "DBAssessment") -> list["DBAssessment"]:
     ]
 
 
+def _resolve_ai_group(
+    assessment: "DBAssessment",
+) -> "tuple[list[DBAssessment], ResponseReturnValue | None]":
+    """Resolve the set of pending AI assessments an approve/reject applies to.
+
+    A grouped review row can span several variants (the front-end groups by
+    ``vuln_id`` + status/justification, deliberately ignoring ``variant_id``),
+    so the client may send an explicit ``ids`` list naming every assessment in
+    the row.  Only pending AI rows are eligible; any id that is missing or not a
+    pending AI assessment is rejected so a single request cannot silently
+    approve unrelated rows.  When no ``ids`` are provided we fall back to the
+    legacy (vuln_id, variant_id) grouping for the addressed row alone.
+    """
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get("ids")
+    if not raw_ids:
+        return _pending_ai_group(assessment), None
+    if not isinstance(raw_ids, list) or not all(isinstance(i, str) for i in raw_ids):
+        return [], ({"error": "'ids' must be a list of assessment id strings"}, 400)
+
+    group: list["DBAssessment"] = []
+    seen: set[str] = set()
+    for aid in raw_ids:
+        if aid in seen:
+            continue
+        seen.add(aid)
+        row = DBAssessment.get_by_id(aid)
+        if row is None:
+            return [], ({"error": f"Assessment not found: {aid}"}, 404)
+        if row.origin != "ai":
+            return [], ({"error": f"Not a pending AI assessment: {aid}"}, 400)
+        group.append(row)
+    return group, None
+
+
 def init_app(app: Flask) -> None:
 
     def _get_all_db_assessments() -> list["DBAssessment"]:
@@ -896,7 +931,9 @@ def init_app(app: Flask) -> None:
             return {"error": "Assessment not found"}, 404
         if existing.origin != "ai":
             return {"error": "Not a pending AI assessment"}, 400
-        group = _pending_ai_group(existing)
+        group, err = _resolve_ai_group(existing)
+        if err is not None:
+            return err
         approved = []
         with batch_session():
             for row in group:
@@ -911,7 +948,9 @@ def init_app(app: Flask) -> None:
             return {"error": "Assessment not found"}, 404
         if existing.origin != "ai":
             return {"error": "Not a pending AI assessment"}, 400
-        group = _pending_ai_group(existing)
+        group, err = _resolve_ai_group(existing)
+        if err is not None:
+            return err
         deleted_ids = [str(row.id) for row in group]
         with batch_session():
             for row in group:

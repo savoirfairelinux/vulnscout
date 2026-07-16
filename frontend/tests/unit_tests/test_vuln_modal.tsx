@@ -2232,7 +2232,7 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Approve/i }));
 
         await waitFor(() => {
-            expect(approveSpy).toHaveBeenCalledWith('assessment-ai-1');
+            expect(approveSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
         });
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
@@ -2252,7 +2252,7 @@ describe('Vulnerability Modal', () => {
         await user.click(screen.getByRole('button', { name: /Reject/i }));
 
         await waitFor(() => {
-            expect(rejectSpy).toHaveBeenCalledWith('assessment-ai-1');
+            expect(rejectSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
         });
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();

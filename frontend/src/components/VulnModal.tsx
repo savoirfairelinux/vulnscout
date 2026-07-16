@@ -546,7 +546,7 @@ type VariantScopedSnapshot = {
     const handleApproveAiAssessment = async (group: AssessmentGroup) => {
         const firstId = group.assessments[0].id;
         try {
-            const approved = await Assessments.approveAi(firstId);
+            const approved = await Assessments.approveAi(firstId, group.assessments.map(a => a.id));
             const approvedIds = new Set(group.assessments.map(a => a.id));
             const approvedById = new Map(approved.map(a => [a.id, a]));
 
@@ -578,7 +578,7 @@ type VariantScopedSnapshot = {
     const handleRejectAiAssessment = async (group: AssessmentGroup) => {
         const firstId = group.assessments[0].id;
         try {
-            await Assessments.rejectAi(firstId);
+            await Assessments.rejectAi(firstId, group.assessments.map(a => a.id));
             const rejectedIds = new Set(group.assessments.map(a => a.id));
             setAllVulnAssessments(prev => prev.filter(a => !rejectedIds.has(a.id)));
             showMessage("AI assessment rejected.", "success");
