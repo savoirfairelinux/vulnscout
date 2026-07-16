@@ -2173,7 +2173,7 @@ describe('Vulnerability Modal', () => {
         responses: []
     };
 
-    const renderWithPendingAiAssessment = (options?: { readOnly?: boolean; patchVuln?: jest.Mock }) => {
+    const renderWithPendingAiAssessment = (options?: { readOnly?: boolean; isEditing?: boolean; patchVuln?: jest.Mock }) => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             if (req.url.includes('/variants')) {
@@ -2202,6 +2202,7 @@ describe('Vulnerability Modal', () => {
             <VulnModal
                 vuln={{ ...vulnerability, assessments: [] }}
                 readOnly={options?.readOnly}
+                isEditing={options?.isEditing}
                 onClose={() => {}}
                 appendAssessment={() => {}}
                 appendCVSS={() => null}
@@ -2210,13 +2211,13 @@ describe('Vulnerability Modal', () => {
         );
     };
 
-    test('renders pending AI review panel with approve and reject actions', async () => {
+    test('renders pending AI review panel at all times, with approve and reject actions only in edit mode', async () => {
         renderWithPendingAiAssessment();
 
         expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
         expect(screen.getByText(/Pending review/i)).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Reject/i })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
     test('approving a pending AI review calls approveAi and removes the panel', async () => {
@@ -2225,7 +2226,7 @@ describe('Vulnerability Modal', () => {
             { ...pendingAiAssessment, origin: 'custom' }
         ]);
 
-        renderWithPendingAiAssessment({ patchVuln });
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
@@ -2245,7 +2246,7 @@ describe('Vulnerability Modal', () => {
     test('rejecting a pending AI review calls rejectAi and removes the panel', async () => {
         const rejectSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
 
-        renderWithPendingAiAssessment();
+        renderWithPendingAiAssessment({ isEditing: true });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
@@ -2261,17 +2262,10 @@ describe('Vulnerability Modal', () => {
         rejectSpy.mockRestore();
     });
 
-    test('readOnly mode hides the pending AI review panel', async () => {
+    test('readOnly mode still shows the pending AI review panel but without approve/reject actions', async () => {
         renderWithPendingAiAssessment({ readOnly: true });
 
-        expect(await screen.findByText('Variant Alpha')).toBeInTheDocument();
-        await waitFor(() => {
-            expect(fetchMock).toHaveBeenCalledWith(
-                expect.stringContaining(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`),
-                expect.objectContaining({ mode: 'cors' })
-            );
-        });
-        expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
