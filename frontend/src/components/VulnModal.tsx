@@ -1705,7 +1705,7 @@ type VariantScopedSnapshot = {
                                     </li>
                                 )}
 
-                                {!readOnly && pendingAiGroups.map(group => {
+                                {pendingAiGroups.map(group => {
                                     const firstAssess = group.assessments[0];
                                     return (
                                         <div
@@ -1721,6 +1721,7 @@ type VariantScopedSnapshot = {
                                                         return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
                                                     })()}
                                                 </span>
+                                                {isEditing && (
                                                 <div className="flex gap-2">
                                                     <button
                                                         type="button"
@@ -1737,6 +1738,7 @@ type VariantScopedSnapshot = {
                                                         Reject
                                                     </button>
                                                 </div>
+                                                )}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
                                                 {group.packages.map(pkg => {

@@ -10,7 +10,7 @@ import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -565,6 +565,38 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setRowToDelete(null);
     }, [rowToDelete, variantId, projectId, onAssessmentChanged, showMessage]);
 
+    /** Refetch both the handmade and AI-pending assessment lists (used after
+     * approving/rejecting a pending AI assessment from the AI Assessments
+     * table, since approving moves a row from one list to the other). */
+    const refreshAssessmentLists = useCallback(async () => {
+        const [reviewData, aiData] = await Promise.all([
+            Assessments.listReview(variantId, projectId),
+            Assessments.listReviewAi(variantId, projectId),
+        ]);
+        setAssessments(groupAssessments(reviewData));
+        setAiAssessments(groupAssessments(aiData));
+    }, [variantId, projectId]);
+
+    const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
+        try {
+            await Assessments.approveAi(row._allIds[0]);
+            await refreshAssessmentLists();
+            showMessage('AI assessment approved!', 'success');
+        } catch (e) {
+            showMessage(`Failed to approve AI assessment: ${String(e)}`, 'error');
+        }
+    }, [refreshAssessmentLists, showMessage]);
+
+    const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
+        try {
+            await Assessments.rejectAi(row._allIds[0]);
+            await refreshAssessmentLists();
+            showMessage('AI assessment rejected.', 'success');
+        } catch (e) {
+            showMessage(`Failed to reject AI assessment: ${String(e)}`, 'error');
+        }
+    }, [refreshAssessmentLists, showMessage]);
+
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
@@ -696,7 +728,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
             if (assessRes.ok) {
                 const assessData = await assessRes.json();
-                vuln.assessments = (assessData as any[]).flatMap(asAssessment);
+                vuln.assessments = (assessData as any[])
+                    .flatMap(asAssessment)
+                    .filter((a) => a.origin !== 'ai');
             }
             setModalVuln(vuln);
         } catch (err) {
@@ -908,7 +942,36 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }),
     ], [handleVulnClick, variantNames]);
 
-    const aiColumns = useMemo(() => columns.filter(c => c.id !== 'actions'), [columns]);
+    const aiActionsColumn = useMemo(() => columnHelper.display({
+        id: 'ai-actions',
+        header: () => <div className="flex items-center justify-center">Actions</div>,
+        size: 110,
+        cell: info => (
+            <div className="flex flex-wrap items-center justify-center gap-2 h-full">
+                <button
+                    onClick={() => handleApproveAiRow(info.row.original)}
+                    className="px-2 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-xs flex items-center gap-1"
+                    title="Approve AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                    Approve
+                </button>
+                <button
+                    onClick={() => handleRejectAiRow(info.row.original)}
+                    className="px-2 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-xs flex items-center gap-1"
+                    title="Reject AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
+                    Reject
+                </button>
+            </div>
+        ),
+    }), [handleApproveAiRow, handleRejectAiRow]);
+
+    const aiColumns = useMemo(
+        () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
+        [columns, aiActionsColumn]
+    );
 
     const teColumns = useMemo(() => [
         teColumnHelper.accessor("vuln_id", {
@@ -1411,7 +1474,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     appendAssessment={() => {}}
                     appendCVSS={() => null}
                     patchVuln={() => {}}
-                    onClose={() => setModalVuln(undefined)}
+                    onClose={() => {
+                        setModalVuln(undefined);
+                    }}
                 />
             )}
 
