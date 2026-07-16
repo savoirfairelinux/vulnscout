@@ -255,39 +255,21 @@ function AIContext() {
                 </div>
                 <div className={cardBody}>
 
-            {/* Selectors */}
-            <div className="flex gap-4 flex-wrap">
-                <div>
-                    <label className={labelClass} htmlFor="ai-project-select">Project</label>
-                    <select
-                        id="ai-project-select"
-                        aria-label="Project"
-                        className={selectClass}
-                        value={selectedProjectId}
-                        onChange={e => setSelectedProjectId(e.target.value)}
-                    >
-                        <option value="">— Select project —</option>
-                        {projects.map(p => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                    </select>
-                </div>
-                <div>
-                    <label className={labelClass} htmlFor="ai-variant-select">Variant</label>
-                    <select
-                        id="ai-variant-select"
-                        aria-label="Variant"
-                        className={selectClass}
-                        value={selectedVariantId}
-                        onChange={e => setSelectedVariantId(e.target.value)}
-                        disabled={!projectSelected || variants.length === 0}
-                    >
-                        <option value="">— Select variant —</option>
-                        {variants.map(v => (
-                            <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
-                    </select>
-                </div>
+            {/* Project selector */}
+            <div>
+                <label className={labelClass} htmlFor="ai-project-select">Project</label>
+                <select
+                    id="ai-project-select"
+                    aria-label="Project"
+                    className={selectClass}
+                    value={selectedProjectId}
+                    onChange={e => setSelectedProjectId(e.target.value)}
+                >
+                    <option value="">— Select project —</option>
+                    {projects.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                </select>
             </div>
 
             {/* Project Description */}
@@ -307,6 +289,24 @@ function AIContext() {
                 {validationErrors.description && (
                     <p className="text-red-500 text-xs mt-1">{validationErrors.description}</p>
                 )}
+            </div>
+
+            {/* Variant selector */}
+            <div>
+                <label className={labelClass} htmlFor="ai-variant-select">Variant</label>
+                <select
+                    id="ai-variant-select"
+                    aria-label="Variant"
+                    className={selectClass}
+                    value={selectedVariantId}
+                    onChange={e => setSelectedVariantId(e.target.value)}
+                    disabled={!projectSelected || variants.length === 0}
+                >
+                    <option value="">— Select variant —</option>
+                    {variants.map(v => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                    ))}
+                </select>
             </div>
 
             {/* Variant Description */}
