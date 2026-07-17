@@ -566,7 +566,7 @@ function TableGeneric<DataType> ({
             <div className="rounded-b-md flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
             <div className="flex items-center gap-2">
                 <span>
-                {pageIndex * itemsPerPage + 1}-
+                {filteredData.length === 0 ? 0 : pageIndex * itemsPerPage + 1}-
                 {Math.min((pageIndex + 1) * itemsPerPage, filteredData.length)} / {filteredData.length}
                 </span>
                 <span>- Results per page:</span>

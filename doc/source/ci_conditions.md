@@ -57,7 +57,7 @@ A condition is always expressed as either:
 Tokens can be:
 - `true`, `false`: mapped to the corresponding boolean values
 - `0`, `5`, `2.3`, `-1`, `.42`, `25%`: recognized as numbers. Percentages are divided by 100 internally.
-- any unrecognised token is treated as a string identifier. String tokens can start with `[a-zA-Z_]` and contain `[a-zA-Z0-9_-:]`.
+- any unrecognised token appearing on the **right-hand side** of `==` or `!=` is treated as a literal string (e.g. `id == CVE-2021-44228`). String tokens can start with `[a-zA-Z_]` and contain `[a-zA-Z0-9_-:]`. An unrecognised token anywhere else (left-hand side, ordering comparisons, boolean position) is an error, so typos in token names are caught instead of silently evaluating.
 
 **Example:** `cvss >= 5 or ignored`
 
@@ -82,7 +82,7 @@ The following tokens are evaluated per vulnerability:
 | `pending` | boolean | Whether the vulnerability has not yet been reviewed (status is pending). |
 | `new` | boolean | Whether the vulnerability was not present in the previous scan. |
 
-Any other token will be treated as a string. Strings are not quoted, can start with `[a-zA-Z]` or an underscore `_`, and can contain `[a-zA-Z0-9_-:]`.
+Any other token used on the right-hand side of `==` or `!=` will be treated as a string. Strings are not quoted, can start with `[a-zA-Z]` or an underscore `_`, and can contain `[a-zA-Z0-9_-:]`.
 
 ---
 

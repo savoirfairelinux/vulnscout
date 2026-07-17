@@ -46,6 +46,116 @@ def client(app):
     return app.test_client()
 
 
+def test_match_condition_returns_matching_vulnerability_ids(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss >= 7 and pending",
+        "items": [
+            {"id": "CVE-HIGH", "data": {"cvss": 8.1, "pending": True}},
+            {"id": "CVE-LOW", "data": {"cvss": 4.2, "pending": True}},
+            {"id": "CVE-FIXED", "data": {"cvss": 9.0, "pending": False}},
+        ],
+    })
+
+    assert response.status_code == 200
+    assert response.get_json() == {"matching_ids": ["CVE-HIGH"]}
+
+
+def test_match_condition_rejects_invalid_expression(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss >",
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1}}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"].startswith("Invalid match condition:")
+
+
+def test_match_condition_rejects_oversized_condition(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss > 7 " + "or cvss > 7 " * 200,
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1}}],
+    })
+
+    assert response.status_code == 400
+    assert "at most" in response.get_json()["error"]
+
+
+def test_match_condition_rejects_oversized_items_list(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss > 7",
+        "items": [{"id": f"CVE-{i}", "data": {}} for i in range(50_001)],
+    })
+
+    assert response.status_code == 400
+    assert "at most" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("condition", [
+    "id == CVE-TEST-0001",
+    "cvss > 8",
+    "cvss > -1",
+    "cvss >= 9.8",
+    "cvss_min < 8",
+    "cvss_min <= 7.5",
+    "epss == 50%",
+    "epss > .42",
+    "epss != 25%",
+    "effort == 3600",
+    "effort_min <= 1800",
+    "effort_max >= 7200",
+    "fixed",
+    "not ignored",
+    "affected or pending",
+    "fixed AND NOT ignored",
+    "not new",
+    "(cvss >= 9 or epss >= 50%) and affected",
+    "true == true",
+    "false == false",
+])
+def test_match_condition_supports_documented_language(client, condition):
+    item = {
+        "id": "CVE-TEST-0001",
+        "data": {
+            "id": "CVE-TEST-0001",
+            "cvss": 9.8,
+            "cvss_min": 7.5,
+            "epss": 0.5,
+            "effort": 3600,
+            "effort_min": 1800,
+            "effort_max": 7200,
+            "fixed": True,
+            "ignored": False,
+            "affected": True,
+            "pending": False,
+            "new": False,
+        },
+    }
+
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": condition,
+        "items": [item],
+    })
+
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"matching_ids": ["CVE-TEST-0001"]}
+
+
+@pytest.mark.parametrize("condition", [
+    "unknown == 2",
+    "true == true == true",
+    "true == true and",
+    "cvss > CVE-TEST-0001",
+])
+def test_match_condition_rejects_invalid_language(client, condition):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": condition,
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1, "fixed": False}}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"].startswith("Invalid match condition:")
+
+
 # Test PATCH vulnerability with CVSS data
 def test_patch_vulnerability_with_cvss(client, init_files):
     """Test updating a vulnerability with new CVSS data"""

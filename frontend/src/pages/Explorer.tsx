@@ -45,6 +45,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
+    const [filterVulnerabilityIds, setFilterVulnerabilityIds] = useState<string[] | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -230,7 +231,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setTab('vulnerabilities');
     }
 
-    function showVulnsForPackage(packageId: string) {
+    function showVulnsForPackage(packageId: string, matchingVulnerabilityIds?: string[]) {
+        setFilterVulnerabilityIds(matchingVulnerabilityIds);
         goToVulnsTabWithFilter("Package", packageId);
     }
 
@@ -241,6 +243,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
             setFilterLabel(undefined);
             setFilterValue(undefined);
+            setFilterVulnerabilityIds(undefined);
         }
         setTab(newTab);
     }
@@ -297,7 +300,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     appendCVSS={appendCVSS}
                     projectId={currentProjectId}
                 />}
-                {tab === 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' && <TablePackages packages={pkgs} vulnerabilities={vulns} onShowVulns={showVulnsForPackage} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
@@ -306,6 +309,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     vulnerabilities={vulns}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
+                    filterVulnerabilityIds={filterVulnerabilityIds}
                     variantId={currentVariantId}
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}

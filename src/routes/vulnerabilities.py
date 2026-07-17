@@ -34,6 +34,7 @@ from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers.conditions_parser import ConditionParser
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -49,6 +50,8 @@ from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+MATCH_CONDITION_MAX_LENGTH = 1_000
+MATCH_CONDITION_MAX_ITEMS = 50_000
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 
 
@@ -295,6 +298,40 @@ def init_app(app: Flask) -> None:
 
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
+
+    @app.post('/api/vulnerabilities/match-condition')
+    def match_condition() -> ResponseReturnValue:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return {"error": "Request body must be a JSON object"}, 400
+
+        condition = payload.get("condition")
+        items = payload.get("items")
+        if not isinstance(condition, str) or not condition.strip():
+            return {"error": "condition must be a non-empty string"}, 400
+        if len(condition) > MATCH_CONDITION_MAX_LENGTH:
+            return {"error": f"condition must be at most {MATCH_CONDITION_MAX_LENGTH} characters"}, 400
+        if not isinstance(items, list):
+            return {"error": "items must be a list"}, 400
+        if len(items) > MATCH_CONDITION_MAX_ITEMS:
+            return {"error": f"items must contain at most {MATCH_CONDITION_MAX_ITEMS} entries"}, 400
+
+        parser = ConditionParser()
+        matching_ids: list[str] = []
+        try:
+            for item in items:
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or not isinstance(item.get("data"), dict)
+                ):
+                    return {"error": "Each item must contain a string id and an object data field"}, 400
+                if parser.evaluate(condition, item["data"]):
+                    matching_ids.append(item["id"])
+        except Exception as exc:
+            return {"error": f"Invalid match condition: {exc}"}, 400
+
+        return jsonify({"matching_ids": matching_ids})
 
     @app.route('/api/vulnerabilities')
     def index_vulns() -> ResponseReturnValue:

@@ -37,6 +37,21 @@ def test_using_data(parser):
     assert parser.evaluate("a == 2", {"a": 3}) is False
     assert parser.evaluate("str1 == str2", {"str1": "test", "str2": "test"}) is True
     assert parser.evaluate("str1 == str2", {"str1": "foo", "str2": "bar"}) is False
+    assert parser.evaluate("id == CVE-2021-44228", {"id": "CVE-2021-44228"}) is True
+
+
+def test_unknown_token_only_allowed_as_comparison_rhs(parser):
+    """
+    GIVEN a condition parser
+    WHEN an unrecognised token appears outside the right-hand side of == / !=
+    THEN evaluation raises instead of silently treating it as a string
+    """
+    with pytest.raises(Exception):
+        parser.evaluate("CVE-2021-44228 == id", {"id": "CVE-2021-44228"})
+    with pytest.raises(Exception):
+        parser.evaluate("unknown_token", {"id": "CVE-2021-44228"})
+    with pytest.raises(Exception):
+        parser.evaluate("cvss > CVE-2021-44228", {"cvss": 9.8})
 
 
 def test_not_operation(parser):

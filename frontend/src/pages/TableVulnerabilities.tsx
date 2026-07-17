@@ -82,6 +82,7 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
+    filterVulnerabilityIds?: string[];
     variantId?: string;
     projectId?: string;
     /** Origin variant when compare mode is active */
@@ -348,7 +349,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -1207,7 +1208,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const dataToDisplay = useMemo(() => {
+        const allowedVulnerabilityIds = filterVulnerabilityIds ? new Set(filterVulnerabilityIds) : null;
         return vulnerabilities.filter((el) => {
+            if (allowedVulnerabilityIds && !allowedVulnerabilityIds.has(el.id)) return false;
             if (aiSuggestionFilter === 'has' && !aiSuggestionVulnIds.has(el.id)) return false;
             if (aiSuggestionFilter === 'no' && aiSuggestionVulnIds.has(el.id)) return false;
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
@@ -1310,7 +1313,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])

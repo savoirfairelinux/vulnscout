@@ -71,6 +71,14 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 
 - **Source**: restrict the table to packages originating from a specific SBOM source (e.g. a particular SPDX or CycloneDX document).
 
+### Match Condition
+
+The **Match condition** field in the toolbar filters packages using the same condition language as CI fail conditions (e.g. `cvss >= 7 and pending`). Press **Enter** or click **Apply** to evaluate the expression against every vulnerability in the current scope; the table is then reduced to packages that have at least one matching vulnerability. Clearing the field and applying again removes the filter. Whenever vulnerability data is refreshed the filter is cleared so it never shows stale results — apply the condition again to evaluate the fresh data.
+
+While a match condition is active, the **Show Vulnerabilities** button carries the matching set along: the Vulnerability Table opens pre-filtered to that package *and* to the vulnerabilities that satisfied the condition.
+
+See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
+
 ### Severity Toggle
 
 The **Severity** toggle switch in the toolbar adds a colour-coded severity tag next to each package's vulnerability count, showing the highest severity among the package's associated vulnerabilities. This gives an at-a-glance view of which packages carry the most critical exposure.

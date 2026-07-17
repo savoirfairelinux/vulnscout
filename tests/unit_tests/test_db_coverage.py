@@ -326,6 +326,21 @@ class TestVulnerabilityPersistFromTransient:
         assert vuln_record.description == "updated desc"
         assert vuln_record.status == "fixed"
 
+    def test_to_dict_derives_missing_severity_bounds_from_metrics(self, app, vuln_record):
+        from src.models.metrics import Metrics
+
+        vuln_record.severity_min_score = None
+        vuln_record.severity_max_score = None
+        vuln_record.metrics = [
+            Metrics(version="3.1", score=7.5, vector="CVSS:3.1/AV:N", author="nvd", origin="scanner"),
+            Metrics(version="3.1", score=9.8, vector="CVSS:3.1/AV:N", author="nvd", origin="scanner"),
+        ]
+
+        severity = vuln_record.to_dict()["severity"]
+
+        assert severity["min_score"] == 7.5
+        assert severity["max_score"] == 9.8
+
 
 # ===========================================================================
 # Assessment.from_vuln_assessment update path + full update

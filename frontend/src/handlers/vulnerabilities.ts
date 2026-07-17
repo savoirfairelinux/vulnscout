@@ -283,6 +283,48 @@ const asVulnerability = (data: any): Vulnerability | [] => {
 }
 
 class Vulnerabilities {
+    static async matchCondition(condition: string, vulnerabilities: Vulnerability[]): Promise<string[]> {
+        // Facts must stay aligned with the CI fail-condition evaluation in
+        // src/bin/cmd_process.py (evaluate_condition) so a given condition
+        // matches identically in the UI and in CI pipelines.
+        const items = vulnerabilities.map(vulnerability => {
+            const lastAssessment = vulnerability.assessments.reduce<Assessment | undefined>((latest, assessment) => {
+                if (!latest || new Date(assessment.timestamp).getTime() > new Date(latest.timestamp).getTime()) {
+                    return assessment;
+                }
+                return latest;
+            }, undefined);
+
+            return {
+                id: vulnerability.id,
+                data: {
+                    id: vulnerability.id,
+                    cvss: vulnerability.severity.max_score || vulnerability.severity.min_score || false,
+                    cvss_min: vulnerability.severity.min_score || vulnerability.severity.max_score || false,
+                    epss: vulnerability.epss.score || false,
+                    effort: vulnerability.effort.likely.total_seconds || false,
+                    effort_min: vulnerability.effort.optimistic.total_seconds || false,
+                    effort_max: vulnerability.effort.pessimistic.total_seconds || false,
+                    fixed: lastAssessment ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(lastAssessment.status) : false,
+                    ignored: lastAssessment ? ['not_affected', 'false_positive'].includes(lastAssessment.status) : false,
+                    affected: lastAssessment ? ['affected', 'exploitable'].includes(lastAssessment.status) : false,
+                    pending: lastAssessment ? ['under_investigation', 'in_triage'].includes(lastAssessment.status) : true,
+                    new: !lastAssessment,
+                },
+            };
+        });
+        const response = await fetch(import.meta.env.VITE_API_URL + '/api/vulnerabilities/match-condition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ condition, items }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Match condition failed (${response.status})`);
+        return Array.isArray(data.matching_ids)
+            ? data.matching_ids.filter((id: unknown): id is string => typeof id === 'string')
+            : [];
+    }
+
     static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
         url.searchParams.set('format', 'list');

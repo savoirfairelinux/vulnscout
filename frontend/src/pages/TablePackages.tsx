@@ -7,14 +7,18 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { extractSupplierName } from '../helpers/pkgId';
 import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames';
+import type { Vulnerability } from '../handlers/vulnerabilities';
+import Vulnerabilities from '../handlers/vulnerabilities';
+import MessageBanner from '../components/MessageBanner';
 
 type Props = {
     packages: Package[];
-    onShowVulns?: (packageId: string) => void;
+    vulnerabilities?: Vulnerability[];
+    onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -45,25 +49,31 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [matchCondition, setMatchCondition] = useState('');
+    const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
+    const [matchConditionError, setMatchConditionError] = useState('');
     // Track variants the user has explicitly unchecked. All variants (including
     // any discovered later) are considered selected unless present here, which
     // avoids a first-render flash where variant rows briefly disappear.
     const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
+    const [showMatchConditionHelper, setShowMatchConditionHelper] = useState(false);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
+    const matchConditionHelperButtonRef = useRef<HTMLButtonElement>(null);
+    const matchConditionHelperDropdownRef = useRef<HTMLDivElement>(null);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -123,16 +133,24 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             ) {
                 setShowSearchHelper(false);
             }
+            if (
+                matchConditionHelperDropdownRef.current &&
+                matchConditionHelperButtonRef.current &&
+                !matchConditionHelperDropdownRef.current.contains(event.target as Node) &&
+                !matchConditionHelperButtonRef.current.contains(event.target as Node)
+            ) {
+                setShowMatchConditionHelper(false);
+            }
         };
 
-        if (showShortcutHelper || showSearchHelper) {
+        if (showShortcutHelper || showSearchHelper || showMatchConditionHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper, showSearchHelper]);
+    }, [showShortcutHelper, showSearchHelper, showMatchConditionHelper]);
 
     const sources_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const source of pkg.source) {
@@ -156,6 +174,21 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     }, [hasSupplierInfo]);
 
     const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
+
+    const matchingVulnerabilityCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+        if (matchingVulnerabilityIds === null) return counts;
+
+        const matchingIds = new Set(matchingVulnerabilityIds);
+        vulnerabilities
+            .filter(vulnerability => matchingIds.has(vulnerability.id))
+            .forEach(vulnerability => {
+                vulnerability.packages_current.forEach(packageId => {
+                    counts.set(packageId, (counts.get(packageId) ?? 0) + 1);
+                });
+            });
+        return counts;
+    }, [matchingVulnerabilityIds, vulnerabilities]);
 
     const sbom_docs_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const doc of pkg.sbom_documents) {
@@ -191,12 +224,38 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
         setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
     }, [variants_list]);
 
+    // Matched IDs are a snapshot of a server-side evaluation; drop them whenever
+    // the vulnerability data changes so the filter never shows stale results.
+    useEffect(() => {
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
+    }, [vulnerabilities]);
+
+    const applyMatchCondition = async () => {
+        const condition = matchCondition.trim();
+        if (!condition) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError('');
+            return;
+        }
+        setMatchConditionError('');
+        try {
+            setMatchingVulnerabilityIds(await Vulnerabilities.matchCondition(condition, vulnerabilities));
+        } catch (error) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError(error instanceof Error ? error.message : 'Unable to evaluate match condition');
+        }
+    };
+
     const resetFilters = () => {
         setSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
         setSelectedVariants(variants_list);
+        setMatchCondition('');
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
         setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
@@ -291,9 +350,21 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 header: () => <div className="flex items-center justify-center">Vulnerabilities</div>,
                 cell: info => {
                 const value = info.getValue();
+                const matchedCount = matchingVulnerabilityCounts.get(info.row.original.id);
                 return (
                     <div className="flex items-center justify-center gap-1 h-full text-center">
-                    <span>{addVulnCounts(value.counts, [])}</span>
+                    {matchingVulnerabilityIds !== null ? (
+                        <span
+                            className="inline-flex items-center rounded-full bg-amber-200 px-2.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-700 dark:text-amber-100"
+                            title={`${matchedCount ?? 0} vulnerabilities match this condition`}
+                            aria-label={`${matchedCount ?? 0} vulnerabilities match this condition`}
+                        >
+                            <span className="mr-1.5 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800 dark:bg-amber-900 dark:text-amber-300">
+                                <FontAwesomeIcon icon={faC} aria-hidden="true" />
+                            </span>
+                            {matchedCount ?? 0}
+                        </span>
+                    ) : <span>{addVulnCounts(value.counts, [])}</span>}
                     {showSeverity && <SeverityTag severity={highestSeverity(value.severity, []).label} />}
                     </div>
                 );
@@ -373,7 +444,14 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     <div className="flex items-center justify-center h-full">
                         <button
                             className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
-                            onClick={() => onShowVulns?.(info.getValue().id)}
+                            onClick={() => {
+                                const packageId = info.getValue().id;
+                                if (matchingVulnerabilityIds) {
+                                    onShowVulns?.(packageId, matchingVulnerabilityIds);
+                                } else {
+                                    onShowVulns?.(packageId);
+                                }
+                            }}
                             >
                             Show Vulnerabilities
                         </button>
@@ -384,7 +462,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                 size: 10
             })
         ]
-    }, [showSeverity, onShowVulns]);
+    }, [showSeverity, onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -396,7 +474,15 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const filteredPackages = useMemo(() => {
+        let matchedPackageIds: Set<string> | null = null;
+        if (matchingVulnerabilityIds !== null) {
+            const matchingIds = new Set(matchingVulnerabilityIds);
+            matchedPackageIds = new Set(vulnerabilities
+                .filter(vulnerability => matchingIds.has(vulnerability.id))
+                .flatMap(vulnerability => vulnerability.packages_current));
+        }
         return packages.filter((el) => {
+            if (matchedPackageIds && !matchedPackageIds.has(el.id)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
                 return false;
             }
@@ -411,9 +497,17 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
             }
             return true;
         });
-    }, [packages, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
+    }, [packages, vulnerabilities, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
+        {matchConditionError && (
+            <MessageBanner
+                type="error"
+                message={matchConditionError}
+                isVisible={true}
+                onClose={() => setMatchConditionError('')}
+            />
+        )}
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
@@ -427,7 +521,7 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                     className="text-white hover:text-blue-300 transition-colors"
                     onClick={() => setShowSearchHelper(!showSearchHelper)}
                 >
-                    <FontAwesomeIcon icon={faCircleInfo} />
+                    <FontAwesomeIcon icon={faCircleQuestion} />
                 </button>
                 {showSearchHelper && (
                     <div
@@ -442,6 +536,46 @@ function TablePackages({ packages, onShowVulns }: Readonly<Props>) {
                                     <span className="text-gray-100">{item.description}</span>
                                 </div>
                             ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <label htmlFor="sbom-match-condition" className="ml-2">Match condition</label>
+            <input
+                id="sbom-match-condition"
+                value={matchCondition}
+                onChange={event => setMatchCondition(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Enter') void applyMatchCondition(); }}
+                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[260px]"
+                placeholder="cvss >= 7 and pending"
+                aria-invalid={matchConditionError ? 'true' : 'false'}
+            />
+            <div className="relative">
+                <button
+                    ref={matchConditionHelperButtonRef}
+                    aria-label="match condition help"
+                    aria-expanded={showMatchConditionHelper}
+                    aria-controls="match-condition-help"
+                    title="View match condition help"
+                    type="button"
+                    className="text-white hover:text-blue-300 transition-colors"
+                    onClick={() => setShowMatchConditionHelper(!showMatchConditionHelper)}
+                >
+                    <FontAwesomeIcon icon={faCircleInfo} />
+                </button>
+                {showMatchConditionHelper && (
+                    <div
+                        id="match-condition-help"
+                        ref={matchConditionHelperDropdownRef}
+                        className="absolute right-0 top-full mt-1 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-4 z-50 w-[360px] text-sm"
+                    >
+                        <h3 className="font-bold text-white mb-2">Match condition</h3>
+                        <div className="space-y-2 text-gray-100">
+                            <p>Filter packages by vulnerability facts. Press Enter to apply the condition.</p>
+                            <p><code className="text-cyan-300">field operator value</code> with <code className="text-cyan-300">==</code>, <code className="text-cyan-300">!=</code>, <code className="text-cyan-300">&lt;</code>, <code className="text-cyan-300">&gt;</code>, <code className="text-cyan-300">&lt;=</code>, or <code className="text-cyan-300">&gt;=</code>. Combine conditions with <code className="text-cyan-300">and</code>, <code className="text-cyan-300">or</code>, <code className="text-cyan-300">not</code>, and parentheses.</p>
+                            <p>Facts: <code className="text-cyan-300">cvss</code>, <code className="text-cyan-300">cvss_min</code>, <code className="text-cyan-300">epss</code>, <code className="text-cyan-300">effort</code>, <code className="text-cyan-300">effort_min</code>, <code className="text-cyan-300">effort_max</code>, <code className="text-cyan-300">fixed</code>, <code className="text-cyan-300">ignored</code>, <code className="text-cyan-300">affected</code>, <code className="text-cyan-300">pending</code>, and <code className="text-cyan-300">new</code>.</p>
+                            <p>Examples: <code className="text-cyan-300">cvss &gt;= 7 and pending</code>; <code className="text-cyan-300">epss &gt;= 10% or fixed</code>.</p>
                         </div>
                     </div>
                 )}
