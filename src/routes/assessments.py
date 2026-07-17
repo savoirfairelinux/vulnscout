@@ -51,13 +51,15 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
-def _resolve_package(pkg_string_id: str) -> "Package":
-    """Parse 'name@version::supplier' and look up or create the Package record."""
-    _parts = pkg_string_id.split("::", 1)
-    _base = _parts[0]
-    _supplier = _parts[1] if len(_parts) > 1 else ""
-    name, version = _base.rsplit("@", 1) if "@" in _base else (_base, "")
-    return Package.find_or_create(name, version, supplier=_supplier)
+def _resolve_package(pkg_string_id: str) -> "Package | None":
+    """Look up an existing Package for 'name@version::supplier'.
+
+    Returns ``None`` when no matching package exists. Writing an assessment must
+    never create a package, so callers block the write when this returns
+    ``None``. Matching is on name + version + supplier (with the same supplier
+    normalization used by :meth:`Package.find_or_create`).
+    """
+    return Package.get_by_string_id(pkg_string_id)
 
 
 def _create_assessment_record(
@@ -741,12 +743,27 @@ def init_app(app: Flask) -> None:
         # across multiple requests); fall back to server time.
         from datetime import datetime as _dt, timezone as _tz
         shared_timestamp = getattr(assessment, 'timestamp', None) or _dt.now(_tz.utc)
+
+        # Resolve every package up front. Assessments must never create a
+        # package: if any referenced package is missing, block the whole request.
+        resolved_packages: list[Package] = []
+        missing_packages: list[str] = []
+        for pkg_string_id in (assessment.packages or []):
+            db_pkg = _resolve_package(pkg_string_id)
+            if db_pkg is None:
+                missing_packages.append(pkg_string_id)
+            else:
+                resolved_packages.append(db_pkg)
+        if missing_packages:
+            return {
+                "error": "Package not found: " + ", ".join(missing_packages)
+                + ". Assessments can only be written for existing packages."
+            }, 400
+
         created = []
         try:
             with batch_session():
-                for pkg_string_id in (assessment.packages or []):
-                    # find_or_create handles both lookup and creation in one query
-                    db_pkg = _resolve_package(pkg_string_id)
+                for db_pkg in resolved_packages:
                     # Ensure vulnerability record exists before creating Finding (FK constraint)
                     DBVuln.get_or_create(vuln_id)
                     finding = Finding.get_or_create(db_pkg.id, vuln_id)
@@ -809,13 +826,32 @@ def init_app(app: Flask) -> None:
                 if not pkg_list:
                     errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
                     continue
+
+                # Assessments must never create a package. Resolve every package
+                # for this item up front; if any is missing, reject the whole
+                # item (other items in the batch are unaffected).
+                item_packages: list[Package] = []
+                item_missing: list[str] = []
                 for pkg_string_id in pkg_list:
-                    try:
-                        # Resolve package from cache first, then DB
-                        db_pkg = pkg_cache.get(pkg_string_id)
-                        if db_pkg is None:
-                            db_pkg = _resolve_package(pkg_string_id)
+                    db_pkg = pkg_cache.get(pkg_string_id)
+                    if db_pkg is None:
+                        db_pkg = _resolve_package(pkg_string_id)
+                        if db_pkg is not None:
                             pkg_cache[pkg_string_id] = db_pkg
+                    if db_pkg is None:
+                        item_missing.append(pkg_string_id)
+                    else:
+                        item_packages.append(db_pkg)
+                if item_missing:
+                    errors.append({
+                        "vuln_id": vuln_id,
+                        "error": "Package not found: " + ", ".join(item_missing)
+                        + ". Assessments can only be written for existing packages.",
+                    })
+                    continue
+
+                for db_pkg in item_packages:
+                    try:
                         # Ensure vulnerability record exists before creating Finding (FK constraint)
                         DBVuln.get_or_create(vuln_id)
                         # Resolve finding from cache first, then DB

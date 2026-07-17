@@ -35,7 +35,7 @@ def app(init_files):
             "OPENVEX_FILE": init_files["openvex"],
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
         })
-        setup_demo_db(application)
+        setup_demo_db(application, extra_packages=["test@1.0.0", "pkg@1.0.0", "pkg1@1.0.0", "pkg2@2.0.0", "pkg3@3.0.0"])
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
