@@ -463,6 +463,7 @@ Downloads a `.tar.gz` archive containing one OpenVEX JSON file per variant.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `author` | string | Author name in the export (default: `"Savoir-faire Linux"`) |
+| `variant_id` | UUID | Restrict export to a variant; repeat the parameter to select multiple variants |
 
 **Response:** Binary `.tar.gz` file (`Content-Type: application/gzip`).
 
@@ -472,9 +473,14 @@ Downloads a `.tar.gz` archive containing one OpenVEX JSON file per variant.
 POST /api/assessments/review/import
 ```
 
-Upload an OpenVEX `.json` or `.tar.gz` file. For `.tar.gz` archives, filenames inside must match variant names.
+Upload an OpenVEX `.json` or `.tar.gz` file. Pass a `variant_id` form field to import into a selected variant without relying on the uploaded filename. Without `variant_id`, JSON filenames must match variant names.
 
-**Request:** Multipart form-data with a `file` field.
+**Request:** Multipart form-data with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | OpenVEX `.json` document or `.tar.gz` archive (required) |
+| `variant_id` | UUID | Optional target variant. For archives, all contained OpenVEX documents are imported into this variant. |
 
 **Response:**
 ```json

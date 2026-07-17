@@ -379,8 +379,12 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[s
 def import_archive_bytes(
     file_bytes: bytes,
     variant_by_name: "dict[str, _Variant]",
+    target_variant_id: "_uuid.UUID | None" = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
     """Import OpenVEX assessments from a tar.gz archive (as raw bytes).
+
+    When ``target_variant_id`` is provided, every valid document is imported
+    into that variant and archive filenames are ignored.
 
     Returns
     -------
@@ -402,7 +406,8 @@ def import_archive_bytes(
         base = os.path.basename(member.name)
         variant_name = base[: -len(".json")]
         variant = variant_by_name.get(variant_name)
-        if variant is None:
+        variant_id = target_variant_id if target_variant_id is not None else (variant.id if variant else None)
+        if variant_id is None:
             total_errors.append({
                 "file": member.name,
                 "error": f"No variant found matching name '{variant_name}'",
@@ -426,7 +431,7 @@ def import_archive_bytes(
             continue
 
         variant_files_found += 1
-        c, e, s = import_statements(doc["statements"], variant.id)
+        c, e, s = import_statements(doc["statements"], variant_id)
         total_created.extend(c)
         total_errors.extend(e)
         total_skipped += s

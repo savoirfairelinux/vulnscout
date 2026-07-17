@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
@@ -86,12 +86,14 @@ jest.mock('../../src/helpers/exportJson', () => ({
     __esModule: true,
     ...jest.requireActual('../../src/helpers/exportJson'),
     downloadJson: jest.fn(),
+    downloadBlob: jest.fn(),
 }));
 
 import Review from '../../src/pages/Review';
-import { downloadJson } from '../../src/helpers/exportJson';
+import { downloadBlob, downloadJson } from '../../src/helpers/exportJson';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
+const mockedDownloadBlob = downloadBlob as jest.MockedFunction<typeof downloadBlob>;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1306,7 +1308,8 @@ describe('Review — import and export', () => {
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
-        await user.click(screen.getByText('Export Custom Data'));
+        await user.click(screen.getByText('Export'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
         await waitFor(() => {
             expect(mockedDownloadJson).toHaveBeenCalled();
         });
@@ -1318,7 +1321,8 @@ describe('Review — import and export', () => {
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
-        await user.click(screen.getByText('Export Custom Data'));
+        await user.click(screen.getByText('Export'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
         await waitFor(() => {
             expect(mockedDownloadJson).toHaveBeenCalled();
         });
@@ -1327,13 +1331,31 @@ describe('Review — import and export', () => {
         expect(filename).toContain('Variant_Alpha');
     });
 
+    test('exports selected variants as an OpenVEX archive', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Export'));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('radio', { name: /OpenVEX/ }));
+        await user.click(within(dialog).getByRole('button', { name: 'Export' }));
+
+        await waitFor(() => expect(mockedDownloadBlob).toHaveBeenCalled());
+        const exportCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export?'));
+        expect(String(exportCall?.[0])).toContain('variant_id=v1');
+        expect(String(exportCall?.[0])).toContain('variant_id=v2');
+    });
+
     test('reports an error when export fails', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { exportOk: false });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
-        await user.click(screen.getByText('Export Custom Data'));
+        await user.click(screen.getByText('Export'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
         await screen.findByText('Failed to export custom data.');
         expect(mockedDownloadJson).not.toHaveBeenCalled();
     });
@@ -1344,7 +1366,8 @@ describe('Review — import and export', () => {
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
-        await user.click(screen.getByText('Export Custom Data'));
+        await user.click(screen.getByText('Export'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
         await screen.findByText('Failed to export custom data.');
 
         await user.click(screen.getByRole('button', { name: 'Dismiss' }));
@@ -1381,6 +1404,28 @@ describe('Review — import and export', () => {
         fireEvent.change(fileInput(), { target: { files: [file] } });
 
         await screen.findByText('Assessments imported successfully!');
+    });
+
+    test('imports OpenVEX into every selected variant without using the filename', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Import'));
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Choose file' }));
+        const file = new File(
+            [JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })],
+            'does-not-match-a-variant.json',
+            { type: 'application/json' },
+        );
+        fireEvent.change(fileInput(), { target: { files: [file] } });
+
+        await screen.findByText('Assessments imported successfully!');
+        const importCalls = postCalls().filter(call => String(call[0]).endsWith('/api/assessments/review/import'));
+        expect(importCalls).toHaveLength(2);
+        const targetedVariantIds = importCalls.map(call => ((call[1] as RequestInit).body as FormData).get('variant_id'));
+        expect(targetedVariantIds).toEqual(expect.arrayContaining(['v1', 'v2']));
     });
 
     test('importing a legacy tar.gz file uses the legacy endpoint', async () => {

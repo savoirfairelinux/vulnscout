@@ -444,6 +444,33 @@ def test_export_contains_variant_name(client):
         assert "default.json" in names
 
 
+def test_export_selected_variants(client, app):
+    from src.extensions import db
+    from src.models import Variant
+
+    second_variant_id = uuid.uuid4()
+    with app.app_context():
+        db.session.add(Variant(id=second_variant_id, project_id=PROJECT_UUID, name="second"))
+        db.session.commit()
+
+    _create_handmade_assessment(client)
+    _create_handmade_assessment(client, variant_id=second_variant_id)
+    resp = client.get(
+        "/api/assessments/review/export"
+        f"?variant_id={VARIANT_UUID}&variant_id={second_variant_id}"
+    )
+
+    assert resp.status_code == 200
+    with tarfile.open(fileobj=io.BytesIO(resp.data), mode="r:gz") as tar:
+        assert {member.name for member in tar.getmembers()} == {"default.json", "second.json"}
+
+
+def test_export_selected_variants_invalid_uuid(client):
+    _create_handmade_assessment(client)
+    resp = client.get("/api/assessments/review/export?variant_id=not-a-uuid")
+    assert resp.status_code == 400
+
+
 def test_export_enriched_fields(client):
     """Exported statements should have enriched vulnerability and product fields."""
     _create_handmade_assessment(client)
@@ -526,6 +553,63 @@ def test_import_json_unknown_variant(client):
     )
     assert resp.status_code == 400
     assert "variant" in json.loads(resp.data)["error"].lower()
+
+
+def test_import_json_selected_variant_ignores_filename(client):
+    data = _make_openvex_json("unrelated", [])
+    resp = client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "unrelated.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "success"
+
+
+def test_import_json_selected_variant_not_found(client):
+    data = _make_openvex_json("unrelated", [])
+    resp = client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "unrelated.json"),
+            "variant_id": str(uuid.uuid4()),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 404
+    assert "variant" in json.loads(resp.data)["error"].lower()
+
+
+def test_import_archive_selected_variant_ignores_entry_names(client):
+    statements = [{
+        "vulnerability": {"name": "CVE-2020-35492"},
+        "products": [{"@id": "cairo@1.16.0"}],
+        "status": "affected",
+        "status_notes": "archive import",
+        "justification": "",
+        "impact_statement": "",
+        "action_statement": "",
+    }]
+    archive = _make_tar_gz({"no-such-variant.json": _make_openvex_json("no-such-variant", statements)})
+    resp = client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (archive, "export.tar.gz"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["imported"] >= 1
+    assert result["errors"] == []
 
 
 def test_import_json_invalid_json(client):

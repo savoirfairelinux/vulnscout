@@ -386,10 +386,24 @@ def init_app(app: Flask) -> None:
         """Export handmade (review) assessments as a .tar.gz containing one
         OpenVEX JSON file per variant (``<variant_name>.json``).
         Assessments without a variant are placed in ``unassigned.json``.
+
+        Repeat ``variant_id`` to export only the selected variants.
         """
         from ..models.variant import Variant as DBVariant
 
-        handmade = DBAssessment.get_by_origin()
+        raw_variant_ids = request.args.getlist('variant_id')
+        variant_ids: list[UUID] | None = None
+        if raw_variant_ids:
+            variant_ids = []
+            for raw_variant_id in raw_variant_ids:
+                variant_uuid, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+                if err:
+                    return err
+                if variant_uuid is None:
+                    return {"error": "Internal error"}, 500
+                variant_ids.append(variant_uuid)
+
+        handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
         if not handmade:
             return {"error": "No review assessments to export"}, 404
 
@@ -406,11 +420,12 @@ def init_app(app: Flask) -> None:
     def import_review_openvex() -> ResponseReturnValue:
         """Import OpenVEX review assessments from a ``.json`` or ``.tar.gz`` file.
 
-        * **Single .json file** – the filename (without extension) must match
-          an existing variant name in the database.
+        * **Single .json file** – the ``variant_id`` form field selects the
+          target. Without it, the filename (without extension) must match an
+          existing variant name.
         * **.tar.gz archive** – each ``.json`` entry inside must be named after
-          an existing variant.  Entries whose basename does not match a known
-          variant are reported as errors.
+          an existing variant unless ``variant_id`` forces all entries into a
+          selected target.
 
         Every file is validated as a well-formed OpenVEX document (must contain
         ``@context`` with ``openvex`` and a ``statements`` array).
@@ -428,24 +443,27 @@ def init_app(app: Flask) -> None:
 
         filename = uploaded.filename
 
-        # ---- build variant-name → variant lookup ----
-        all_variants = DBVariant.get_all()
-        # The export sanitises names (/ and \ replaced by _), so we store a
-        # sanitised-name → variant mapping for reliable round-trip matching.
-        variant_by_name: dict[str, "DBVariant"] = {}
-        for v in all_variants:
-            sanitised = v.name.replace("/", "_").replace("\\", "_")
-            variant_by_name[sanitised] = v
-            # Also keep the original name in case it differs
-            variant_by_name[v.name] = v
+        target_variant_id = None
+        raw_variant_id = request.form.get('variant_id')
+        if raw_variant_id:
+            target_variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+            if err:
+                return err
+            if target_variant_id is None:
+                return {"error": "Internal error"}, 500
+            if DBVariant.get_by_id(target_variant_id) is None:
+                return {"error": "Variant not found"}, 404
 
+        # ---- build variant-name → variant lookup ----
+        # The export sanitises names (/ and \ replaced by _), so the map keeps
+        # both sanitised and original names for reliable round-trip matching.
         variant_by_name = build_variant_by_name_map()
 
         # ---- .tar.gz handling ----
-        if filename.endswith(".tar.gz") or filename.endswith(".tgz"):
+        if filename.endswith((".tar.gz", ".tgz")):
             try:
                 total_created, total_errors, total_skipped, found = import_archive_bytes(
-                    uploaded.read(), variant_by_name
+                    uploaded.read(), variant_by_name, target_variant_id
                 )
             except ValueError as exc:
                 return {"error": str(exc)}, 400
@@ -468,7 +486,7 @@ def init_app(app: Flask) -> None:
             import json
             base = os.path.basename(filename)
             variant_name = base[: -len(".json")]
-            variant = variant_by_name.get(variant_name)
+            variant = DBVariant.get_by_id(target_variant_id) if target_variant_id else variant_by_name.get(variant_name)
             if variant is None:
                 return {
                     "error": f"No variant found matching filename '{variant_name}'. "
@@ -655,24 +673,26 @@ def init_app(app: Flask) -> None:
 
         Query parameters:
 
-        * ``variant_id`` – restrict to a single variant.
+        * ``variant_id`` – restrict to selected variants; may be repeated.
         * ``project_id`` – restrict to all variants in a project.
         """
-        variant_id = request.args.get('variant_id')
+        raw_variant_ids = request.args.getlist('variant_id')
         project_id = request.args.get('project_id')
 
         from ..models.project import Project as DBProject
 
         variant_ids: list[UUID] | None = None
         project_name = None
-        if variant_id:
-            vid, err = parse_uuid_or_400(variant_id, "variant_id")
-            if err:
-                return err
-            if vid is None:
-                return {"error": "Internal error"}, 500
-            variant_ids = [vid]
-            variant = DBVariant.get_by_id(vid)
+        if raw_variant_ids:
+            variant_ids = []
+            for raw_variant_id in raw_variant_ids:
+                vid, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+                if err:
+                    return err
+                if vid is None:
+                    return {"error": "Internal error"}, 500
+                variant_ids.append(vid)
+            variant = DBVariant.get_by_id(variant_ids[0])
             if variant and variant.project:
                 project_name = variant.project.name
         elif project_id:
