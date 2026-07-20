@@ -14,9 +14,10 @@ type Props = {
   projectId?: string;
   opened?: boolean;
   onOpen?: () => void;
+  onRequestDownload?: (exportType: string, url: string) => void;
 };
 
-function FileTag({ name, extension, variantId, projectId, opened, onOpen }: Readonly<Props>) {
+function FileTag({ name, extension, variantId, projectId, opened, onOpen, onRequestDownload }: Readonly<Props>) {
   const formats = extension.split(' | ');
 
   // SBOM/VEX exports are scoped to the current variant (preferred) or project.
@@ -48,6 +49,15 @@ function FileTag({ name, extension, variantId, projectId, opened, onOpen }: Read
                 name
               )}?ext=${encodeURIComponent(value)}${scopeQuery}`}
               target="_blank"
+              rel="noreferrer"
+              onClick={(event) => {
+                if (!onRequestDownload) return;
+                event.preventDefault();
+                onRequestDownload(
+                  `${name} (${documentTypes[value.toUpperCase()] ?? value.toUpperCase()})`,
+                  event.currentTarget.href,
+                );
+              }}
               className="flex items-left justify-left gap-2 rounded-xl bg-sfl-dark text-white py-2 px-4"
             >
               <FontAwesomeIcon icon={faDownload} />

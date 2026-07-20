@@ -434,7 +434,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
-                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} />}
+                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
                 {tab === 'transfer' && <Transfer projectId={currentProjectId} onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);

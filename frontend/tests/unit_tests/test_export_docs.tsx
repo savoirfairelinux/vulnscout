@@ -335,8 +335,14 @@ describe('Exports Page', () => {
         await screen.findByText(/Uploaded "logo\.png"/i);
     await screen.findByRole('button', { name: /logo\.png/i });
 
-        const [url, options] = fetchMock.mock.calls[1];
-        expect(url).toContain('/api/documents/assets');
+        const assetRequest = fetchMock.mock.calls.find(([request]) =>
+            (typeof request === 'string' ? request : request?.url ?? '')
+                .includes('/api/documents/assets')
+        );
+        expect(assetRequest).toBeDefined();
+        const [url, options] = assetRequest!;
+        expect(typeof url === 'string' ? url : url?.url)
+            .toContain('/api/documents/assets');
         expect(options?.method).toBe('POST');
         const body = options?.body as FormData;
         expect(body.get('file')).toBeInstanceOf(File);
@@ -473,5 +479,34 @@ describe('Exports Page', () => {
 
         expect(clickSpy).toHaveBeenCalled();
         clickSpy.mockRestore();
+    })
+
+    test('confirms the export scope before downloading', async () => {
+        fetchMock.resetMocks();
+        fetchMock
+            .mockResponseOnce(JSON.stringify([
+                { id: "report.adoc", category: ['built-in'], extension: "pdf" }
+            ]))
+            .mockResponseOnce(JSON.stringify([
+                { id: "project-1", name: "Demo Project" }
+            ]))
+            .mockResponseOnce(JSON.stringify([
+                { id: "variant-1", name: "v1", project_id: "project-1" },
+                { id: "variant-2", name: "v2", project_id: "project-1" }
+            ]));
+
+        render(<Exports projectId="project-1" variantIds={["variant-1", "variant-2"]} />);
+
+        const fileButton = await screen.findByText(/report\.adoc/i);
+        fireEvent.click(fileButton);
+        fireEvent.click(screen.getByRole('link', { name: /download pdf/i }));
+
+        expect(await screen.findByText(/this will export report\.adoc \(pdf document\) for the project demo project/i)).toBeInTheDocument();
+        expect(screen.getByText('v1')).toBeInTheDocument();
+        expect(screen.getByText('v2')).toBeInTheDocument();
+        expect(screen.getByText(/change the export scope using the selector/i)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByText(/this will export/i)).not.toBeInTheDocument();
     })
 });

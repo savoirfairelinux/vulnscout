@@ -6,6 +6,11 @@ import {
 import FileTag from "../components/FileTag";
 import PopupExportOptions from "../components/PopupExportOptions";
 import type { Options as PopupOptions } from "../components/PopupExportOptions";
+import ConfirmationModal from "../components/ConfirmationModal";
+import Projects from "../handlers/project";
+import type { Project } from "../handlers/project";
+import Variants from "../handlers/variant";
+import type { Variant } from "../handlers/variant";
 
 
 type ExportDoc = {
@@ -36,10 +41,24 @@ const asExportDoc = (data: any): ExportDoc | [] => {
 }
 
 
-function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; projectId?: string }>) {
+type PendingDownload = {
+  exportType: string;
+  url: string;
+};
+
+type Props = {
+  variantId?: string;
+  projectId?: string;
+  variantIds?: string[];
+};
+
+function Exports ({ variantId, projectId, variantIds }: Readonly<Props>) {
     const [tab, setTab] = useState<string>("all");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [variants, setVariants] = useState<Variant[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
+  const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
     const [popupOptions, setPopupOptions] = useState<PopupOptions|undefined>(undefined);
     const [dragActive, setDragActive] = useState<boolean>(false);
     const [uploading, setUploading] = useState<boolean>(false);
@@ -65,6 +84,18 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
     useEffect(() => {
         loadDocs();
     }, [loadDocs]);
+
+    useEffect(() => {
+      Projects.list().then(setProjects).catch(() => setProjects([]));
+    }, []);
+
+    useEffect(() => {
+      if (!projectId) {
+        setVariants([]);
+        return;
+      }
+      Variants.list(projectId).then(setVariants).catch(() => setVariants([]));
+    }, [projectId]);
 
     const uploadTemplate = useCallback((file: File) => {
         setUploadError(null);
@@ -144,6 +175,17 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
       (doc.category.includes(tab) || tab === "all")
       && (tab !== "custom" || !assetExtensions.has(doc.extension.toLowerCase()))
     );
+    const selectedVariantIds = variantIds?.length ? variantIds : (variantId ? [variantId] : []);
+    const scopedVariants = selectedVariantIds.length
+      ? variants.filter(variant => selectedVariantIds.includes(variant.id))
+      : variants;
+    const projectName = projects.find(project => project.id === projectId)?.name ?? 'the selected project';
+
+    const handleContinueDownload = () => {
+      if (!pendingDownload) return;
+      window.open(pendingDownload.url, '_blank', 'noopener,noreferrer');
+      setPendingDownload(null);
+    };
 
 
     return (<>
@@ -195,6 +237,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         projectId={projectId}
         opened={openDl === doc.id}
         onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
+        onRequestDownload={(exportType, url) => setPendingDownload({ exportType, url })}
       />
     ))}
 
@@ -286,6 +329,22 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
             extension={popupOptions.extension}
             onClose={() => {setPopupOptions(undefined)}}
         ></PopupExportOptions>}
+        <ConfirmationModal
+          isOpen={pendingDownload !== null}
+          title="Confirm export"
+          message=""
+          confirmText="Continue"
+          cancelText="Cancel"
+          onConfirm={handleContinueDownload}
+          onCancel={() => setPendingDownload(null)}
+        >
+          <p>This will export {pendingDownload?.exportType} for the project {projectName}.</p>
+          <p className="mt-4">It covers the following variants:</p>
+          <ul className="mt-2 list-disc list-inside text-left">
+            {scopedVariants.map(variant => <li key={variant.id}>{variant.name}</li>)}
+          </ul>
+          <p className="mt-4">You can change the export scope using the selector in the upper-right corner of the page.</p>
+        </ConfirmationModal>
     </>);
 }
 
