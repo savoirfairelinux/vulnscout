@@ -3458,4 +3458,65 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             expect(screen.queryByText('Search Syntax')).toBeNull();
         });
     });
+
+    // AI Suggestion radio filter (Any / Has / No). CVE-2010-1234 has a pending
+    // AI suggestion; CVE-2018-5678 does not.
+    const mockAiSuggestionsFor = (...vulnIds: string[]) => {
+        fetchMock.mockResponse(async (req) => {
+            if (req.url.includes('/api/assessments/review/ai')) {
+                return JSON.stringify(vulnIds.map((vuln_id, i) => ({
+                    id: `ai-${i}`,
+                    vuln_id,
+                    status: 'not_affected',
+                    origin: 'ai',
+                    timestamp: '2025-01-01T00:00:00Z',
+                })));
+            }
+            return JSON.stringify([]);
+        });
+    };
+
+    test('AI Suggestion filter defaults to "Any" and shows all vulnerabilities', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+
+        const anyRadio = await screen.findByRole('radio', { name: /^any$/i });
+        expect(anyRadio).toBeChecked();
+
+        expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(0);
+    });
+
+    test('AI Suggestion filter "Has AI suggestion" shows only vulns with a suggestion', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        const hasRadio = await screen.findByRole('radio', { name: /has ai suggestion/i });
+        await user.click(hasRadio);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+            expect(screen.queryByText('CVE-2018-5678')).toBeNull();
+        });
+    });
+
+    test('AI Suggestion filter "No AI suggestion" shows only vulns without a suggestion', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        const noRadio = await screen.findByRole('radio', { name: /no ai suggestion/i });
+        await user.click(noRadio);
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2010-1234')).toBeNull();
+            expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(0);
+        });
+    });
 });

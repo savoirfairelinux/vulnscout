@@ -391,7 +391,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showStatusHelper, setShowStatusHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
-    const [onlyAiSuggestions, setOnlyAiSuggestions] = useState<boolean>(false);
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useState<'any' | 'has' | 'no'>('any');
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1134,7 +1134,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
     const dataToDisplay = useMemo(() => {
         return vulnerabilities.filter((el) => {
-            if (onlyAiSuggestions && !aiSuggestionVulnIds.has(el.id)) return false;
+            if (aiSuggestionFilter === 'has' && !aiSuggestionVulnIds.has(el.id)) return false;
+            if (aiSuggestionFilter === 'no' && aiSuggestionVulnIds.has(el.id)) return false;
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length) {
                 const summary = getVulnerabilityStatusSummary(el);
@@ -1235,7 +1236,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, onlyAiSuggestions, aiSuggestionVulnIds]);
+    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -1277,6 +1278,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setEpssRange({ min: 0, max: 100 });
         setSelectedAttackVectors([]);
         setSelectedFirstScanDates([]);
+        setAiSuggestionFilter('any');
     }
 
     useEffect(() => {
@@ -1522,7 +1524,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     <FontAwesomeIcon icon={faFilter} />
                     More
-                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0 || onlyAiSuggestions) && (
+                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0 || aiSuggestionFilter !== 'any') && (
                         <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>
                     )}
                     <FontAwesomeIcon icon={faCaretDown} />
@@ -1624,18 +1626,27 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
                             {/* AI Suggestion Filter */}
                             <div>
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="checkbox"
-                                        id="ai-suggestion-filter"
-                                        checked={onlyAiSuggestions}
-                                        onChange={() => setOnlyAiSuggestions(!onlyAiSuggestions)}
-                                        className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
-                                    />
-                                    <label htmlFor="ai-suggestion-filter" className="text-sm font-semibold">Has AI suggestion</label>
+                                <div className="text-sm font-semibold mb-2">AI Suggestion</div>
+                                <div className="space-y-1 ml-2">
+                                    {([
+                                        { value: 'any', label: 'Any' },
+                                        { value: 'has', label: 'Has AI suggestion' },
+                                        { value: 'no', label: 'No AI suggestion' },
+                                    ] as const).map(opt => (
+                                        <label key={opt.value} className="flex items-center space-x-2">
+                                            <input
+                                                type="radio"
+                                                name="ai-suggestion-filter"
+                                                checked={aiSuggestionFilter === opt.value}
+                                                onChange={() => setAiSuggestionFilter(opt.value)}
+                                                className="form-radio text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                            />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    ))}
                                 </div>
-                                <p className="text-xs text-gray-400 mt-1 ml-6">
-                                    Only show vulnerabilities with a pending AI suggestion in the current scope.
+                                <p className="text-xs text-gray-400 mt-1 ml-2">
+                                    Filter by pending AI suggestion in the current scope.
                                 </p>
                             </div>
                         </div>
