@@ -127,18 +127,6 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         </button>
       </li>
 
-      {/* === Settings === */}
-      <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
-        <button
-          onClick={() => changeTab('settings')}
-          className="flex items-center h-full px-4 py-2"
-          aria-current={tab === 'settings' ? 'page' : undefined}
-        >
-          <FontAwesomeIcon icon={faGear} className="mr-1" />
-          Settings
-        </button>
-      </li>
-
       {/* Spacer */}
       <li className="grow"></li>
 
@@ -150,6 +138,19 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
           defaultScope={defaultScope}
           onApply={onApply}
         />
+      </li>
+
+      {/* === Settings === */}
+      <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
+        <button
+          type="button"
+          onClick={() => changeTab('settings')}
+          className="flex items-center h-full px-4 py-2"
+          aria-label="Settings"
+          aria-current={tab === 'settings' ? 'page' : undefined}
+        >
+          <FontAwesomeIcon icon={faGear} />
+        </button>
       </li>
 
       {/* === Divider === */}
