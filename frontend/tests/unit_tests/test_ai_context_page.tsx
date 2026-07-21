@@ -130,25 +130,6 @@ describe('AIContext page', () => {
         });
     });
 
-    test('file input is disabled when no variant selected', async () => {
-        // Projects list
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
-        // Variants.list('p1')
-        fetchMock.mockResponseOnce(JSON.stringify([]));
-        // getProject
-        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
-
-        render(<AIContext />);
-        await screen.findByRole('option', { name: 'Project A' });
-        const projectSelect = screen.getByLabelText("Project");
-        fireEvent.change(projectSelect, { target: { value: 'p1' } });
-
-        await waitFor(() => {
-            const fileInput = screen.getByLabelText(/supplemental files/i);
-            expect(fileInput).toBeDisabled();
-        });
-    });
-
     test('shows error banner when project load fails', async () => {
         fetchMock.mockRejectOnce(new Error('Network error'));
         render(<AIContext />);
@@ -244,101 +225,6 @@ describe('AIContext page', () => {
         });
     });
 
-    test('file upload adds file to list', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
-        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
-        // Context.get after variant select
-        fetchMock.mockResponseOnce(JSON.stringify({
-            project_id: 'p1', description: null, variant_id: 'v1',
-            variant_description: null, environment: null, threat_model: null,
-            risks: null, other_info: null, files: [],
-        }));
-        // upload response
-        fetchMock.mockResponseOnce(JSON.stringify({ id: 'f1', original_name: 'doc.pdf' }), { status: 201 });
-
-        render(<AIContext />);
-        await screen.findByRole('option', { name: 'Project A' });
-        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
-        await screen.findByRole('option', { name: 'Variant 1' });
-        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-
-        await waitFor(() => expect(screen.getByLabelText(/supplemental files/i)).not.toBeDisabled());
-
-        const file = new File(['content'], 'doc.pdf', { type: 'application/pdf' });
-        fireEvent.change(screen.getByLabelText(/supplemental files/i), { target: { files: [file] } });
-
-        await waitFor(() => {
-            expect(screen.getByText('doc.pdf')).toBeInTheDocument();
-        });
-    });
-
-    test('file upload sends and displays description', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
-        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
-        fetchMock.mockResponseOnce(JSON.stringify({
-            project_id: 'p1', description: null, variant_id: 'v1',
-            variant_description: null, environment: null, threat_model: null,
-            risks: null, other_info: null, files: [],
-        }));
-        fetchMock.mockResponseOnce(
-            JSON.stringify({ id: 'f1', original_name: 'doc.pdf', description: 'design notes' }),
-            { status: 201 }
-        );
-
-        render(<AIContext />);
-        await screen.findByRole('option', { name: 'Project A' });
-        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
-        await screen.findByRole('option', { name: 'Variant 1' });
-        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-
-        await waitFor(() => expect(screen.getByLabelText(/supplemental files/i)).not.toBeDisabled());
-
-        fireEvent.change(screen.getByLabelText("File Description"), { target: { value: 'design notes' } });
-        const file = new File(['content'], 'doc.pdf', { type: 'application/pdf' });
-        fireEvent.change(screen.getByLabelText(/supplemental files/i), { target: { files: [file] } });
-
-        await waitFor(() => {
-            expect(screen.getByText('design notes')).toBeInTheDocument();
-        });
-
-        const uploadCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/context/files') && c[1]?.method === 'POST');
-        expect(uploadCall).toBeDefined();
-        const body = uploadCall![1]!.body as FormData;
-        expect(body.get('description')).toBe('design notes');
-
-        // description input resets after successful upload
-        expect(screen.getByLabelText("File Description")).toHaveValue('');
-    });
-
-    test('delete file button removes file from list', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
-        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
-        fetchMock.mockResponseOnce(JSON.stringify({
-            project_id: 'p1', description: null, variant_id: 'v1',
-            variant_description: null, environment: null, threat_model: null,
-            risks: null, other_info: null,
-            files: [{ id: 'f1', original_name: 'existing.txt' }],
-        }));
-        // delete response
-        fetchMock.mockResponseOnce('', { status: 204 });
-
-        render(<AIContext />);
-        await screen.findByRole('option', { name: 'Project A' });
-        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
-        await screen.findByRole('option', { name: 'Variant 1' });
-        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-
-        await screen.findByText('existing.txt');
-        fireEvent.click(screen.getByRole('button', { name: /delete existing\.txt/i }));
-
-        await waitFor(() => {
-            expect(screen.queryByText('existing.txt')).not.toBeInTheDocument();
-        });
-    });
-
     test('clears variant fields when project changes', async () => {
         fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
         fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
@@ -389,7 +275,7 @@ describe('AIContext page', () => {
         fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
         await screen.findByRole('option', { name: 'Variant 1' });
         fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-        await waitFor(() => expect(screen.getByLabelText(/supplemental files/i)).not.toBeDisabled());
+        await waitFor(() => expect(screen.getByLabelText(/threat model/i)).not.toBeDisabled());
     }
 
     test('shows error banner when variant save fails', async () => {
@@ -406,61 +292,6 @@ describe('AIContext page', () => {
 
         await waitFor(() => {
             expect(screen.getByText(/variant context failed/i)).toBeInTheDocument();
-        });
-    });
-
-    test('shows file size error when file is too large', async () => {
-        setupWithVariant();
-        render(<AIContext />);
-        await selectProjectAndVariant();
-
-        const largeFile = new File([new ArrayBuffer(11 * 1024 * 1024)], 'big.bin');
-        Object.defineProperty(largeFile, 'size', { value: 11 * 1024 * 1024 });
-        fireEvent.change(screen.getByLabelText(/supplemental files/i), { target: { files: [largeFile] } });
-
-        await waitFor(() => {
-            expect(screen.getByText(/10 MB maximum/i)).toBeInTheDocument();
-        });
-    });
-
-    test('shows error when file upload fails', async () => {
-        setupWithVariant();
-        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Upload failed on server' }), { status: 500 });
-
-        render(<AIContext />);
-        await selectProjectAndVariant();
-
-        const file = new File(['data'], 'test.txt');
-        fireEvent.change(screen.getByLabelText(/supplemental files/i), { target: { files: [file] } });
-
-        await waitFor(() => {
-            expect(screen.getByText(/upload failed on server/i)).toBeInTheDocument();
-        });
-    });
-
-    test('shows error banner when delete file fails', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }]));
-        fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
-        fetchMock.mockResponseOnce(JSON.stringify({ project_id: 'p1', description: null }));
-        fetchMock.mockResponseOnce(JSON.stringify({
-            project_id: 'p1', description: null, variant_id: 'v1',
-            variant_description: null, environment: null, threat_model: null,
-            risks: null, other_info: null,
-            files: [{ id: 'f1', original_name: 'keep.txt' }],
-        }));
-        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Delete failed' }), { status: 500 });
-
-        render(<AIContext />);
-        await screen.findByRole('option', { name: 'Project A' });
-        fireEvent.change(screen.getByLabelText("Project"), { target: { value: 'p1' } });
-        await screen.findByRole('option', { name: 'Variant 1' });
-        fireEvent.change(screen.getByLabelText("Variant"), { target: { value: 'v1' } });
-        await screen.findByText('keep.txt');
-
-        fireEvent.click(screen.getByRole('button', { name: /delete keep\.txt/i }));
-
-        await waitFor(() => {
-            expect(screen.getByText(/delete failed/i)).toBeInTheDocument();
         });
     });
 
@@ -548,6 +379,99 @@ describe('AIContext page', () => {
 
         await waitFor(() => {
             expect(document.querySelector('[role="alert"]')).toBeInTheDocument();
+        });
+    });
+
+    describe('import / export', () => {
+        let createObjSpy: jest.Mock;
+        let clickSpy: jest.SpyInstance;
+
+        beforeEach(() => {
+            createObjSpy = jest.fn(() => 'blob:mock');
+            (global.URL as any).createObjectURL = createObjSpy;
+            (global.URL as any).revokeObjectURL = jest.fn();
+            clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        });
+
+        afterEach(() => {
+            clickSpy.mockRestore();
+        });
+
+        test('export menu loads variants and downloads selected', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            // Opening the menu lazily loads all variants
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'v1', name: 'Variant 1', project_id: 'p1' }]));
+            fireEvent.click(screen.getByRole('button', { name: /export context/i }));
+
+            const checkbox = await screen.findByLabelText('Export Project A / Variant 1');
+            fireEvent.click(checkbox);
+
+            // Export selected -> exportAll, filtered to the checked variant
+            fetchMock.mockResponseOnce(JSON.stringify([
+                {
+                    project_name: 'Project A', variant_name: 'Variant 1', description: 'd',
+                    variant_description: null, codebase_path: null, environment: null,
+                    threat_model: 't', risks: null, other_info: null,
+                },
+            ]));
+            fireEvent.click(screen.getByRole('button', { name: /export selected/i }));
+
+            await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+            expect(createObjSpy).toHaveBeenCalled();
+            const exportCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/api/context/export'));
+            expect(exportCall).toBeDefined();
+        });
+
+        test('export this variant is enabled after selecting a variant', async () => {
+            setupWithVariant();
+            render(<AIContext />);
+            await selectProjectAndVariant();
+            expect(screen.getByRole('button', { name: /export this variant/i })).not.toBeDisabled();
+        });
+
+        test('import shows summary banner and detail list', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            fetchMock.mockResponseOnce(JSON.stringify({
+                imported: [{ project_name: 'Project A', variant_name: 'Variant 1' }],
+                ignored: [{ project_name: 'X', variant_name: 'Y', reason: 'Project not found' }],
+                failed: [],
+            }));
+
+            const payload = JSON.stringify([
+                { project_name: 'Project A', variant_name: 'Variant 1', description: 'd', threat_model: 't' },
+            ]);
+            const file = new File([payload], 'ctx.json', { type: 'application/json' });
+            (file as any).text = () => Promise.resolve(payload);
+            fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+
+            await waitFor(() => expect(screen.getByText(/import complete/i)).toBeInTheDocument());
+            expect(screen.getByText(/Project not found/i)).toBeInTheDocument();
+
+            const importCall = fetchMock.mock.calls.find(
+                c => String(c[0]).includes('/api/context/import') && (c[1] as any)?.method === 'POST'
+            );
+            expect(importCall).toBeDefined();
+        });
+
+        test('import rejects a non-array JSON file', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            const file = new File([JSON.stringify({ not: 'an array' })], 'ctx.json', { type: 'application/json' });
+            (file as any).text = () => Promise.resolve(JSON.stringify({ not: 'an array' }));
+            fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+
+            await waitFor(() => expect(screen.getByText(/must contain a JSON array/i)).toBeInTheDocument());
+            // No import request should have been sent
+            const importCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/api/context/import'));
+            expect(importCall).toBeUndefined();
         });
     });
 });

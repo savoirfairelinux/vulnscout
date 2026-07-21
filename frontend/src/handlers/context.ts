@@ -14,18 +14,44 @@ type VariantContextData = {
 
 type VariantContext = VariantContextData & {
     variant_id: string;
-    files: ContextFile[];
 };
 
 type MergedContext = ProjectContext & VariantContext;
 
-type ContextFile = {
-    id: string;
-    original_name: string;
+/** One variant's full context, as used by the import/export file format. */
+type ContextEntry = {
+    project_name: string;
+    variant_name: string;
     description: string | null;
+    variant_description: string | null;
+    codebase_path: string | null;
+    environment: string | null;
+    threat_model: string | null;
+    risks: string | null;
+    other_info: string | null;
 };
 
-export type { ProjectContext, VariantContext, VariantContextData, MergedContext, ContextFile };
+type ImportResultItem = {
+    project_name: string | null;
+    variant_name: string | null;
+    reason?: string;
+};
+
+type ImportResult = {
+    imported: ImportResultItem[];
+    ignored: ImportResultItem[];
+    failed: ImportResultItem[];
+};
+
+export type {
+    ProjectContext,
+    VariantContext,
+    VariantContextData,
+    MergedContext,
+    ContextEntry,
+    ImportResultItem,
+    ImportResult,
+};
 
 class Context {
     static async get(projectId: string, variantId: string): Promise<MergedContext> {
@@ -76,30 +102,37 @@ class Context {
         return data as VariantContext;
     }
 
-    static async uploadFile(variantId: string, file: File, description?: string | null): Promise<ContextFile> {
-        const formData = new FormData();
-        formData.append('file', file);
-        if (description != null && description !== '') {
-            formData.append('description', description);
-        }
+    static async exportAll(): Promise<ContextEntry[]> {
         const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files`,
-            { mode: 'cors', method: 'POST', body: formData }
+            `${import.meta.env.VITE_API_URL}/api/context/export`,
+            { mode: 'cors' }
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to upload file (${res.status})`);
-        return data as ContextFile;
+        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
+        return data as ContextEntry[];
     }
 
-    static async deleteFile(variantId: string, fileId: string): Promise<void> {
+    static async exportVariant(projectId: string, variantId: string): Promise<ContextEntry[]> {
+        const url = `${import.meta.env.VITE_API_URL}/api/context/export?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
+        const res = await fetch(url, { mode: 'cors' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
+        return data as ContextEntry[];
+    }
+
+    static async importContext(entries: unknown): Promise<ImportResult> {
         const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files/${encodeURIComponent(fileId)}`,
-            { mode: 'cors', method: 'DELETE' }
+            `${import.meta.env.VITE_API_URL}/api/context/import`,
+            {
+                mode: 'cors',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(entries),
+            }
         );
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.error || `Failed to delete file (${res.status})`);
-        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to import context (${res.status})`);
+        return data as ImportResult;
     }
 }
 

@@ -147,6 +147,7 @@ class VariantContext(Base):
         threat_model: str | None = None,
         risks: str | None = None,
         other_info: str | None = None,
+        commit: bool = True,
     ) -> "VariantContext":
         existing = VariantContext.get_by_variant(variant_id)
         if existing is not None:
@@ -156,7 +157,8 @@ class VariantContext(Base):
             existing.threat_model = threat_model
             existing.risks = risks
             existing.other_info = other_info
-            db.session.commit()
+            if commit:
+                db.session.commit()
             return existing
         vc = VariantContext(
             variant_id=variant_id,
@@ -168,7 +170,8 @@ class VariantContext(Base):
             other_info=other_info,
         )
         db.session.add(vc)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return vc
 
 

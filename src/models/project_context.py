@@ -43,13 +43,17 @@ class ProjectContext(Base):
         ).scalar_one_or_none()
 
     @staticmethod
-    def upsert(project_id: uuid.UUID, description: str | None = None) -> "ProjectContext":
+    def upsert(
+        project_id: uuid.UUID, description: str | None = None, commit: bool = True
+    ) -> "ProjectContext":
         existing = ProjectContext.get_by_project(project_id)
         if existing is not None:
             existing.description = description
-            db.session.commit()
+            if commit:
+                db.session.commit()
             return existing
         pc = ProjectContext(project_id=project_id, description=description)
         db.session.add(pc)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return pc

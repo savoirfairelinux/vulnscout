@@ -34,10 +34,11 @@ class ProjectContextController:
     def upsert(
         project_id: uuid.UUID | str,
         description: Optional[str] = None,
+        commit: bool = True,
     ) -> ProjectContext:
         pid = ensure_uuid(project_id)
         ProjectContextController._get_project(pid)
-        return ProjectContext.upsert(pid, description=description)
+        return ProjectContext.upsert(pid, description=description, commit=commit)
 
     @staticmethod
     def serialize(pc: ProjectContext) -> dict:
@@ -72,6 +73,7 @@ class VariantContextController:
         threat_model: Optional[str] = None,
         risks: Optional[str] = None,
         other_info: Optional[str] = None,
+        commit: bool = True,
     ) -> VariantContext:
         vid = ensure_uuid(variant_id)
         VariantContextController._get_variant(vid)
@@ -83,6 +85,7 @@ class VariantContextController:
             threat_model=threat_model,
             risks=risks,
             other_info=other_info,
+            commit=commit,
         )
 
     @staticmethod

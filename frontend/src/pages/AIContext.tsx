@@ -1,14 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faXmark, faSpinner, faRobot, faBook } from "@fortawesome/free-solid-svg-icons";
+import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
+import Variants from "../handlers/variant";
 import Context from "../handlers/context";
-import type { ContextFile, VariantContextData } from "../handlers/context";
+import type { VariantContextData, ContextEntry, ImportResult } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import { useDocUrl } from "../helpers/useDocUrl";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
 async function fetchProjectList(): Promise<Project[]> {
@@ -44,6 +43,7 @@ function AIContext() {
     // Selectors
     const [projects, setProjects] = useState<Project[]>([]);
     const [variants, setVariants] = useState<Variant[]>([]);
+    const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
     const [selectedVariantId, setSelectedVariantId] = useState<string>('');
 
@@ -55,16 +55,21 @@ function AIContext() {
     const [threatModel, setThreatModel] = useState<string>('');
     const [risks, setRisks] = useState<string>('');
     const [otherInfo, setOtherInfo] = useState<string>('');
-    const [files, setFiles] = useState<ContextFile[]>([]);
-    const [fileDescription, setFileDescription] = useState<string>('');
 
     // UI state
     const [busy, setBusy] = useState(false);
-    const [fileError, setFileError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
     const [bannerMsg, setBannerMsg] = useState<string>('');
     const [bannerType, setBannerType] = useState<'success' | 'error'>('success');
     const [bannerVisible, setBannerVisible] = useState(false);
+
+    // Import/Export state
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [exportSelection, setExportSelection] = useState<Set<string>>(new Set());
+    const [ioBusy, setIoBusy] = useState(false);
+    const [importDetails, setImportDetails] = useState<ImportResult | null>(null);
+    const exportMenuRef = useRef<HTMLDivElement | null>(null);
+    const importInputRef = useRef<HTMLInputElement | null>(null);
 
     const showBanner = (msg: string, type: 'success' | 'error') => {
         setBannerMsg(msg);
@@ -82,6 +87,21 @@ function AIContext() {
      
     }, []);
 
+    // Load all variants for the export selector (lazily, when the menu first opens)
+    const [allVariantsLoaded, setAllVariantsLoaded] = useState(false);
+    const loadAllVariants = useCallback(() => {
+        if (allVariantsLoaded) return;
+        Variants.listAll().then(vs => {
+            if (unmountedRef.current) return;
+            setAllVariants(vs);
+            setAllVariantsLoaded(true);
+        }).catch((e: any) => {
+            // Leave allVariantsLoaded false so reopening the menu retries.
+            if (!unmountedRef.current)
+                showBanner(e?.message || "Failed to load variants for export.", "error");
+        });
+    }, [allVariantsLoaded]);
+
     const clearVariantFields = () => {
         setVariantDescription('');
         setCodebasePath('');
@@ -89,8 +109,6 @@ function AIContext() {
         setThreatModel('');
         setRisks('');
         setOtherInfo('');
-        setFiles([]);
-        setFileDescription('');
     };
 
     // Load variants when project changes
@@ -121,7 +139,6 @@ function AIContext() {
                     setThreatModel(ctx.threat_model ?? '');
                     setRisks(ctx.risks ?? '');
                     setOtherInfo(ctx.other_info ?? '');
-                    setFiles(ctx.files);
                 }).catch((e: any) => {
                     if (!unmountedRef.current)
                         showBanner(e?.message || "Failed to load context.", "error");
@@ -194,36 +211,114 @@ function AIContext() {
         }
     };
 
-    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        e.target.value = '';
-        if (!file || !selectedVariantId) return;
-        setFileError(null);
-        if (file.size > MAX_FILE_BYTES) {
-            setFileError("File exceeds the 10 MB maximum size.");
-            return;
-        }
-        const desc = fileDescription.trim() || null;
+    const handleFileDownload = (entries: ContextEntry[], filename: string) => {
+        const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const projectNameById = useCallback(
+        (projectId: string) => projects.find(p => p.id === projectId)?.name ?? '',
+        [projects]
+    );
+
+    const handleExportSelected = async () => {
+        if (ioBusy || exportSelection.size === 0) return;
+        setIoBusy(true);
         try {
-            const uploaded = await Context.uploadFile(selectedVariantId, file, desc);
-            if (!unmountedRef.current) {
-                setFiles(prev => [...prev, uploaded]);
-                setFileDescription('');
-            }
+            const all = await Context.exportAll();
+            // Keep only entries whose variant is checked in the selector.
+            const keys = new Set(
+                allVariants
+                    .filter(v => exportSelection.has(v.id))
+                    .map(v => `${projectNameById(v.project_id)}\u0000${v.name}`)
+            );
+            const chosen = all.filter(e => keys.has(`${e.project_name}\u0000${e.variant_name}`));
+            handleFileDownload(chosen, "vulnscout-context.json");
+            if (!unmountedRef.current) setExportMenuOpen(false);
         } catch (e: any) {
-            if (!unmountedRef.current) setFileError(e?.message || "Upload failed.");
+            if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");
+        } finally {
+            if (!unmountedRef.current) setIoBusy(false);
         }
     };
 
-    const handleDeleteFile = async (fileId: string) => {
-        if (!selectedVariantId) return;
+    const handleExportVariant = async () => {
+        if (ioBusy || !selectedProjectId || !selectedVariantId) return;
+        setIoBusy(true);
         try {
-            await Context.deleteFile(selectedVariantId, fileId);
-            if (!unmountedRef.current) setFiles(prev => prev.filter(f => f.id !== fileId));
+            const entries = await Context.exportVariant(selectedProjectId, selectedVariantId);
+            const variantName = variants.find(v => v.id === selectedVariantId)?.name ?? "variant";
+            handleFileDownload(entries, `vulnscout-context-${variantName}.json`);
         } catch (e: any) {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to delete file.", "error");
+            if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");
+        } finally {
+            if (!unmountedRef.current) setIoBusy(false);
         }
     };
+
+    const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file || ioBusy) return;
+        setIoBusy(true);
+        setImportDetails(null);
+        try {
+            const text = await file.text();
+            let parsed: unknown;
+            try {
+                parsed = JSON.parse(text);
+            } catch {
+                throw new Error("The selected file is not valid JSON.");
+            }
+            if (!Array.isArray(parsed)) {
+                throw new Error("The file must contain a JSON array of context entries.");
+            }
+            const result = await Context.importContext(parsed);
+            if (unmountedRef.current) return;
+            setImportDetails(result);
+            const total = result.imported.length + result.ignored.length + result.failed.length;
+            const msg =
+                `Import complete: ${result.imported.length} of ${total} imported, ` +
+                `${result.ignored.length} ignored, ${result.failed.length} failed.`;
+            showBanner(msg, result.failed.length > 0 ? "error" : "success");
+            loadContext();
+        } catch (err: any) {
+            if (!unmountedRef.current) showBanner(err?.message || "Import failed.", "error");
+        } finally {
+            if (!unmountedRef.current) setIoBusy(false);
+        }
+    };
+
+    const toggleExportVariant = (variantId: string) => {
+        setExportSelection(prev => {
+            const next = new Set(prev);
+            if (next.has(variantId)) next.delete(variantId);
+            else next.add(variantId);
+            return next;
+        });
+    };
+
+    const selectAllExport = () => setExportSelection(new Set(allVariants.map(v => v.id)));
+    const clearAllExport = () => setExportSelection(new Set());
+
+    // Close the export menu on outside click
+    useEffect(() => {
+        if (!exportMenuOpen) return;
+        const onClick = (ev: MouseEvent) => {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(ev.target as Node)) {
+                setExportMenuOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", onClick);
+        return () => document.removeEventListener("mousedown", onClick);
+    }, [exportMenuOpen]);
 
     const variantSelected = Boolean(selectedVariantId);
     const projectSelected = Boolean(selectedProjectId);
@@ -235,6 +330,8 @@ function AIContext() {
         "rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
     const btnPrimary =
         "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
+    const btnSecondary =
+        "px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 focus:ring-4 focus:outline-none focus:ring-slate-500 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
     const cardHeader =
         "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
     const cardBody =
@@ -261,7 +358,116 @@ function AIContext() {
                     >
                     <FontAwesomeIcon icon={faBook} size='lg' />
                 </a>
+
+                {/* Import / Export controls */}
+                <div className="ml-auto flex items-center gap-2">
+                    <div className="relative" ref={exportMenuRef}>
+                        <button
+                            type="button"
+                            aria-label="Export context"
+                            aria-haspopup="true"
+                            aria-expanded={exportMenuOpen}
+                            onClick={() => setExportMenuOpen(o => { const next = !o; if (next) loadAllVariants(); return next; })}
+                            disabled={ioBusy}
+                            className={btnSecondary + " flex items-center gap-2"}
+                        >
+                            <FontAwesomeIcon icon={faFileExport} />
+                            Export
+                            <FontAwesomeIcon icon={faChevronDown} size="xs" />
+                        </button>
+                        {exportMenuOpen && (
+                            <div
+                                role="menu"
+                                className="absolute right-0 z-20 mt-2 w-72 max-h-96 overflow-auto rounded-lg bg-slate-800 border border-slate-600 shadow-xl shadow-black/40 p-3"
+                            >
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-sm font-semibold text-white">Select variants</span>
+                                    <div className="flex gap-2 text-xs">
+                                        <button type="button" onClick={selectAllExport} className="text-cyan-400 hover:text-cyan-300">All</button>
+                                        <button type="button" onClick={clearAllExport} className="text-cyan-400 hover:text-cyan-300">None</button>
+                                    </div>
+                                </div>
+                                {projects.length === 0 && (
+                                    <p className="text-xs text-zinc-400">No projects available.</p>
+                                )}
+                                {projects.map(p => {
+                                    const pv = allVariants.filter(v => v.project_id === p.id);
+                                    return (
+                                        <div key={p.id} className="mb-2">
+                                            <p className="text-xs font-semibold text-zinc-300 mb-1">{p.name}</p>
+                                            {pv.length === 0 ? (
+                                                <p className="text-xs text-zinc-500 pl-2">No variants</p>
+                                            ) : pv.map(v => (
+                                                <label key={v.id} className="flex items-center gap-2 pl-2 py-0.5 text-sm text-zinc-200 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={`Export ${p.name} / ${v.name}`}
+                                                        checked={exportSelection.has(v.id)}
+                                                        onChange={() => toggleExportVariant(v.id)}
+                                                    />
+                                                    {v.name}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                                <button
+                                    type="button"
+                                    onClick={handleExportSelected}
+                                    disabled={ioBusy || exportSelection.size === 0}
+                                    className={btnPrimary + " w-full mt-2 flex items-center justify-center gap-2"}
+                                >
+                                    {ioBusy && <FontAwesomeIcon icon={faSpinner} spin />}
+                                    Export selected ({exportSelection.size})
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    <button
+                        type="button"
+                        aria-label="Import context"
+                        onClick={() => importInputRef.current?.click()}
+                        disabled={ioBusy}
+                        className={btnSecondary + " flex items-center gap-2"}
+                    >
+                        <FontAwesomeIcon icon={faFileImport} />
+                        Import
+                    </button>
+                    <input
+                        ref={importInputRef}
+                        type="file"
+                        accept="application/json,.json"
+                        aria-label="Import context file"
+                        className="hidden"
+                        onChange={handleImportFile}
+                    />
+                </div>
             </div>
+
+            {importDetails && (importDetails.ignored.length > 0 || importDetails.failed.length > 0) && (
+                <div className="rounded-lg bg-slate-800/60 border border-slate-600 p-3 text-sm">
+                    {importDetails.failed.length > 0 && (
+                        <div className="mb-2">
+                            <p className="font-semibold text-red-400">Failed ({importDetails.failed.length})</p>
+                            <ul className="list-disc list-inside text-zinc-300">
+                                {importDetails.failed.map((it, i) => (
+                                    <li key={`f-${i}`}>{it.project_name ?? '—'} / {it.variant_name ?? '—'}: {it.reason}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    {importDetails.ignored.length > 0 && (
+                        <div>
+                            <p className="font-semibold text-yellow-400">Ignored ({importDetails.ignored.length})</p>
+                            <ul className="list-disc list-inside text-zinc-300">
+                                {importDetails.ignored.map((it, i) => (
+                                    <li key={`i-${i}`}>{it.project_name ?? '—'} / {it.variant_name ?? '—'}: {it.reason}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </div>
+            )}
             <div>
                 <div className={cardHeader}>
                     <FontAwesomeIcon icon={faRobot} className="text-cyan-400" />
@@ -415,52 +621,18 @@ function AIContext() {
                 />
             </div>
 
-            {/* Supplemental Files */}
-            <div>
-                <label className={labelClass} htmlFor="ai-files">
-                    Supplemental Files <span className="text-neutral-400 font-normal">(10 MB each)</span>
-                </label>
-                <input
-                    id="ai-file-description"
-                    aria-label="File Description"
-                    type="text"
-                    className={inputClass + " mb-2"}
-                    value={fileDescription}
-                    onChange={e => setFileDescription(e.target.value)}
-                    disabled={!variantSelected}
-                    placeholder={variantSelected ? "Optional description for the next uploaded file" : "Select a variant to enable"}
-                />
-                <input
-                    id="ai-files"
-                    aria-label="Supplemental Files"
-                    type="file"
-                    className="text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={!variantSelected}
-                    onChange={handleFileChange}
-                />
-                {fileError && <p className="text-red-500 text-xs mt-1">{fileError}</p>}
-                {files.length > 0 && (
-                    <ul className="mt-2 flex flex-col gap-2">
-                        {files.map(f => (
-                            <li key={f.id} className="flex items-start gap-1 bg-slate-900/60 border border-slate-600 rounded px-2 py-1.5 text-sm text-white">
-                                <div className="flex flex-col">
-                                    <span>{f.original_name}</span>
-                                    {f.description && (
-                                        <span className="text-xs text-zinc-400">{f.description}</span>
-                                    )}
-                                </div>
-                                <button
-                                    type="button"
-                                    aria-label={`Delete ${f.original_name}`}
-                                    onClick={() => handleDeleteFile(f.id)}
-                                    className="ml-auto text-zinc-400 hover:text-red-400"
-                                >
-                                    <FontAwesomeIcon icon={faXmark} />
-                                </button>
-                            </li>
-                        ))}
-                    </ul>
-                )}
+                {/* Export this variant */}
+                <div>
+                    <button
+                        type="button"
+                        aria-label="Export this variant"
+                        onClick={handleExportVariant}
+                        disabled={!variantSelected || ioBusy}
+                        className={btnSecondary + " flex items-center gap-2"}
+                    >
+                        <FontAwesomeIcon icon={faFileExport} />
+                        Export this variant
+                    </button>
                 </div>
 
                 {/* Save */}
