@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faXmark, faSpinner, faRobot } from "@fortawesome/free-solid-svg-icons";
+import { faXmark, faSpinner, faRobot, faBook } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import Context from "../handlers/context";
 import type { ContextFile, VariantContextData } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
+import { useDocUrl } from "../helpers/useDocUrl";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -37,6 +38,8 @@ function AIContext() {
         unmountedRef.current = false;
         return () => { unmountedRef.current = true; };
     }, []);
+
+    const docUrl = useDocUrl("ai-assessments.html");
 
     // Selectors
     const [projects, setProjects] = useState<Project[]>([]);
@@ -246,8 +249,19 @@ function AIContext() {
                 onClose={() => setBannerVisible(false)}
             />
 
-            <h1 className="text-3xl font-bold text-white mb-2">AI Assessment Context</h1>
-
+            <div className="flex items-center justify-start gap-4">
+                <h1 className="text-3xl font-bold text-white mb-2">AI Assessment Context</h1>
+                <a
+                    href={docUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="documentation"
+                    title="Open documentation"
+                    className="hover:text-blue-400 transition-colors"
+                    >
+                    <FontAwesomeIcon icon={faBook} size='lg' />
+                </a>
+            </div>
             <div>
                 <div className={cardHeader}>
                     <FontAwesomeIcon icon={faRobot} className="text-cyan-400" />
