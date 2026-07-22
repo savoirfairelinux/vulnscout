@@ -410,13 +410,17 @@ describe('AIContext page', () => {
             fireEvent.click(checkbox);
 
             // Export selected -> exportAll, filtered to the checked variant
-            fetchMock.mockResponseOnce(JSON.stringify([
-                {
-                    project_name: 'Project A', variant_name: 'Variant 1', description: 'd',
-                    variant_description: null, codebase_path: null, environment: null,
-                    threat_model: 't', risks: null, other_info: null,
-                },
-            ]));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                version: '1.0',
+                exported_at: '2026-07-22T00:00:00+00:00',
+                entries: [
+                    {
+                        project_name: 'Project A', variant_name: 'Variant 1', description: 'd',
+                        variant_description: null, codebase_path: null, environment: null,
+                        threat_model: 't', risks: null, other_info: null,
+                    },
+                ],
+            }));
             fireEvent.click(screen.getByRole('button', { name: /export selected/i }));
 
             await waitFor(() => expect(clickSpy).toHaveBeenCalled());
@@ -459,19 +463,60 @@ describe('AIContext page', () => {
             expect(importCall).toBeDefined();
         });
 
-        test('import rejects a non-array JSON file', async () => {
+        test('import forwards an envelope object to the backend', async () => {
             fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
             render(<AIContext />);
             await screen.findByRole('option', { name: 'Project A' });
 
-            const file = new File([JSON.stringify({ not: 'an array' })], 'ctx.json', { type: 'application/json' });
-            (file as any).text = () => Promise.resolve(JSON.stringify({ not: 'an array' }));
+            fetchMock.mockResponseOnce(JSON.stringify({
+                imported: [{ project_name: 'Project A', variant_name: 'Variant 1' }],
+                ignored: [],
+                failed: [],
+            }));
+
+            const envelope = JSON.stringify({
+                version: '1.0',
+                exported_at: '2026-07-22T00:00:00+00:00',
+                entries: [
+                    { project_name: 'Project A', variant_name: 'Variant 1', description: 'd', threat_model: 't' },
+                ],
+            });
+            const file = new File([envelope], 'ctx.json', { type: 'application/json' });
+            (file as any).text = () => Promise.resolve(envelope);
             fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
 
-            await waitFor(() => expect(screen.getByText(/must contain a JSON array/i)).toBeInTheDocument());
+            await waitFor(() => expect(screen.getByText(/import complete/i)).toBeInTheDocument());
+            const importCall = fetchMock.mock.calls.find(
+                c => String(c[0]).includes('/api/context/import') && (c[1] as any)?.method === 'POST'
+            );
+            expect(importCall).toBeDefined();
+            expect(JSON.parse((importCall![1] as any).body).version).toBe('1.0');
+        });
+
+        test('import rejects a file that is not valid JSON', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            const file = new File(['not json'], 'ctx.json', { type: 'application/json' });
+            (file as any).text = () => Promise.resolve('not json');
+            fireEvent.change(screen.getByLabelText('Import context file'), { target: { files: [file] } });
+
+            await waitFor(() => expect(screen.getByText(/not valid JSON/i)).toBeInTheDocument());
             // No import request should have been sent
             const importCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/api/context/import'));
             expect(importCall).toBeUndefined();
+        });
+
+        test('import help tooltip toggles on the question-mark button', async () => {
+            fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
+            render(<AIContext />);
+            await screen.findByRole('option', { name: 'Project A' });
+
+            expect(screen.queryByRole('tooltip')).toBeNull();
+            fireEvent.click(screen.getByRole('button', { name: /import help/i }));
+            const tip = await screen.findByRole('tooltip');
+            expect(tip).toHaveTextContent(/overwrites the existing context/i);
         });
     });
 });

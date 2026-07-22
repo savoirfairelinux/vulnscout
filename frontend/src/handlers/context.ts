@@ -43,6 +43,13 @@ type ImportResult = {
     failed: ImportResultItem[];
 };
 
+/** Versioned export envelope produced by the backend. */
+type ContextExport = {
+    version: string;
+    exported_at: string;
+    entries: ContextEntry[];
+};
+
 export type {
     ProjectContext,
     VariantContext,
@@ -51,6 +58,7 @@ export type {
     ContextEntry,
     ImportResultItem,
     ImportResult,
+    ContextExport,
 };
 
 class Context {
@@ -102,22 +110,22 @@ class Context {
         return data as VariantContext;
     }
 
-    static async exportAll(): Promise<ContextEntry[]> {
+    static async exportAll(): Promise<ContextExport> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/context/export`,
             { mode: 'cors' }
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextEntry[];
+        return data as ContextExport;
     }
 
-    static async exportVariant(projectId: string, variantId: string): Promise<ContextEntry[]> {
+    static async exportVariant(projectId: string, variantId: string): Promise<ContextExport> {
         const url = `${import.meta.env.VITE_API_URL}/api/context/export?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
         const res = await fetch(url, { mode: 'cors' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextEntry[];
+        return data as ContextExport;
     }
 
     static async importContext(entries: unknown): Promise<ImportResult> {

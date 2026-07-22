@@ -82,6 +82,8 @@ Scan & output commands:
     --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
     --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
     --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
+    --export-context                 Export AI assessment context to /scan/outputs/context-export.json
+    --import-context <path>          Import AI assessment context from a JSON file (overwrites matching project/variant)
   --delete-scan <id>                Delete a past scan by its ID
 
 Data retrieval commands:
@@ -358,6 +360,17 @@ parse_and_run() {
                 import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
                 EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
+                shift 2 ;;
+            export-context|--export-context)
+                ensure_running; EXPORT_ARGS+=(--export-context); shift ;;
+            import-context|--import-context)
+                ensure_running
+                local import_ctx_file
+                import_ctx_file="$(readlink -f "$2")"
+                local import_ctx_staged
+                import_ctx_staged="/tmp/vulnscout_stage_$(basename "$import_ctx_file")"
+                call_container_engine cp "$import_ctx_file" "$CONTAINER_NAME:$import_ctx_staged"
+                EXPORT_ARGS+=(--import-context "$import_ctx_staged")
                 shift 2 ;;
             delete-scan|--delete-scan)
                 ensure_running

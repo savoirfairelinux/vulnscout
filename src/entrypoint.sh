@@ -124,6 +124,8 @@ Scan & output commands:
     --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
     --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
     --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
+    --export-context          Export AI assessment context (project/variant description, threat model, etc.) to /scan/outputs/context-export.json
+    --import-context <path>   Import AI assessment context from a JSON file (overwrites matching project/variant)
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
   --delete-scan <id>        Delete a past scan by its ID
 
@@ -603,6 +605,40 @@ cmd_import_custom_openvex_assessments() {
     setup_user
 }
 
+cmd_export_context() {
+    local -a export_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        export_args+=(--variant "$VARIANT_NAME")
+    fi
+
+    cd "$BASE_DIR"
+    local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    export_args+=(--output "$output_dir/context-export.json")
+
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp export-context "${export_args[@]}"
+    setup_user
+}
+
+cmd_import_context() {
+    local file="$1"
+
+    cd "$BASE_DIR"
+    local raw_basename dest_name dest_file
+    raw_basename="$(basename "$file")"
+    dest_name="${raw_basename#vulnscout_stage_}"
+    if [[ "$dest_name" != "$raw_basename" ]]; then
+        # Strip the staging prefix added by the wrapper before importing.
+        dest_file="$(dirname "$file")/$dest_name"
+        mv "$file" "$dest_file"
+        file="$dest_file"
+    fi
+
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp import-context "$file"
+    setup_user
+}
+
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
         echo "Config ($CONFIG_FILE):"
@@ -792,6 +828,10 @@ while [[ $# -gt 0 ]]; do
             EXPORT_CUSTOM_OPENVEX_ASSESSMENTS=true; shift ;;
         --import-custom-openvex-assessments)
             IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE="$2"; shift 2 ;;
+        --export-context)
+            EXPORT_CONTEXT=true; shift ;;
+        --import-context)
+            IMPORT_CONTEXT_FILE="$2"; shift 2 ;;
         --list-projects|--list-scans)
             cmd_get_data "$1"; shift ;;
         --config)
@@ -840,6 +880,14 @@ if [[ "${EXPORT_CUSTOM_OPENVEX_ASSESSMENTS:-false}" == "true" ]]; then
 fi
 if [[ -n "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
     cmd_import_custom_openvex_assessments "$IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE"
+fi
+
+# Step 4b: Export/import AI assessment context
+if [[ "${EXPORT_CONTEXT:-false}" == "true" ]]; then
+    cmd_export_context
+fi
+if [[ -n "${IMPORT_CONTEXT_FILE:-}" ]]; then
+    cmd_import_context "$IMPORT_CONTEXT_FILE"
 fi
 
 # Step 5: Get data

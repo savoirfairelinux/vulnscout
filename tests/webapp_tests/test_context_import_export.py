@@ -83,21 +83,38 @@ def client_and_data(app_with_data):
     return application.test_client(), data
 
 
+def _export_entries(client, url="/api/context/export"):
+    """GET the export endpoint and return the entries list from the envelope."""
+    response = client.get(url)
+    assert response.status_code == 200
+    body = json.loads(response.data)
+    assert isinstance(body, dict)
+    assert body["version"]
+    assert body["exported_at"]
+    assert isinstance(body["entries"], list)
+    return body["entries"]
+
+
 # ===========================================================================
 # Export
 # ===========================================================================
 
 class TestExportContext:
 
+    def test_export_returns_versioned_envelope(self, client_and_data):
+        client, _ = client_and_data
+        body = json.loads(client.get("/api/context/export").data)
+        assert isinstance(body, dict)
+        assert body["version"] == "1.0"
+        assert isinstance(body["exported_at"], str) and body["exported_at"]
+        assert isinstance(body["entries"], list)
+
     def test_export_all_returns_one_entry_per_variant(self, client_and_data):
         client, _ = client_and_data
-        response = client.get("/api/context/export")
-        assert response.status_code == 200
-        body = json.loads(response.data)
-        assert isinstance(body, list)
+        entries = _export_entries(client)
         # 3 variants total; EmptyProject contributes nothing.
-        assert len(body) == 3
-        keys = {(e["project_name"], e["variant_name"]) for e in body}
+        assert len(entries) == 3
+        keys = {(e["project_name"], e["variant_name"]) for e in entries}
         assert keys == {
             ("ProjectA", "VariantA1"),
             ("ProjectA", "VariantA2"),
@@ -106,8 +123,8 @@ class TestExportContext:
 
     def test_export_entry_shape_and_values(self, client_and_data):
         client, _ = client_and_data
-        body = json.loads(client.get("/api/context/export").data)
-        entry = next(e for e in body if e["variant_name"] == "VariantA1")
+        entries = _export_entries(client)
+        entry = next(e for e in entries if e["variant_name"] == "VariantA1")
         assert entry["description"] == "ProjectA description"
         assert entry["variant_description"] == "A1 variant desc"
         assert entry["codebase_path"] == "/src/a1"
@@ -118,15 +135,13 @@ class TestExportContext:
 
     def test_export_single_variant(self, client_and_data):
         client, data = client_and_data
-        response = client.get(
+        entries = _export_entries(
+            client,
             f"/api/context/export?project_id={data['project_a_id']}"
-            f"&variant_id={data['variant_a1_id']}"
+            f"&variant_id={data['variant_a1_id']}",
         )
-        assert response.status_code == 200
-        body = json.loads(response.data)
-        assert isinstance(body, list)
-        assert len(body) == 1
-        assert body[0]["variant_name"] == "VariantA1"
+        assert len(entries) == 1
+        assert entries[0]["variant_name"] == "VariantA1"
 
     def test_export_single_variant_mismatched_project(self, client_and_data):
         client, data = client_and_data
@@ -163,6 +178,33 @@ class TestImportContext:
         response = self._post(client, {"project_name": "ProjectA"})
         assert response.status_code == 400
 
+    def test_import_envelope_accepted(self, client_and_data):
+        client, _ = client_and_data
+        payload = {
+            "version": "1.0",
+            "exported_at": "2026-07-22T00:00:00+00:00",
+            "entries": [{
+                "project_name": "ProjectA",
+                "variant_name": "VariantA1",
+                "description": "From envelope",
+                "threat_model": "t",
+            }],
+        }
+        response = self._post(client, payload)
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body["imported"] == [
+            {"project_name": "ProjectA", "variant_name": "VariantA1"}
+        ]
+        entries = _export_entries(client)
+        entry = next(e for e in entries if e["variant_name"] == "VariantA1")
+        assert entry["description"] == "From envelope"
+
+    def test_import_envelope_missing_entries_rejected(self, client_and_data):
+        client, _ = client_and_data
+        response = self._post(client, {"version": "1.0", "exported_at": "x"})
+        assert response.status_code == 400
+
     def test_import_valid_overwrites(self, client_and_data):
         client, _ = client_and_data
         payload = [{
@@ -183,7 +225,7 @@ class TestImportContext:
         assert body["failed"] == []
 
         # Verify overwrite via export.
-        exported = json.loads(client.get("/api/context/export").data)
+        exported = _export_entries(client)
         entry = next(e for e in exported if e["variant_name"] == "VariantA1")
         assert entry["description"] == "New ProjectA description"
         assert entry["variant_description"] == "new variant desc"
@@ -252,7 +294,7 @@ class TestImportContext:
         assert body["imported"] == [
             {"project_name": "ProjectB", "variant_name": "VariantB1"}
         ]
-        exported = json.loads(client.get("/api/context/export").data)
+        exported = _export_entries(client)
         entry = next(e for e in exported if e["variant_name"] == "VariantB1")
         assert entry["risks"] is None
 

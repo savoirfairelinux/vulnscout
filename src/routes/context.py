@@ -9,6 +9,12 @@ from flask import jsonify, request
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
+from ..helpers.context_io import (
+    build_export_document,
+    collect_entries,
+    extract_entries,
+    import_entries,
+)
 from ..models.project import Project
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext, ContextFile
@@ -117,124 +123,40 @@ def init_app(app):
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
 
-    def _context_entry(project, variant, pc, vc) -> dict:
-        return {
-            "project_name": project.name,
-            "variant_name": variant.name,
-            "description": pc.description if pc else None,
-            "variant_description": vc.variant_description if vc else None,
-            "codebase_path": vc.codebase_path if vc else None,
-            "environment": vc.environment if vc else None,
-            "threat_model": vc.threat_model if vc else None,
-            "risks": vc.risks if vc else None,
-            "other_info": vc.other_info if vc else None,
-        }
-
     @app.route('/api/context/export', methods=['GET'])
     def export_context():
-        from ..models.project_context import ProjectContext
-
         project_id_str = request.args.get('project_id')
         variant_id_str = request.args.get('variant_id')
 
+        project_uuid = None
+        variant_uuid = None
         # Single-variant export requires both identifiers.
         if project_id_str or variant_id_str:
             project_uuid, err = parse_uuid_or_400(project_id_str or '', 'project_id')
             if err:
                 return err
-            assert project_uuid is not None
             variant_uuid, err = parse_uuid_or_400(variant_id_str or '', 'variant_id')
             if err:
                 return err
-            assert variant_uuid is not None
 
-            project = Project.get_by_id(project_uuid)
-            if project is None:
-                return jsonify({"error": "Project not found"}), 404
-            variant = Variant.get_by_id(variant_uuid)
-            if variant is None:
-                return jsonify({"error": "Variant not found"}), 404
-            if variant.project_id != project_uuid:
-                return jsonify({"error": "Variant does not belong to the specified project"}), 400
+        try:
+            entries = collect_entries(project_uuid, variant_uuid)
+        except LookupError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
-            pc = ProjectContext.get_by_project(project_uuid)
-            vc = VariantContext.get_by_variant(variant_uuid)
-            return jsonify([_context_entry(project, variant, pc, vc)])
-
-        # Full export: one entry per variant across all projects.
-        entries = []
-        for project in Project.get_all():
-            pc = ProjectContext.get_by_project(project.id)
-            for variant in Variant.get_by_project(project.id):
-                vc = VariantContext.get_by_variant(variant.id)
-                entries.append(_context_entry(project, variant, pc, vc))
-        return jsonify(entries)
+        return jsonify(build_export_document(entries))
 
     @app.route('/api/context/import', methods=['POST'])
     def import_context():
         body = request.get_json(silent=True)
-        if not isinstance(body, list):
-            return jsonify({"error": "Request body must be a JSON array of context entries"}), 400
+        try:
+            entries = extract_entries(body)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
-        def _txt(value):
-            return value if isinstance(value, str) else None
-
-        imported: list = []
-        ignored: list = []
-        failed: list = []
-
-        for entry in body:
-            if not isinstance(entry, dict):
-                failed.append({
-                    "project_name": None,
-                    "variant_name": None,
-                    "reason": "Entry is not a JSON object",
-                })
-                continue
-
-            project_name = _txt(entry.get('project_name'))
-            variant_name = _txt(entry.get('variant_name'))
-            ident = {"project_name": project_name, "variant_name": variant_name}
-
-            if not project_name or not variant_name:
-                ignored.append({**ident, "reason": "Missing project_name or variant_name"})
-                continue
-
-            project = Project.get_by_name(project_name)
-            if project is None:
-                ignored.append({**ident, "reason": "Project not found"})
-                continue
-            variant = Variant.get_by_name_and_project(variant_name, project.id)
-            if variant is None:
-                ignored.append({**ident, "reason": "Variant not found"})
-                continue
-
-            description = _txt(entry.get('description'))
-            threat_model = _txt(entry.get('threat_model'))
-            missing = []
-            if not (description and description.strip()):
-                missing.append('description')
-            if not (threat_model and threat_model.strip()):
-                missing.append('threat_model')
-            if missing:
-                failed.append({
-                    **ident,
-                    "reason": f"Missing mandatory field(s): {', '.join(missing)}",
-                })
-                continue
-
-            ProjectContextController.upsert(project.id, description=description, commit=False)
-            VariantContextController.upsert(
-                variant.id,
-                variant_description=_txt(entry.get('variant_description')),
-                codebase_path=_txt(entry.get('codebase_path')),
-                environment=_txt(entry.get('environment')),
-                threat_model=threat_model,
-                risks=_txt(entry.get('risks')),
-                other_info=_txt(entry.get('other_info')),
-                commit=False,
-            )
-            imported.append(ident)
+        result = import_entries(entries)
 
         # Apply all valid entries atomically: a failure part-way through must
         # not leave the database with only some entries persisted.
@@ -245,7 +167,7 @@ def init_app(app):
             logger.exception("Failed to commit context import")
             return jsonify({"error": f"Failed to import context: {exc}"}), 500
 
-        return jsonify({"imported": imported, "ignored": ignored, "failed": failed})
+        return jsonify(result)
 
     @app.route('/api/variants/<variant_id>/context/files', methods=['POST'])
     def post_context_file(variant_id):
