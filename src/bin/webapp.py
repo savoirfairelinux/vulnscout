@@ -22,6 +22,7 @@ MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
 MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
 
 def _launch_enrichment(app):
@@ -82,6 +83,32 @@ def _warm_scan_list_cache(app):
                 print(f"[cache-warm/scan-list] {e}", flush=True)
 
     threading.Thread(target=_warm, name="cache-warm-scan-list", daemon=True).start()
+
+
+def _schedule_background_tasks(app):
+    """Start post-scan work after the initial Explorer data request burst.
+
+    Starting both jobs from the status-poll response makes them compete with
+    the immediately following packages, vulnerabilities, and assessments
+    requests.  The delay keeps that work asynchronous in practice, not merely
+    in implementation.  It must also cover large Explorer responses, which
+    can take well over 30 seconds on production-sized databases, while
+    retaining automatic enrichment and cache warming when no browser is
+    connected.
+    """
+    try:
+        delay = float(app.config.get("BACKGROUND_TASK_DELAY", DEFAULT_BACKGROUND_TASK_DELAY))
+    except (TypeError, ValueError):
+        delay = DEFAULT_BACKGROUND_TASK_DELAY
+
+    def _start():
+        _launch_enrichment(app)
+        _warm_scan_list_cache(app)
+
+    timer = threading.Timer(max(0.0, delay), _start)
+    timer.name = "post-scan-background-scheduler"
+    timer.daemon = True
+    timer.start()
 
 
 def create_app():
@@ -152,8 +179,7 @@ def create_app():
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
                 app._INT_SCAN_FINISHED = True
                 if not app.config.get("TESTING"):
-                    _launch_enrichment(app)
-                    _warm_scan_list_cache(app)
+                    _schedule_background_tasks(app)
                 return True
         return False
 
