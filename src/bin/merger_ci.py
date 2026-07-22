@@ -11,7 +11,7 @@
 # This module is the entry point / orchestrator.  The actual logic lives in:
 #   cmd_process.py     — ``flask merge`` and ``flask process``
 #   cmd_export.py      — ``flask export`` and ``flask report``
-#   cmd_assessments.py — ``flask export-custom-assessments`` / ``flask import-custom-assessments``
+#   cmd_assessments.py — custom VulnScout JSON and OpenVEX import/export commands
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, ``flask delete-scan``
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
 
@@ -29,8 +29,10 @@ from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
 )
 from .cmd_export import export_command, report_command
 from .cmd_assessments import (
-    export_custom_assessments_command,
-    import_custom_assessments_command,
+    export_custom_openvex_assessments_command,
+    export_custom_vulnscout_data_command,
+    import_custom_openvex_assessments_command,
+    import_custom_vulnscout_data_command,
 )
 from .cmd_scans import (
     list_projects_command,
@@ -46,8 +48,10 @@ def init_app(app) -> None:
     app.cli.add_command(process_command)
     app.cli.add_command(report_command)
     app.cli.add_command(export_command)
-    app.cli.add_command(export_custom_assessments_command)
-    app.cli.add_command(import_custom_assessments_command)
+    app.cli.add_command(export_custom_vulnscout_data_command)
+    app.cli.add_command(import_custom_vulnscout_data_command)
+    app.cli.add_command(export_custom_openvex_assessments_command)
+    app.cli.add_command(import_custom_openvex_assessments_command)
     app.cli.add_command(list_projects_command)
     app.cli.add_command(list_scans_command)
     app.cli.add_command(delete_scan_command)

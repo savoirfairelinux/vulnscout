@@ -10,8 +10,6 @@ neither caller needs to re-implement it.
 
 from __future__ import annotations
 
-import json
-import os
 import uuid as _uuid
 from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
@@ -315,62 +313,6 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[s
         variant_by_name[sanitised] = v
         variant_by_name[v.name] = v
     return variant_by_name
-
-
-def import_directory(
-    dir_path: str,
-    variant_by_name: "dict[str, _Variant]",
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
-    """Import OpenVEX assessments from a directory of JSON files.
-
-    Each ``.json`` file is matched to a variant by its filename (sans
-    extension).
-
-    Returns
-    -------
-    (created, errors, skipped, variant_files_found)
-    """
-    total_created: list[dict[str, Any]] = []
-    total_errors: list[dict[str, Any]] = []
-    total_skipped = 0
-    variant_files_found = 0
-
-    json_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".json"))
-    if not json_files:
-        raise ValueError("No .json files found in directory")
-
-    for json_name in json_files:
-        variant_name = json_name[: -len(".json")]
-        variant = variant_by_name.get(variant_name)
-        if variant is None:
-            total_errors.append({
-                "file": json_name,
-                "error": f"No variant found matching name '{variant_name}'",
-            })
-            continue
-
-        json_path = os.path.join(dir_path, json_name)
-        try:
-            with open(json_path) as fh:
-                doc = json.load(fh)
-        except Exception:
-            total_errors.append({"file": json_name, "error": "Invalid JSON"})
-            continue
-
-        if not is_openvex_doc(doc):
-            total_errors.append({
-                "file": json_name,
-                "error": "Not a valid OpenVEX document",
-            })
-            continue
-
-        variant_files_found += 1
-        c, e, s = import_statements(doc["statements"], variant.id)
-        total_created.extend(c)
-        total_errors.extend(e)
-        total_skipped += s
-
-    return total_created, total_errors, total_skipped, variant_files_found
 
 
 # ---------------------------------------------------------------------------

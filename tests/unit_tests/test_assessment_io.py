@@ -6,8 +6,6 @@
 """Unit tests for assessment_io.py helper functions."""
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -17,7 +15,6 @@ from src.helpers.assessment_io import (
     is_openvex_doc,
     sanitize_variant_name,
     _get_vuln_info,
-    import_directory,
     build_variant_by_name_map,
     build_openvex_doc,
     import_statements,
@@ -226,74 +223,6 @@ class TestGetVulnInfo:
             # Should not call get_by_id since it's in cache
             mock_get.assert_not_called()
             assert result["url"] == ""
-
-
-# ---------------------------------------------------------------------------
-# import_directory() tests
-# ---------------------------------------------------------------------------
-
-class TestImportDirectory:
-    """Test import_directory function."""
-
-    def test_empty_directory(self):
-        """GIVEN a directory with no JSON files WHEN imported THEN raise ValueError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            variant_by_name = {}
-            
-            with pytest.raises(ValueError, match="No .json files found"):
-                import_directory(tmpdir, variant_by_name)
-
-    def test_directory_with_non_json_files(self):
-        """GIVEN a directory with only non-JSON files WHEN imported THEN raise ValueError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a non-JSON file
-            with open(os.path.join(tmpdir, "readme.txt"), "w") as f:
-                f.write("hello")
-            
-            variant_by_name = {}
-            
-            with pytest.raises(ValueError, match="No .json files found"):
-                import_directory(tmpdir, variant_by_name)
-
-    def test_directory_with_unknown_variant(self):
-        """GIVEN a directory with JSON for unknown variant WHEN imported THEN add error."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a valid JSON file
-            doc = {"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}
-            json_path = os.path.join(tmpdir, "unknown_variant.json")
-            with open(json_path, "w") as f:
-                json.dump(doc, f)
-            
-            variant_by_name = {}
-            created, errors, skipped, variant_files_found = import_directory(
-                tmpdir,
-                variant_by_name
-            )
-            
-            assert variant_files_found == 0
-            assert len(errors) == 1
-            assert "No variant found" in errors[0]["error"]
-
-    def test_directory_sorted_by_filename(self):
-        """GIVEN a directory with multiple JSON files WHEN imported THEN files are processed."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create multiple JSON files with different names
-            for name in ["zebra.json", "apple.json", "monkey.json"]:
-                doc = {"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}
-                json_path = os.path.join(tmpdir, name)
-                with open(json_path, "w") as f:
-                    json.dump(doc, f)
-            
-            variant_by_name = {}
-            
-            # All 3 files should produce errors for missing variants
-            created, errors, skipped, variant_files_found = import_directory(
-                tmpdir,
-                variant_by_name
-            )
-            
-            # All 3 files should produce errors for missing variants
-            assert len(errors) == 3
 
 
 # ---------------------------------------------------------------------------

@@ -312,33 +312,36 @@ VulnScout lets you export and re-import the assessments you have manually create
 - Sharing assessment decisions across different VulnScout instances.
 - Restoring triage state in CI pipelines after a database reset.
 
-### Exporting Custom Assessments
+### VulnScout JSON
 
-The `--export-custom-assessments` flag produces one OpenVEX JSON file per variant, written directly to the outputs directory:
+The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `--variant` is provided.
 
 ```bash
-./vulnscout --project demo --export-custom-assessments
+./vulnscout --project demo --export-custom-vulnscout-data
 ```
 
-You can also use the `--variant` flag to export only a single variant:
+Export one variant:
 
 ```bash
-./vulnscout --project demo --variant x86 --export-custom-assessments
+./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
 ```
 
-### Importing Custom Assessments
-
-The `--import-custom-assessments` flag reads a `.json` file or a directory of OpenVEX JSON files and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
+The `--import-custom-vulnscout-data` command restores entries according to the variant metadata stored in the file:
 
 ```bash
-# Import from a single OpenVEX JSON file
-./vulnscout --project demo --variant x86 --import-custom-assessments /path/to/assessments.json
+./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
+```
 
-# Import from a single OpenVEX JSON file without specifying the variant
-./vulnscout --project demo --import-custom-assessments /path/to/assessments/x86.json
+### OpenVEX
 
-# Import from a directory of OpenVEX JSON files (one per variant)
-./vulnscout --project demo --import-custom-assessments /path/to/assessments/
+OpenVEX custom-assessment transfers operate on one JSON document and require `--variant` for both import and export.
+
+```bash
+# Export a variant
+./vulnscout --project demo --variant x86 --export-custom-openvex-assessments
+
+# Import into a variant
+./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
 ```
 
 ---

@@ -481,7 +481,7 @@ def test_report_command_with_match_condition_cache(app, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# export-custom-assessments & import-custom-assessments CLI commands
+# Custom VulnScout JSON and OpenVEX CLI commands
 # ---------------------------------------------------------------------------
 
 def _create_custom_assessment(app):
@@ -515,31 +515,33 @@ def _create_custom_assessment(app):
         return db_a, variant
 
 
-def test_export_custom_assessments_no_data(app, tmp_path):
+def test_export_custom_openvex_assessments_no_data(app, tmp_path):
     """Export with no custom assessments exits with error code 1."""
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "export-custom-assessments",
+            "export-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 1
     assert "No custom assessments" in result.output
 
 
-def test_export_custom_assessments_success(app, tmp_path):
-    """Export creates individual OpenVEX JSON files per variant."""
+def test_export_custom_openvex_assessments_success(app, tmp_path):
+    """Export creates one OpenVEX JSON file for the selected variant."""
     _create_custom_assessment(app)
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "export-custom-assessments",
+            "export-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 0, result.output
-    out_file = tmp_path / f"{_VARIANT_NAME}.json"
+    out_file = tmp_path / f"custom_openvex_{_VARIANT_NAME}.json"
     assert out_file.exists()
 
     doc = json.loads(out_file.read_text())
@@ -547,52 +549,72 @@ def test_export_custom_assessments_success(app, tmp_path):
     assert len(doc["statements"]) >= 1
 
 
-def test_export_custom_assessments_success_variant(app, tmp_path):
-    """Export creates variant.json OpenVEX."""
+def test_export_custom_vulnscout_data_success_variant(app, tmp_path):
+    """Export creates a VulnScout JSON document for the selected variant."""
     _create_custom_assessment(app)
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "export-custom-assessments",
+            "export-custom-vulnscout-data",
             "--project", _PROJECT_NAME,
             "--variant", _VARIANT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 0, result.output
-    out_file = tmp_path / f"{_VARIANT_NAME}.json"
+    out_file = tmp_path / f"custom_vulnscout_data_{_VARIANT_NAME}.json"
+    assert out_file.exists()
+    document = json.loads(out_file.read_text())
+    assert document["version"] == 1
+    assert "openvex" not in document.get("@context", "")
+
+
+def test_export_custom_vulnscout_data_all_variants(app, tmp_path):
+    """Export without --variant creates a VulnScout JSON document for the project."""
+    _create_custom_assessment(app)
+    with app.app_context():
+        runner = app.test_cli_runner()
+        result = runner.invoke(args=[
+            "export-custom-vulnscout-data",
+            "--project", _PROJECT_NAME,
+            "--output-dir", str(tmp_path),
+        ])
+    assert result.exit_code == 0, result.output
+    out_file = tmp_path / "custom_vulnscout_data_all.json"
     assert out_file.exists()
 
 
-def test_import_custom_assessments_file_not_found(app, tmp_path):
+def test_import_custom_openvex_assessments_file_not_found(app, tmp_path):
     """Import with a nonexistent file exits with error code 1."""
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             str(tmp_path / "nonexistent.json"),
         ])
     assert result.exit_code == 1
-    assert "file not found" in result.output
+    assert "file not found" in result.output.lower()
 
 
-def test_import_custom_assessments_unsupported_type(app, tmp_path):
+def test_import_custom_openvex_assessments_unsupported_type(app, tmp_path):
     """Import with an unsupported file type exits with error code 1."""
     bad_file = tmp_path / "data.xml"
     bad_file.write_text("<xml/>")
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             str(bad_file),
         ])
     assert result.exit_code == 1
     assert "unsupported file type" in result.output.lower()
 
 
-def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
-    """Import a .json with a filename that doesn't match any variant."""
+def test_import_custom_openvex_assessments_requires_variant(app, tmp_path):
+    """OpenVEX import requires an explicit target variant."""
     doc = {
         "@context": "https://openvex.dev/ns/v0.2.0",
         "statements": [],
@@ -602,45 +624,47 @@ def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
             str(json_file),
         ])
-    assert result.exit_code == 1
-    assert "no variant found" in result.output.lower()
+    assert result.exit_code == 2
+    assert "missing option '--variant'" in result.output.lower()
 
 
-def test_import_custom_assessments_json_invalid_json(app, tmp_path):
+def test_import_custom_openvex_assessments_invalid_json(app, tmp_path):
     """Import a .json with invalid JSON exits with error code 1."""
     json_file = tmp_path / f"{_VARIANT_NAME}.json"
     json_file.write_text("{invalid json")
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             str(json_file),
         ])
     assert result.exit_code == 1
     assert "invalid json" in result.output.lower()
 
 
-def test_import_custom_assessments_json_not_openvex(app, tmp_path):
+def test_import_custom_openvex_assessments_not_openvex(app, tmp_path):
     """Import a .json that is not OpenVEX exits with error code 1."""
     json_file = tmp_path / f"{_VARIANT_NAME}.json"
     json_file.write_text(json.dumps({"hello": "world"}))
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             str(json_file),
         ])
     assert result.exit_code == 1
     assert "not a valid openvex" in result.output.lower()
 
 
-def test_import_custom_assessments_json_success(app, tmp_path):
+def test_import_custom_openvex_assessments_success(app, tmp_path):
     """Import a valid .json creates assessments."""
     doc = {
         "@context": "https://openvex.dev/ns/v0.2.0",
@@ -656,15 +680,16 @@ def test_import_custom_assessments_json_success(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             str(json_file),
         ])
     assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
+    assert "Imported 1 OpenVEX assessments" in result.output
 
 
-def test_import_custom_assessments_custom_data_format(app, tmp_path):
+def test_import_custom_vulnscout_data(app, tmp_path):
     """Import the web 'export custom data' format (non-OpenVEX) via the CLI.
 
     The filename does not match a variant; the embedded ``variant_id`` is used.
@@ -682,7 +707,7 @@ def test_import_custom_assessments_custom_data_format(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-vulnscout-data",
             "--project", _PROJECT_NAME,
             str(json_file),
         ])
@@ -691,119 +716,36 @@ def test_import_custom_assessments_custom_data_format(app, tmp_path):
     assert "time estimates" in result.output.lower()
 
 
-def test_import_custom_assessments_json_success_variant_flag(app, tmp_path):
-    """Import a .json with a filename that doesn't match any variant."""
-    doc = {
-        "@context": "https://openvex.dev/ns/v0.2.0",
-        "statements": [{
-            "vulnerability": {"name": "CVE-2020-35492"},
-            "status": "affected",
-            "products": [{"@id": "cairo@1.16.0"}],
-            "status_notes": "imported via CLI",
-        }],
-    }
-    json_file = tmp_path / "nonexistent_variant.json"
-    json_file.write_text(json.dumps(doc))
+def test_import_custom_openvex_assessments_rejects_vulnscout_json(app, tmp_path):
+    """OpenVEX import rejects a VulnScout JSON document."""
+    json_file = tmp_path / "custom.json"
+    json_file.write_text(json.dumps({"version": 1, "assessments": []}))
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
             "--variant", _VARIANT_NAME,
             str(json_file),
         ])
-    assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
-
-
-def test_import_custom_assessments_directory_success(app, tmp_path):
-    """Import from a directory of JSON files."""
-    doc = {
-        "@context": "https://openvex.dev/ns/v0.2.0",
-        "statements": [{
-            "vulnerability": {"name": "CVE-2020-35492"},
-            "status": "affected",
-            "products": [{"@id": "cairo@1.16.0"}],
-            "status_notes": "imported from dir",
-        }],
-    }
-    json_file = tmp_path / f"{_VARIANT_NAME}.json"
-    json_file.write_text(json.dumps(doc))
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(tmp_path),
-        ])
-    assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
-
-
-def test_import_custom_assessments_directory_no_matching(app, tmp_path):
-    """Import from a directory with no matching variant files exits 1."""
-    doc = {
-        "@context": "https://openvex.dev/ns/v0.2.0",
-        "statements": [],
-    }
-    json_file = tmp_path / "unknown_variant.json"
-    json_file.write_text(json.dumps(doc))
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(tmp_path),
-        ])
     assert result.exit_code == 1
-    assert "no valid openvex" in result.output.lower()
+    assert "not a valid openvex" in result.output.lower()
 
 
-def test_import_custom_assessments_directory_variant_flag(app, tmp_path):
-    """Import from a directory with --variant fails."""
-    (tmp_path / f"{_VARIANT_NAME}.json").write_text("{}")
+def test_export_import_openvex_roundtrip(app, tmp_path):
+    """Export then import an OpenVEX document for one variant."""
+    _create_custom_assessment(app)
+
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "export-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
             "--variant", _VARIANT_NAME,
-            str(tmp_path),
-        ])
-    assert result.exit_code == 1
-    assert "cannot use the --variant" in result.output.lower()
-
-
-def test_import_custom_assessments_directory_empty(app, tmp_path):
-    """Import from an empty directory exits 1."""
-    empty_dir = tmp_path / "empty"
-    empty_dir.mkdir()
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(empty_dir),
-        ])
-    assert result.exit_code == 1
-    assert "no .json files found" in result.output.lower()
-
-
-def test_export_import_roundtrip_directory(app, tmp_path):
-    """Export individual files then import directory produces same assessments."""
-    _create_custom_assessment(app)
-
-    # Export (individual files)
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "export-custom-assessments",
-            "--project", _PROJECT_NAME,
             "--output-dir", str(tmp_path),
         ])
     assert result.exit_code == 0, result.output
 
-    # Delete all to have a clean slate, then import directory
     with app.app_context():
         from src.extensions import db as _db
         from src.models.assessment import Assessment
@@ -813,56 +755,25 @@ def test_export_import_roundtrip_directory(app, tmp_path):
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
-            str(tmp_path),
+            "--variant", _VARIANT_NAME,
+            str(tmp_path / f"custom_openvex_{_VARIANT_NAME}.json"),
         ])
     assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
+    assert "Imported 1 OpenVEX assessments" in result.output
 
 
-def test_export_import_roundtrip(app, tmp_path):
-    """Export then import produces same number of assessments."""
+def test_import_custom_openvex_assessments_skips_duplicates(app, tmp_path):
+    """Importing the same OpenVEX data twice skips duplicates."""
     _create_custom_assessment(app)
 
-    # Export (individual files, new default)
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "export-custom-assessments",
-            "--project", _PROJECT_NAME,
-            "--output-dir", str(tmp_path),
-        ])
-    assert result.exit_code == 0, result.output
-
-    # Delete all to have a clean slate, then import the individual file
-    with app.app_context():
-        from src.extensions import db as _db
-        from src.models.assessment import Assessment
-        for a in Assessment.get_by_origin():
-            a.delete()
-        _db.session.commit()
-
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(tmp_path / f"{_VARIANT_NAME}.json"),
-        ])
-    assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
-
-
-def test_import_custom_assessments_skips_duplicates(app, tmp_path):
-    """Importing the same data twice skips duplicates."""
-    _create_custom_assessment(app)
-
-    # Export (individual files)
     with app.app_context():
         runner = app.test_cli_runner()
         runner.invoke(args=[
-            "export-custom-assessments",
+            "export-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
+            "--variant", _VARIANT_NAME,
             "--output-dir", str(tmp_path),
         ])
 
@@ -870,9 +781,10 @@ def test_import_custom_assessments_skips_duplicates(app, tmp_path):
     with app.app_context():
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "import-custom-assessments",
+            "import-custom-openvex-assessments",
             "--project", _PROJECT_NAME,
-            str(tmp_path / f"{_VARIANT_NAME}.json"),
+            "--variant", _VARIANT_NAME,
+            str(tmp_path / f"custom_openvex_{_VARIANT_NAME}.json"),
         ])
     assert result.exit_code == 0, result.output
     assert "1 skipped" in result.output

@@ -78,9 +78,10 @@ Scan & output commands:
   --export-spdx                   Export project as SPDX 3.0 SBOM
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
-  --export-custom-assessments     Export custom (review) assessments as individual OpenVEX files
-  --compress                      Compress export output into a .tar.gz archive
-  --import-custom-assessments <path>  Import custom assessments from .json, .tar.gz, or directory
+    --export-custom-vulnscout-data  Export custom VulnScout JSON data
+    --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+    --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
+    --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
   --delete-scan <id>                Delete a past scan by its ID
 
 Data retrieval commands:
@@ -336,18 +337,27 @@ parse_and_run() {
                 ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
             export-openvex|--export-openvex)
                 ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
-            export-custom-assessments|--export-custom-assessments)
-                ensure_running; EXPORT_ARGS+=(--export-custom-assessments); shift ;;
-            compress|--compress)
-                EXPORT_ARGS+=(--compress); shift ;;
-            import-custom-assessments|--import-custom-assessments)
+            export-custom-vulnscout-data|--export-custom-vulnscout-data)
+                ensure_running; EXPORT_ARGS+=(--export-custom-vulnscout-data); shift ;;
+            export-custom-openvex-assessments|--export-custom-openvex-assessments)
+                ensure_running; EXPORT_ARGS+=(--export-custom-openvex-assessments); shift ;;
+            import-custom-vulnscout-data|--import-custom-vulnscout-data)
                 ensure_running
                 local import_file
                 import_file="$(readlink -f "$2")"
                 local import_staged
                 import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
-                EXPORT_ARGS+=(--import-custom-assessments "$import_staged")
+                EXPORT_ARGS+=(--import-custom-vulnscout-data "$import_staged")
+                shift 2 ;;
+            import-custom-openvex-assessments|--import-custom-openvex-assessments)
+                ensure_running
+                local import_file
+                import_file="$(readlink -f "$2")"
+                local import_staged
+                import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
+                call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
+                EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
                 shift 2 ;;
             delete-scan|--delete-scan)
                 ensure_running

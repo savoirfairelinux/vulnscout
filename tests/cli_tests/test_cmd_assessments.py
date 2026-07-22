@@ -25,11 +25,11 @@ def app(tmp_path, monkeypatch):
         _db.drop_all()
 
 
-class TestExportCustomAssessmentsVariant:
-    """Cover the single-variant export path (line 107: assert variant_obj)."""
+class TestExportCustomOpenVexAssessments:
+    """Cover the single-variant OpenVEX export path."""
 
     def test_export_with_variant_covers_assert(self, app, tmp_path):
-        """Providing --variant hits the else branch and evaluates assert variant_obj."""
+        """Providing --variant exports custom assessments as one OpenVEX document."""
         from src.models.project import Project
         from src.models.variant import Variant
         from src.models.package import Package
@@ -53,11 +53,11 @@ class TestExportCustomAssessmentsVariant:
 
         runner = app.test_cli_runner()
         result = runner.invoke(args=[
-            "export-custom-assessments",
+            "export-custom-openvex-assessments",
             "--project", "AssessProj",
             "--variant", "v1",
             "--output-dir", str(tmp_path),
         ])
 
         assert result.exit_code == 0, result.output
-        assert "Custom assessments exported" in result.output
+        assert "Custom OpenVEX assessments exported" in result.output

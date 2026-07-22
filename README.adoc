@@ -293,28 +293,37 @@ VulnScout lets you export and re-import the assessments you have manually create
 * Sharing assessment decisions across different VulnScout instances.
 * Restoring triage state in CI pipelines after a database reset.
 
-==== Exporting Custom Assessments
+==== VulnScout JSON
 
-The `--export-custom-assessments` flag produces one OpenVEX JSON file per variant, written individually to the outputs directory (default: `.vulnscout/outputs/`).
-
-[source,shell]
-----
-# Export as individual files (one per variant)
-./vulnscout --project demo --export-custom-assessments
-
-----
-
-==== Importing Custom Assessments
-
-The `--import-custom-assessments` flag reads a `.json` file or a directory of OpenVEX JSON files and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
+The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `--variant` is provided.
 
 [source,shell]
 ----
-# Import from a single OpenVEX JSON file
-./vulnscout --project demo --import-custom-assessments /path/to/assessments.json
+# Export all project variants
+./vulnscout --project demo --export-custom-vulnscout-data
 
-# Import from a directory of OpenVEX JSON files (one per variant)
-./vulnscout --project demo --import-custom-assessments /path/to/assessments/
+# Export one variant
+./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
+----
+
+The `--import-custom-vulnscout-data` command restores entries according to the variant metadata in the file.
+
+[source,shell]
+----
+./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
+----
+
+==== OpenVEX
+
+The OpenVEX custom-assessment commands operate on one JSON document and require `--variant` for both import and export.
+
+[source,shell]
+----
+# Export a variant
+./vulnscout --project demo --variant x86 --export-custom-openvex-assessments
+
+# Import into a variant
+./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
 ----
 
 Both commands can be combined with other flags:
@@ -323,7 +332,7 @@ Both commands can be combined with other flags:
 ----
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
-  --import-custom-assessments /path/to/assessments.json \
+  --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json \
   --export-spdx --report summary.adoc
 ----
 
