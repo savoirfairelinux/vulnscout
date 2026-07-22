@@ -121,8 +121,7 @@ Scan & output commands:
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
   --export-custom-assessments  Export custom (review) assessments as individual OpenVEX files to /scan/outputs/
-  --compress                  Compress export output into a .tar.gz archive
-  --import-custom-assessments <path>  Import custom assessments from .json, .tar.gz, or directory
+    --import-custom-assessments <path>  Import custom assessments from .json or directory
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
   --delete-scan <id>        Delete a past scan by its ID
 
@@ -532,9 +531,6 @@ cmd_export_custom_assessments() {
     if [[ -n "$VARIANT_NAME" ]]; then
         export_args+=(--variant "$VARIANT_NAME")
     fi
-    if [[ "${COMPRESS:-false}" == "true" ]]; then
-        export_args+=(--compress)
-    fi
 
     cd "$BASE_DIR"
     local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
@@ -753,8 +749,6 @@ while [[ $# -gt 0 ]]; do
             EXPORT_FORMATS+=("openvex"); shift ;;
         --export-custom-assessments)
             EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
-        --compress)
-            COMPRESS=true; shift ;;
         --import-custom-assessments)
             IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
         --list-projects|--list-scans)

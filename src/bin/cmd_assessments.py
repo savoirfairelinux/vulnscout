@@ -3,11 +3,9 @@
 """Custom assessment import/export commands:
 ``flask export-custom-assessments`` and ``flask import-custom-assessments``."""
 
-import io
 import uuid
 import click
 import json as _json
-import tarfile
 import os
 from flask.cli import with_appcontext
 from ..helpers.assessment_io import (
@@ -16,15 +14,15 @@ from ..helpers.assessment_io import (
     build_openvex_doc,
     sanitize_variant_name,
     import_statements,
-    import_archive_bytes,
     import_directory,
     import_custom_data,
 )
 from ..models.assessment import Assessment as DBAssessment
 from ..models.variant import Variant as DBVariant
 from datetime import datetime as _dt, timezone as _tz
-from collections import defaultdict
 from ._common import get_default_author, resolve_project, resolve_project_variant
+
+_JSON_SUFFIX = ".json"
 
 
 @click.command("export-custom-assessments")
@@ -33,10 +31,8 @@ from ._common import get_default_author, resolve_project, resolve_project_varian
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
               help="Variant name. If empty, all variants will be exported.")
-@click.option("--compress", is_flag=True, default=False,
-              help="Write a .tar.gz archive instead of individual files.")
 @with_appcontext
-def export_custom_assessments_command(output_dir: str, project: str, variant: str | None, compress: bool) -> None:
+def export_custom_assessments_command(output_dir: str, project: str, variant: str | None) -> None:
     """Export handmade (custom) assessments as OpenVEX file(s)."""
 
     author = get_default_author()
@@ -66,48 +62,22 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
             _json.dump(doc, fh, indent=2)
         return out_path
 
-    def _write_tar(docs: dict[str, list]):
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-            for filename, assessments in docs.items():
-                doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
-                json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
-                info = tarfile.TarInfo(name=filename)
-                info.size = len(json_bytes)
-                tar.addfile(info, io.BytesIO(json_bytes))
-        out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
-        with open(out_path, "wb") as fh:
-            fh.write(buf.getvalue())
-        return out_path
-
     if variant is None:
-        by_variant: dict[uuid.UUID, list[DBAssessment]] = defaultdict(list)
+        by_variant: dict[uuid.UUID, list[DBAssessment]] = {}
         for assess in handmade:
             if assess.variant_id is not None:
-                by_variant[assess.variant_id].append(assess)
+                by_variant.setdefault(assess.variant_id, []).append(assess)
 
-        named_groups: dict[str, list] = {}
-        for vid, assessments in by_variant.items():
-            vobj = DBVariant.get_by_id(vid)
-            assert vobj
-            filename = sanitize_variant_name(vobj.name) + ".json"
-            named_groups[filename] = assessments
-
-        if compress:
-            out_path = _write_tar(named_groups)
+        for variant_id, assessments in by_variant.items():
+            variant_for_assessment = DBVariant.get_by_id(variant_id)
+            assert variant_for_assessment
+            filename = sanitize_variant_name(variant_for_assessment.name) + _JSON_SUFFIX
+            out_path = _write_doc(assessments, filename)
             click.echo(f"Custom assessments exported: {out_path}")
-        else:
-            for filename, assessments in named_groups.items():
-                out_path = _write_doc(assessments, filename)
-                click.echo(f"Custom assessments exported: {out_path}")
     else:
         assert variant_obj
-        filename = sanitize_variant_name(variant_obj.name) + ".json"
-
-        if compress:
-            out_path = _write_tar({filename: handmade})
-        else:
-            out_path = _write_doc(handmade, filename)
+        filename = sanitize_variant_name(variant_obj.name) + _JSON_SUFFIX
+        out_path = _write_doc(handmade, filename)
         click.echo(f"Custom assessments exported: {out_path}")
 
 
@@ -117,7 +87,7 @@ def export_custom_assessments_command(output_dir: str, project: str, variant: st
 @click.option("--variant", "-v", default=None, help="Variant name. Defaults to the file name.")
 @with_appcontext
 def import_custom_assessments_command(file_path: str, project: str, variant: str | None) -> None:
-    """Import custom assessments from a .json, .tar.gz, or directory of OpenVEX files."""
+    """Import custom assessments from a .json file or directory of OpenVEX files."""
     if not os.path.isfile(file_path) and not os.path.isdir(file_path):
         click.echo(f"Error: file not found: {file_path}", err=True)
         raise SystemExit(1)
@@ -135,31 +105,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
     total_skipped: int
     variant_files_found: int = 0
 
-    if file_path.endswith(".tar.gz") or file_path.endswith(".tgz"):
-        if variant:
-            click.echo("Error: cannot use the --variant argument with an archive of custom assessments.")
-            raise SystemExit(1)
-
-        try:
-            with open(file_path, "rb") as fh:
-                file_bytes = fh.read()
-            total_created, total_errors, total_skipped, variant_files_found = (
-                import_archive_bytes(file_bytes, variant_by_name)
-            )
-        except ValueError as exc:
-            click.echo(f"Error: {exc}", err=True)
-            raise SystemExit(1)
-
-        if variant_files_found == 0 and not total_created:
-            click.echo(
-                "Error: no valid OpenVEX files matching known "
-                "variants found in archive.", err=True
-            )
-            for err in total_errors:
-                click.echo(f"  {err}", err=True)
-            raise SystemExit(1)
-
-    elif os.path.isdir(file_path):
+    if os.path.isdir(file_path):
         if variant:
             click.echo("Error: cannot use the --variant argument with a directory of custom assessments.")
             raise SystemExit(1)
@@ -181,7 +127,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
                 click.echo(f"  {err}", err=True)
             raise SystemExit(1)
 
-    elif file_path.endswith(".json"):
+    elif file_path.endswith(_JSON_SUFFIX):
         try:
             with open(file_path) as fh:
                 data = _json.load(fh)
@@ -218,7 +164,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
         if variant:
             assert variant_obj
         else:
-            variant_name = basename[:-len(".json")]
+            variant_name = basename[:-len(_JSON_SUFFIX)]
             variant_obj = variant_by_name.get(variant_name)
             if variant_obj is None:
                 click.echo(
@@ -240,7 +186,7 @@ def import_custom_assessments_command(file_path: str, project: str, variant: str
     else:
         click.echo(
             "Error: unsupported file type. "
-            "Please provide a .json, .tar.gz file, or directory.",
+            "Please provide a .json file or directory.",
             err=True,
         )
         raise SystemExit(1)

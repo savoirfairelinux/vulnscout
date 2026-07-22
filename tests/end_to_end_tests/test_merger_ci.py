@@ -12,7 +12,6 @@ Tests use the new DB-backed workflow:
 """
 
 import pytest
-import io
 import json
 import os
 
@@ -548,31 +547,6 @@ def test_export_custom_assessments_success(app, tmp_path):
     assert len(doc["statements"]) >= 1
 
 
-def test_export_custom_assessments_compress(app, tmp_path):
-    """Export with --compress creates custom_assessments.tar.gz."""
-    _create_custom_assessment(app)
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "export-custom-assessments",
-            "--project", _PROJECT_NAME,
-            "--compress",
-            "--output-dir", str(tmp_path),
-        ])
-    assert result.exit_code == 0, result.output
-    out_file = tmp_path / "custom_assessments.tar.gz"
-    assert out_file.exists()
-
-    import tarfile as _tf
-    with _tf.open(str(out_file), "r:gz") as tar:
-        members = tar.getnames()
-        assert len(members) >= 1
-        f = tar.extractfile(members[0])
-        doc = json.loads(f.read())
-        assert "openvex" in doc["@context"]
-        assert len(doc["statements"]) >= 1
-
-
 def test_export_custom_assessments_success_variant(app, tmp_path):
     """Export creates variant.json OpenVEX."""
     _create_custom_assessment(app)
@@ -596,7 +570,7 @@ def test_import_custom_assessments_file_not_found(app, tmp_path):
         result = runner.invoke(args=[
             "import-custom-assessments",
             "--project", _PROJECT_NAME,
-            str(tmp_path / "nonexistent.tar.gz"),
+            str(tmp_path / "nonexistent.json"),
         ])
     assert result.exit_code == 1
     assert "file not found" in result.output
@@ -615,21 +589,6 @@ def test_import_custom_assessments_unsupported_type(app, tmp_path):
         ])
     assert result.exit_code == 1
     assert "unsupported file type" in result.output.lower()
-
-
-def test_import_custom_assessments_invalid_targz(app, tmp_path):
-    """Import with a corrupt tar.gz exits with error code 1."""
-    bad_archive = tmp_path / "corrupt.tar.gz"
-    bad_archive.write_bytes(b"not a tar.gz")
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(bad_archive),
-        ])
-    assert result.exit_code == 1
-    assert "unable to open" in result.output.lower()
 
 
 def test_import_custom_assessments_json_unknown_variant(app, tmp_path):
@@ -755,51 +714,6 @@ def test_import_custom_assessments_json_success_variant_flag(app, tmp_path):
         ])
     assert result.exit_code == 0, result.output
     assert "Imported 1 assessments" in result.output
-
-
-def test_import_custom_assessments_targz_no_matching(app, tmp_path):
-    """Import a tar.gz with no matching variant files exits 1."""
-    import tarfile as _tf
-
-    buf = io.BytesIO()
-    with _tf.open(fileobj=buf, mode='w:gz') as tar:
-        content = json.dumps({
-            "@context": "https://openvex.dev/ns/v0.2.0",
-            "statements": [],
-        }).encode()
-        info = _tf.TarInfo(name="unknown_variant.json")
-        info.size = len(content)
-        tar.addfile(info, io.BytesIO(content))
-
-    archive = tmp_path / "assessments.tar.gz"
-    archive.write_bytes(buf.getvalue())
-
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(archive),
-        ])
-    assert result.exit_code == 1
-    assert "no valid openvex" in result.output.lower()
-
-
-def test_import_custom_assessments_targz_variant_flag(app, tmp_path):
-    """Import a tar.gz with --variant fails."""
-    archive = tmp_path / "assessments.tar.gz"
-    archive.touch()
-
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            "--variant", _VARIANT_NAME,
-            str(archive),
-        ])
-    assert result.exit_code == 1
-    assert "cannot use the --variant" in result.output.lower()
 
 
 def test_import_custom_assessments_directory_success(app, tmp_path):
@@ -939,39 +853,6 @@ def test_export_import_roundtrip(app, tmp_path):
     assert "Imported 1 assessments" in result.output
 
 
-def test_export_import_roundtrip_compress(app, tmp_path):
-    """Export with --compress then import tar.gz produces same assessments."""
-    _create_custom_assessment(app)
-
-    # Export (compressed)
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "export-custom-assessments",
-            "--project", _PROJECT_NAME,
-            "--compress",
-            "--output-dir", str(tmp_path),
-        ])
-    assert result.exit_code == 0, result.output
-
-    # Delete all to have a clean slate, then import
-    with app.app_context():
-        from src.extensions import db as _db
-        from src.models.assessment import Assessment
-        for a in Assessment.get_by_origin():
-            a.delete()
-        _db.session.commit()
-
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(tmp_path / "custom_assessments.tar.gz"),
-        ])
-    assert result.exit_code == 0, result.output
-    assert "Imported 1 assessments" in result.output
-
-
 def test_import_custom_assessments_skips_duplicates(app, tmp_path):
     """Importing the same data twice skips duplicates."""
     _create_custom_assessment(app)
@@ -995,58 +876,6 @@ def test_import_custom_assessments_skips_duplicates(app, tmp_path):
         ])
     assert result.exit_code == 0, result.output
     assert "1 skipped" in result.output
-
-
-def test_import_custom_assessments_targz_invalid_json_inside(
-    app, tmp_path
-):
-    """Import tar.gz with invalid JSON inside continues gracefully."""
-    import tarfile as _tf
-
-    buf = io.BytesIO()
-    with _tf.open(fileobj=buf, mode='w:gz') as tar:
-        content = b"{"
-        info = _tf.TarInfo(name=f"{_VARIANT_NAME}.json")
-        info.size = len(content)
-        tar.addfile(info, io.BytesIO(content))
-
-    archive = tmp_path / "bad_inner.tar.gz"
-    archive.write_bytes(buf.getvalue())
-
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(archive),
-        ])
-    assert result.exit_code == 1
-
-
-def test_import_custom_assessments_targz_not_openvex_inside(
-    app, tmp_path
-):
-    """Import tar.gz with non-OpenVEX JSON inside reports error."""
-    import tarfile as _tf
-
-    buf = io.BytesIO()
-    with _tf.open(fileobj=buf, mode='w:gz') as tar:
-        content = json.dumps({"hello": "world"}).encode()
-        info = _tf.TarInfo(name=f"{_VARIANT_NAME}.json")
-        info.size = len(content)
-        tar.addfile(info, io.BytesIO(content))
-
-    archive = tmp_path / "not_vex.tar.gz"
-    archive.write_bytes(buf.getvalue())
-
-    with app.app_context():
-        runner = app.test_cli_runner()
-        result = runner.invoke(args=[
-            "import-custom-assessments",
-            "--project", _PROJECT_NAME,
-            str(archive),
-        ])
-    assert result.exit_code == 1
 
 
 def test_list_projects(cli_runner):

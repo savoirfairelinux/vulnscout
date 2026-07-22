@@ -320,12 +320,6 @@ The `--export-custom-assessments` flag produces one OpenVEX JSON file per varian
 ./vulnscout --project demo --export-custom-assessments
 ```
 
-To bundle the exported files into a `.tar.gz` archive instead, add the `--compress` flag:
-
-```bash
-./vulnscout --project demo --export-custom-assessments --compress
-```
-
 You can also use the `--variant` flag to export only a single variant:
 
 ```bash
@@ -334,7 +328,7 @@ You can also use the `--variant` flag to export only a single variant:
 
 ### Importing Custom Assessments
 
-The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, or a directory of OpenVEX JSON files and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
+The `--import-custom-assessments` flag reads a `.json` file or a directory of OpenVEX JSON files and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
 
 ```bash
 # Import from a single OpenVEX JSON file
@@ -342,9 +336,6 @@ The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, 
 
 # Import from a single OpenVEX JSON file without specifying the variant
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments/x86.json
-
-# Import from a tar.gz archive
-./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
 
 # Import from a directory of OpenVEX JSON files (one per variant)
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments/

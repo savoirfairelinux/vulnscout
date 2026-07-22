@@ -5,10 +5,8 @@
 
 """Unit tests for assessment_io.py helper functions."""
 
-import io
 import json
 import os
-import tarfile
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -19,11 +17,9 @@ from src.helpers.assessment_io import (
     is_openvex_doc,
     sanitize_variant_name,
     _get_vuln_info,
-    import_archive_bytes,
     import_directory,
     build_variant_by_name_map,
     build_openvex_doc,
-    build_openvex_archive,
     import_statements,
 )
 
@@ -230,79 +226,6 @@ class TestGetVulnInfo:
             # Should not call get_by_id since it's in cache
             mock_get.assert_not_called()
             assert result["url"] == ""
-
-
-# ---------------------------------------------------------------------------
-# import_archive_bytes() tests
-# ---------------------------------------------------------------------------
-
-class TestImportArchiveBytes:
-    """Test import_archive_bytes function."""
-
-    def test_invalid_tar_gz_bytes(self):
-        """GIVEN invalid tar.gz bytes WHEN imported THEN raise ValueError."""
-        invalid_bytes = b"this is not a tar file"
-        variant_by_name = {}
-        
-        with pytest.raises(ValueError, match="Unable to open tar.gz archive"):
-            import_archive_bytes(invalid_bytes, variant_by_name)
-
-    def test_tar_with_no_json_files(self):
-        """GIVEN a tar.gz with no JSON files WHEN imported THEN skip them."""
-        # Create a tar archive with non-JSON files
-        tar_buffer = io.BytesIO()
-        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
-            # Add non-JSON files
-            info = tarfile.TarInfo(name="readme.txt")
-            info.size = 5
-            tar.addfile(info, io.BytesIO(b"hello"))
-        
-        variant_by_name = {}
-        created, errors, skipped, variant_files_found = import_archive_bytes(
-            tar_buffer.getvalue(),
-            variant_by_name
-        )
-        
-        assert variant_files_found == 0
-        assert created == []
-        assert errors == []
-
-    def test_tar_with_missing_variant(self):
-        """GIVEN a tar with JSON for unknown variant WHEN imported THEN add error."""
-        tar_buffer = io.BytesIO()
-        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
-            doc = {"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}
-            json_bytes = json.dumps(doc).encode()
-            info = tarfile.TarInfo(name="unknown_variant.json")
-            info.size = len(json_bytes)
-            tar.addfile(info, io.BytesIO(json_bytes))
-        
-        variant_by_name = {}
-        created, errors, skipped, variant_files_found = import_archive_bytes(
-            tar_buffer.getvalue(),
-            variant_by_name
-        )
-        
-        assert variant_files_found == 0
-        assert len(errors) == 1
-        assert "No variant found" in errors[0]["error"]
-
-    def test_tar_with_directory_member(self):
-        """GIVEN a tar with directory entries WHEN imported THEN skip them."""
-        tar_buffer = io.BytesIO()
-        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
-            # Add a directory
-            info = tarfile.TarInfo(name="subdir/")
-            info.type = tarfile.DIRTYPE
-            tar.addfile(info)
-        
-        variant_by_name = {}
-        created, errors, skipped, variant_files_found = import_archive_bytes(
-            tar_buffer.getvalue(),
-            variant_by_name
-        )
-        
-        assert variant_files_found == 0
 
 
 # ---------------------------------------------------------------------------
@@ -639,91 +562,6 @@ class TestBuildOpenvexDoc:
         names1 = [s["vulnerability"]["name"] for s in doc1["statements"]]
         names2 = [s["vulnerability"]["name"] for s in doc2["statements"]]
         assert names1 == names2
-
-
-# ---------------------------------------------------------------------------
-# build_openvex_archive() tests
-# ---------------------------------------------------------------------------
-
-class TestBuildOpenvexArchive:
-    """Unit tests for build_openvex_archive."""
-
-    def test_empty_assessments_returns_empty_tar(self):
-        """GIVEN no assessments WHEN building archive THEN tar.gz with no members."""
-        result = build_openvex_archive([], {}, "author")
-        buf = io.BytesIO(result)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            assert len(tar.getmembers()) == 0
-
-    def test_assessment_without_variant_goes_to_unassigned(self):
-        """GIVEN assessment with variant_id=None WHEN building archive THEN unassigned.json."""
-        assess = mock.MagicMock()
-        assess.variant_id = None
-        assess.to_openvex_dict.return_value = {"status": "affected"}
-        assess.vuln_id = "CVE-2021-1234"
-        assess.packages = ["pkg@1.0"]
-        assess.source = "s"
-        assess.origin = "o"
-        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
-            result = build_openvex_archive([assess], {}, "author")
-        buf = io.BytesIO(result)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            names = [m.name for m in tar.getmembers()]
-        assert "unassigned.json" in names
-
-    def test_assessment_with_variant_uses_variant_name(self):
-        """GIVEN assessment with known variant WHEN building archive THEN file named after variant."""
-        import uuid as _uuid
-        vid = str(_uuid.uuid4())
-        assess = mock.MagicMock()
-        assess.variant_id = vid
-        assess.to_openvex_dict.return_value = {"status": "fixed"}
-        assess.vuln_id = "CVE-2021-5678"
-        assess.packages = ["lib@0.1"]
-        assess.source = "s"
-        assess.origin = "o"
-        variant_names = {vid: "my-variant"}
-        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
-            result = build_openvex_archive([assess], variant_names, "author")
-        buf = io.BytesIO(result)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            names = [m.name for m in tar.getmembers()]
-        assert "my-variant.json" in names
-
-    def test_variant_name_with_slash_is_sanitized(self):
-        """GIVEN a variant name with '/' WHEN building archive THEN slashes become underscores."""
-        import uuid as _uuid
-        vid = str(_uuid.uuid4())
-        assess = mock.MagicMock()
-        assess.variant_id = vid
-        assess.to_openvex_dict.return_value = None  # skipped
-        assess.packages = []
-        variant_names = {vid: "board/arch"}
-        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value=_EMPTY_VULN_INFO):
-            result = build_openvex_archive([assess], variant_names, "author")
-        buf = io.BytesIO(result)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            names = [m.name for m in tar.getmembers()]
-        assert "board_arch.json" in names
-
-    def test_json_content_is_valid_openvex(self):
-        """GIVEN an archive built from one assessment WHEN extracting THEN JSON is valid OpenVEX."""
-        assess = mock.MagicMock()
-        assess.variant_id = None
-        assess.to_openvex_dict.return_value = {"status": "not_affected"}
-        assess.vuln_id = "CVE-2021-9999"
-        assess.packages = ["pkg@2.0"]
-        assess.source = "scanner"
-        assess.origin = "custom"
-        with mock.patch("src.helpers.assessment_io._get_vuln_info", return_value={"description": "d", "aliases": [], "url": "https://example.com"}):
-            result = build_openvex_archive([assess], {}, "author", now_iso="2025-01-01T00:00:00Z")
-        buf = io.BytesIO(result)
-        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-            member = tar.getmembers()[0]
-            doc = json.load(tar.extractfile(member))
-        assert is_openvex_doc(doc)
-        assert doc["author"] == "author"
-        assert doc["timestamp"] == "2025-01-01T00:00:00Z"
 
 
 # ---------------------------------------------------------------------------

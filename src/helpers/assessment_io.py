@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Shared helpers for importing and exporting assessments as OpenVEX archives.
+"""Shared helpers for importing and exporting assessments as OpenVEX JSON.
 
 Both the CLI (``cmd_assessments.py``) and the web API (``routes/assessments.py``)
 perform the same build/parse logic.  This module contains the common core so
@@ -10,12 +10,9 @@ neither caller needs to re-implement it.
 
 from __future__ import annotations
 
-import io
 import json
 import os
-import tarfile
 import uuid as _uuid
-from collections import defaultdict
 from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
@@ -155,62 +152,6 @@ def build_openvex_doc(
         "version": 1,
         "statements": statements,
     }
-
-
-def build_openvex_archive(
-    handmade_assessments: "list[_Assessment]",
-    variant_names: dict[str, str],
-    author: str,
-    now_iso: str | None = None,
-) -> bytes:
-    """Build an in-memory tar.gz archive of OpenVEX JSON files.
-
-    One ``.json`` file is created per variant (named
-    ``<variant_name>.json``).  Assessments without a variant go into
-    ``unassigned.json``.
-
-    Parameters
-    ----------
-    handmade_assessments:
-        List of DB ``Assessment`` objects (usually from
-        ``Assessment.get_by_origin()``).
-    variant_names:
-        Mapping ``str(variant_id) → variant_name`` used to name the files.
-    author:
-        Author string written into every OpenVEX document header.
-    now_iso:
-        ISO-8601 timestamp written into every document.  Defaults to *now*.
-
-    Returns
-    -------
-    bytes
-        Raw tar.gz content.
-    """
-    if now_iso is None:
-        now_iso = _dt.now(_tz.utc).isoformat()
-
-    vuln_cache: "dict[str, _Vulnerability | None]" = {}
-
-    by_variant: "dict[str | None, list[_Assessment]]" = defaultdict(list)
-    for assess in handmade_assessments:
-        vid = str(assess.variant_id) if assess.variant_id else None
-        by_variant[vid].append(assess)
-
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-        for vid, assessments in by_variant.items():
-            filename = sanitize_variant_name(
-                variant_names.get(vid, "unassigned") if vid else "unassigned"
-            ) + ".json"
-
-            doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
-
-            json_bytes = json.dumps(doc, indent=2).encode("utf-8")
-            info = tarfile.TarInfo(name=filename)
-            info.size = len(json_bytes)
-            tar.addfile(info, io.BytesIO(json_bytes))
-
-    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -374,70 +315,6 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[s
         variant_by_name[sanitised] = v
         variant_by_name[v.name] = v
     return variant_by_name
-
-
-def import_archive_bytes(
-    file_bytes: bytes,
-    variant_by_name: "dict[str, _Variant]",
-    target_variant_id: "_uuid.UUID | None" = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
-    """Import OpenVEX assessments from a tar.gz archive (as raw bytes).
-
-    When ``target_variant_id`` is provided, every valid document is imported
-    into that variant and archive filenames are ignored.
-
-    Returns
-    -------
-    (created, errors, skipped, variant_files_found)
-    """
-    total_created: list[dict[str, Any]] = []
-    total_errors: list[dict[str, Any]] = []
-    total_skipped = 0
-    variant_files_found = 0
-
-    try:
-        tar = tarfile.open(fileobj=io.BytesIO(file_bytes), mode='r:gz')
-    except Exception:
-        raise ValueError("Unable to open tar.gz archive")
-
-    for member in tar.getmembers():
-        if not member.isfile() or not member.name.endswith(".json"):
-            continue
-        base = os.path.basename(member.name)
-        variant_name = base[: -len(".json")]
-        variant = variant_by_name.get(variant_name)
-        variant_id = target_variant_id if target_variant_id is not None else (variant.id if variant else None)
-        if variant_id is None:
-            total_errors.append({
-                "file": member.name,
-                "error": f"No variant found matching name '{variant_name}'",
-            })
-            continue
-
-        f = tar.extractfile(member)
-        if f is None:
-            continue
-        try:
-            doc = json.load(f)
-        except Exception:
-            total_errors.append({"file": member.name, "error": "Invalid JSON"})
-            continue
-
-        if not is_openvex_doc(doc):
-            total_errors.append({
-                "file": member.name,
-                "error": "Not a valid OpenVEX document",
-            })
-            continue
-
-        variant_files_found += 1
-        c, e, s = import_statements(doc["statements"], variant_id)
-        total_created.extend(c)
-        total_errors.extend(e)
-        total_skipped += s
-
-    tar.close()
-    return total_created, total_errors, total_skipped, variant_files_found
 
 
 def import_directory(

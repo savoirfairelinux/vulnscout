@@ -302,21 +302,16 @@ The `--export-custom-assessments` flag produces one OpenVEX JSON file per varian
 # Export as individual files (one per variant)
 ./vulnscout --project demo --export-custom-assessments
 
-# Export as a compressed .tar.gz archive
-./vulnscout --project demo --export-custom-assessments --compress
 ----
 
 ==== Importing Custom Assessments
 
-The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, or a directory of OpenVEX JSON files and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
+The `--import-custom-assessments` flag reads a `.json` file or a directory of OpenVEX JSON files and replays the assessment statements into the database, matching them to existing vulnerabilities and packages.
 
 [source,shell]
 ----
 # Import from a single OpenVEX JSON file
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments.json
-
-# Import from a tar.gz archive
-./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
 
 # Import from a directory of OpenVEX JSON files (one per variant)
 ./vulnscout --project demo --import-custom-assessments /path/to/assessments/
@@ -328,7 +323,7 @@ Both commands can be combined with other flags:
 ----
 ./vulnscout --project demo \
   --add-spdx /path/to/sbom.spdx.json \
-  --import-custom-assessments /path/to/custom_assessments.tar.gz \
+  --import-custom-assessments /path/to/assessments.json \
   --export-spdx --report summary.adoc
 ----
 
