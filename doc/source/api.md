@@ -456,16 +456,16 @@ Returns only user-created assessments (not scan-imported).
 GET /api/assessments/review/export
 ```
 
-Downloads a `.tar.gz` archive containing one OpenVEX JSON file per variant.
+Downloads one OpenVEX JSON document for a selected variant.
 
 **Query parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `author` | string | Author name in the export (default: `"Savoir-faire Linux"`) |
-| `variant_id` | UUID | Restrict export to a variant; repeat the parameter to select multiple variants |
+| `variant_id` | UUID | Required. The single variant to export. |
 
-**Response:** Binary `.tar.gz` file (`Content-Type: application/gzip`).
+**Response:** OpenVEX JSON file (`Content-Type: application/json`).
 
 #### Import Review Assessments
 
@@ -473,14 +473,14 @@ Downloads a `.tar.gz` archive containing one OpenVEX JSON file per variant.
 POST /api/assessments/review/import
 ```
 
-Upload an OpenVEX `.json` or `.tar.gz` file. Pass a `variant_id` form field to import into a selected variant without relying on the uploaded filename. Without `variant_id`, JSON filenames must match variant names.
+Upload an OpenVEX `.json` file into a selected variant. The uploaded filename is not used to select the target.
 
 **Request:** Multipart form-data with the following fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `file` | file | OpenVEX `.json` document or `.tar.gz` archive (required) |
-| `variant_id` | UUID | Optional target variant. For archives, all contained OpenVEX documents are imported into this variant. |
+| `file` | file | OpenVEX `.json` document (required) |
+| `variant_id` | UUID | Required target variant. |
 
 **Response:**
 ```json
@@ -500,14 +500,14 @@ Upload an OpenVEX `.json` or `.tar.gz` file. Pass a `variant_id` form field to i
 GET /api/assessments/review/export-custom-data
 ```
 
-Exports all handmade (review) assessments, custom CVSS scores, and time estimates as a single JSON file.
+Exports handmade (review) assessments, custom CVSS scores, and time estimates as a single JSON file.
 
 **Query parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `variant_id` | UUID | Restrict to a single variant |
-| `project_id` | UUID | Restrict to all variants of a project |
+| `variant_id` | UUID | Restrict to selected variants; may be repeated. |
+| `project_id` | UUID | Restrict to all variants in a project. |
 
 **Response:** JSON file download (`Content-Disposition: attachment; filename=custom_data.json`) containing:
 
@@ -535,11 +535,7 @@ Accepts either:
 - `multipart/form-data` with a `file` field containing a `.json` file.
 - `application/json` body with the custom-data payload directly.
 
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `variant_id` | UUID | *(optional)* Force all imported records to a specific variant |
+The records keep the variant identifiers embedded in the file.
 
 **Response:**
 ```json

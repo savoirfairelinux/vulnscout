@@ -7,9 +7,9 @@ type Props = {
     mode: 'import' | 'export';
     variants: Variant[];
     selectedVariantIds: string[];
-    exportFormat: 'custom' | 'openvex';
+    transferFormat: 'custom' | 'openvex';
     onSelectedVariantIdsChange: (ids: string[]) => void;
-    onExportFormatChange: (format: 'custom' | 'openvex') => void;
+    onTransferFormatChange: (format: 'custom' | 'openvex') => void;
     onConfirm: () => void;
     onCancel: () => void;
 };
@@ -18,13 +18,16 @@ function ReviewTransferModal({
     mode,
     variants,
     selectedVariantIds,
-    exportFormat,
+    transferFormat,
     onSelectedVariantIdsChange,
-    onExportFormatChange,
+    onTransferFormatChange,
     onConfirm,
     onCancel,
 }: Readonly<Props>) {
     const title = mode === 'export' ? 'Export review data' : 'Import review data';
+    const isOpenVex = transferFormat === 'openvex';
+    const needsVariantSelection = isOpenVex || mode === 'export';
+    const supportsMultipleVariants = !isOpenVex;
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -53,43 +56,45 @@ function ReviewTransferModal({
                 </div>
 
                 <div className="space-y-5 p-5">
-                    {mode === 'export' && (
+                    <fieldset>
+                        <legend className="mb-2 text-sm font-semibold text-gray-200">Format</legend>
+                        <div className="grid grid-cols-2 gap-3">
+                            <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
+                                <input type="radio" name="review-transfer-format" checked={transferFormat === 'custom'} onChange={() => onTransferFormatChange('custom')} />
+                                <span><span className="block font-medium">VulnScout JSON</span><span className="text-xs text-gray-400">{mode === 'export' ? 'Assessments, CVSS, and time estimates' : 'Uses the variants recorded in the file'}</span></span>
+                            </label>
+                            <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
+                                <input type="radio" name="review-transfer-format" checked={isOpenVex} onChange={() => onTransferFormatChange('openvex')} />
+                                <span><span className="block font-medium">OpenVEX</span><span className="text-xs text-gray-400">One variant in a JSON document</span></span>
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    {needsVariantSelection && (
                         <fieldset>
-                            <legend className="mb-2 text-sm font-semibold text-gray-200">Format</legend>
-                            <div className="grid grid-cols-2 gap-3">
-                                <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
-                                    <input type="radio" name="review-export-format" checked={exportFormat === 'custom'} onChange={() => onExportFormatChange('custom')} />
-                                    <span><span className="block font-medium">VulnScout JSON</span><span className="text-xs text-gray-400">Assessments, CVSS, and time estimates</span></span>
-                                </label>
-                                <label className="flex cursor-pointer items-start gap-2 rounded border border-gray-600 p-3 text-gray-100">
-                                    <input type="radio" name="review-export-format" checked={exportFormat === 'openvex'} onChange={() => onExportFormatChange('openvex')} />
-                                    <span><span className="block font-medium">OpenVEX</span><span className="text-xs text-gray-400">Assessment archive compatible with the CLI</span></span>
-                                </label>
+                            <legend className="float-left text-sm font-semibold text-gray-200">{supportsMultipleVariants ? 'Variants' : 'Variant'}</legend>
+                            {supportsMultipleVariants && (
+                                <div className="mb-2 flex items-center justify-end">
+                                    <button type="button" className="text-sm text-cyan-300 hover:text-cyan-200" onClick={() => onSelectedVariantIdsChange(selectedVariantIds.length === variants.length ? [] : variants.map(variant => variant.id))}>
+                                        {selectedVariantIds.length === variants.length ? 'Clear all' : 'Select all'}
+                                    </button>
+                                </div>
+                            )}
+                            <div className="clear-both max-h-64 space-y-1 overflow-y-auto rounded border border-gray-600 p-2">
+                                {variants.map(variant => (
+                                    <label key={variant.id} className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 text-sm text-gray-100 hover:bg-gray-700">
+                                        <input type={supportsMultipleVariants ? 'checkbox' : 'radio'} name="review-openvex-variant" checked={supportsMultipleVariants ? selectedVariantIds.includes(variant.id) : selectedVariantIds[0] === variant.id} onChange={() => supportsMultipleVariants ? toggleVariant(variant.id) : onSelectedVariantIdsChange([variant.id])} />
+                                        {variant.name}
+                                    </label>
+                                ))}
                             </div>
                         </fieldset>
                     )}
-
-                    <fieldset>
-                        <legend className="float-left text-sm font-semibold text-gray-200">Variants</legend>
-                        <div className="mb-2 flex items-center justify-end">
-                            <button type="button" className="text-sm text-cyan-300 hover:text-cyan-200" onClick={() => onSelectedVariantIdsChange(selectedVariantIds.length === variants.length ? [] : variants.map(v => v.id))}>
-                                {selectedVariantIds.length === variants.length ? 'Clear all' : 'Select all'}
-                            </button>
-                        </div>
-                        <div className="clear-both max-h-64 space-y-1 overflow-y-auto rounded border border-gray-600 p-2">
-                            {variants.map(variant => (
-                                <label key={variant.id} className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 text-sm text-gray-100 hover:bg-gray-700">
-                                    <input type="checkbox" checked={selectedVariantIds.includes(variant.id)} onChange={() => toggleVariant(variant.id)} />
-                                    {variant.name}
-                                </label>
-                            ))}
-                        </div>
-                    </fieldset>
                 </div>
 
                 <div className="flex justify-end gap-3 border-t border-gray-600 px-5 py-4">
                     <button type="button" onClick={onCancel} className="rounded border border-gray-500 px-4 py-2 text-sm text-gray-200 hover:bg-gray-700">Cancel</button>
-                    <button type="button" onClick={onConfirm} disabled={selectedVariantIds.length === 0} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50">
+                    <button type="button" onClick={onConfirm} disabled={needsVariantSelection && (isOpenVex ? selectedVariantIds.length !== 1 : selectedVariantIds.length === 0)} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50">
                         {mode === 'export' ? 'Export' : 'Choose file'}
                     </button>
                 </div>

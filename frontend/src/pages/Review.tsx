@@ -11,7 +11,7 @@ import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
-import { downloadBlob, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -19,7 +19,6 @@ import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
 import Packages from '../handlers/packages';
-import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 import ReviewTransferModal from '../components/ReviewTransferModal';
@@ -134,7 +133,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
     const [variantNames, setVariantNames] = useState<Record<string, string>>({});
-    const [projectNames, setProjectNames] = useState<Record<string, string>>({});
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
     const [editVariants, setEditVariants] = useState<Variant[]>([]);
@@ -146,7 +144,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [showBanner, setShowBanner] = useState(false);
     const [transferMode, setTransferMode] = useState<'import' | 'export' | null>(null);
     const [transferVariantIds, setTransferVariantIds] = useState<string[]>([]);
-    const [exportFormat, setExportFormat] = useState<'custom' | 'openvex'>('custom');
+    const [transferFormat, setTransferFormat] = useState<'custom' | 'openvex'>('custom');
 
     const showMessage = useCallback((message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -185,11 +183,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             for (const v of vs) map[v.id] = v.name;
             setVariantNames(map);
             setAllVariants(vs);
-        }).catch(() => {});
-        Projects.list().then(ps => {
-            const map: Record<string, string> = {};
-            for (const p of ps) map[p.id] = p.name;
-            setProjectNames(map);
         }).catch(() => {});
     }, []);
 
@@ -444,15 +437,32 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }, [allVariants, projectId, variantId]);
 
     const openTransfer = useCallback((mode: 'import' | 'export') => {
-        setTransferVariantIds(variantId ? [variantId] : transferVariants.map(v => v.id));
+        setTransferFormat('custom');
+        setTransferVariantIds(mode === 'export'
+            ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
+            : []);
         setTransferMode(mode);
     }, [transferVariants, variantId]);
+
+    const changeTransferFormat = useCallback((format: 'custom' | 'openvex') => {
+        setTransferFormat(format);
+        if (format === 'custom') {
+            setTransferVariantIds(transferMode === 'export'
+                ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
+                : []);
+            return;
+        }
+        const defaultVariantId = variantId && transferVariants.some(v => v.id === variantId)
+            ? variantId
+            : transferVariants[0]?.id;
+        setTransferVariantIds(defaultVariantId ? [defaultVariantId] : []);
+    }, [transferMode, transferVariants, variantId]);
 
     const handleExportReview = useCallback(async () => {
         try {
             const params = new URLSearchParams();
-            transferVariantIds.forEach(id => params.append('variant_id', id));
-            const endpoint = exportFormat === 'openvex' ? 'export' : 'export-custom-data';
+            transferVariantIds.forEach(variantId => params.append('variant_id', variantId));
+            const endpoint = transferFormat === 'openvex' ? 'export' : 'export-custom-data';
             const url = new URL(
                 import.meta.env.VITE_API_URL + `/api/assessments/review/${endpoint}` +
                 (params.toString() ? `?${params.toString()}` : ''),
@@ -461,26 +471,23 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const res = await fetch(url.toString(), { mode: 'cors' });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                showMessage(err.error || 'Failed to export custom data.', 'error');
+                showMessage(err.error || 'Failed to export review data.', 'error');
                 return;
             }
             const ts = formatTimestampForFilename();
-            const pName = projectId ? projectNames[projectId]
-                : variantId ? projectNames[allVariants.find(v => v.id === variantId)?.project_id ?? ''] ?? ''
-                : '';
-            const vName = transferVariantIds.length === 1 ? variantNames[transferVariantIds[0]] ?? '' : '';
-            const label = [pName, vName].filter(Boolean).join('_') || 'all';
-            if (exportFormat === 'openvex') {
-                downloadBlob(await res.blob(), `review_openvex_${sanitizeFilename(label)}_${ts}.tar.gz`);
+            if (transferFormat === 'openvex') {
+                const label = variantNames[transferVariantIds[0]] ?? 'variant';
+                downloadJson(await res.json(), `review_openvex_${sanitizeFilename(label)}_${ts}.json`);
             } else {
+                const label = transferVariantIds.length === 1 ? variantNames[transferVariantIds[0]] ?? 'variant' : 'all';
                 downloadJson(await res.json(), `custom_data_${sanitizeFilename(label)}_${ts}.json`);
             }
             setTransferMode(null);
         } catch (err) {
             console.error('Export error:', err);
-            showMessage('Failed to export custom data.', 'error');
+            showMessage('Failed to export review data.', 'error');
         }
-    }, [variantId, projectId, showMessage, projectNames, variantNames, allVariants, transferVariantIds, exportFormat]);
+    }, [showMessage, variantNames, transferVariantIds, transferFormat]);
 
     const handleImportReview = useCallback(() => {
         setTransferMode(null);
@@ -490,10 +497,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const handleFileSelected = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-        const targetVariantIds = transferVariantIds.length > 0
-            ? transferVariantIds
-            : variantId ? [variantId] : [];
-        const targets: (string | undefined)[] = targetVariantIds.length > 0 ? targetVariantIds : [undefined];
 
         type ImportResult = {
             status?: string;
@@ -505,75 +508,44 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             errors?: { error?: string }[];
         };
 
-        // Imports run one variant at a time so concurrent requests cannot
-        // race on shared records created during import.
-        const runSequentially = async (doImport: (targetVariantId?: string) => Promise<ImportResult>) => {
-            const results: ImportResult[] = [];
-            for (const targetVariantId of targets) {
-                results.push(await doImport(targetVariantId));
-            }
-            return results;
-        };
-
-        const importOpenVex = async (targetVariantId?: string): Promise<ImportResult> => {
+        if (transferFormat === 'openvex') {
+            setImportStatus("Importing...");
             const formData = new FormData();
             formData.append('file', file);
-            if (targetVariantId) formData.append('variant_id', targetVariantId);
-            const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-            const response = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
-            return response.json();
-        };
-
-        const refreshIfAnySucceeded = (results: ImportResult[]) => {
-            if (results.some(data => data.status === 'success')) {
-                Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
-            }
-        };
-
-        const finishOpenVexImport = (results: ImportResult[]) => {
-            refreshIfAnySucceeded(results);
-            const failed = results.find(data => data.status !== 'success');
-            if (!failed) {
-                showMessage('Assessments imported successfully!', 'success');
-            } else {
-                showMessage(`Import error: ${failed.error || 'Unknown error'}`, 'error');
-            }
-            setImportStatus(null);
-        };
-
-        // Old OpenVEX format: .tar.gz or .tgz files — use legacy import path
-        if (file.name.endsWith('.tar.gz') || file.name.endsWith('.tgz')) {
-            setImportStatus("Importing...");
-            runSequentially(importOpenVex)
-                .then(finishOpenVexImport)
+            formData.append('variant_id', transferVariantIds[0]);
+            fetch(new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href).toString(), {
+                method: 'POST',
+                body: formData,
+                mode: 'cors',
+            })
+                .then(response => response.json() as Promise<ImportResult>)
+                .then(result => {
+                    if (result.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                        showMessage('Assessments imported successfully!', 'success');
+                    } else {
+                        showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
+                    }
+                })
                 .catch(err => {
                     console.error(err);
                     showMessage('Import failed', 'error');
-                    setImportStatus(null);
                 })
                 .finally(() => {
+                    setImportStatus(null);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                 });
             return;
         }
 
-        // JSON files: detect format and route to appropriate backend endpoint
+        // VulnScout JSON carries its own variant IDs, so no target selection
+        // or override is sent with the request.
         const reader = new FileReader();
         reader.onload = async () => {
             try {
                 const text = reader.result as string;
                 const parsed = JSON.parse(text);
 
-                // Detect old OpenVEX format: has @context with "openvex"
-                if (parsed?.['@context'] && String(parsed['@context']).includes('openvex')) {
-                    setImportStatus("Importing...");
-                    const results = await runSequentially(importOpenVex);
-                    finishOpenVexImport(results);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                    return;
-                }
-
-                // New custom data format — send to backend import-custom-data endpoint
                 if (!parsed?.version || !parsed?.assessments) {
                     showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
                     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -581,45 +553,33 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 }
 
                 setImportStatus("Importing...");
-                const results = await runSequentially(async targetVariantId => {
-                    const params = new URLSearchParams();
-                    if (targetVariantId) params.set('variant_id', targetVariantId);
-                    const url = new URL(
-                        import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data" +
-                        (params.toString() ? `?${params.toString()}` : ''),
-                        window.location.href,
-                    );
-                    const response = await fetch(url.toString(), {
-                        method: 'POST',
-                        mode: 'cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: text,
-                    });
-                    return response.json();
+                const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data", window.location.href);
+                const result = await fetch(url.toString(), {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: text,
                 });
-                refreshIfAnySucceeded(results);
-                const failed = results.find(result => result.status !== 'success');
+                const data = await result.json() as ImportResult;
 
-                if (!failed) {
-                    const result = results.reduce((totals, current) => ({
-                        assessments_imported: totals.assessments_imported + (current.assessments_imported || 0),
-                        assessments_skipped: totals.assessments_skipped + (current.assessments_skipped || 0),
-                        cvss_imported: totals.cvss_imported + (current.cvss_imported || 0),
-                        time_estimates_imported: totals.time_estimates_imported + (current.time_estimates_imported || 0),
-                        errors: [...totals.errors, ...(current.errors || [])],
-                    }), { assessments_imported: 0, assessments_skipped: 0, cvss_imported: 0, time_estimates_imported: 0, errors: [] as unknown[] });
+                if (data.status === 'success') {
+                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    const assessmentsImported = data.assessments_imported ?? 0;
+                    const assessmentsSkipped = data.assessments_skipped ?? 0;
+                    const cvssImported = data.cvss_imported ?? 0;
+                    const timeEstimatesImported = data.time_estimates_imported ?? 0;
                     const summary: string[] = [];
-                    if (result.assessments_imported > 0) {
-                        let msg = `${result.assessments_imported} assessment(s) imported`;
-                        if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
+                    if (assessmentsImported > 0) {
+                        let msg = `${assessmentsImported} assessment(s) imported`;
+                        if (assessmentsSkipped) msg += `, ${assessmentsSkipped} skipped`;
                         summary.push(msg);
                     }
-                    if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
-                    if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
-                    if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
+                    if (cvssImported > 0) summary.push(`${cvssImported} CVSS score(s)`);
+                    if (timeEstimatesImported > 0) summary.push(`${timeEstimatesImported} time estimate(s)`);
+                    if (data.errors?.length) summary.push(`${data.errors.length} error(s)`);
                     showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
                 } else {
-                    showMessage(`Import error: ${failed.errors?.[0]?.error || failed.error || 'Unknown error'}`, 'error');
+                    showMessage(`Import error: ${data.errors?.[0]?.error || data.error || 'Unknown error'}`, 'error');
                 }
                 setImportStatus(null);
             } catch (err) {
@@ -631,7 +591,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferVariantIds]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -1433,7 +1393,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={() => openTransfer('import')}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Import custom data (assessments, CVSS, time estimates)"
+                        title="Import review data"
                     >
                         <FontAwesomeIcon icon={faFileImport} />
                         Import
@@ -1441,7 +1401,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".json,.tar.gz,.tgz,application/json,application/gzip"
+                        accept=".json,application/json"
                         className="hidden"
                         onChange={handleFileSelected}
                     />
@@ -1449,7 +1409,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <button
                         onClick={() => openTransfer('export')}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Export custom data (assessments, CVSS, time estimates)"
+                        title="Export review data"
                     >
                         <FontAwesomeIcon icon={faFileExport} />
                         Export
@@ -1462,9 +1422,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     mode={transferMode}
                     variants={transferVariants}
                     selectedVariantIds={transferVariantIds}
-                    exportFormat={exportFormat}
+                    transferFormat={transferFormat}
                     onSelectedVariantIdsChange={setTransferVariantIds}
-                    onExportFormatChange={setExportFormat}
+                    onTransferFormatChange={changeTransferFormat}
                     onConfirm={transferMode === 'export' ? handleExportReview : handleImportReview}
                     onCancel={() => setTransferMode(null)}
                 />

@@ -11,7 +11,6 @@
 
 import io
 import json
-import tarfile
 import uuid
 
 import pytest
@@ -406,45 +405,34 @@ def test_assessments_list_by_project_invalid(client):
 
 # ── GET /api/assessments/review/export ───────────────────────────────────
 
-def test_export_empty(client):
-    """No handmade assessments → 404."""
+def test_export_requires_one_variant(client):
+    """OpenVEX export needs an explicit single variant."""
     resp = client.get("/api/assessments/review/export")
-    assert resp.status_code == 404
+    assert resp.status_code == 400
+    assert "variant" in json.loads(resp.data)["error"].lower()
 
 
-def test_export_tar_gz(client):
+def test_export_openvex_json(client):
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
     assert resp.status_code == 200
-    assert resp.content_type == "application/gzip"
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        members = tar.getmembers()
-        assert len(members) >= 1
-        # Each member should be a valid OpenVEX JSON
-        for m in members:
-            assert m.name.endswith(".json")
-            f = tar.extractfile(m)
-            doc = json.load(f)
-            assert "openvex" in doc.get("@context", "")
-            assert isinstance(doc.get("statements"), list)
-            for stmt in doc["statements"]:
-                assert "vulnerability" in stmt
-                assert "products" in stmt
-                assert "status" in stmt
+    assert resp.content_type == "application/json"
+    doc = json.loads(resp.data)
+    assert "openvex" in doc.get("@context", "")
+    assert isinstance(doc.get("statements"), list)
+    for stmt in doc["statements"]:
+        assert "vulnerability" in stmt
+        assert "products" in stmt
+        assert "status" in stmt
 
 
 def test_export_contains_variant_name(client):
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        names = [m.name for m in tar.getmembers()]
-        # The demo variant is named "default"
-        assert "default.json" in names
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
+    assert 'review_openvex_default.json' in resp.headers["Content-Disposition"]
 
 
-def test_export_selected_variants(client, app):
+def test_export_rejects_multiple_variants(client, app):
     from src.extensions import db
     from src.models import Variant
 
@@ -453,16 +441,12 @@ def test_export_selected_variants(client, app):
         db.session.add(Variant(id=second_variant_id, project_id=PROJECT_UUID, name="second"))
         db.session.commit()
 
-    _create_handmade_assessment(client)
-    _create_handmade_assessment(client, variant_id=second_variant_id)
     resp = client.get(
         "/api/assessments/review/export"
         f"?variant_id={VARIANT_UUID}&variant_id={second_variant_id}"
     )
 
-    assert resp.status_code == 200
-    with tarfile.open(fileobj=io.BytesIO(resp.data), mode="r:gz") as tar:
-        assert {member.name for member in tar.getmembers()} == {"default.json", "second.json"}
+    assert resp.status_code == 400
 
 
 def test_export_selected_variants_invalid_uuid(client):
@@ -474,19 +458,16 @@ def test_export_selected_variants_invalid_uuid(client):
 def test_export_enriched_fields(client):
     """Exported statements should have enriched vulnerability and product fields."""
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        for m in tar.getmembers():
-            doc = json.load(tar.extractfile(m))
-            for stmt in doc["statements"]:
-                vuln = stmt["vulnerability"]
-                assert "name" in vuln
-                assert "description" in vuln
-                assert "aliases" in vuln
-                for prod in stmt["products"]:
-                    assert "identifiers" in prod
-                assert "scanners" in stmt
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
+    doc = json.loads(resp.data)
+    for stmt in doc["statements"]:
+        vuln = stmt["vulnerability"]
+        assert "name" in vuln
+        assert "description" in vuln
+        assert "aliases" in vuln
+        for prod in stmt["products"]:
+            assert "identifiers" in prod
+        assert "scanners" in stmt
 
 
 # ── POST /api/assessments/review/import ──────────────────────────────────
@@ -503,18 +484,6 @@ def _make_openvex_json(variant_name, statements):
     }).encode("utf-8")
 
 
-def _make_tar_gz(files_dict):
-    """Build a tar.gz archive from {filename: bytes} dict."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for name, data in files_dict.items():
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-    buf.seek(0)
-    return buf
-
-
 def test_import_no_file(client):
     resp = client.post("/api/assessments/review/import",
                        content_type="multipart/form-data")
@@ -522,7 +491,7 @@ def test_import_no_file(client):
 
 
 def test_import_json_valid(client):
-    """Import a single .json named after the demo variant."""
+    """Import a single .json document into the selected variant."""
     statements = [{
         "vulnerability": {"name": "CVE-2020-35492"},
         "products": [{"@id": "cairo@1.16.0"}],
@@ -535,7 +504,7 @@ def test_import_json_valid(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -544,7 +513,7 @@ def test_import_json_valid(client):
     assert result["imported"] >= 1
 
 
-def test_import_json_unknown_variant(client):
+def test_import_json_requires_selected_variant(client):
     data = _make_openvex_json("unknown_variant", [])
     resp = client.post(
         "/api/assessments/review/import",
@@ -552,7 +521,7 @@ def test_import_json_unknown_variant(client):
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
-    assert "variant" in json.loads(resp.data)["error"].lower()
+    assert "variant_id" in json.loads(resp.data)["error"]
 
 
 def test_import_json_selected_variant_ignores_filename(client):
@@ -585,37 +554,10 @@ def test_import_json_selected_variant_not_found(client):
     assert "variant" in json.loads(resp.data)["error"].lower()
 
 
-def test_import_archive_selected_variant_ignores_entry_names(client):
-    statements = [{
-        "vulnerability": {"name": "CVE-2020-35492"},
-        "products": [{"@id": "cairo@1.16.0"}],
-        "status": "affected",
-        "status_notes": "archive import",
-        "justification": "",
-        "impact_statement": "",
-        "action_statement": "",
-    }]
-    archive = _make_tar_gz({"no-such-variant.json": _make_openvex_json("no-such-variant", statements)})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={
-            "file": (archive, "export.tar.gz"),
-            "variant_id": str(VARIANT_UUID),
-        },
-        content_type="multipart/form-data",
-    )
-
-    assert resp.status_code == 200
-    result = json.loads(resp.data)
-    assert result["status"] == "success"
-    assert result["imported"] >= 1
-    assert result["errors"] == []
-
-
 def test_import_json_invalid_json(client):
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(b"not json"), "default.json")},
+        data={"file": (io.BytesIO(b"not json"), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
@@ -625,82 +567,11 @@ def test_import_json_not_openvex(client):
     data = json.dumps({"foo": "bar"}).encode()
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
     assert "openvex" in json.loads(resp.data)["error"].lower()
-
-
-def test_import_tar_gz_valid(client):
-    """Import a tar.gz with one file named after the demo variant."""
-    statements = [{
-        "vulnerability": {"name": "CVE-2020-35492"},
-        "products": [{"@id": "cairo@1.16.0"}],
-        "status": "not_affected",
-        "justification": "component_not_present",
-        "impact_statement": "not present",
-        "status_notes": "",
-        "action_statement": "",
-    }]
-    content = _make_openvex_json("default", statements)
-    tar_buf = _make_tar_gz({"default.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 200
-    result = json.loads(resp.data)
-    assert result["status"] == "success"
-    assert result["imported"] >= 1
-
-
-def test_import_tar_gz_unknown_variant(client):
-    """Archive with a .json not matching any variant → error."""
-    content = _make_openvex_json("nonexistent", [{
-        "vulnerability": {"name": "CVE-2020-35492"},
-        "products": [{"@id": "cairo@1.16.0"}],
-        "status": "affected",
-    }])
-    tar_buf = _make_tar_gz({"nonexistent.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 400
-
-
-def test_import_tar_gz_invalid_archive(client):
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (io.BytesIO(b"notatar"), "bad.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 400
-
-
-def test_import_tar_gz_invalid_json_inside(client):
-    tar_buf = _make_tar_gz({"default.json": b"not json"})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    # The bad JSON is reported as error but request succeeds if no valid files
-    assert resp.status_code in (200, 400)
-
-
-def test_import_tar_gz_not_openvex_inside(client):
-    content = json.dumps({"not": "openvex"}).encode()
-    tar_buf = _make_tar_gz({"default.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code in (200, 400)
 
 
 def test_import_unsupported_file_type(client):
@@ -736,7 +607,7 @@ def test_import_duplicate_skipped(client):
     # First import
     resp1 = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp1.status_code == 200
@@ -746,7 +617,7 @@ def test_import_duplicate_skipped(client):
     # Second import — same data
     resp2 = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp2.status_code == 200
@@ -765,7 +636,7 @@ def test_import_statement_missing_vuln(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -781,7 +652,7 @@ def test_import_statement_missing_status(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -797,7 +668,7 @@ def test_import_statement_missing_products(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -819,7 +690,7 @@ def test_import_product_string_format(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -841,7 +712,7 @@ def test_import_product_without_version(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -855,12 +726,12 @@ def test_export_import_round_trip(client):
     """Export Review → Import Review should be a valid round-trip."""
     _create_handmade_assessment(client, status="affected")
     # Export
-    export_resp = client.get("/api/assessments/review/export")
+    export_resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
     assert export_resp.status_code == 200
     # Import the exported file back
     import_resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(export_resp.data), "review.tar.gz")},
+        data={"file": (io.BytesIO(export_resp.data), "review.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert import_resp.status_code == 200
@@ -1004,8 +875,8 @@ def test_review_time_estimates_matches_export_via_patch_flow(app, client):
     rows_all = [e for e in json.loads(resp_all.data) if e["vuln_id"] == "CVE-2020-35492"]
     assert len({e["variant_id"] for e in rows_all}) == 2
 
-    # Export endpoint (project scope) → two time-estimate entries, matching.
-    exp = client.get(f"/api/assessments/review/export-custom-data?project_id={PROJECT_UUID}")
+    # The all-variant export retains both time-estimate entries.
+    exp = client.get("/api/assessments/review/export-custom-data")
     assert exp.status_code == 200
     exported = json.loads(exp.data)["time_estimates"]
     exp_rows = [e for e in exported if e["vuln_id"] == "CVE-2020-35492"]
@@ -1079,14 +950,13 @@ def test_export_custom_data_basic(client):
 
 
 def test_export_custom_data_by_variant(client):
-    """Filter by variant_id returns only that variant's assessments."""
     _create_handmade_assessment(client)
     resp = client.get(f"/api/assessments/review/export-custom-data?variant_id={VARIANT_UUID}")
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert len(data["assessments"]) >= 1
-    for a in data["assessments"]:
-        assert a["variant_id"] == str(VARIANT_UUID)
+    for assessment in data["assessments"]:
+        assert assessment["variant_id"] == str(VARIANT_UUID)
 
 
 def test_export_custom_data_by_project(client):

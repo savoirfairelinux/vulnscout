@@ -90,10 +90,9 @@ jest.mock('../../src/helpers/exportJson', () => ({
 }));
 
 import Review from '../../src/pages/Review';
-import { downloadBlob, downloadJson } from '../../src/helpers/exportJson';
+import { downloadJson } from '../../src/helpers/exportJson';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
-const mockedDownloadBlob = downloadBlob as jest.MockedFunction<typeof downloadBlob>;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -219,6 +218,11 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
             if (url.includes('/api/assessments/review/export-custom-data')) {
                 return exportOk
                     ? JSON.stringify({ version: 1, assessments: [] })
+                    : { status: 500, body: JSON.stringify({}) };
+            }
+            if (url.includes('/api/assessments/review/export')) {
+                return exportOk
+                    ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
@@ -1302,20 +1306,26 @@ describe('Review — deleting an assessment', () => {
 // ===========================================================================
 
 describe('Review — import and export', () => {
-    test('exporting custom data downloads a file', async () => {
+    test('exports selected variants as VulnScout JSON', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
         await user.click(screen.getByText('Export'));
-        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Variant Beta' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Export' }));
         await waitFor(() => {
             expect(mockedDownloadJson).toHaveBeenCalled();
         });
+        const exportCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export-custom-data'));
+        expect(String(exportCall?.[0])).toContain('variant_id=v1');
+        expect(String(exportCall?.[0])).not.toContain('variant_id=v2');
+        expect(mockedDownloadJson.mock.calls[0][1]).toContain('custom_data_Variant_Alpha_');
     });
 
-    test('exporting when scoped to a variant builds a variant-labelled filename', async () => {
+    test('VulnScout JSON export defaults to the current variant', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review variantId="v1" />);
         const user = userEvent.setup();
@@ -1326,12 +1336,11 @@ describe('Review — import and export', () => {
         await waitFor(() => {
             expect(mockedDownloadJson).toHaveBeenCalled();
         });
-        const filename = mockedDownloadJson.mock.calls[0][1] as string;
-        expect(filename).toContain('Project_One');
-        expect(filename).toContain('Variant_Alpha');
+        const exportCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export-custom-data'));
+        expect(String(exportCall?.[0])).toContain('variant_id=v1');
     });
 
-    test('exports selected variants as an OpenVEX archive', async () => {
+    test('exports one selected variant as an OpenVEX JSON document', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
@@ -1340,12 +1349,15 @@ describe('Review — import and export', () => {
         await user.click(screen.getByText('Export'));
         const dialog = screen.getByRole('dialog');
         await user.click(within(dialog).getByRole('radio', { name: /OpenVEX/ }));
+        await user.click(within(dialog).getByRole('radio', { name: 'Variant Beta' }));
         await user.click(within(dialog).getByRole('button', { name: 'Export' }));
 
-        await waitFor(() => expect(mockedDownloadBlob).toHaveBeenCalled());
+        await waitFor(() => expect(mockedDownloadJson).toHaveBeenCalled());
         const exportCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/api/assessments/review/export?'));
-        expect(String(exportCall?.[0])).toContain('variant_id=v1');
         expect(String(exportCall?.[0])).toContain('variant_id=v2');
+        expect(String(exportCall?.[0])).not.toContain('variant_id=v1');
+        expect(mockedDownloadJson.mock.calls[0][1]).toContain('review_openvex_Variant_Beta_');
+        expect(mockedDownloadJson.mock.calls[0][1]).toContain('.json');
     });
 
     test('reports an error when export fails', async () => {
@@ -1356,7 +1368,7 @@ describe('Review — import and export', () => {
 
         await user.click(screen.getByText('Export'));
         await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
-        await screen.findByText('Failed to export custom data.');
+        await screen.findByText('Failed to export review data.');
         expect(mockedDownloadJson).not.toHaveBeenCalled();
     });
 
@@ -1368,18 +1380,24 @@ describe('Review — import and export', () => {
 
         await user.click(screen.getByText('Export'));
         await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' }));
-        await screen.findByText('Failed to export custom data.');
+        await screen.findByText('Failed to export review data.');
 
         await user.click(screen.getByRole('button', { name: 'Dismiss' }));
         await waitFor(() => {
-            expect(screen.queryByText('Failed to export custom data.')).not.toBeInTheDocument();
+            expect(screen.queryByText('Failed to export review data.')).not.toBeInTheDocument();
         });
     });
 
-    test('importing a custom-data JSON file reports a summary', async () => {
+    test('importing VulnScout JSON has no variant selector and reports a summary', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
+
+        await user.click(screen.getByText('Import'));
+        const dialog = screen.getByRole('dialog');
+        expect(within(dialog).queryByText('Variant')).not.toBeInTheDocument();
+        await user.click(within(dialog).getByRole('button', { name: 'Choose file' }));
 
         const file = new File(
             [JSON.stringify({ version: '1', assessments: [{ id: 'x' }] })],
@@ -1391,29 +1409,18 @@ describe('Review — import and export', () => {
         await screen.findByText(/Imported:/);
     });
 
-    test('importing a legacy OpenVEX JSON file succeeds', async () => {
-        mockNetwork([makeAssessment('a1', 'v1')]);
-        render(<Review projectId="proj1" />);
-        await screen.findByTitle('Edit assessment');
-
-        const file = new File(
-            [JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })],
-            'openvex.json',
-            { type: 'application/json' },
-        );
-        fireEvent.change(fileInput(), { target: { files: [file] } });
-
-        await screen.findByText('Assessments imported successfully!');
-    });
-
-    test('imports OpenVEX into every selected variant without using the filename', async () => {
+    test('imports OpenVEX into one selected variant without using the filename', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         await screen.findByTitle('Edit assessment');
 
         await user.click(screen.getByText('Import'));
-        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Choose file' }));
+        const dialog = screen.getByRole('dialog');
+        await user.click(within(dialog).getByRole('radio', { name: /OpenVEX/ }));
+        await user.click(within(dialog).getByRole('radio', { name: 'Variant Beta' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Choose file' }));
+
         const file = new File(
             [JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })],
             'does-not-match-a-variant.json',
@@ -1423,24 +1430,17 @@ describe('Review — import and export', () => {
 
         await screen.findByText('Assessments imported successfully!');
         const importCalls = postCalls().filter(call => String(call[0]).endsWith('/api/assessments/review/import'));
-        expect(importCalls).toHaveLength(2);
+        expect(importCalls).toHaveLength(1);
         const targetedVariantIds = importCalls.map(call => ((call[1] as RequestInit).body as FormData).get('variant_id'));
-        expect(targetedVariantIds).toEqual(expect.arrayContaining(['v1', 'v2']));
+        expect(targetedVariantIds).toEqual(['v2']);
     });
 
-    test('importing a legacy tar.gz file uses the legacy endpoint', async () => {
+    test('file selection accepts JSON only', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         await screen.findByTitle('Edit assessment');
 
-        const file = new File(['binary'], 'export.tar.gz', { type: 'application/gzip' });
-        fireEvent.change(fileInput(), { target: { files: [file] } });
-
-        await screen.findByText('Assessments imported successfully!');
-        expect(fetchMock).toHaveBeenCalledWith(
-            expect.stringContaining('/api/assessments/review/import'),
-            expect.objectContaining({ method: 'POST' })
-        );
+        expect(fileInput()).toHaveAttribute('accept', '.json,application/json');
     });
 
     test('rejects a JSON file with an unrecognised format', async () => {

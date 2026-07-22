@@ -306,5 +306,5 @@ The toolbar mirrors the vulnerability table's search bar. Filters are available 
 
 Two buttons in the toolbar handle review portability:
 
-- **Import Review**: accepts either an OpenVEX file (JSON or `.tar.gz`) or a VulnScout custom-data JSON file and merges its contents into the current project. OpenVEX files import assessments only; custom-data files additionally restore custom CVSS scores and time estimates. This is useful for receiving triage decisions from another team or migrating data between VulnScout instances.
-- **Export Review**: downloads all handmade assessments, custom CVSS scores, and time estimates as a single JSON file. The export captures the full set of user-created data so it can be shared, archived, or loaded into another VulnScout deployment.
+- **Import Review**: choose either an OpenVEX JSON document or a VulnScout JSON file. OpenVEX imports assessments into one selected variant. VulnScout JSON restores all included assessments, custom CVSS scores, and time estimates using the variants recorded in the file.
+- **Export Review**: choose VulnScout JSON to export assessments, custom CVSS scores, and time estimates for selected variants, or OpenVEX to export assessments for one selected variant as a JSON document.

@@ -18,11 +18,10 @@ from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.assessment_io import (
-    build_openvex_archive,
+    build_openvex_doc,
     is_openvex_doc,
     import_statements as _import_openvex_statements,
     build_variant_by_name_map,
-    import_archive_bytes,
     build_custom_data_export,
     import_custom_data,
 )
@@ -383,132 +382,72 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/export')
     def export_review_openvex() -> ResponseReturnValue:
-        """Export handmade (review) assessments as a .tar.gz containing one
-        OpenVEX JSON file per variant (``<variant_name>.json``).
-        Assessments without a variant are placed in ``unassigned.json``.
-
-        Repeat ``variant_id`` to export only the selected variants.
-        """
+        """Export review assessments for one variant as an OpenVEX JSON document."""
         from ..models.variant import Variant as DBVariant
 
         raw_variant_ids = request.args.getlist('variant_id')
-        variant_ids: list[UUID] | None = None
-        if raw_variant_ids:
-            variant_ids = []
-            for raw_variant_id in raw_variant_ids:
-                variant_uuid, err = parse_uuid_or_400(raw_variant_id, "variant_id")
-                if err:
-                    return err
-                if variant_uuid is None:
-                    return {"error": "Internal error"}, 500
-                variant_ids.append(variant_uuid)
+        if len(raw_variant_ids) != 1:
+            return {"error": "Exactly one variant_id is required for OpenVEX export"}, 400
+        variant_uuid, err = parse_uuid_or_400(raw_variant_ids[0], "variant_id")
+        if err:
+            return err
+        if variant_uuid is None:
+            return {"error": "Internal error"}, 500
+        variant = DBVariant.get_by_id(variant_uuid)
+        if variant is None:
+            return {"error": "Variant not found"}, 404
 
-        handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
+        handmade = DBAssessment.get_by_origin([variant_uuid], origin="custom")
         if not handmade:
             return {"error": "No review assessments to export"}, 404
 
         author = request.args.get('author', 'Savoir-faire Linux')
-        variant_names = {str(v.id): v.name for v in DBVariant.get_all()}
-
-        archive_bytes = build_openvex_archive(handmade, variant_names, author)
-        return archive_bytes, 200, {
-            "Content-Type": "application/gzip",
-            "Content-Disposition": "attachment; filename=review_openvex.tar.gz",
+        import json
+        json_data = json.dumps(build_openvex_doc(handmade, author), indent=2)
+        filename = re.sub(r"[^\w\-.]", "_", variant.name)
+        return json_data, 200, {
+            "Content-Type": "application/json",
+            "Content-Disposition": f'attachment; filename="review_openvex_{filename}.json"',
         }
 
     @app.route('/api/assessments/review/import', methods=['POST'])
     def import_review_openvex() -> ResponseReturnValue:
-        """Import OpenVEX review assessments from a ``.json`` or ``.tar.gz`` file.
+        """Import a JSON OpenVEX document into exactly one selected variant."""
 
-        * **Single .json file** – the ``variant_id`` form field selects the
-          target. Without it, the filename (without extension) must match an
-          existing variant name.
-        * **.tar.gz archive** – each ``.json`` entry inside must be named after
-          an existing variant unless ``variant_id`` forces all entries into a
-          selected target.
-
-        Every file is validated as a well-formed OpenVEX document (must contain
-        ``@context`` with ``openvex`` and a ``statements`` array).
-
-        Assessments are created with ``origin="custom"``.
-        """
-        import os
-
-        # ---- retrieve the uploaded file ----
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload"}, 400
         uploaded = request.files.get('file')
         if not uploaded or not uploaded.filename:
             return {"error": "No file uploaded"}, 400
+        if not uploaded.filename.endswith(".json"):
+            return {"error": "Unsupported file type. Please upload a .json file."}, 400
 
-        filename = uploaded.filename
-
-        target_variant_id = None
         raw_variant_id = request.form.get('variant_id')
-        if raw_variant_id:
-            target_variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
-            if err:
-                return err
-            if target_variant_id is None:
-                return {"error": "Internal error"}, 500
-            if DBVariant.get_by_id(target_variant_id) is None:
-                return {"error": "Variant not found"}, 404
+        if not raw_variant_id:
+            return {"error": "variant_id is required for OpenVEX import"}, 400
+        target_variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+        if err:
+            return err
+        if target_variant_id is None:
+            return {"error": "Internal error"}, 500
+        if DBVariant.get_by_id(target_variant_id) is None:
+            return {"error": "Variant not found"}, 404
 
-        # ---- build variant-name → variant lookup ----
-        # The export sanitises names (/ and \ replaced by _), so the map keeps
-        # both sanitised and original names for reliable round-trip matching.
-        variant_by_name = build_variant_by_name_map()
+        import json
+        try:
+            data = json.load(uploaded.stream)
+        except Exception:
+            return {"error": "Invalid JSON file"}, 400
 
-        # ---- .tar.gz handling ----
-        if filename.endswith((".tar.gz", ".tgz")):
-            try:
-                total_created, total_errors, total_skipped, found = import_archive_bytes(
-                    uploaded.read(), variant_by_name, target_variant_id
-                )
-            except ValueError as exc:
-                return {"error": str(exc)}, 400
-
-            if found == 0 and not total_created:
-                return {
-                    "error": "No valid OpenVEX files matching known variants found in archive",
-                    "errors": total_errors,
-                }, 400
-
+        if not is_openvex_doc(data):
             return {
-                "status": "success",
-                "imported": len(total_created),
-                "skipped": total_skipped,
-                "errors": total_errors,
-            }, 200
+                "error": "Not a valid OpenVEX document "
+                         "(missing @context with 'openvex' "
+                         "or 'statements' array)"
+            }, 400
 
-        # ---- single .json handling ----
-        if filename.endswith(".json"):
-            import json
-            base = os.path.basename(filename)
-            variant_name = base[: -len(".json")]
-            variant = DBVariant.get_by_id(target_variant_id) if target_variant_id else variant_by_name.get(variant_name)
-            if variant is None:
-                return {
-                    "error": f"No variant found matching filename '{variant_name}'. "
-                             f"The JSON filename must correspond to an existing variant name."
-                }, 400
-
-            try:
-                data = json.load(uploaded.stream)
-            except Exception:
-                return {"error": "Invalid JSON file"}, 400
-
-            if not is_openvex_doc(data):
-                return {
-                    "error": "Not a valid OpenVEX document "
-                             "(missing @context with 'openvex' "
-                             "or 'statements' array)"
-                }, 400
-
-            created, errors, skipped = _import_openvex_statements(data["statements"], variant.id)
-            return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
-
-        return {"error": "Unsupported file type. Please upload a .json or .tar.gz file."}, 400
+        created, errors, skipped = _import_openvex_statements(data["statements"], target_variant_id)
+        return {"status": "success", "imported": len(created), "skipped": skipped, "errors": errors}, 200
 
     @app.route('/api/assessments/review/time-estimates')
     def review_time_estimates() -> ResponseReturnValue:
@@ -673,8 +612,8 @@ def init_app(app: Flask) -> None:
 
         Query parameters:
 
-        * ``variant_id`` – restrict to selected variants; may be repeated.
-        * ``project_id`` – restrict to all variants in a project.
+        * ``variant_id`` - restrict to selected variants; may be repeated.
+        * ``project_id`` - restrict to all variants in a project.
         """
         raw_variant_ids = request.args.getlist('variant_id')
         project_id = request.args.get('project_id')
@@ -686,26 +625,25 @@ def init_app(app: Flask) -> None:
         if raw_variant_ids:
             variant_ids = []
             for raw_variant_id in raw_variant_ids:
-                vid, err = parse_uuid_or_400(raw_variant_id, "variant_id")
+                variant_id, err = parse_uuid_or_400(raw_variant_id, "variant_id")
                 if err:
                     return err
-                if vid is None:
+                if variant_id is None:
                     return {"error": "Internal error"}, 500
-                variant_ids.append(vid)
+                variant_ids.append(variant_id)
             variant = DBVariant.get_by_id(variant_ids[0])
             if variant and variant.project:
                 project_name = variant.project.name
         elif project_id:
-            pid, err = parse_uuid_or_400(project_id, "project_id")
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
-            if pid is None:
+            if project_uuid is None:
                 return {"error": "Internal error"}, 500
-            project = DBProject.get_by_id(pid)
+            project = DBProject.get_by_id(project_uuid)
             if project:
                 project_name = project.name
-            variants = DBVariant.get_by_project(pid)
-            variant_ids = [v.id for v in variants]
+            variant_ids = [variant.id for variant in DBVariant.get_by_project(project_uuid)]
 
         data = build_custom_data_export(variant_ids)
 
@@ -713,13 +651,12 @@ def init_app(app: Flask) -> None:
             return {"error": "No custom data to export"}, 404
 
         import json as _json
-        import re as _re
         json_bytes = _json.dumps(data, indent=2)
-        safe_name = _re.sub(r'[^\w\-.]', '_', project_name) if project_name else None
-        fname = f"custom_data_{safe_name}.json" if safe_name else "custom_data.json"
+        safe_name = re.sub(r'[^\w\-.]', '_', project_name) if project_name else None
+        filename = f"custom_data_{safe_name}.json" if safe_name else "custom_data.json"
         return json_bytes, 200, {
             "Content-Type": "application/json",
-            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Content-Disposition": f'attachment; filename="{filename}"',
         }
 
     @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
@@ -733,17 +670,10 @@ def init_app(app: Flask) -> None:
           file.
         * ``application/json`` body with the custom-data payload directly.
 
-        Optional query parameter ``variant_id`` to force all imported
-        assessments to a specific variant.
         """
         import json as _json
-
-        variant_id = None
-        raw_vid = request.args.get('variant_id')
-        if raw_vid:
-            variant_id, err = parse_uuid_or_400(raw_vid, "variant_id")
-            if err:
-                return err
+        if request.args.getlist('variant_id'):
+            return {"error": "VulnScout JSON import uses the variants in the file"}, 400
 
         # Parse the incoming data
         data = None
@@ -766,7 +696,7 @@ def init_app(app: Flask) -> None:
             return {"error": "Invalid custom-data format. Expected {version, assessments, ...}"}, 400
 
         variant_by_name = build_variant_by_name_map()
-        result = import_custom_data(data, variant_by_name, variant_id)
+        result = import_custom_data(data, variant_by_name)
 
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code
