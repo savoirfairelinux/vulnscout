@@ -5,6 +5,7 @@ import gzip
 import json
 import re
 from datetime import datetime
+from typing import Any, Literal, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
@@ -41,6 +42,9 @@ _SCANNER_AUTHORS = {
     "cna@cloudflare.com",
 }
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+AssessmentDict = dict[str, Any]
+CompactAssessment = list[str | None]
 
 
 def _is_scanner_author(author: str | None) -> bool:
@@ -146,10 +150,24 @@ def _resolve_ai_group(
 
 def init_app(app: Flask) -> None:
 
+    @overload
+    def _get_db_assessment_dicts(
+        variant_ids: list[UUID] | None = None,
+        compact: Literal[False] = False,
+    ) -> list[AssessmentDict]:
+        ...
+
+    @overload
+    def _get_db_assessment_dicts(
+        variant_ids: list[UUID] | None,
+        compact: Literal[True],
+    ) -> list[CompactAssessment]:
+        ...
+
     def _get_db_assessment_dicts(
         variant_ids: list[UUID] | None = None,
         compact: bool = False,
-    ) -> list[dict | list]:
+    ) -> list[AssessmentDict] | list[CompactAssessment]:
         """Serialize assessments with one lightweight joined query.
 
         The Explorer endpoint previously materialized tens of thousands of
@@ -230,7 +248,8 @@ def init_app(app: Flask) -> None:
                     return []
                 query = query.where(DBAssessment.variant_id.in_(variant_ids))
 
-        result = []
+        full_result: list[AssessmentDict] = []
+        compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
             if row.name is not None:
@@ -242,7 +261,7 @@ def init_app(app: Flask) -> None:
                 # Positional encoding avoids repeating six field names for
                 # every row in this high-volume Explorer-only response:
                 # [id, vulnerability, package, variant, timestamp, status].
-                result.append([
+                compact_result.append([
                     str(row.id),
                     row.vulnerability_id or "",
                     package_id or None,
@@ -251,7 +270,7 @@ def init_app(app: Flask) -> None:
                     row.status or "",
                 ])
                 continue
-            result.append({
+            full_result.append({
                 "id": str(row.id),
                 "source": row.source or "",
                 "origin": row.origin or "sbom",
@@ -267,20 +286,21 @@ def init_app(app: Flask) -> None:
                 "responses": list(row.responses or []),
                 "workaround": row.workaround or "",
             })
-        return result
+        return compact_result if compact else full_result
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compact = request.args.get('format') == 'compact'
+        scoped_variant_ids: list[UUID] | None
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
             if variant_uuid is None:
                 return {"error": "Internal error"}, 500
-            assessments = _get_db_assessment_dicts([variant_uuid], compact=compact)
+            scoped_variant_ids = [variant_uuid]
         elif project_id:
             from ..models.variant import Variant as DBVariant
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
@@ -289,22 +309,24 @@ def init_app(app: Flask) -> None:
             if project_uuid is None:
                 return {"error": "Internal error"}, 500
             variants = DBVariant.get_by_project(project_uuid)
-            variant_ids = [v.id for v in variants]
-            assessments = _get_db_assessment_dicts(variant_ids, compact=compact)
+            scoped_variant_ids = [v.id for v in variants]
         else:
-            assessments = _get_db_assessment_dicts(compact=compact)
-        if not compact:
-            annotate_assessments_outdated(assessments)
-        if request.args.get('format', 'list') == "dict":
-            return {a["id"]: a for a in assessments}
+            scoped_variant_ids = None
+
         if compact:
-            payload = json.dumps(assessments, separators=(",", ":")).encode()
+            compact_assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=True)
+            payload = json.dumps(compact_assessments, separators=(",", ":")).encode()
             response = app.response_class(payload, mimetype="application/json")
             if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
                 response.set_data(gzip.compress(payload, compresslevel=1))
                 response.headers["Content-Encoding"] = "gzip"
                 response.headers["Vary"] = "Accept-Encoding"
             return response
+
+        assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=False)
+        annotate_assessments_outdated(assessments)
+        if request.args.get('format', 'list') == "dict":
+            return {a["id"]: a for a in assessments}
         return assessments
 
     def _review_assessments_by_origin(origin: str) -> ResponseReturnValue:

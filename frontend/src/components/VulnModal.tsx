@@ -196,7 +196,7 @@ type VariantScopedSnapshot = {
             })
             .catch(() => {});
         return () => controller.abort();
-    }, [vuln.id]);
+    }, [vuln]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {

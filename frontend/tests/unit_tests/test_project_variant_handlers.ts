@@ -570,7 +570,7 @@ describe('Assessments.list with filtering params', () => {
 
         const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
         expect(calledUrl).toContain('/api/assessments');
-        expect(calledUrl).toContain('format=list');
+        expect(calledUrl).toContain('format=compact');
         expect(calledUrl).not.toContain('variant_id');
         expect(calledUrl).not.toContain('project_id');
     });

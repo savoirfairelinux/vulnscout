@@ -417,7 +417,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             });
 
         return () => controller.abort();
-    }, [modalVuln?.id, modalVuln?.details_loaded, variantId, projectId]);
+    }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);

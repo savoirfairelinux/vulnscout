@@ -62,6 +62,21 @@ const getDOMRect = (width: number, height: number) => ({
     toJSON: () => {},
 })
 
+const formatAssessmentDate = (value: string) => new Date(value).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    timeZoneName: 'shortOffset',
+});
+
+const formatPublishedDate = (value: string) => new Date(value).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+});
+
 
 describe('Vulnerability Table', () => {
 
@@ -1231,7 +1246,7 @@ describe('Vulnerability Table', () => {
 
         // ACT & ASSERT
         // First vulnerability should show formatted date
-        const formattedDate = await screen.getByText(/january 15, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-01-15T10:30:00Z'));
         expect(formattedDate).toBeInTheDocument();
 
         // Second vulnerability should still show "No assessment"
@@ -1263,7 +1278,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithUpdatedAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT & ASSERT - Should show the more recent last_update date
-        const formattedDate = await screen.getByText(/february 20, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-02-20T14:45:00Z'));
         expect(formattedDate).toBeInTheDocument();
     })
 
@@ -1310,7 +1325,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithMultipleAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT & ASSERT - Should show the most recent assessment date (March 10)
-        const formattedDate = await screen.getByText(/march 10, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-03-10T16:20:00Z'));
         expect(formattedDate).toBeInTheDocument();
     })
 
@@ -2111,8 +2126,8 @@ describe('Vulnerability Table', () => {
 
         // Check that dates are rendered (formatted as short month)
         await waitFor(() => {
-            [/May 15, 2010/, /Jul 22, 2018/].forEach(date => {
-            expect(screen.queryByText(date)).toBeInTheDocument();
+            ['2010-05-15T08:00:00Z', '2018-07-22T14:30:00Z'].forEach(date => {
+                expect(screen.queryByText(formatPublishedDate(date))).toBeInTheDocument();
             });
         });
     });

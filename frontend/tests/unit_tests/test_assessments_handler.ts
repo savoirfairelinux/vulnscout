@@ -205,7 +205,7 @@ describe('Assessments API', () => {
     const result = await Assessments.list();
     expect(result).toHaveLength(2);
     const url = new URL(fetchMock.mock.calls[0][0] as string);
-    expect(url.searchParams.get('format')).toBe('list');
+    expect(url.searchParams.get('format')).toBe('compact');
   });
 
   test('list with variantId sets variant_id param', async () => {
