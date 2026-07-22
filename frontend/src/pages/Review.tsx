@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { createColumnHelper } from "@tanstack/react-table";
+import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
@@ -30,6 +30,14 @@ type AssessmentMutation =
 
 type ReviewTab = 'assessments' | 'ai-assessments' | 'time-estimates' | 'custom-cvss';
 
+type ReviewTimeEstimateRow = ReviewTimeEstimate & {
+    texts: { title: string; content: string }[];
+};
+
+type ReviewCustomCvssRow = ReviewCustomCvss & {
+    texts: { title: string; content: string }[];
+};
+
 type Props = {
     variantId?: string;
     projectId?: string;
@@ -54,6 +62,39 @@ type ReviewRow = Assessment & {
 const columnHelper = createColumnHelper<ReviewRow>();
 const teColumnHelper = createColumnHelper<ReviewTimeEstimate>();
 const cvssColumnHelper = createColumnHelper<ReviewCustomCvss>();
+
+function createSelectionColumn<DataType>() {
+    return {
+        id: 'select-checkbox',
+        cell: ({ row }: { row: Row<DataType> }) => (
+            <div className="flex items-center justify-center h-full">
+                <input
+                    type="checkbox"
+                    title={row.getIsSelected() ? "Unselect" : "Select"}
+                    checked={row.getIsSelected()}
+                    disabled={!row.getCanSelect()}
+                    onChange={row.getToggleSelectedHandler()}
+                />
+            </div>
+        ),
+        header: ({ table }: { table: Table<DataType> }) => (
+            <div className="flex items-center justify-center h-full">
+                <input
+                    type="checkbox"
+                    ref={element => {
+                        if (element) element.indeterminate = table.getIsSomePageRowsSelected();
+                    }}
+                    title={table.getIsAllPageRowsSelected() ? "Unselect all" : "Select all"}
+                    checked={table.getIsAllPageRowsSelected()}
+                    onChange={table.getToggleAllPageRowsSelectedHandler()}
+                />
+            </div>
+        ),
+        minSize: 10,
+        size: 40,
+        maxSize: 40,
+    };
+}
 
 /**
  * Group assessments that share the same CVE, status, justification, notes,
@@ -146,6 +187,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
+    const [selectedAssessments, setSelectedAssessments] = useState<RowSelectionState>({});
+    const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
+    const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
+    const [selectedCustomCvss, setSelectedCustomCvss] = useState<RowSelectionState>({});
+    const [bulkDeleteTab, setBulkDeleteTab] = useState<ReviewTab | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("success");
     const [showBanner, setShowBanner] = useState(false);
@@ -665,6 +711,98 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
     }, [refreshAssessmentLists, showMessage]);
 
+    const selectedRows = activeTab === 'assessments'
+        ? selectedAssessments
+        : activeTab === 'ai-assessments'
+            ? selectedAiAssessments
+            : activeTab === 'time-estimates'
+                ? selectedTimeEstimates
+                : selectedCustomCvss;
+    const selectedRowCount = Object.keys(selectedRows).length;
+
+    const clearSelectedRows = useCallback((tab: ReviewTab) => {
+        if (tab === 'assessments') setSelectedAssessments({});
+        else if (tab === 'ai-assessments') setSelectedAiAssessments({});
+        else if (tab === 'time-estimates') setSelectedTimeEstimates({});
+        else setSelectedCustomCvss({});
+    }, []);
+
+    const handleBulkDelete = useCallback(async () => {
+        if (!bulkDeleteTab) return;
+
+        try {
+            if (bulkDeleteTab === 'assessments') {
+                const rows = assessments.filter(row => selectedAssessments[row.id]);
+                const ids = rows.flatMap(row => (row as ReviewRow)._allIds ?? [row.id]);
+                const responses = await Promise.all(ids.map(id => fetch(
+                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
+                    { method: 'DELETE', mode: 'cors' }
+                )));
+                if (responses.some(response => !response.ok)) throw new Error('Assessment deletion failed');
+                setAssessments(groupAssessments(await Assessments.listReview(variantId, projectId)));
+                for (const row of rows) {
+                    const assessmentRow = row as ReviewRow;
+                    onAssessmentChanged?.({
+                        type: 'delete',
+                        vulnId: row.vuln_id,
+                        ids: assessmentRow._allIds ?? [row.id],
+                    });
+                }
+            } else if (bulkDeleteTab === 'ai-assessments') {
+                const rows = aiAssessments.filter(row => selectedAiAssessments[row.id]);
+                await Promise.all(rows.map(row => {
+                    const assessmentRow = row as ReviewRow;
+                    const ids = assessmentRow._allIds ?? [row.id];
+                    return Assessments.rejectAi(ids[0], ids);
+                }));
+                await refreshAssessmentLists();
+            } else if (bulkDeleteTab === 'time-estimates') {
+                const ids = Object.keys(selectedTimeEstimates);
+                const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/review/time-estimates', {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                if (!response.ok) throw new Error('Time estimate deletion failed');
+                setTimeEstimates(await Assessments.listReviewTimeEstimates(variantId, projectId));
+            } else {
+                const ids = Object.keys(selectedCustomCvss);
+                const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/review/custom-cvss', {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                if (!response.ok) throw new Error('Custom CVSS deletion failed');
+                const refreshed = await Assessments.listReviewCustomCvss(variantId, projectId);
+                setCustomCvss(refreshed.filter(item => item.origin === 'custom'));
+            }
+            clearSelectedRows(bulkDeleteTab);
+            showMessage(`${selectedRowCount} item${selectedRowCount === 1 ? '' : 's'} deleted successfully!`, 'success');
+        } catch (error) {
+            console.error(error);
+            showMessage('Failed to delete selected items.', 'error');
+        } finally {
+            setBulkDeleteTab(null);
+        }
+    }, [
+        aiAssessments,
+        assessments,
+        bulkDeleteTab,
+        clearSelectedRows,
+        onAssessmentChanged,
+        projectId,
+        refreshAssessmentLists,
+        selectedAiAssessments,
+        selectedAssessments,
+        selectedCustomCvss,
+        selectedRowCount,
+        selectedTimeEstimates,
+        showMessage,
+        variantId,
+    ]);
+
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
         setEditSubmitting(true);
@@ -833,6 +971,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
 
     const columns = useMemo(() => [
+        createSelectionColumn<ReviewRow>(),
         columnHelper.accessor("vuln_id", {
             id: 'id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -1050,6 +1189,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     );
 
     const teColumns = useMemo(() => [
+        createSelectionColumn<ReviewTimeEstimateRow>(),
         teColumnHelper.accessor("vuln_id", {
             id: 'te_vuln_id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -1111,6 +1251,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     ], [handleVulnClickWithNav, variantNames]);
 
     const cvssColumns = useMemo(() => [
+        createSelectionColumn<ReviewCustomCvssRow>(),
         cvssColumnHelper.accessor("vuln_id", {
             id: 'cvss_vuln_id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -1242,6 +1383,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         emptyTitle: string,
         emptyBody: string,
         onFilteredDataChange?: (rows: ReviewRow[]) => void,
+        selected?: RowSelectionState,
+        updateSelected?: OnChangeFn<RowSelectionState>,
     ) => (
         rows.length === 0 ? (
             <div className="text-center py-10 text-gray-400">
@@ -1269,6 +1412,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 hoverField="texts"
                 hoverIdField="vuln_id"
                 onFilteredDataChange={onFilteredDataChange}
+                selected={selected}
+                updateSelected={updateSelected}
             />
         )
     );
@@ -1398,6 +1543,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         Reset Filters
                     </button>
 
+                    {selectedRowCount > 0 && (
+                        <button
+                            onClick={() => setBulkDeleteTab(activeTab)}
+                            className="bg-red-700 hover:bg-red-600 px-3 py-1 rounded text-white border border-red-500 flex items-center gap-1.5"
+                            title="Delete selected items"
+                        >
+                            <FontAwesomeIcon icon={faTrash} />
+                            Delete selected ({selectedRowCount})
+                        </button>
+                    )}
+
                     <button
                         onClick={() => openTransfer('import')}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
@@ -1511,6 +1667,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 "No handmade assessments found",
                 "Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.",
                 handleDisplayedVulnsChange,
+                selectedAssessments,
+                setSelectedAssessments,
             )}
 
             {activeTab === 'ai-assessments' && renderAssessmentsTable(
@@ -1519,6 +1677,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 "No AI-generated assessments found",
                 "Pending assessments suggested by AI will appear here until approved or rejected.",
                 handleDisplayedVulnsChange,
+                selectedAiAssessments,
+                setSelectedAiAssessments,
             )}
 
             {activeTab === 'time-estimates' && (
@@ -1530,11 +1690,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         </p>
                     </div>
                 ) : (
-                    <TableGeneric<ReviewTimeEstimate & { texts: { title: string; content: string }[] }>
+                    <TableGeneric<ReviewTimeEstimateRow>
                         columns={teColumns as any}
                         data={timeEstimates.map(te => ({
                             ...te,
-                            id: `${te.vuln_id}::${te.variant_id ?? 'none'}`,
                             texts: vulnDescriptions[te.vuln_id] ?? [],
                         }))}
                         search={search}
@@ -1544,6 +1703,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hoverField="texts"
                         hoverIdField="vuln_id"
                         onFilteredDataChange={handleDisplayedVulnsChange}
+                        selected={selectedTimeEstimates}
+                        updateSelected={setSelectedTimeEstimates}
                     />
                 )
             )}
@@ -1557,11 +1718,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         </p>
                     </div>
                 ) : (
-                    <TableGeneric<ReviewCustomCvss & { texts: { title: string; content: string }[] }>
+                    <TableGeneric<ReviewCustomCvssRow>
                         columns={cvssColumns as any}
                         data={customCvss.map(c => ({
                             ...c,
-                            id: `${c.vuln_id}::${c.variant_id ?? 'none'}::${c.author}`,
                             texts: vulnDescriptions[c.vuln_id] ?? [],
                         }))}
                         search={search}
@@ -1571,6 +1731,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hoverField="texts"
                         hoverIdField="vuln_id"
                         onFilteredDataChange={handleDisplayedVulnsChange}
+                        selected={selectedCustomCvss}
+                        updateSelected={setSelectedCustomCvss}
                     />
                 )
             )}
@@ -1605,6 +1767,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 showTitleIcon={true}
                 onConfirm={handleDeleteRow}
                 onCancel={() => setRowToDelete(null)}
+            />
+
+            <ConfirmationModal
+                isOpen={bulkDeleteTab !== null}
+                title={`Delete ${selectedRowCount} selected item${selectedRowCount === 1 ? '' : 's'}`}
+                message="Are you sure you want to delete the selected items? This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setBulkDeleteTab(null)}
             />
 
             {editingRow && (

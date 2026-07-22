@@ -183,6 +183,18 @@ def _resolve_ai_group(
     return group, None
 
 
+def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
+    """Return unique UUIDs from a batch-delete request, or an error message."""
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids or not all(isinstance(item, str) for item in raw_ids):
+        return None, "'ids' must be a non-empty list of record id strings"
+    try:
+        return list(dict.fromkeys(UUID(item) for item in raw_ids)), None
+    except ValueError:
+        return None, "'ids' must contain valid record ids"
+
+
 def init_app(app: Flask) -> None:
 
     @overload
@@ -614,6 +626,7 @@ def init_app(app: Flask) -> None:
             lik = te.likely or 0
             pes = te.pessimistic or 0
             vuln_map[(vid, scoped_variant)] = {
+                "id": str(te.id),
                 "vuln_id": vid,
                 "variant_id": scoped_variant,
                 "optimistic": opt,
@@ -684,6 +697,7 @@ def init_app(app: Flask) -> None:
             if _is_scanner_author(m.author):
                 continue
             result.append({
+                "id": str(m.id),
                 "vuln_id": m.vulnerability_id,
                 "variant_id": str(m.variant_id) if m.variant_id else None,
                 "version": m.version or "",
@@ -695,6 +709,38 @@ def init_app(app: Flask) -> None:
             })
 
         return result
+
+    @app.route('/api/assessments/review/time-estimates', methods=['DELETE'])
+    def delete_review_time_estimates() -> ResponseReturnValue:
+        """Delete the explicitly selected time estimates as one operation."""
+        from ..models.time_estimate import TimeEstimate
+
+        ids, error = _parse_batch_record_ids()
+        if error or ids is None:
+            return {"error": error or "Invalid record ids"}, 400
+        records = [db.session.get(TimeEstimate, estimate_id) for estimate_id in ids]
+        if any(record is None for record in records):
+            return {"error": "Time estimate not found"}, 404
+        for record in records:
+            db.session.delete(record)
+        db.session.commit()
+        return {"status": "success", "deleted": [str(estimate_id) for estimate_id in ids]}, 200
+
+    @app.route('/api/assessments/review/custom-cvss', methods=['DELETE'])
+    def delete_review_custom_cvss() -> ResponseReturnValue:
+        """Delete selected custom CVSS records without affecting scanner data."""
+        from ..models.metrics import Metrics
+
+        ids, error = _parse_batch_record_ids()
+        if error or ids is None:
+            return {"error": error or "Invalid record ids"}, 400
+        records = [db.session.get(Metrics, metric_id) for metric_id in ids]
+        if any(record is None or record.origin != "custom" for record in records):
+            return {"error": "Custom CVSS score not found"}, 404
+        for record in records:
+            db.session.delete(record)
+        db.session.commit()
+        return {"status": "success", "deleted": [str(metric_id) for metric_id in ids]}, 200
 
     @app.route('/api/assessments/review/export-custom-data')
     def export_review_custom_data() -> ResponseReturnValue:

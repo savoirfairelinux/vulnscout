@@ -6,6 +6,10 @@
 import pytest
 import json
 from src.bin.webapp import create_app
+from src.extensions import db
+from src.models.finding import Finding
+from src.models.metrics import Metrics
+from src.models.time_estimate import TimeEstimate
 from . import write_demo_files, setup_demo_db
 
 
@@ -75,6 +79,64 @@ def test_post_assessment_without_vuln_id_in_payload(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["vuln_id"] == "CVE-2021-99999"
+
+
+def test_bulk_delete_review_time_estimates(client, app):
+    with app.app_context():
+        finding = Finding.get_by_vulnerability("CVE-2020-35492")[0]
+        estimate = TimeEstimate(
+            finding_id=finding.id,
+            optimistic=1,
+            likely=2,
+            pessimistic=3,
+        )
+        db.session.add(estimate)
+        db.session.commit()
+        estimate_id = str(estimate.id)
+
+    listed = client.get("/api/assessments/review/time-estimates")
+    assert listed.status_code == 200
+    assert any(item["id"] == estimate_id for item in listed.get_json())
+
+    deleted = client.delete("/api/assessments/review/time-estimates", json={"ids": [estimate_id]})
+    assert deleted.status_code == 200
+    assert deleted.get_json()["deleted"] == [estimate_id]
+    assert all(item["id"] != estimate_id for item in client.get("/api/assessments/review/time-estimates").get_json())
+
+
+def test_bulk_delete_review_custom_cvss_preserves_scanner_data(client, app):
+    with app.app_context():
+        custom = Metrics.create(
+            vulnerability_id="CVE-2020-35492",
+            version="3.1",
+            score=7.5,
+            vector="CVSS:3.1/AV:N",
+            author="reviewer",
+            origin="custom",
+        )
+        scanner = Metrics.create(
+            vulnerability_id="CVE-2020-35492",
+            version="3.1",
+            score=7.5,
+            vector="CVSS:3.1/AV:N",
+            author="nvd@nist.gov",
+            origin="scanner",
+        )
+        custom_id = str(custom.id)
+        scanner_id = str(scanner.id)
+
+    listed = client.get("/api/assessments/review/custom-cvss")
+    assert listed.status_code == 200
+    assert any(item["id"] == custom_id for item in listed.get_json())
+
+    deleted = client.delete("/api/assessments/review/custom-cvss", json={"ids": [custom_id]})
+    assert deleted.status_code == 200
+    assert deleted.get_json()["deleted"] == [custom_id]
+
+    scanner_delete = client.delete("/api/assessments/review/custom-cvss", json={"ids": [scanner_id]})
+    assert scanner_delete.status_code == 404
+    with app.app_context():
+        assert Metrics.get_by_id(scanner_id) is not None
 
 
 # Test POST assessment with non-string vuln_id

@@ -11,7 +11,7 @@ jest.mock('../../src/components/TableGeneric', () => {
     const ReactMock = require('react');
     return {
         __esModule: true,
-        default: ({ data, columns, search, onFilteredDataChange }: any) => {
+        default: ({ data, columns, search, onFilteredDataChange, selected, updateSelected }: any) => {
             const val = (row: any, col: any) => (col.accessorKey ? row[col.accessorKey] : undefined);
             // Simulate TableGeneric emitting its filtered+sorted rows in display
             // order. The real component applies the text search internally; here
@@ -25,12 +25,40 @@ jest.mock('../../src/components/TableGeneric', () => {
             ReactMock.useEffect(() => {
                 onFilteredDataChange?.(displayedForNav);
             }, [onFilteredDataChange, displayedForNav]);
+            const selection = selected ?? {};
+            const updateSelection = (next: Record<string, boolean>) => updateSelected?.(next);
+            const isSelected = (row: any) => Boolean(selection[row.id]);
+            const rowFor = (row: any) => ({
+                original: row,
+                getIsSelected: () => isSelected(row),
+                getCanSelect: () => true,
+                getToggleSelectedHandler: () => () => {
+                    const next = { ...selection };
+                    if (isSelected(row)) delete next[row.id];
+                    else next[row.id] = true;
+                    updateSelection(next);
+                },
+            });
+            const selectedOnPage = displayedForNav.filter(isSelected);
+            const allPageSelected = displayedForNav.length > 0 && selectedOnPage.length === displayedForNav.length;
+            const table = {
+                getIsAllPageRowsSelected: () => allPageSelected,
+                getIsSomePageRowsSelected: () => selectedOnPage.length > 0 && !allPageSelected,
+                getToggleAllPageRowsSelectedHandler: () => () => {
+                    const next = { ...selection };
+                    for (const row of displayedForNav) {
+                        if (allPageSelected) delete next[row.id];
+                        else next[row.id] = true;
+                    }
+                    updateSelection(next);
+                },
+            };
             return (
                 <table data-testid="mock-table" data-search={search ?? ''}>
                     <thead>
                         <tr>
                             {columns.map((col: any, ci: number) => (
-                                <th key={ci}>{typeof col.header === 'function' ? col.header({ column: col }) : col.header}</th>
+                                <th key={ci}>{typeof col.header === 'function' ? col.header({ column: col, table }) : col.header}</th>
                             ))}
                         </tr>
                     </thead>
@@ -39,7 +67,7 @@ jest.mock('../../src/components/TableGeneric', () => {
                             <tr key={i} data-testid="mock-table-row">
                                 {columns.map((col: any, ci: number) => (
                                     <td key={ci}>
-                                        {col.cell ? col.cell({ row: { original: row }, getValue: () => val(row, col) }) : null}
+                                        {col.cell ? col.cell({ row: rowFor(row), getValue: () => val(row, col) }) : null}
                                     </td>
                                 ))}
                             </tr>
@@ -151,12 +179,14 @@ const BARE_ASSESSMENT = {
 
 const TIME_ESTIMATES = [
     {
+        id: 'te-1',
         vuln_id: 'CVE-2020-3333', variant_id: 'v1',
         optimistic: 1, likely: 2, pessimistic: 4,
         optimistic_iso: 'PT1H', likely_iso: 'PT2H', pessimistic_iso: 'PT4H',
         vuln_texts: [{ title: 'description', content: 'te desc' }],
     },
     {
+        id: 'te-2',
         vuln_id: 'CVE-2020-4444', variant_id: undefined,
         optimistic: 0, likely: 0, pessimistic: 0,
         optimistic_iso: 'PT0H', likely_iso: 'PT0H', pessimistic_iso: 'PT0H',
@@ -164,13 +194,13 @@ const TIME_ESTIMATES = [
 ];
 
 const CUSTOM_CVSS = [
-    { vuln_id: 'CVE-A', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:N', base_score: 9.5, author: 'alice', origin: 'custom', vuln_texts: [{ title: 'description', content: 'c' }] },
-    { vuln_id: 'CVE-B', variant_id: undefined, version: '3.1', vector_string: 'CVSS:3.1/AV:L', base_score: 7.5, author: 'bob', origin: 'custom' },
-    { vuln_id: 'CVE-C', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:A', base_score: 5.0, author: 'carol', origin: 'custom' },
-    { vuln_id: 'CVE-D', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:P', base_score: 2.0, author: 'dan', origin: 'custom' },
-    { vuln_id: 'CVE-E', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:N', base_score: 0, author: 'eve', origin: 'custom' },
+    { id: 'cvss-a', vuln_id: 'CVE-A', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:N', base_score: 9.5, author: 'alice', origin: 'custom', vuln_texts: [{ title: 'description', content: 'c' }] },
+    { id: 'cvss-b', vuln_id: 'CVE-B', variant_id: undefined, version: '3.1', vector_string: 'CVSS:3.1/AV:L', base_score: 7.5, author: 'bob', origin: 'custom' },
+    { id: 'cvss-c', vuln_id: 'CVE-C', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:A', base_score: 5.0, author: 'carol', origin: 'custom' },
+    { id: 'cvss-d', vuln_id: 'CVE-D', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:P', base_score: 2.0, author: 'dan', origin: 'custom' },
+    { id: 'cvss-e', vuln_id: 'CVE-E', variant_id: 'v1', version: '3.1', vector_string: 'CVSS:3.1/AV:N', base_score: 0, author: 'eve', origin: 'custom' },
     // Non-custom score is filtered out of the Custom CVSS tab.
-    { vuln_id: 'CVE-F', variant_id: 'v1', version: '3.1', vector_string: 'x', base_score: 3, author: 'nvd', origin: 'nvd' },
+    { id: 'cvss-f', vuln_id: 'CVE-F', variant_id: 'v1', version: '3.1', vector_string: 'x', base_score: 3, author: 'nvd', origin: 'nvd' },
 ];
 
 type NetworkOpts = {
@@ -1304,6 +1334,75 @@ describe('Review — filters, search and keyboard', () => {
 // ===========================================================================
 
 describe('Review — deleting an assessment', () => {
+    const selectFirstTableRow = async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByText(/Delete selected \(1\)/));
+        await user.click(screen.getByText('Yes, delete'));
+    };
+
+    test('bulk deletion removes selected handmade assessments', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await selectFirstTableRow(user);
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessments/a1'),
+                expect.objectContaining({ method: 'DELETE' }),
+            );
+        });
+    });
+
+    test('bulk deletion rejects selected AI assessments', async () => {
+        mockNetwork([], { aiReviewList: [makeAssessment('ai-1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/AI Assessments \(1\)/));
+        await selectFirstTableRow(user);
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessments/ai-1/reject'),
+                expect.objectContaining({ method: 'POST' }),
+            );
+        });
+    });
+
+    test('bulk deletion removes selected time estimates', async () => {
+        mockNetwork([], { te: TIME_ESTIMATES });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/Time Estimates \(2\)/));
+        await selectFirstTableRow(user);
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessments/review/time-estimates'),
+                expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ ids: ['te-1'] }) }),
+            );
+        });
+    });
+
+    test('bulk deletion removes selected custom CVSS scores', async () => {
+        mockNetwork([], { cvss: CUSTOM_CVSS });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText(/Custom CVSS \(5\)/));
+        await selectFirstTableRow(user);
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining('/api/assessments/review/custom-cvss'),
+                expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ ids: ['cvss-a'] }) }),
+            );
+        });
+    });
+
     test('confirming the delete dialog removes the assessment', async () => {
         const onChanged = jest.fn();
         mockNetwork([makeAssessment('a1', 'v1')]);
