@@ -268,7 +268,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
         'supplier': 'Supplier',
         'vulnerabilities': 'Vulnerabilities',
         'variants': 'Variants',
-        'remainingPendingVulns': 'Remaining Pending Vulnerabilities',
         'source': 'Sources',
         'actions': 'Actions',
     }), []);
@@ -390,24 +389,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                 enableSorting: false,
                 size: 120
             }),
-            columnHelper.accessor(
-                row => row.vulnerabilities['Pending Assessment'] ?? 0,
-                {
-                    id: 'remainingPendingVulns',
-                    header: () => <div className="flex items-center justify-center">Remaining Pending Vulnerabilities</div>,
-                    cell: info => (
-                        <div className="flex items-center justify-center h-full text-center">
-                            {info.getValue()}
-                        </div>
-                    ),
-                    sortingFn: (a, b) => {
-                        const countA = a.original.vulnerabilities['Pending Assessment'] ?? 0;
-                        const countB = b.original.vulnerabilities['Pending Assessment'] ?? 0;
-                        return countA - countB;
-                    },
-                    size: 50
-                }
-            ),
             columnHelper.accessor('source', {
                 id: 'source',
                 header: () => <div className="flex items-center justify-center">Sources</div>,
@@ -591,7 +572,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                     'Supplier',
                     'Vulnerabilities',
                     'Variants',
-                    'Remaining Pending Vulnerabilities',
                     'Sources',
                 ]}
                 selected={visibleColumns}
