@@ -36,6 +36,7 @@ type Assessment = {
     superseded_by?: string[];
     stale_packages?: string[];
     superseded_map?: Record<string, string[]>;
+    details_loaded?: boolean;
 };
 
 export type { Assessment };
@@ -71,6 +72,22 @@ const asStringArray = (data: any): string[] => {
 }
 
 const asAssessment = (data: any): Assessment | [] => {
+    if (Array.isArray(data)) {
+        const [id, vuln_id, packageId, variant_id, timestamp, status] = data;
+        if (typeof id !== "string" || typeof vuln_id !== "string"
+            || (packageId !== null && typeof packageId !== "string")
+            || (variant_id !== null && typeof variant_id !== "string")
+            || typeof timestamp !== "string" || typeof status !== "string") return [];
+        data = {
+            id,
+            vuln_id,
+            packages: packageId ? [packageId] : [],
+            variant_id,
+            timestamp,
+            status,
+            details_loaded: false,
+        };
+    }
     if (typeof data !== "object") return [];
     if (typeof data?.id !== "string") return [];
     if (typeof data?.vuln_id !== "string") return [];
@@ -113,6 +130,7 @@ const asAssessment = (data: any): Assessment | [] => {
         }
         item.superseded_map = map;
     }
+    if (typeof data?.details_loaded === "boolean") item.details_loaded = data.details_loaded;
     return item
 }
 
@@ -148,7 +166,10 @@ class Assessments {
      */
     static async list(variantId?: string, projectId?: string): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments", window.location.href);
-        url.searchParams.set('format', 'list');
+        // Initial Explorer rendering only needs status, timestamp, package and
+        // variant scope. Full notes/responses are fetched for one vulnerability
+        // when its modal opens.
+        url.searchParams.set('format', 'compact');
         if (variantId) url.searchParams.set('variant_id', variantId);
         else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), {

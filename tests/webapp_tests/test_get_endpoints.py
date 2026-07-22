@@ -192,6 +192,21 @@ def test_get_assessments_dict(client):
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["impact_statement"] == "Yocto reported vulnerability as Patched"
 
 
+def test_get_assessments_compact(client):
+    response = client.get("/api/assessments?format=compact")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 1
+    assessment = data[0]
+    assert assessment[0] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    assert assessment[1] == "CVE-2020-35492"
+    assert assessment[2] == "cairo@1.16.0"
+    assert assessment[3] is None
+    assert isinstance(assessment[4], str)
+    assert assessment[5] == "fixed"
+    assert len(assessment) == 6
+
+
 def test_get_assessment_by_id(client):
     response = client.get("/api/assessments/da4d18f0-d89e-4d54-819d-86fc884cc737")
     assert response.status_code == 200

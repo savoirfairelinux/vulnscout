@@ -267,6 +267,8 @@ describe('Vulnerabilities', () => {
 
         const assessments = await Assessments.list();
         expect(assessments.length).toEqual(3);
+        const assessmentsUrl = new URL(fetchMock.mock.calls[0][0] as string);
+        expect(assessmentsUrl.searchParams.get('format')).toBe('compact');
         expect(thisFetch).toHaveBeenCalledTimes(1);
 
         const enrichedvuln = Vulnerabilities.enrich_with_assessments(vulnerabilities, assessments);
@@ -297,6 +299,31 @@ describe('Assessments', () => {
         const assessments = await Assessments.list();
         expect(assessments).toEqual([]);
         expect(thisFetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('parses compact assessment tuples', async () => {
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            json: () => Promise.resolve([[
+                'assessment-id',
+                'CVE-2026-0001',
+                'demo@1.0',
+                'variant-id',
+                '2026-07-21T19:00:00+00:00',
+                'fixed',
+            ]])
+        } as Response));
+
+        const assessments = await Assessments.list();
+        expect(assessments).toHaveLength(1);
+        expect(assessments[0]).toMatchObject({
+            id: 'assessment-id',
+            vuln_id: 'CVE-2026-0001',
+            packages: ['demo@1.0'],
+            variant_id: 'variant-id',
+            status: 'fixed',
+            simplified_status: 'Fixed',
+            details_loaded: false,
+        });
     });
 });
 

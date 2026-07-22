@@ -83,36 +83,40 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setIsLoadingData(true);
 
         const multiActive = !!(variantIds && variantIds.length >= 2);
-        let assessPromise: Promise<Assessment[]>;
-        if (multiActive) {
-            assessPromise = Promise.all(
-                variantIds!.map(id => Assessments.list(id, projectId)),
-            ).then(lists => removeDuplicateAssessments(lists.flat()));
-        } else if (compareVariantId && variantId) {
-            assessPromise = Promise.all([
-                Assessments.list(variantId, projectId),
-                Assessments.list(compareVariantId, projectId),
-              ]).then(([a1, a2]) => removeDuplicateAssessments([...a1, ...a2]));
-        } else {
-            assessPromise = Assessments.list(variantId, projectId);
-        }
-
         Promise.allSettled([
             Packages.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
             Vulnerabilities.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
-            assessPromise,
-        ]).then(([pkgsResult, vulnsResult, assessResult]) => {
+        ]).then(async ([pkgsResult, vulnsResult]) => {
+            if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected') {
+                throw new Error("Failed to load packages or vulnerabilities");
+            }
+            let assessments: Assessment[];
+            if (multiActive) {
+                const lists = await Promise.all(
+                    variantIds!.map(id => Assessments.list(id, projectId)),
+                );
+                assessments = removeDuplicateAssessments(lists.flat());
+            } else if (compareVariantId && variantId) {
+                const [a1, a2] = await Promise.all([
+                    Assessments.list(variantId, projectId),
+                    Assessments.list(compareVariantId, projectId),
+                ]);
+                assessments = removeDuplicateAssessments([...a1, ...a2]);
+            } else {
+                assessments = await Assessments.list(variantId, projectId);
+            }
+
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
-            if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
-                console.error(pkgsResult, vulnsResult);
-                triggerBanner("Failed to load data", "error");
-                return;
-            }
-            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
+            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
+        }).catch(error => {
+            console.error(error);
+            setIsLoadingData(false);
+            setLoadingMessage("Loading data...");
+            triggerBanner("Failed to load data", "error");
         });
     }, []);
 

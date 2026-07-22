@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import gzip
+import json
 import re
 from datetime import datetime
 from uuid import UUID
@@ -13,6 +15,7 @@ from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
+from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.assessment_io import (
     build_openvex_archive,
     is_openvex_doc,
@@ -26,7 +29,7 @@ from ..helpers.assessment_staleness import annotate_assessments_outdated
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -143,20 +146,141 @@ def _resolve_ai_group(
 
 def init_app(app: Flask) -> None:
 
-    def _get_all_db_assessments() -> list["DBAssessment"]:
-        return DBAssessment.get_all()
+    def _get_db_assessment_dicts(
+        variant_ids: list[UUID] | None = None,
+        compact: bool = False,
+    ) -> list[dict | list]:
+        """Serialize assessments with one lightweight joined query.
+
+        The Explorer endpoint previously materialized tens of thousands of
+        Assessment, Finding, and Package ORM objects only to immediately turn
+        them into dictionaries.  Selecting the response columns directly
+        avoids that object-graph cost and also lets project scope use one query
+        instead of one query per variant.
+        """
+        if compact:
+            ranked = (
+                db.select(
+                    DBAssessment.id.label("id"),
+                    DBAssessment.variant_id.label("variant_id"),
+                    DBAssessment.timestamp.label("timestamp"),
+                    DBAssessment.status.label("status"),
+                    Finding.vulnerability_id.label("vulnerability_id"),
+                    Package.name.label("name"),
+                    Package.version.label("version"),
+                    Package.supplier.label("supplier"),
+                    func.row_number().over(
+                        partition_by=(
+                            Finding.vulnerability_id,
+                            DBAssessment.variant_id,
+                            Finding.package_id,
+                        ),
+                        order_by=(DBAssessment.timestamp.desc(), DBAssessment.id.desc()),
+                    ).label("assessment_rank"),
+                )
+                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .outerjoin(Package, Finding.package_id == Package.id)
+                .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
+            )
+            if variant_ids is not None:
+                if not variant_ids:
+                    return []
+                ranked = ranked.where(DBAssessment.variant_id.in_(variant_ids))
+            ranked = ranked.subquery()
+            query = (
+                db.select(
+                    ranked.c.id,
+                    ranked.c.variant_id,
+                    ranked.c.timestamp,
+                    ranked.c.status,
+                    ranked.c.vulnerability_id,
+                    ranked.c.name,
+                    ranked.c.version,
+                    ranked.c.supplier,
+                )
+                .where(ranked.c.assessment_rank == 1)
+                .order_by(ranked.c.timestamp)
+            )
+        else:
+            query = (
+                db.select(
+                    DBAssessment.id,
+                    DBAssessment.source,
+                    DBAssessment.origin,
+                    DBAssessment.variant_id,
+                    DBAssessment.timestamp,
+                    DBAssessment.status,
+                    DBAssessment.status_notes,
+                    DBAssessment.justification,
+                    DBAssessment.impact_statement,
+                    DBAssessment.responses,
+                    DBAssessment.workaround,
+                    Finding.vulnerability_id,
+                    Package.name,
+                    Package.version,
+                    Package.supplier,
+                )
+                .outerjoin(Finding, DBAssessment.finding_id == Finding.id)
+                .outerjoin(Package, Finding.package_id == Package.id)
+                .where(db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"))
+                .order_by(DBAssessment.timestamp)
+            )
+            if variant_ids is not None:
+                if not variant_ids:
+                    return []
+                query = query.where(DBAssessment.variant_id.in_(variant_ids))
+
+        result = []
+        for row in db.session.execute(query):
+            package_id = ""
+            if row.name is not None:
+                package_id = f"{row.name}@{row.version}"
+                if row.supplier:
+                    package_id += f"::{row.supplier}"
+            timestamp = ensure_utc_iso(row.timestamp)
+            if compact:
+                # Positional encoding avoids repeating six field names for
+                # every row in this high-volume Explorer-only response:
+                # [id, vulnerability, package, variant, timestamp, status].
+                result.append([
+                    str(row.id),
+                    row.vulnerability_id or "",
+                    package_id or None,
+                    str(row.variant_id) if row.variant_id else None,
+                    timestamp,
+                    row.status or "",
+                ])
+                continue
+            result.append({
+                "id": str(row.id),
+                "source": row.source or "",
+                "origin": row.origin or "sbom",
+                "vuln_id": row.vulnerability_id or "",
+                "packages": [package_id] if package_id else [],
+                "variant_id": str(row.variant_id) if row.variant_id else None,
+                "timestamp": timestamp,
+                "last_update": timestamp or "",
+                "status": row.status or "",
+                "status_notes": row.status_notes or "",
+                "justification": row.justification or "",
+                "impact_statement": row.impact_statement or "",
+                "responses": list(row.responses or []),
+                "workaround": row.workaround or "",
+            })
+        return result
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
+        compact = request.args.get('format') == 'compact'
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
                 return err
             if variant_uuid is None:
                 return {"error": "Internal error"}, 500
-            assessments = [a.to_dict() for a in DBAssessment.get_by_variant(variant_uuid)]
+            assessments = _get_db_assessment_dicts([variant_uuid], compact=compact)
         elif project_id:
             from ..models.variant import Variant as DBVariant
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
@@ -166,18 +290,21 @@ def init_app(app: Flask) -> None:
                 return {"error": "Internal error"}, 500
             variants = DBVariant.get_by_project(project_uuid)
             variant_ids = [v.id for v in variants]
-            if variant_ids:
-                assessments = []
-                for vid in variant_ids:
-                    assessments.extend(a.to_dict() for a in DBAssessment.get_by_variant(vid))
-            else:
-                assessments = []
+            assessments = _get_db_assessment_dicts(variant_ids, compact=compact)
         else:
-            assessments = [a.to_dict() for a in _get_all_db_assessments()]
-        annotate_assessments_outdated(assessments)
-        assessments = [a for a in assessments if a.get("origin") != "ai"]
+            assessments = _get_db_assessment_dicts(compact=compact)
+        if not compact:
+            annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
+        if compact:
+            payload = json.dumps(assessments, separators=(",", ":")).encode()
+            response = app.response_class(payload, mimetype="application/json")
+            if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
+                response.set_data(gzip.compress(payload, compresslevel=1))
+                response.headers["Content-Encoding"] = "gzip"
+                response.headers["Vary"] = "Accept-Encoding"
+            return response
         return assessments
 
     def _review_assessments_by_origin(origin: str) -> ResponseReturnValue:

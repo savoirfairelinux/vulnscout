@@ -186,7 +186,12 @@ type VariantScopedSnapshot = {
             .then(r => r.json())
             .then((data: any[]) => {
                 if (Array.isArray(data)) {
-                    setAllVulnAssessments(data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a)));
+                    const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
+                    const fullById = new Map(fullAssessments.map(a => [a.id, a]));
+                    // Keep the Explorer's current scope, but replace its compact
+                    // assessment rows with the full records used by the modal.
+                    vuln.assessments = vuln.assessments.map(a => fullById.get(a.id) ?? a);
+                    setAllVulnAssessments(fullAssessments);
                 }
             })
             .catch(() => {});
