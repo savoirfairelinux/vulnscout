@@ -368,7 +368,9 @@ class Vulnerabilities {
             url.searchParams.set('project_id', projectId);
         }
         const response = await fetch(url.toString(), { mode: 'cors', signal });
-        if (!response.ok) return null;
+        if (!response.ok) {
+            throw new Error(`Failed to load vulnerability details (${response.status})`);
+        }
         const parsed = asVulnerability(await response.json());
         return Array.isArray(parsed) ? null : parsed;
     }

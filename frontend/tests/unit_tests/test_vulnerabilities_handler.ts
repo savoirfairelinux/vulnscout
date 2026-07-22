@@ -113,6 +113,14 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(calledUrl.searchParams.has('project_id')).toBe(false);
   });
 
+  test('getDetails rejects non-success responses with the status', async () => {
+    fetchMock.mockResponseOnce('', { status: 503 });
+
+    await expect(Vulnerabilities.getDetails('CVE-TEST-1')).rejects.toThrow(
+      'Failed to load vulnerability details (503)',
+    );
+  });
+
   test('list with compareVariantId but no operation omits operation param', async () => {
     fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
     const vulns = await Vulnerabilities.list('variant-1', undefined, 'variant-2');
