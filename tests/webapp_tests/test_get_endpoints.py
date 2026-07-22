@@ -127,6 +127,22 @@ def test_get_vulnerabilities_list(client):
     ]
 
 
+def test_get_vulnerabilities_compact_defers_modal_details(client):
+    response = client.get("/api/vulnerabilities?format=compact")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 1
+
+    vuln = data[0]
+    assert vuln["id"] == "CVE-2020-35492"
+    assert vuln["details_loaded"] is False
+    assert "texts" not in vuln
+    assert "urls" not in vuln
+    assert vuln["severity"]["severity"] == "high"
+    for cvss in vuln["severity"]["cvss"]:
+        assert set(cvss) == {"version", "base_score", "attack_vector"}
+
+
 def test_get_vulnerabilities_dict(client):
     response = client.get("/api/vulnerabilities?format=dict")
     assert response.status_code == 200
@@ -144,6 +160,10 @@ def test_get_vulnerability_by_id(client):
     assert data["id"] == "CVE-2020-35492"
     assert data["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data["packages"]
+    assert "urls" in data
+    for cvss in data["severity"]["cvss"]:
+        assert "vector_string" in cvss
+        assert "author" in cvss
     assert data["texts"] == [
         {
             "title": "description",

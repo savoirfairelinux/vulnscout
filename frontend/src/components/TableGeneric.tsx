@@ -29,6 +29,7 @@ type Props<DataType> = {
     hasPagination?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
+    onHoverData?: (item: DataType) => Promise<DataType | null | undefined>;
     /**
      * Values checked by the `only:<term>` search operator. When provided, a row
      * is kept only if EVERY string returned here satisfies the (optionally
@@ -61,6 +62,7 @@ function TableGeneric<DataType> ({
     hasPagination = true,
     onFilteredDataChange,
     onFocusedRowChange,
+    onHoverData,
     forAllValues
 }: Readonly<Props<DataType>>) {
     const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 })
@@ -72,6 +74,7 @@ function TableGeneric<DataType> ({
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
     const [tooltipInfo, setTooltipInfo] = useState<{ original: DataType; id: string; rect: DOMRect } | null>(null)
     const hideTooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const tooltipRequestId = useRef(0)
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -281,13 +284,26 @@ function TableGeneric<DataType> ({
         return () => document.removeEventListener('mousedown', closeHintOnOutsideClick);
     }, [hintColumnId])
 
-    function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
+    async function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
         if (hoverField === undefined) return
         if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current)
-        setTooltipInfo({ original: rowOriginal, id: rowId, rect: e.currentTarget.getBoundingClientRect() })
+        const rect = e.currentTarget.getBoundingClientRect()
+        const requestId = ++tooltipRequestId.current
+        setTooltipInfo({ original: rowOriginal, id: rowId, rect })
+        if (onHoverData) {
+            try {
+                const resolved = await onHoverData(rowOriginal)
+                if (resolved && tooltipRequestId.current === requestId) {
+                    setTooltipInfo({ original: resolved, id: rowId, rect })
+                }
+            } catch {
+                // Keep the tooltip open with its fallback when details cannot load.
+            }
+        }
     }
 
     function hideTooltip() {
+        tooltipRequestId.current++
         hideTooltipTimer.current = setTimeout(() => setTooltipInfo(null), 100)
     }
 
@@ -661,7 +677,9 @@ function TableGeneric<DataType> ({
                                 {index < (tooltipInfo.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
                             </span>
                         ))
-                        : "No description was provided"
+                        : (tooltipInfo.original as any)?.details_loaded === false
+                            ? "Loading description..."
+                            : "No description was provided"
                     }
                 </div>
                 <p className="text-xs text-gray-400 mt-1 italic">Click the CVE to see more</p>

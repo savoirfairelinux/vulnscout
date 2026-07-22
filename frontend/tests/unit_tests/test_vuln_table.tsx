@@ -868,6 +868,33 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('loads a compact vulnerability description when hovering', async () => {
+        const compactVuln: Vulnerability = {
+            ...vulnerabilities[0],
+            texts: [],
+            urls: [],
+            details_loaded: false,
+        };
+        fetchMock.mockResponse((request) => {
+            if (new URL(request.url).pathname !== '/api/vulnerabilities/CVE-2010-1234') {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            return Promise.resolve(JSON.stringify({
+                id: compactVuln.id,
+                texts: [{ title: 'description', content: 'Lazily loaded hover description' }],
+                urls: [],
+                severity: compactVuln.severity,
+            }));
+        });
+        const { container } = render(<TableVulnerabilities vulnerabilities={[compactVuln]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        fireEvent.mouseEnter(container.querySelector('tr.row-with-hover-effect')!);
+
+        await waitFor(() => {
+            expect(screen.getByRole('tooltip').textContent).toContain('Lazily loaded hover description');
+        });
+    });
+
     test('filter by severity', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -1453,6 +1480,36 @@ describe('Vulnerability Table', () => {
         await waitFor(() => {
             expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(1);
         });
+    });
+
+    test('opening a compact vulnerability loads its deferred description', async () => {
+        const compactVuln: Vulnerability = {
+            ...vulnerabilities[0],
+            texts: [],
+            urls: [],
+            details_loaded: false,
+        };
+        fetchMock.mockResponse((request) => {
+            if (new URL(request.url).pathname !== '/api/vulnerabilities/CVE-2010-1234') {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            return Promise.resolve(JSON.stringify({
+                id: compactVuln.id,
+                texts: [{ title: 'description', content: 'Deferred vulnerability description' }],
+                urls: ['https://example.com/deferred'],
+                severity: compactVuln.severity,
+            }));
+        });
+
+        render(<TableVulnerabilities vulnerabilities={[compactVuln]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await userEvent.click(await screen.findByText('CVE-2010-1234'));
+
+        expect((await screen.findAllByText('Deferred vulnerability description')).length).toBeGreaterThan(0);
+        expect(fetchMock.mock.calls.some(([request]) => request != null && (
+            new URL(typeof request === 'string' ? request : request.url).pathname ===
+            '/api/vulnerabilities/CVE-2010-1234'
+        ))).toBe(true);
     });
 
     // =========================================================================

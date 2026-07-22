@@ -1,4 +1,4 @@
-import type { Vulnerability } from "../handlers/vulnerabilities";
+import Vulnerabilities, { type Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
@@ -355,6 +355,69 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
+    const [modalDetailsLoading, setModalDetailsLoading] = useState(false);
+    const [modalDetailsError, setModalDetailsError] = useState(false);
+    const hoverDetailsCache = useRef(new Map<string, Vulnerability>());
+
+    const loadHoverDetails = useCallback(async (summary: Vulnerability): Promise<Vulnerability> => {
+        if (summary.details_loaded !== false) return summary;
+        const cacheKey = `${summary.id}:${variantId ?? ''}:${projectId ?? ''}`;
+        const cached = hoverDetailsCache.current.get(cacheKey);
+        if (cached) return cached;
+        const details = await Vulnerabilities.getDetails(summary.id, variantId, projectId);
+        const resolved = details ? {
+            ...summary,
+            texts: details.texts,
+            urls: details.urls,
+            severity: { ...summary.severity, cvss: details.severity.cvss },
+            details_loaded: true,
+        } : { ...summary, details_loaded: true };
+        hoverDetailsCache.current.set(cacheKey, resolved);
+        return resolved;
+    }, [variantId, projectId]);
+
+    useEffect(() => {
+        if (!modalVuln || modalVuln.details_loaded !== false) {
+            setModalDetailsLoading(false);
+            setModalDetailsError(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        const vulnId = modalVuln.id;
+        setModalDetailsLoading(true);
+        setModalDetailsError(false);
+        Vulnerabilities.getDetails(vulnId, variantId, projectId, controller.signal)
+            .then((details) => {
+                if (!details || controller.signal.aborted) return;
+                const mergeDetails = (summary: Vulnerability): Vulnerability => ({
+                    ...summary,
+                    texts: details.texts,
+                    urls: details.urls,
+                    severity: {
+                        ...summary.severity,
+                        cvss: details.severity.cvss,
+                    },
+                    details_loaded: true,
+                });
+                setModalVuln((current) => (
+                    current?.id === vulnId ? mergeDetails(current) : current
+                ));
+                setModalVulnSnapshot((current) => current.map((vuln) => (
+                    vuln.id === vulnId ? mergeDetails(vuln) : vuln
+                )));
+            })
+            .catch((error) => {
+                if (error?.name !== 'AbortError' && !controller.signal.aborted) {
+                    setModalDetailsError(true);
+                }
+            })
+            .finally(() => {
+                if (!controller.signal.aborted) setModalDetailsLoading(false);
+            });
+
+        return () => controller.abort();
+    }, [modalVuln?.id, modalVuln?.details_loaded, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
@@ -1814,10 +1877,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             updateSelected={setSelectedRows}
             onFilteredDataChange={setSearchFilteredData}
             onFocusedRowChange={setFocusedRowIndex}
+            onHoverData={loadHoverDetails}
         />
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
+            detailsLoading={modalDetailsLoading}
+            detailsError={modalDetailsError}
             isEditing={isEditing}
             onClose={() => {
                 setModalVuln(undefined);

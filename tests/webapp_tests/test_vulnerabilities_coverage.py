@@ -973,8 +973,7 @@ def test_apply_variant_scoped_overrides_skips_missing_vuln():
 
 
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
-    """In the legacy fallback, non-string doc formats are skipped and tool
-    scan sources are mapped."""
+    """Fallback skips non-string document formats and maps scan sources."""
     from src.routes.vulnerabilities import _populate_found_by
 
     class _Record:
@@ -992,20 +991,19 @@ def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
         def all(self):
             return self._rows
 
-    # The function runs two queries: (1) provenance markers, (2) legacy
-    # fallback. Return no provenance markers so both vulns fall through to the
-    # fallback, then return fallback rows shaped (vuln_id, scan_source,
-    # doc_format).
+    # The function runs separate queries for provenance, fallback observations,
+    # and document formats to avoid multiplying observations by documents.
     fallback_rows = [
-        ("v1", "nvd", None),      # non-string doc format -> use scan_source
-        ("v2", None, 12345),      # both non-string -> nothing added
+        ("v1", "scan-1", "nvd"),
+        ("v2", "scan-2", None),
     ]
+    format_rows = [("scan-1", None), ("scan-2", 12345)]
     calls = {"n": 0}
 
     def _fake_execute(*args, **kwargs):
         calls["n"] += 1
-        # 1st call: provenance query (empty), 2nd call: fallback query
-        return _Result([] if calls["n"] == 1 else fallback_rows)
+        rows = {1: [], 2: fallback_rows, 3: format_rows}[calls["n"]]
+        return _Result(rows)
 
     monkeypatch.setattr(
         "src.routes.vulnerabilities.db.session.execute",

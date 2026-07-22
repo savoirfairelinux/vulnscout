@@ -78,6 +78,39 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
     expect(calledUrl.searchParams.get('compare_variant_id')).toBe('variant-2');
     expect(calledUrl.searchParams.get('operation')).toBe('difference');
+    expect(calledUrl.searchParams.get('format')).toBe('compact');
+  });
+
+  test('parses compact records and preserves explicit attack vectors', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln({
+      details_loaded: false,
+      texts: undefined,
+      urls: undefined,
+      severity: {
+        severity: 'high',
+        min_score: 8.1,
+        max_score: 8.1,
+        cvss: [{ version: '3.1', base_score: 8.1, attack_vector: 'ADJACENT' }],
+      },
+    })]));
+
+    const [vuln] = await Vulnerabilities.list();
+    expect(vuln.details_loaded).toBe(false);
+    expect(vuln.texts).toEqual([]);
+    expect(vuln.urls).toEqual([]);
+    expect(vuln.severity.cvss[0].attack_vector).toBe('ADJACENT');
+  });
+
+  test('getDetails requests a scoped full vulnerability', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify(rawVuln()));
+
+    const details = await Vulnerabilities.getDetails('CVE-TEST-1', 'variant-1', 'project-1');
+
+    expect(details?.details_loaded).toBe(true);
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toContain('/api/vulnerabilities/CVE-TEST-1');
+    expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
+    expect(calledUrl.searchParams.has('project_id')).toBe(false);
   });
 
   test('list with compareVariantId but no operation omits operation param', async () => {

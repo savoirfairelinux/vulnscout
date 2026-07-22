@@ -30,6 +30,8 @@ import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 
 type Props = {
     vuln: Vulnerability;
+    detailsLoading?: boolean;
+    detailsError?: boolean;
     isEditing?: boolean;
     readOnly?: boolean;
     onClose: () => void;
@@ -126,7 +128,7 @@ type VariantScopedSnapshot = {
 };
 
   function VulnModal(props: Readonly<Props>) {
-    const { vuln, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const [showCustomCvss, setShowCustomCvss] = useState(false);
@@ -1623,6 +1625,17 @@ type VariantScopedSnapshot = {
                             </div>
 
                         </div>
+
+                        {detailsLoading && (
+                            <div className="mb-6 rounded-lg bg-gray-800 p-3 text-gray-300">
+                                Loading description, links, and CVSS details...
+                            </div>
+                        )}
+                        {detailsError && (
+                            <div className="mb-6 rounded-lg bg-red-900 p-3 text-red-100">
+                                Vulnerability details could not be loaded.
+                            </div>
+                        )}
 
                         <div className="mb-6 flex flex-col gap-2">
                             {vuln.texts.map((text) => {

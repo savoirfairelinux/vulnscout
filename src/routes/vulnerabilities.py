@@ -12,7 +12,7 @@ import uuid
 from flask import jsonify, request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select, ColumnElement
-from sqlalchemy.orm import selectinload, aliased, attributes as orm_attrs
+from sqlalchemy.orm import joinedload, selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
     Finding,
@@ -53,6 +53,19 @@ TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
 MATCH_CONDITION_MAX_LENGTH = 1_000
 MATCH_CONDITION_MAX_ITEMS = 50_000
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
+
+
+def _attack_vector_from_vector(vector: str) -> str | None:
+    """Return the normalized CVSS attack vector used by Explorer filters."""
+    for token, label in (
+        ("AV:N", "NETWORK"),
+        ("AV:A", "ADJACENT"),
+        ("AV:L", "LOCAL"),
+        ("AV:P", "PHYSICAL"),
+    ):
+        if token in vector:
+            return label
+    return None
 
 
 def _sbom_pkg_filter(pkg_ids: set[uuid.UUID]) -> "ColumnElement[bool] | None":
@@ -257,34 +270,47 @@ def _populate_found_by(
 
     unresolved_vuln_ids = [vid for vid in vuln_ids if vid not in found_by_map]
 
-    # 2) Fallback: derive from observing scans/documents in scope.
+    # 2) Fallback: derive from observing scans/documents in scope. Fetch the
+    # observation-to-scan rows separately from document metadata: joining
+    # every finding observation to every document in its scan creates a very
+    # large intermediate result on scans with many findings and documents.
     if unresolved_vuln_ids:
         fallback_q = (
             db.select(
                 Finding.vulnerability_id,
+                Scan.id.label("scan_id"),
                 Scan.scan_source,
-                SBOMDocument.format.label("doc_format"),
             )
             .select_from(Finding)
             .join(Observation, Observation.finding_id == Finding.id)
             .join(Scan, Scan.id == Observation.scan_id)
-            .outerjoin(
-                SBOMDocument,
-                db.and_(
-                    SBOMDocument.scan_id == Scan.id,
-                    SBOMDocument.format.isnot(None),
-                ),
-            )
             .where(Finding.vulnerability_id.in_(unresolved_vuln_ids))
         )
         if active_scan_ids:
             fallback_q = fallback_q.where(Observation.scan_id.in_(active_scan_ids))
         fallback_rows = db.session.execute(fallback_q.distinct()).all()
 
-        for vuln_id, scan_source, doc_format in fallback_rows:
-            if isinstance(doc_format, str):
-                mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
-                found_by_map.setdefault(vuln_id, set()).add(mapped)
+        fallback_scan_ids = {scan_id for _, scan_id, _ in fallback_rows}
+        formats_by_scan: dict[uuid.UUID, set[str]] = {}
+        if fallback_scan_ids:
+            format_rows = db.session.execute(
+                db.select(SBOMDocument.scan_id, SBOMDocument.format)
+                .where(
+                    SBOMDocument.scan_id.in_(fallback_scan_ids),
+                    SBOMDocument.format.isnot(None),
+                )
+                .distinct()
+            ).all()
+            for scan_id, doc_format in format_rows:
+                if isinstance(doc_format, str):
+                    formats_by_scan.setdefault(scan_id, set()).add(doc_format)
+
+        for vuln_id, scan_id, scan_source in fallback_rows:
+            doc_formats = formats_by_scan.get(scan_id, set())
+            if doc_formats:
+                for doc_format in doc_formats:
+                    mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
+                    found_by_map.setdefault(vuln_id, set()).add(mapped)
             elif isinstance(scan_source, str):
                 mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
@@ -335,6 +361,7 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities')
     def index_vulns() -> ResponseReturnValue:
+        response_format = request.args.get('format', 'list')
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
@@ -364,6 +391,7 @@ def init_app(app: Flask) -> None:
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
+                joinedload(Vulnerability.refresh),
             )
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
@@ -420,6 +448,7 @@ def init_app(app: Flask) -> None:
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
+                joinedload(Vulnerability.refresh),
             )
             per_variant_scan_ids = {u: active_scan_ids_for_variant(u) for u in parsed_uuids}
             current_scan_ids = []
@@ -461,6 +490,7 @@ def init_app(app: Flask) -> None:
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
                         selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                         selectinload(Vulnerability.metrics),
+                        joinedload(Vulnerability.refresh),
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
@@ -539,6 +569,7 @@ def init_app(app: Flask) -> None:
 
                 records = list(db.session.execute(
                     select(Vulnerability)
+                    .options(joinedload(Vulnerability.refresh))
                     .where(Vulnerability.id.in_(vuln_ids_subq))
                     .order_by(Vulnerability.id)
                 ).scalars().all())
@@ -675,6 +706,12 @@ def init_app(app: Flask) -> None:
         _populate_found_by(records, _scope_variant, _scope_project,
                            active_scan_ids=current_scan_ids or None)
         vulns = {r.id: r.to_dict() for r in records}
+        # The frontend consumes the richer ``texts`` field and never reads the
+        # legacy top-level description.  Omitting this duplicate from the list
+        # response saves substantial transfer and JSON parsing on large scans;
+        # the single-vulnerability endpoint still returns the complete record.
+        for vuln in vulns.values():
+            vuln.pop("description", None)
         _apply_variant_scoped_overrides_to_vuln_dicts(vulns, variant_scoped_overrides)
         vuln_ids = vulns.keys()
 
@@ -764,14 +801,39 @@ def init_app(app: Flask) -> None:
             for vuln_id, vuln in vulns.items():
                 vuln["first_scan_date"] = first_scan_by_vuln.get(vuln_id)
 
-            # Enrich with observation statuses
-            all_vuln_texts = fetch_vulnerabilities_texts(vuln_ids, include_packages=True, scan_ids=active_scan_ids)
-            for vuln_id, vuln_texts in all_vuln_texts.items():
-                vuln = vulns[vuln_id]
-                vuln["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts))
+            # Descriptions are only needed by the detail modal.  The compact
+            # Explorer response deliberately skips this relatively expensive
+            # query and lets the single-vulnerability endpoint load them when
+            # a row is opened.
+            if response_format != "compact":
+                all_vuln_texts = fetch_vulnerabilities_texts(
+                    vuln_ids,
+                    include_packages=True,
+                    scan_ids=active_scan_ids,
+                )
+                for vuln_id, vuln_texts in all_vuln_texts.items():
+                    vuln = vulns[vuln_id]
+                    vuln["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts))
 
-        match request.args.get('format', 'list'):
+        match response_format:
             case "list":
+                return list(vulns.values())
+            case "compact":
+                for vuln in vulns.values():
+                    vuln.pop("texts", None)
+                    vuln.pop("urls", None)
+                    vuln["details_loaded"] = False
+                    cvss_entries = vuln.get("severity", {}).get("cvss", [])
+                    vuln["severity"]["cvss"] = [
+                        {
+                            "version": cvss.get("version", ""),
+                            "base_score": cvss.get("base_score", 0.0),
+                            "attack_vector": _attack_vector_from_vector(
+                                cvss.get("vector_string", "")
+                            ),
+                        }
+                        for cvss in cvss_entries
+                    ]
                 return list(vulns.values())
             case "dict":
                 return vulns
@@ -785,7 +847,9 @@ def init_app(app: Flask) -> None:
             return "Not found", 404
 
         variant_id = request.args.get("variant_id")
+        project_id = request.args.get("project_id")
         response = record.to_dict()
+        text_variant_ids: list[uuid.UUID] | None = None
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -794,12 +858,35 @@ def init_app(app: Flask) -> None:
                 return {"error": "Internal error"}, 500
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
+            text_variant_ids = [variant_uuid]
+        elif project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
+            text_variant_ids = [v.id for v in Variant.get_by_project(project_uuid)]
+            metric_filter = Metrics.variant_id.is_(None)
+            if text_variant_ids:
+                metric_filter = db.or_(
+                    Metrics.variant_id.in_(text_variant_ids),
+                    Metrics.variant_id.is_(None),
+                )
+            scoped_metrics = db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == record.id,
+                    metric_filter,
+                )
+            ).scalars().all()
+            response.setdefault("severity", {})["cvss"] = [
+                metric.to_dict() for metric in scoped_metrics
+            ]
         else:
             variant_uuid = None
 
         vuln_texts = fetch_vulnerabilities_texts(
             [id],
-            variant_ids=[variant_uuid] if variant_uuid else None,
+            variant_ids=text_variant_ids,
             include_packages=True,
         )
         response["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[id]))

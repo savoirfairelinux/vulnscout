@@ -72,6 +72,8 @@ type Vulnerability = {
     simplified_status: string;
     status_summary?: StatusSummary;
     assessments: Assessment[];
+    /** False only for compact list records whose modal-only data is deferred. */
+    details_loaded?: boolean;
 };
 
 export type { Vulnerability, CVSS };
@@ -212,6 +214,7 @@ const asCVSS = (data: any): CVSS | [] => {
         if (score.vector_string.includes("AV:L")) score.attack_vector = "LOCAL"
         if (score.vector_string.includes("AV:P")) score.attack_vector = "PHYSICAL"
     }
+    if (typeof data?.attack_vector === "string") score.attack_vector = data.attack_vector
     if (typeof data?.exploitability_score === "number") score.exploitability_score = Number(data.exploitability_score)
     if (typeof data?.impact_score === "number") score.impact_score = Number(data.impact_score)
     return score
@@ -252,6 +255,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         },
         simplified_status: 'unknown',
         assessments: [],
+        details_loaded: data?.details_loaded !== false,
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace
     if (typeof data?.datasource === "string") vuln.datasource = data.datasource
@@ -327,7 +331,7 @@ class Vulnerabilities {
 
     static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
-        url.searchParams.set('format', 'list');
+        url.searchParams.set('format', 'compact');
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
             url.searchParams.set('compare_variant_id', compareVariantId);
@@ -346,6 +350,27 @@ class Vulnerabilities {
         });
         const data = await response.json();
         return data.flatMap(asVulnerability);
+    }
+
+    static async getDetails(
+        vulnId: string,
+        variantId?: string,
+        projectId?: string,
+        signal?: AbortSignal,
+    ): Promise<Vulnerability | null> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}`,
+            window.location.href,
+        );
+        if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), { mode: 'cors', signal });
+        if (!response.ok) return null;
+        const parsed = asVulnerability(await response.json());
+        return Array.isArray(parsed) ? null : parsed;
     }
 
     // Re-fetch a single vulnerability in the given (project) scope and return
