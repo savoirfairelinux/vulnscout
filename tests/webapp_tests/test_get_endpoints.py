@@ -306,6 +306,7 @@ def test_render_document_pdf(client):
     else:
         assert response.status_code == 200
 
+
 def test_render_document_html(client):
     import shutil
     response = client.get("/api/documents/summary.adoc?ext=html")
@@ -337,6 +338,7 @@ def test_render_document_invalid_ext(client):
     data = json.loads(response.data)
     assert data["error"] is not None
 
+
 def test_render_spdx_json(client):
     response = client.get("/api/documents/SPDX 2.3?ext=json")
     assert response.status_code == 200
@@ -350,6 +352,7 @@ def test_render_spdx_json(client):
     assert data["spdxVersion"] == "SPDX-2.3"
     assert data["dataLicense"] == "CC0-1.0"
     assert "packages" in data
+
 
 def test_render_spdx_xml(monkeypatch, client):
     # Ensure expected_mime is 'text/xml' for '?ext=xml'
@@ -369,6 +372,7 @@ def test_render_spdx_xml(monkeypatch, client):
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd and "filename=spdx_v2_3.xml" in cd
     assert response.data.decode("utf-8").lstrip().startswith("<")
+
 
 def test_render_openvex_json(client):
     response = client.get("/api/documents/OpenVex?ext=json")
