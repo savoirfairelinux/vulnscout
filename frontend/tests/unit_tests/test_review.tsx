@@ -474,8 +474,11 @@ describe('Review — rendering columns and tabs', () => {
         ]);
         render(<Review projectId="proj1" />);
 
-        const outdated = await screen.findByText('Outdated');
-        expect(outdated.parentElement).toHaveTextContent(/Variant Alpha.*Outdated/);
+        const outdatedBadges = await screen.findAllByText('Outdated');
+        const outdated = outdatedBadges.find(element =>
+            element.classList.contains('tracking-wide')
+        );
+        expect(outdated?.parentElement).toHaveTextContent(/Variant Alpha.*Outdated/);
         expect(screen.getByText('Variant Beta').closest('span')).not.toHaveTextContent('Outdated');
         expect(screen.getByText('Exploitable').closest('td')).not.toHaveTextContent('Outdated');
     });
@@ -1150,6 +1153,31 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
 // ===========================================================================
 
 describe('Review — filters, search and keyboard', () => {
+    test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
+        const mixedOutdated = {
+            ...makeAssessment('outdated', 'v1'),
+            vuln_id: 'CVE-2020-MIXED',
+            outdated: true,
+            superseded_map: { 'pkgA@1.0.0': ['pkgA@2.0.0'] },
+        };
+        const mixedCurrent = {
+            ...makeAssessment('current', 'v2'),
+            vuln_id: 'CVE-2020-MIXED',
+            packages: ['pkgB@1.0.0'],
+        };
+        mockNetwork([mixedOutdated, mixedCurrent, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-MIXED');
+        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2020-MIXED')).toBeInTheDocument();
+    });
+
     test('filtering by status hides non-matching rows', async () => {
         mockNetwork([RICH_ASSESSMENT, makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);

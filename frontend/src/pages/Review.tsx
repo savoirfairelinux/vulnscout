@@ -9,6 +9,7 @@ import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -114,6 +115,11 @@ function formatDate(iso: string): string {
     });
 }
 
+function hasOutdatedAssessment(assessment: Assessment): boolean {
+    const rawAssessments = (assessment as Partial<ReviewRow>)._assessments ?? [assessment];
+    return rawAssessments.some(current => current.outdated);
+}
+
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
@@ -129,6 +135,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
+    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -391,6 +398,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }, [variantList]);
 
     const filteredAssessments = useMemo(() => assessments.filter((a) => {
+        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+            return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -407,7 +417,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames, showOnlyOutdated]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -430,6 +440,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
         setSelectedVariants(variantList);
+        setShowOnlyOutdated(false);
     };
 
     const transferVariants = useMemo(() => {
@@ -1199,6 +1210,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }
 
     const filterReviewRows = (list: Assessment[]) => list.filter((a) => {
+        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+            return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -1327,6 +1341,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 setSelected={setSelectedVariants}
                             />
                         )}
+
+                        <ToggleSwitch
+                            enabled={showOnlyOutdated}
+                            setEnabled={setShowOnlyOutdated}
+                            label="Outdated"
+                        />
+                        <div className="flex items-center mx-3">
+                            <div className="border-l h-8 dark:border-neutral-300"></div>
+                        </div>
                     </>
                 )}
 
