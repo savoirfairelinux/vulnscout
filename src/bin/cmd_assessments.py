@@ -48,6 +48,8 @@ def _print_custom_data_import_result(result: dict) -> None:
     click.echo(
         f"Imported {result['assessments_imported']} assessments"
         f" ({result['assessments_skipped']} skipped as duplicates),"
+        f" {result['ai_assessments_imported']} AI assessments"
+        f" ({result['ai_assessments_skipped']} skipped as duplicates),"
         f" {result['cvss_imported']} CVSS,"
         f" {result['time_estimates_imported']} time estimates"
     )
@@ -72,7 +74,12 @@ def export_custom_vulnscout_data_command(output_dir: str, project: str, variant:
         filename_label = "all"
 
     data = build_custom_data_export(variant_ids)
-    if not data["assessments"] and not data["cvss"] and not data["time_estimates"]:
+    if (
+        not data["assessments"]
+        and not data["ai_assessments"]
+        and not data["cvss"]
+        and not data["time_estimates"]
+    ):
         raise click.ClickException("No custom VulnScout data to export.")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"custom_vulnscout_data_{filename_label}{_JSON_SUFFIX}")

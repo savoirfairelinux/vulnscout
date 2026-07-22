@@ -333,8 +333,8 @@ def build_custom_data_export(
 
     Returns
     -------
-    dict with keys ``version``, ``exported_at``, ``assessments``, ``cvss``,
-    ``time_estimates``.
+    dict with keys ``version``, ``exported_at``, ``assessments``,
+    ``ai_assessments``, ``cvss``, ``time_estimates``.
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment
@@ -343,27 +343,36 @@ def build_custom_data_export(
     from ..models.iso8601_duration import Iso8601Duration
     from ..models.variant import Variant as DBVariant
 
-    handmade = DBAssessment.get_by_origin(variant_ids)
+    handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
+    pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
 
     variant_name_by_id: dict[str, str] = {}
     variant_uuid_set: set[_uuid.UUID] = {
-        a.variant_id for a in handmade if a.variant_id is not None
+        a.variant_id for a in [*handmade, *pending_ai]
+        if a.variant_id is not None
     }
 
-    exported_assessments = []
-    for a in handmade:
-        d = a.to_dict()
-        exported_assessments.append({
-            "vuln_id": d["vuln_id"],
-            "status": d["status"],
-            "simplified_status": d.get("simplified_status", ""),
-            "justification": d.get("justification") or None,
-            "impact_statement": d.get("impact_statement") or None,
-            "status_notes": d.get("status_notes") or None,
-            "workaround": d.get("workaround") or None,
-            "packages": d["packages"],
-            "variant_id": d.get("variant_id"),
-        })
+    def _export_assessments(
+        assessments: "list[DBAssessment]",
+    ) -> list[dict[str, Any]]:
+        exported = []
+        for assessment in assessments:
+            assessment_dict = assessment.to_dict()
+            exported.append({
+                "vuln_id": assessment_dict["vuln_id"],
+                "status": assessment_dict["status"],
+                "simplified_status": assessment_dict.get("simplified_status", ""),
+                "justification": assessment_dict.get("justification") or None,
+                "impact_statement": assessment_dict.get("impact_statement") or None,
+                "status_notes": assessment_dict.get("status_notes") or None,
+                "workaround": assessment_dict.get("workaround") or None,
+                "packages": assessment_dict["packages"],
+                "variant_id": assessment_dict.get("variant_id"),
+            })
+        return exported
+
+    exported_assessments = _export_assessments(handmade)
+    exported_ai_assessments = _export_assessments(pending_ai)
 
     # Gather ALL custom CVSS entries, not just those linked to handmade
     # assessments.
@@ -452,6 +461,10 @@ def build_custom_data_export(
         vid = item.get("variant_id")
         item["variant"] = variant_name_by_id.get(vid) if vid else None
 
+    for item in exported_ai_assessments:
+        vid = item.get("variant_id")
+        item["variant"] = variant_name_by_id.get(vid) if vid else None
+
     for item in cvss_entries:
         vid = item.get("variant_id")
         item["variant"] = variant_name_by_id.get(vid) if vid else None
@@ -464,6 +477,7 @@ def build_custom_data_export(
         "version": 1,
         "exported_at": _dt.now(_tz.utc).isoformat(),
         "assessments": exported_assessments,
+        "ai_assessments": exported_ai_assessments,
         "cvss": cvss_entries,
         "time_estimates": time_estimates,
     }
@@ -485,7 +499,7 @@ def import_custom_data(
     ----------
     data:
         Parsed JSON matching the custom-data export format
-        (``{version, assessments, cvss, time_estimates}``).
+        (``{version, assessments, ai_assessments, cvss, time_estimates}``).
     variant_by_name:
         Mapping ``{name: Variant, sanitised_name: Variant}`` for variant
         resolution.
@@ -495,7 +509,7 @@ def import_custom_data(
 
     Returns
     -------
-    dict with ``status``, ``assessments_imported``, ``assessments_skipped``,
+    dict with ``status``, assessment import counts for custom and AI rows,
     ``cvss_imported``, ``time_estimates_imported``, ``errors``.
     """
     from ..extensions import db
@@ -515,6 +529,8 @@ def import_custom_data(
         "status": "success",
         "assessments_imported": 0,
         "assessments_skipped": 0,
+        "ai_assessments_imported": 0,
+        "ai_assessments_skipped": 0,
         "cvss_imported": 0,
         "time_estimates_imported": 0,
         "errors": [],
@@ -549,10 +565,16 @@ def import_custom_data(
                 return None
             return mapped_variant.id
 
-    # -- Import assessments --
-    assessments_list = data.get("assessments", [])
-    if isinstance(assessments_list, list):
-        for a in assessments_list:
+    def _import_assessments(
+        key: str,
+        origin: str,
+        imported_key: str,
+        skipped_key: str,
+    ) -> None:
+        assessment_list = data.get(key, [])
+        if not isinstance(assessment_list, list):
+            return
+        for a in assessment_list:
             if not isinstance(a, dict):
                 continue
             vuln_name = a.get("vuln_id")
@@ -598,11 +620,11 @@ def import_custom_data(
                             DBAssessment.finding_id == finding.id,
                             DBAssessment.variant_id == target_variant_id,
                             DBAssessment.status == status,
-                            DBAssessment.origin == "custom",
+                            DBAssessment.origin == origin,
                         )
                     ).scalars().first()
                     if existing is not None:
-                        result["assessments_skipped"] += 1
+                        result[skipped_key] += 1
                         continue
 
                     DBAssessment.create(
@@ -612,7 +634,7 @@ def import_custom_data(
                         ),
                         finding_id=finding.id,
                         variant_id=target_variant_id,
-                        origin="custom",
+                        origin=origin,
                         status_notes=status_notes,
                         justification=justification,
                         impact_statement=impact_statement,
@@ -620,13 +642,22 @@ def import_custom_data(
                         responses=[],
                         commit=True,
                     )
-                    result["assessments_imported"] += 1
+                    result[imported_key] += 1
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
+
+    # Import pending AI assessments separately so the Review page continues to
+    # surface them in its AI Assessments tab for approval or rejection.
+    _import_assessments(
+        "assessments", "custom", "assessments_imported", "assessments_skipped"
+    )
+    _import_assessments(
+        "ai_assessments", "ai", "ai_assessments_imported", "ai_assessments_skipped"
+    )
 
     # -- Import CVSS --
     cvss_list = data.get("cvss", [])
@@ -738,7 +769,12 @@ def import_custom_data(
                 apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
             result["time_estimates_imported"] += 1
 
-    if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:
+    if (
+        not result["assessments_imported"]
+        and not result["ai_assessments_imported"]
+        and not result["cvss_imported"]
+        and not result["time_estimates_imported"]
+    ):
         if result["errors"]:
             result["status"] = "error"
 

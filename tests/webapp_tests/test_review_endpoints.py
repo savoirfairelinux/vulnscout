@@ -1604,6 +1604,19 @@ def test_export_import_custom_data_round_trip(client):
     assert result["status"] == "success"
 
 
+def test_export_custom_data_with_only_pending_ai_assessments(client):
+    """The Review page can export a pending AI assessment without custom data."""
+    _create_ai_assessment(client)
+
+    response = client.get("/api/assessments/review/export-custom-data")
+
+    assert response.status_code == 200
+    exported = json.loads(response.data)
+    assert exported["assessments"] == []
+    assert len(exported["ai_assessments"]) == 1
+    assert exported["ai_assessments"][0]["vuln_id"] == "CVE-2020-35492"
+
+
 # ── review_custom_cvss: variant/project filtering ────────────────────────
 
 def test_review_custom_cvss_by_variant(client):

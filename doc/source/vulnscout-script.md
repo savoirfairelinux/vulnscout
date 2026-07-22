@@ -314,7 +314,11 @@ VulnScout lets you export and re-import the assessments you have manually create
 
 ### VulnScout JSON
 
-The `--export-custom-vulnscout-data` flag exports custom assessments, CVSS scores, and time estimates as one VulnScout JSON file. It includes every variant in the selected project unless `--variant` is provided.
+The `--export-custom-vulnscout-data` flag exports custom assessments, pending AI
+assessments, CVSS scores, and time estimates as one VulnScout JSON file. It
+includes every variant in the selected project unless `--variant` is provided.
+After import, pending AI assessments are available from the Review page's **AI
+Assessments** tab for approval or rejection.
 
 ```bash
 ./vulnscout --project demo --export-custom-vulnscout-data

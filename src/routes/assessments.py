@@ -607,8 +607,8 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/export-custom-data')
     def export_review_custom_data() -> ResponseReturnValue:
-        """Export handmade (review) assessments, custom CVSS scores and time
-        estimates as a single JSON file.
+        """Export handmade and pending AI assessments, custom CVSS scores and
+        time estimates as a single JSON file.
 
         Query parameters:
 
@@ -647,7 +647,12 @@ def init_app(app: Flask) -> None:
 
         data = build_custom_data_export(variant_ids)
 
-        if not data["assessments"] and not data["cvss"] and not data["time_estimates"]:
+        if (
+            not data["assessments"]
+            and not data["ai_assessments"]
+            and not data["cvss"]
+            and not data["time_estimates"]
+        ):
             return {"error": "No custom data to export"}, 404
 
         import json as _json
@@ -661,8 +666,8 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/import-custom-data', methods=['POST'])
     def import_review_custom_data() -> ResponseReturnValue:
-        """Import assessments, CVSS scores and time estimates from a custom-data
-        JSON file.
+        """Import handmade and pending AI assessments, CVSS scores and time
+        estimates from a custom-data JSON file.
 
         Accepts either:
 

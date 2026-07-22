@@ -130,6 +130,42 @@ class TestBuildCustomDataExport:
         # variant name should be resolved on the exported assessment
         assert result["assessments"][0]["variant"] == "io-cov-var"
 
+    def test_pending_ai_assessments_are_exported(self, app, variant_and_project):
+        """Pending AI rows are emitted separately for the Review page AI tab."""
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+
+        with app.app_context():
+            pkg = Package.create("ai-pkg", "1.0.0")
+            vuln = Vulnerability.create_record("CVE-2099-AI01")
+            finding = Finding.create(pkg.id, vuln.id)
+            Assessment.create(
+                status="under_investigation",
+                finding_id=finding.id,
+                variant_id=var.id,
+                origin="ai",
+            )
+
+            result = build_custom_data_export(variant_ids=[var.id])
+
+        assert result["assessments"] == []
+        assert result["ai_assessments"] == [{
+            "vuln_id": "CVE-2099-AI01",
+            "status": "under_investigation",
+            "simplified_status": "",
+            "justification": None,
+            "impact_statement": None,
+            "status_notes": None,
+            "workaround": None,
+            "packages": ["ai-pkg@1.0.0"],
+            "variant_id": str(var.id),
+            "variant": "io-cov-var",
+        }]
+
 
 # ===========================================================================
 # import_custom_data — assessments section
@@ -235,6 +271,30 @@ class TestImportCustomDataAssessments:
         with app.app_context():
             result = import_custom_data(data, variant_by_name)
         assert result["assessments_imported"] == 1
+
+    def test_import_ai_assessment_preserves_pending_origin(self, app, variant_and_project):
+        """AI JSON rows return to the Review page as pending AI assessments."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        data = {
+            "ai_assessments": [{
+                "vuln_id": "CVE-2099-AI02",
+                "status": "affected",
+                "packages": ["ai-import@1.0"],
+                "variant_id": str(var.id),
+            }]
+        }
+        with app.app_context():
+            result = import_custom_data(data, {})
+            imported = Assessment.get_by_origin([var.id], origin="ai")
+            duplicate_result = import_custom_data(data, {})
+
+        assert result["ai_assessments_imported"] == 1
+        assert result["assessments_imported"] == 0
+        assert len(imported) == 1
+        assert imported[0].vuln_id == "CVE-2099-AI02"
+        assert duplicate_result["ai_assessments_skipped"] == 1
 
 
 # ===========================================================================

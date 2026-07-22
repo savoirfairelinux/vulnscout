@@ -500,7 +500,9 @@ Upload an OpenVEX `.json` file into a selected variant. The uploaded filename is
 GET /api/assessments/review/export-custom-data
 ```
 
-Exports handmade (review) assessments, custom CVSS scores, and time estimates as a single JSON file.
+Exports handmade review assessments, pending AI assessments, custom CVSS scores,
+and time estimates as a single JSON file. Pending AI assessments can be reviewed
+from the **AI Assessments** tab after import.
 
 **Query parameters:**
 
@@ -515,6 +517,7 @@ Exports handmade (review) assessments, custom CVSS scores, and time estimates as
 {
   "version": "1.0",
   "assessments": [...],
+  "ai_assessments": [...],
   "cvss": [...],
   "time_estimates": [...]
 }
@@ -528,7 +531,9 @@ Returns `404` if there is no custom data to export.
 POST /api/assessments/review/import-custom-data
 ```
 
-Imports assessments, custom CVSS scores, and time estimates from a custom-data JSON file.
+Imports assessments, pending AI assessments, custom CVSS scores, and time
+estimates from a custom-data JSON file. Imported AI assessments retain their
+pending state and appear in the **AI Assessments** tab.
 
 Accepts either:
 
@@ -542,6 +547,7 @@ The records keep the variant identifiers embedded in the file.
 {
   "status": "success",
   "assessments_imported": 12,
+  "ai_assessments_imported": 4,
   "cvss_imported": 5,
   "time_estimates_imported": 3
 }
