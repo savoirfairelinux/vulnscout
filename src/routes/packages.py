@@ -171,47 +171,58 @@ def init_app(app: Flask) -> None:
         # Enrich each package with its variants and sources derived from the
         # SBOMPackage → SBOMDocument → Scan → Variant chain so that the
         # frontend can display them even for packages with 0 vulnerabilities.
-        # Restrict to the current project/variant scope to avoid showing
-        # variant names from other projects.
+        # Fetch the comparatively small document metadata first, then fetch
+        # only package/document UUID pairs.  The previous five-table DISTINCT
+        # query repeated text metadata for every package/document association
+        # and made SQLAlchemy materialize a very large joined result.
         pkg_ids = [pkg.id for pkg in pkgs]
         if pkg_ids:
-            enrich_query = (
+            document_query = (
                 db.select(
-                    Package.id.label("package_id"),
-                    Package.name,
-                    Package.version,
+                    SBOMDocument.id.label("document_id"),
                     Variant.name.label("variant_name"),
                     SBOMDocument.format.label("doc_format"),
                     SBOMDocument.source_name.label("doc_source_name"),
                 )
-                .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
                 .join(Scan, SBOMDocument.scan_id == Scan.id)
                 .join(Variant, Scan.variant_id == Variant.id)
-                .where(Package.id.in_(pkg_ids))
             )
             # Restrict to active (non-deprecated) scan documents only
             if active_scan_ids:
-                enrich_query = enrich_query.where(SBOMDocument.scan_id.in_(active_scan_ids))
+                document_query = document_query.where(SBOMDocument.scan_id.in_(active_scan_ids))
             if variant_id:
                 _v = db.session.get(Variant, uuid.UUID(variant_id))
                 if _v and _v.project_id:
-                    enrich_query = enrich_query.where(
+                    document_query = document_query.where(
                         Variant.project_id == _v.project_id
                     )
                 else:
-                    enrich_query = enrich_query.where(
+                    document_query = document_query.where(
                         Scan.variant_id == uuid.UUID(variant_id)
                     )
             elif project_id:
-                enrich_query = enrich_query.where(Variant.project_id == uuid.UUID(project_id))
-            rows = db.session.execute(enrich_query).all()
+                document_query = document_query.where(Variant.project_id == uuid.UUID(project_id))
+
+            document_rows = db.session.execute(document_query).all()
+            document_meta = {
+                row.document_id: row
+                for row in document_rows
+            }
+            document_ids = list(document_meta)
+            association_rows = db.session.execute(
+                db.select(SBOMPackage.package_id, SBOMPackage.sbom_document_id)
+                .where(SBOMPackage.sbom_document_id.in_(document_ids))
+            ).all() if document_ids else []
 
             # Build lookup by package UUID to avoid conflating similarly-named
             # package rows (e.g. different supplier or near-identical versions).
             meta: dict = {}
-            for row in rows:
-                key = str(row.package_id)
+            selected_package_ids = {str(package_id) for package_id in pkg_ids}
+            for package_id, document_id in association_rows:
+                row = document_meta[document_id]
+                key = str(package_id)
+                if key not in selected_package_ids:
+                    continue
                 if key not in meta:
                     meta[key] = {"variants": set(), "sources": set(), "sbom_documents": set()}
                 if row.variant_name:

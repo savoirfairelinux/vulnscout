@@ -491,6 +491,8 @@ class TestPackagesFiltering:
         body = json.loads(response.data)
         cairo = next(p for p in body if p["name"] == "cairo")
         assert cairo["variants"] == ["VariantA"]
+        assert cairo["sources"] == []
+        assert cairo["sbom_documents"] == ["cdx"]
 
     # Compare-filtering tests:
     # VariantA has cairo@1.16.0, VariantB has no packages (via observations).
