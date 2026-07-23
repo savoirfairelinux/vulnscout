@@ -458,8 +458,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
 
         {/* ======== Category tabs ======== */}
-        <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
+        <div role="tablist" aria-label="Settings categories" className="mb-3 flex items-center gap-1 border-b border-gray-700">
           <button
+            id="settings-tab-general"
+            role="tab"
+            aria-selected={activeTab === "general"}
+            aria-controls="settings-tabpanel"
             className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
               activeTab === "general"
                 ? "bg-sky-800 text-white border-b-2 border-sky-400"
@@ -470,6 +474,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             General Settings
           </button>
           <button
+            id="settings-tab-projects"
+            role="tab"
+            aria-selected={activeTab === "projects"}
+            aria-controls="settings-tabpanel"
             className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
               activeTab === "projects"
                 ? "bg-sky-800 text-white border-b-2 border-sky-400"
@@ -480,6 +488,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             Projects Settings
           </button>
           <button
+            id="settings-tab-variants"
+            role="tab"
+            aria-selected={activeTab === "variants"}
+            aria-controls="settings-tabpanel"
             className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
               activeTab === "variants"
                 ? "bg-sky-800 text-white border-b-2 border-sky-400"
@@ -490,6 +502,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             Variants Settings
           </button>
           <button
+            id="settings-tab-scan"
+            role="tab"
+            aria-selected={activeTab === "scan"}
+            aria-controls="settings-tabpanel"
             className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
               activeTab === "scan"
                 ? "bg-sky-800 text-white border-b-2 border-sky-400"
@@ -503,7 +519,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
 
         {/* ======== General Settings tab ======== */}
         {activeTab === "general" && (
-        <>
+        <div id="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-general">
         {/* ======== Report Metadata ======== */}
         <div>
           <div className={cardHeader}>
@@ -512,8 +528,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
           <div className={cardBody + " space-y-3"}>
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
+              <label htmlFor="settings-product-name" className="block text-sm text-zinc-300 mb-1">PRODUCT_NAME</label>
               <input
+                id="settings-product-name"
                 type="text"
                 value={configForm.product_name}
                 onChange={(e) => {
@@ -527,8 +544,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
 
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">AUTHOR_NAME</label>
+              <label htmlFor="settings-author-name" className="block text-sm text-zinc-300 mb-1">AUTHOR_NAME</label>
               <input
+                id="settings-author-name"
                 type="text"
                 value={configForm.author_name}
                 onChange={(e) => {
@@ -542,8 +560,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
 
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">CLIENT_NAME</label>
+              <label htmlFor="settings-client-name" className="block text-sm text-zinc-300 mb-1">CLIENT_NAME</label>
               <input
+                id="settings-client-name"
                 type="text"
                 value={configForm.client_name}
                 onChange={(e) => {
@@ -557,8 +576,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
 
             <div>
-              <label className="block text-sm text-zinc-300 mb-1">CONTACT_EMAIL</label>
+              <label htmlFor="settings-contact-email" className="block text-sm text-zinc-300 mb-1">CONTACT_EMAIL</label>
               <input
+                id="settings-contact-email"
                 type="email"
                 value={configForm.contact_email}
                 onChange={(e) => {
@@ -584,9 +604,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 )}
                 Save
               </button>
-              {configSaved && <span className="text-emerald-400 text-sm">{configSaved}</span>}
+              {configSaved && <span role="status" className="text-emerald-400 text-sm">{configSaved}</span>}
               {configError && (
-                <span className="text-red-400 text-sm">
+                <span role="alert" className="text-red-400 text-sm">
                   <FontAwesomeIcon icon={faTriangleExclamation} className="mr-1" />
                   {configError}
                 </span>
@@ -615,7 +635,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
               </a>
             </p>
             {nvdMsg && (
-              <div className={`text-sm rounded px-3 py-2 ${nvdMsg.type === "success" ? "bg-green-900/40 text-green-300" : "bg-red-900/40 text-red-300"}`}>
+              <div role={nvdMsg.type === "success" ? "status" : "alert"} className={`text-sm rounded px-3 py-2 ${nvdMsg.type === "success" ? "bg-green-900/40 text-green-300" : "bg-red-900/40 text-red-300"}`}>
                 {nvdMsg.text}
               </div>
             )}
@@ -686,12 +706,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </section>
 
-        </>)
+        </div>)
         }
 
         {/* ======== Projects Settings tab ======== */}
         {activeTab === "projects" && (
-        <>
+        <div id="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-projects">
         {/* ======== Add Project ======== */}
         <section aria-labelledby="settings-heading-project-add">
           <div className={cardHeader}>
@@ -850,12 +870,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             )}
           </div>
         </section>
-        </>
+        </div>
         )}
 
         {/* ======== Variants Settings tab ======== */}
         {activeTab === "variants" && (
-        <>
+        <div id="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-variants">
         {/* ======== Select Project ======== */}
         <section aria-labelledby="settings-heading-variant-project">
           <div className={cardHeader}>
@@ -1062,12 +1082,12 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
           </div>
         </section>
 
-        </>
+        </div>
         )}
 
         {/* ======== Scan Settings tab ======== */}
         {activeTab === "scan" && (
-        <>
+        <div id="settings-tabpanel" role="tabpanel" aria-labelledby="settings-tab-scan">
         {/* ======== Import SBOM ======== */}
         <section aria-labelledby="settings-heading-import">
           <div className={cardHeader}>
@@ -1245,7 +1265,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             </div>
           </div>
         </section>
-        </>
+        </div>
         )}
       </div>
 
