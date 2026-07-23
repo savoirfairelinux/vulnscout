@@ -22,6 +22,7 @@ import Packages from '../handlers/packages';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 import ReviewTransferModal from '../components/ReviewTransferModal';
+import { useDialogFocus } from '../components/useDialogFocus';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -162,6 +163,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const editDialogRef = useRef<HTMLDivElement>(null);
+
+    useDialogFocus(editingRow !== null, editDialogRef);
 
     const keyboardShortcuts = [
         { key: '/', description: 'Focus search bar' },
@@ -1458,8 +1462,12 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             )}
 
-            <div className="mb-3 flex items-center gap-1 border-b border-gray-700">
+                <div role="tablist" aria-label="Review data categories" className="mb-3 flex items-center gap-1 border-b border-gray-700">
                 <button
+                    id="review-tab-assessments"
+                    role="tab"
+                    aria-selected={activeTab === 'assessments'}
+                    aria-controls="review-tabpanel"
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
                         activeTab === 'assessments'
                             ? 'bg-sky-800 text-white border-b-2 border-sky-400'
@@ -1470,6 +1478,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     Assessments{assessments.length > 0 ? ` (${assessments.length})` : ''}
                 </button>
                 <button
+                    id="review-tab-time-estimates"
+                    role="tab"
+                    aria-selected={activeTab === 'time-estimates'}
+                    aria-controls="review-tabpanel"
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
                         activeTab === 'time-estimates'
                             ? 'bg-sky-800 text-white border-b-2 border-sky-400'
@@ -1480,6 +1492,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     Time Estimates{timeEstimates.length > 0 ? ` (${timeEstimates.length})` : ''}
                 </button>
                 <button
+                    id="review-tab-custom-cvss"
+                    role="tab"
+                    aria-selected={activeTab === 'custom-cvss'}
+                    aria-controls="review-tabpanel"
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
                         activeTab === 'custom-cvss'
                             ? 'bg-sky-800 text-white border-b-2 border-sky-400'
@@ -1490,6 +1506,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     Custom CVSS{customCvss.length > 0 ? ` (${customCvss.length})` : ''}
                 </button>
                 <button
+                    id="review-tab-ai-assessments"
+                    role="tab"
+                    aria-selected={activeTab === 'ai-assessments'}
+                    aria-controls="review-tabpanel"
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
                         activeTab === 'ai-assessments'
                             ? 'bg-sky-800 text-white border-b-2 border-sky-400'
@@ -1501,6 +1521,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </button>
             </div>
 
+            <div id="review-tabpanel" role="tabpanel" aria-labelledby={`review-tab-${activeTab}`}>
             {activeTab === 'assessments' && renderAssessmentsTable(
                 filteredAssessments,
                 columns,
@@ -1570,6 +1591,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     />
                 )
             )}
+            </div>
 
             {modalVuln && (
                 <VulnModal
@@ -1605,8 +1627,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
             {editingRow && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => !editSubmitting && setEditingRow(null)}>
-                    <div className="bg-gray-900 rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-base font-bold text-gray-400 mb-4 font-mono">{editingRow.vuln_id}</h3>
+                    <div ref={editDialogRef} role="dialog" aria-modal="true" aria-labelledby="review-edit-dialog-title" tabIndex={-1} className="bg-gray-900 rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <h3 id="review-edit-dialog-title" className="text-base font-bold text-gray-400 mb-4 font-mono">{editingRow.vuln_id}</h3>
                         {editSubmitting ? (
                             <div className="flex items-center justify-center py-8">
                                 <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />

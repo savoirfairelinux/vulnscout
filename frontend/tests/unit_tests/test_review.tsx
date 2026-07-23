@@ -1119,7 +1119,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
         await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
 
         // Back to Assessments: nav must again span the assessment vuln ids.
-        await user.click(screen.getByRole('button', { name: /^Assessments/ }));
+        await user.click(screen.getByRole('tab', { name: /^Assessments/ }));
         cells = await screen.findAllByTitle('Click to view details');
         await user.click(cells[0]);
         await screen.findByTestId('vuln-modal');
