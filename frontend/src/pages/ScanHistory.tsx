@@ -39,6 +39,7 @@ import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import { useDialogFocus } from "../components/useDialogFocus";
 
 type Props = {
     variantId?: string;
@@ -508,6 +509,10 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
     const [section, setSection] = useState<GlobalSection>('packages');
     const [filter, setFilter] = useState('');
     const overlayRef = useRef<HTMLDivElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(true, dialogRef, closeButtonRef);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -545,14 +550,21 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
             ref={overlayRef}
         >
             <div className="relative p-16 h-full w-full">
-                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto flex flex-col">
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="scan-result-dialog-title"
+                    tabIndex={-1}
+                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto flex flex-col"
+                >
 
                     {/* Header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
-                        <h3 className="text-xl font-semibold text-white">
+                        <h3 id="scan-result-dialog-title" className="text-xl font-semibold text-white">
                             Scan Result — Active Items
                         </h3>
-                        <button onClick={onClose} type="button" className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors">
+                        <button ref={closeButtonRef} onClick={onClose} type="button" className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors">
                             <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
                                 <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
                             </svg>
@@ -590,6 +602,7 @@ function GlobalResultModal({ scanId, onClose }: { scanId: string; onClose: () =>
                             <div className="ml-auto">
                                 <input
                                     type="text"
+                                    aria-label="Filter scan result"
                                     placeholder="Filter\u2026"
                                     value={filter}
                                     onChange={e => setFilter(e.target.value)}
@@ -705,6 +718,10 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
     const isToolScan = scanType === 'tool';
     const [section, setSection] = useState<Section>(isToolScan ? 'findings' : 'packages');
     const overlayRef = useRef<HTMLDivElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(true, dialogRef, closeButtonRef);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -745,14 +762,22 @@ function DiffModal({ scanId, scanType, onClose }: { scanId: string; scanType: st
             ref={overlayRef}
         >
             <div className="relative p-16 h-full w-full">
-                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto flex flex-col">
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="scan-diff-dialog-title"
+                    tabIndex={-1}
+                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto flex flex-col"
+                >
 
                     {/* Header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
-                        <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
+                        <h3 id="scan-diff-dialog-title" className="text-xl font-semibold text-gray-900 dark:text-white">
                             {isToolScan ? 'Tool scan diff details' : 'Scan diff details'}
                         </h3>
                         <button
+                            ref={closeButtonRef}
                             onClick={onClose}
                             type="button"
                             className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
