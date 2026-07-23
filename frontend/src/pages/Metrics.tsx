@@ -573,7 +573,23 @@ const packageColumns = [
                   <Pie
                     data={dataSetVulnBySeverity}
                     options={{ ...vulnBySeverityOptions, maintainAspectRatio: false }}
+                    aria-label="Vulnerabilities by severity chart"
+                    role="img"
                   />
+                  <div className="sr-only focus-within:not-sr-only">
+                    <p>Filter vulnerabilities by severity</p>
+                    {dataSetVulnBySeverity.labels.map((label, index) => {
+                      const severity = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'][index];
+                      const matchingSeverity = vulnerabilities.find(vulnerability =>
+                        vulnerability.severity.severity.toUpperCase() === severity
+                      )?.severity.severity;
+                      return matchingSeverity ? (
+                        <button key={label} type="button" onClick={() => goToVulnsTabWithFilter('Severity', matchingSeverity)}>
+                          {label}
+                        </button>
+                      ) : null;
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -588,7 +604,22 @@ const packageColumns = [
                   <Pie
                     data={dataSetVulnByStatus}
                     options={{ ...vulnByStatusOptions, maintainAspectRatio: false }}
+                    aria-label="Vulnerabilities by status chart"
+                    role="img"
                   />
+                  <div className="sr-only focus-within:not-sr-only">
+                    <p>Filter vulnerabilities by status</p>
+                    {dataSetVulnByStatus.labels.map(label => {
+                      const matchingStatus = vulnerabilities.some(vulnerability =>
+                        (getVulnerabilityStatusSummary(vulnerability).counts[label] ?? 0) > 0
+                      );
+                      return matchingStatus ? (
+                        <button key={label} type="button" onClick={() => goToVulnsTabWithFilter('Status', label)}>
+                          {label}
+                        </button>
+                      ) : null;
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -621,6 +652,8 @@ const packageColumns = [
                   <Line
                     data={vulnEvolutionTime}
                     options={{ ...LineOptions, maintainAspectRatio: false }}
+                    aria-label="Active vulnerabilities over time chart"
+                    role="img"
                   />
                 </div>
               </div>
@@ -636,6 +669,8 @@ const packageColumns = [
                   <Bar
                     data={dataSetVulnBySource}
                     options={{ ...BarOptions, maintainAspectRatio: false }}
+                    aria-label="Vulnerabilities by database chart"
+                    role="img"
                   />
                 </div>
               </div>

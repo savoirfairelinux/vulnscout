@@ -13,8 +13,8 @@ function Loading(
   }: Readonly<Props>
 ) {
   return (
-    <div className='w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] text-center pt-[15vh]'>
-        <img src={infinityLoader} alt='Loading animation' className='min-w-[150px] m-auto' />
+    <div role="status" aria-live="polite" aria-atomic="true" className='w-screen min-h-screen bg-gray-200 dark:bg-neutral-800 dark:text-[#eee] text-center pt-[15vh]'>
+      <img src={infinityLoader} alt='' aria-hidden="true" className='min-w-[150px] m-auto' />
         <h1 id='topline' className='text-5xl p-8'>{topline}</h1>
         <h2 id='details' className='text-3xl p-8'>{details}</h2>
         <VersionDisplay />
