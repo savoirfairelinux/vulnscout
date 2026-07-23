@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useDialogFocus } from "./useDialogFocus";
 
 type Props = {
     isOpen: boolean;
@@ -21,6 +22,11 @@ function ConfirmationModal({
     onConfirm,
     onCancel
 }: Readonly<Props>) {
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const cancelButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(isOpen, dialogRef, cancelButtonRef);
+
     useEffect(() => {
         if (!isOpen) return;
 
@@ -50,7 +56,15 @@ function ConfirmationModal({
             className="fixed top-0 right-0 left-0 z-[100] flex justify-center items-center w-full h-full max-h-full bg-black/50"
         >
             <div className="relative p-4 w-full max-w-md max-h-full">
-                <div className="relative bg-white rounded-lg shadow dark:bg-gray-700">
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="confirmation-modal-title"
+                    aria-describedby="confirmation-modal-message"
+                    tabIndex={-1}
+                    className="relative bg-white rounded-lg shadow dark:bg-gray-700"
+                >
                     {/* Modal header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
                         <div className="flex items-center gap-2">
@@ -59,7 +73,7 @@ function ConfirmationModal({
                                     <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 0 1 3 0v4a1.5 1.5 0 0 1-3 0V4Zm0 8a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-3 0v-1Z"/>
                                 </svg>
                             )}
-                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                            <h3 id="confirmation-modal-title" className="text-lg font-semibold text-gray-900 dark:text-white">
                                 {title}
                             </h3>
                         </div>
@@ -77,9 +91,9 @@ function ConfirmationModal({
                     
                     {/* Modal body */}
                     <div className="p-4 md:p-5 text-center">
-                        <h3 className="mb-5 text-lg font-normal text-gray-500 dark:text-gray-400">
+                        <p id="confirmation-modal-message" className="mb-5 text-lg font-normal text-gray-500 dark:text-gray-400">
                             {message}
-                        </h3>
+                        </p>
                         
                         {/* Modal footer */}
                         <div className="flex justify-center gap-4">
@@ -91,6 +105,7 @@ function ConfirmationModal({
                                 {confirmText}
                             </button>
                             <button
+                                ref={cancelButtonRef}
                                 onClick={onCancel}
                                 type="button"
                                 className="py-2.5 px-5 ms-3 text-sm font-medium text-gray-500 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-primary-300 hover:text-gray-900 focus:z-10 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-500 dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-gray-600"

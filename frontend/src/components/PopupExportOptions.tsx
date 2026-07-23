@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDialogFocus } from "./useDialogFocus";
 
 type Options = {
     docName: string;
@@ -16,6 +17,10 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
     const [onlyMoreRecentDate, setOnlyMoreRecentDate] = useState("");
     const [onlyMoreRecentTime, setOnlyMoreRecentTime] = useState("00:00");
     const [onlyEPSSGreater, setOnlyEPSSGreater] = useState<string>("");
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(true, dialogRef, closeButtonRef);
 
     const onlyMoreRecent = onlyMoreRecentDate != '' ? `${onlyMoreRecentDate}T${onlyMoreRecentTime || '00:00'}` : undefined;
 
@@ -44,14 +49,22 @@ function PopupExportOptions({docName, extension, onClose = () => {}}: Readonly<O
             className="overflow-x-hidden fixed top-0 right-0 left-0 z-50 justify-center items-center w-full md:inset-0 h-full max-h-full bg-gray-900/90"
         >
             <div className="relative p-4 md:p-32 xl:px-64 h-full">
-                <div className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto">
+                <div
+                    ref={dialogRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="export-options-title"
+                    tabIndex={-1}
+                    className="relative rounded-lg shadow bg-gray-700 h-full overflow-y-auto"
+                >
 
                     {/* Modal header */}
                     <div className="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600">
-                        <h3 id="vulnerability_modal_title" className="text-xl text-gray-900 dark:text-white">
+                        <h3 id="export-options-title" className="text-xl text-gray-900 dark:text-white">
                             Exporting <span className="font-semibold">{docName}</span> in <span className="font-mono">{extension}</span> format
                         </h3>
                         <button
+                            ref={closeButtonRef}
                             onClick={onClose}
                             type="button"
                             aria-label="close export options"

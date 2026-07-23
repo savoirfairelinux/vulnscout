@@ -201,12 +201,27 @@ describe('ConfirmationModal', () => {
         render(<ConfirmationModal {...defaultProps} />);
 
         // ASSERT
-        const modal = document.querySelector('[tabindex="-1"]');
+        const modal = screen.getByRole('dialog', { name: 'Confirm Action' });
         expect(modal).toBeInTheDocument();
+        expect(modal).toHaveAttribute('aria-modal', 'true');
+        expect(modal).toHaveAttribute('aria-describedby', 'confirmation-modal-message');
         expect(modal).toHaveAttribute('tabIndex', '-1');
         
         const closeButton = screen.getByRole('button', { name: /close modal/i });
         expect(closeButton).toBeInTheDocument();
+    });
+
+    test('restores focus to the invoking control when closed', () => {
+        const trigger = document.createElement('button');
+        document.body.append(trigger);
+        trigger.focus();
+
+        const { rerender } = render(<ConfirmationModal {...defaultProps} />);
+        expect(screen.getByRole('button', { name: /no/i })).toHaveFocus();
+
+        rerender(<ConfirmationModal {...defaultProps} isOpen={false} />);
+        expect(trigger).toHaveFocus();
+        trigger.remove();
     });
 
     test('should handle multiple rapid escape key presses', () => {

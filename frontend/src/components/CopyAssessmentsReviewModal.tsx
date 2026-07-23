@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useCallback } from "react";
+import { useEffect, useReducer, useCallback, useRef } from "react";
 import React from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCopy, faXmark, faChevronDown, faChevronRight } from "@fortawesome/free-solid-svg-icons";
@@ -8,6 +8,7 @@ import type {
     CopyAssessmentsSelection,
     CopyAssessmentsAssessmentDetails,
 } from "../handlers/variant";
+import { useDialogFocus } from "./useDialogFocus";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -166,6 +167,10 @@ type Props = {
 
 function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm, onCancel }: Readonly<Props>) {
     const [state, dispatch] = useReducer(reducer, groups, buildInitialState);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(isOpen, dialogRef, closeButtonRef);
 
     // Escape key to close
     useEffect(() => {
@@ -217,20 +222,28 @@ function CopyAssessmentsReviewModal({ isOpen, groups, previewMessage, onConfirm,
             }}
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
         >
-            <div className="relative w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col rounded-lg shadow-2xl bg-slate-800 border border-slate-600">
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="copy-review-modal-title"
+                tabIndex={-1}
+                className="relative w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col rounded-lg shadow-2xl bg-slate-800 border border-slate-600"
+            >
 
                 {/* Header */}
                 <div className="flex items-center justify-between px-5 py-4 border-b border-slate-600">
                     <div className="flex items-center gap-2">
                         <FontAwesomeIcon icon={faCopy} className="text-cyan-400" aria-hidden="true" />
                         <div>
-                            <h2 className="text-lg font-semibold text-white">Review Copy Alignments</h2>
+                            <h2 id="copy-review-modal-title" className="text-lg font-semibold text-white">Review Copy Alignments</h2>
                             {previewMessage && (
                                 <p className="text-xs text-cyan-300 mt-0.5">{previewMessage}</p>
                             )}
                         </div>
                     </div>
                     <button
+                        ref={closeButtonRef}
                         type="button"
                         onClick={onCancel}
                         className="text-zinc-400 hover:text-white hover:bg-slate-700 rounded-lg p-1.5 transition-colors"

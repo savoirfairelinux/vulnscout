@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faXmark } from '@fortawesome/free-solid-svg-icons';
 import type { Variant } from '../handlers/variant';
+import { useDialogFocus } from './useDialogFocus';
 
 type Props = {
     mode: 'import' | 'export';
@@ -28,6 +29,10 @@ function ReviewTransferModal({
     const isOpenVex = transferFormat === 'openvex';
     const needsVariantSelection = isOpenVex || mode === 'export';
     const supportsMultipleVariants = !isOpenVex;
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    useDialogFocus(true, dialogRef, closeButtonRef);
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -46,11 +51,11 @@ function ReviewTransferModal({
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="review-transfer-title">
-            <div className="w-full max-w-lg rounded-lg border border-gray-600 bg-gray-800 shadow-xl">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+            <div ref={dialogRef} className="w-full max-w-lg rounded-lg border border-gray-600 bg-gray-800 shadow-xl" role="dialog" aria-modal="true" aria-labelledby="review-transfer-title" tabIndex={-1}>
                 <div className="flex items-center justify-between border-b border-gray-600 px-5 py-4">
                     <h2 id="review-transfer-title" className="text-lg font-semibold text-white">{title}</h2>
-                    <button type="button" onClick={onCancel} aria-label="Close" className="h-8 w-8 text-gray-300 hover:text-white">
+                    <button ref={closeButtonRef} type="button" onClick={onCancel} aria-label="Close" className="h-8 w-8 text-gray-300 hover:text-white">
                         <FontAwesomeIcon icon={faXmark} />
                     </button>
                 </div>

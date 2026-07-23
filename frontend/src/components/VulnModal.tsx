@@ -24,6 +24,7 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useDialogFocus } from "./useDialogFocus";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
@@ -360,6 +361,7 @@ type VariantScopedSnapshot = {
     const [nvdMode, setNvdMode] = useState<"local" | "api">("local");
 
     const modalRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -380,12 +382,7 @@ type VariantScopedSnapshot = {
         };
     }, [showShortcutHelper]);
 
-    useEffect(() => {
-        // force focus the modal content when the modal opens such that keyboard users can interact with it immediately
-        if (modalRef.current) {
-            modalRef.current.focus();
-        }
-    }, []);
+    useDialogFocus(true, modalRef, closeButtonRef);
 
     useEffect(() => {
         // Scroll to top when vulnerability changes
@@ -1342,6 +1339,9 @@ type VariantScopedSnapshot = {
             >
                 <div
                     ref={modalRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="vulnerability_modal_title"
                     tabIndex={-1}
                     className="relative rounded-lg shadow bg-gray-700 h-full flex flex-col overflow-hidden">
 
@@ -1464,6 +1464,7 @@ type VariantScopedSnapshot = {
                                 {isEditing ? "Exit editing" : "Edit"}
                             </button>}
                             <button
+                                ref={closeButtonRef}
                                 onClick={handleClose}
                                 type="button"
                                 className="text-white bg-transparent border border-gray-600 hover:bg-gray-600 hover:border-gray-500 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center transition-colors"
