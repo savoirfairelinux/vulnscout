@@ -161,11 +161,12 @@ describe('Packages Table', () => {
 
         // ACT
         const user = userEvent.setup();
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
+        const severity_toggle = await screen.getByRole('switch', {name: /show severity/i});
 
         await user.click(severity_toggle); // switch to enabled mode
 
-        const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
+        const btn_enabled = await screen.getByRole('switch', {name: /hide severity/i});
+        expect(btn_enabled.getAttribute('aria-checked')).toBe('true');
         const severity_high = await screen.getByText('high');
         const severity_mediums = await screen.getAllByText('medium');
 
@@ -375,7 +376,7 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, 'xyz');
 
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
+        const severity_toggle = await screen.getByRole('switch', {name: /show severity/i});
         await user.click(severity_toggle);
 
         const source_btn = await screen.getByRole('button', { name: /^source$/i });

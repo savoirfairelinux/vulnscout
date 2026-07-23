@@ -3001,19 +3001,15 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         const user = userEvent.setup();
 
         // Wait for the variants to render inside the StatusEditor.
-        await screen.findByText('Apply to variants:');
+        await screen.findByRole('group', { name: 'Apply to variants' });
 
         // Scope checkbox lookups to the StatusEditor sections so we do not match
         // the TimeEstimateEditor / CVSS target-variant selectors that reuse the
         // same variant names.
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
+        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement =>
+            within(screen.getByRole('group', { name: header })).getByRole('checkbox', { name: labelText }) as HTMLInputElement;
+        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants', name);
+        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages', label);
 
         // Both packages are reachable before any variant is selected.
         expect(packageCheckbox('pkgA@1.0.0').disabled).toBe(false);
@@ -3056,16 +3052,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={multiPkgVuln} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
         const user = userEvent.setup();
 
-        await screen.findByText('Apply to variants:');
+        await screen.findByRole('group', { name: 'Apply to variants' });
 
-        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement => {
-            const section = screen.getByText(header).closest('div') as HTMLElement;
-            const input = within(section).getByText(labelText).closest('label')?.querySelector('input[type="checkbox"]');
-            if (!input) throw new Error(`No checkbox found for "${labelText}" under "${header}"`);
-            return input as HTMLInputElement;
-        };
-        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants:', name);
-        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages:', label);
+        const sectionCheckbox = (header: string, labelText: string): HTMLInputElement =>
+            within(screen.getByRole('group', { name: header })).getByRole('checkbox', { name: labelText }) as HTMLInputElement;
+        const variantCheckbox = (name: string) => sectionCheckbox('Apply to variants', name);
+        const packageCheckbox = (label: string) => sectionCheckbox('Apply to packages', label);
 
         // With an empty map (all lookups failed), no incompatibility filtering
         // applies: selecting a variant leaves every package enabled.
