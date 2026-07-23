@@ -21,6 +21,7 @@ function DropdownMenu({
     menuClassName = "bg-slate-800 border border-slate-600 rounded-lg shadow-lg"
 }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
+    const menuId = 'actions-menu';
     const menuRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -80,6 +81,9 @@ function DropdownMenu({
                     className={`${buttonClassName} ${isOpen ? 'bg-slate-600' : ''}`}
                     onClick={handleToggle}
                     aria-label="Actions menu"
+                    aria-expanded={isOpen}
+                    aria-controls={isOpen ? menuId : undefined}
+                    aria-haspopup="menu"
                     type="button"
                 >
                     <FontAwesomeIcon icon={faEllipsisH} />
@@ -89,6 +93,8 @@ function DropdownMenu({
             {isOpen && createPortal(
                 <div
                     ref={menuRef}
+                    id={menuId}
+                    role="menu"
                     className={`fixed z-[9999] ${menuClassName}`}
                     style={{
                         top: buttonPosition.top,
@@ -107,6 +113,7 @@ function DropdownMenu({
                                     item.onClick();
                                     setIsOpen(false);
                                 }}
+                                role="menuitem"
                             >
                                 {item.icon && <FontAwesomeIcon icon={item.icon} className="w-4" />}
                                 {item.label}

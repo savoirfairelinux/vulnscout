@@ -22,6 +22,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
     const [isOpen, setIsOpen] = useState(false);
     const [maxHeight, setMaxHeight] = useState<string>('500px'); 
     const [optionSearch, setOptionSearch] = useState('');
+    const dropdownId = `filter-option-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
     const dropdownRef = useRef<HTMLDivElement>(null);
     const isActive = selected.length > 0 || showCustomFilterComponent;
 
@@ -76,6 +77,9 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
         <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
             <button
                 onClick={() => setIsOpen(!isOpen)}
+                aria-expanded={isOpen}
+                aria-controls={isOpen ? dropdownId : undefined}
+                aria-haspopup="dialog"
                 className={`py-1 px-2 rounded flex items-center gap-1 border ${
                     isOpen ? 'bg-sky-950' : 'bg-sky-900'
                 } ${
@@ -88,6 +92,9 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
 
             {isOpen && (
                 <div 
+                    id={dropdownId}
+                    role="dialog"
+                    aria-label={`${label} filter options`}
                     className={`absolute mt-1 ${searchable ? 'w-72' : 'w-48'} bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50`}
                     style={{ maxHeight, overflowY: 'auto' }} // <-- dynamic max-height
                 >

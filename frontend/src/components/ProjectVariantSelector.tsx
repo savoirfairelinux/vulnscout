@@ -269,6 +269,9 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
             <button
                 ref={buttonRef}
                 onClick={() => setIsOpen(!isOpen)}
+                aria-expanded={isOpen}
+                aria-controls={isOpen ? 'project-variant-selector' : undefined}
+                aria-haspopup="dialog"
                 className={[
                     'flex items-center h-full px-4 py-2',
                     bgHoverColor,
@@ -291,6 +294,9 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
             {isOpen && createPortal(
                 <div
                     ref={panelRef}
+                    id="project-variant-selector"
+                    role="dialog"
+                    aria-label="Project and variant selector"
                     className="fixed z-[9999] bg-cyan-900 text-neutral-50 border border-cyan-700 rounded-lg shadow-xl p-4 w-72"
                     style={{ top: panelPosition.top, right: panelPosition.right }}
                 >
@@ -299,8 +305,9 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
                     </p>
 
                     {/* Project select */}
-                    <label className="block text-sm mb-1">Project</label>
+                    <label htmlFor="project-variant-project" className="block text-sm mb-1">Project</label>
                     <select
+                        id="project-variant-project"
                         value={selectedProjectId}
                         onChange={e => setSelectedProjectId(e.target.value)}
                         className="w-full rounded px-2 py-1 text-sm bg-cyan-800 border border-cyan-600 focus:outline-none focus:border-cyan-400 mb-3"
@@ -406,8 +413,9 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
                                     </label>
                                 ))}
                             </div>
-                            <label className="block text-sm mb-1">Base variant</label>
+                            <label htmlFor="project-variant-base" className="block text-sm mb-1">Base variant</label>
                             <select
+                                id="project-variant-base"
                                 value={compareBaseVariantId}
                                 onChange={e => setCompareBaseVariantId(e.target.value)}
                                 disabled={!selectedProjectId}
@@ -417,8 +425,9 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
                                     <option key={v.id} value={v.id}>{v.name}</option>
                                 ))}
                             </select>
-                            <label className="block text-sm mb-1">Compare variant</label>
+                            <label htmlFor="project-variant-compare" className="block text-sm mb-1">Compare variant</label>
                             <select
+                                id="project-variant-compare"
                                 value={selectedCompareVariantId}
                                 onChange={e => setSelectedCompareVariantId(e.target.value)}
                                 disabled={!compareBaseVariantId}

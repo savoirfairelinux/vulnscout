@@ -675,7 +675,7 @@ describe('Packages Table', () => {
         const user = userEvent.setup();
 
         // ACT: open the Supplier filter dropdown and select "Acme Corp"
-        const supplierBtn = await screen.getByRole('button', { name: /^supplier$/i });
+        const supplierBtn = (await screen.getAllByRole('button', { name: /^supplier$/i }))[0];
         await user.click(supplierBtn);
 
         const acmeCheckbox = await screen.getByRole('checkbox', { name: /acme corp/i });

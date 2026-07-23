@@ -68,6 +68,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    const mainRef = useRef<HTMLElement>(null);
+    const hasMountedTabRef = useRef(false);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -242,6 +244,14 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     const [tab, setTab] = useState("metrics");
 
+    useEffect(() => {
+        if (!hasMountedTabRef.current) {
+            hasMountedTabRef.current = true;
+            return;
+        }
+        mainRef.current?.focus();
+    }, [tab]);
+
     // This function ensures vulns get reset when switching outside filtering context
     function handleTabChange(newTab: string) {
         if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
@@ -273,7 +283,8 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 />
             </header>
 
-            <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
+            <main ref={mainRef} id="main-content" aria-label={tabLabels[tab] ?? 'Content'} tabIndex={-1} className="flex-1 flex flex-col overflow-hidden">
+            <h1 className="sr-only">{tabLabels[tab] ?? 'Content'}</h1>
             <div className="px-8 pt-4">
                 <MessageBanner
                     type={bannerType}

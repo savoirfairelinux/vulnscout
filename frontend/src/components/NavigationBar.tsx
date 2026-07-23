@@ -24,6 +24,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === VulnScout (Logo + text) === */}
       <li className={[bgHoverColor, tab == 'metrics' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('metrics')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'metrics' ? 'page' : undefined}
@@ -40,6 +41,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === SBOM === */}
       <li className={[bgHoverColor, tab == 'packages' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('packages')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'packages' ? 'page' : undefined}
@@ -52,6 +54,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Vulnerabilities === */}
       <li className={[bgHoverColor, tab == 'vulnerabilities' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('vulnerabilities')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'vulnerabilities' ? 'page' : undefined}
@@ -64,6 +67,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Scans === */}
       <li className={[bgHoverColor, tab == 'scans' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('scans')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'scans' ? 'page' : undefined}
@@ -76,6 +80,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Review === */}
       <li className={[bgHoverColor, tab == 'review' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('review')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'review' ? 'page' : undefined}
@@ -88,6 +93,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Transfer === */}
       <li className={[bgHoverColor, tab == 'transfer' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('transfer')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'transfer' ? 'page' : undefined}
@@ -99,6 +105,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
 
       <li className={[bgHoverColor, tab == 'ai' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('ai')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'ai' ? 'page' : undefined}
@@ -116,6 +123,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Export === */}
       <li className={[bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('exports')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'exports' ? 'page' : undefined}
@@ -128,6 +136,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
       {/* === Settings === */}
       <li className={[bgHoverColor, tab == 'settings' && bgActiveColor].join(' ')}>
         <button
+          type="button"
           onClick={() => changeTab('settings')}
           className="flex items-center h-full px-4 py-2"
           aria-current={tab === 'settings' ? 'page' : undefined}
@@ -160,6 +169,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
           type="button"
           onClick={() => setDarkMode(!darkMode)}
           aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-pressed={darkMode}
           className="flex items-center w-14 h-7 bg-neutral-300 dark:bg-neutral-700 rounded-full px-1 cursor-pointer relative transition-all duration-300"
         >
           <FontAwesomeIcon icon={faSun} className="text-yellow-500 text-sm" />
