@@ -4,7 +4,7 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import React from 'react';
@@ -644,7 +644,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        const sourceBtn = (await screen.getAllByRole('button', { name: /source/i }))[0];
         expect(sourceBtn).toBeInTheDocument();
         await user.click(sourceBtn);
 
@@ -699,7 +699,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const statusBtn = await screen.getByRole('button', { name: /^status$/i });
+        const statusBtn = (await screen.getAllByRole('button', { name: /^status$/i }))[0];
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
@@ -721,7 +721,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const statusBtn = await screen.getByRole('button', { name: /^status$/i });
+        const statusBtn = (await screen.getAllByRole('button', { name: /^status$/i }))[0];
         expect(statusBtn).toBeInTheDocument();
         await user.click(statusBtn);
 
@@ -948,7 +948,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        const severityBtn = (await screen.getAllByRole('button', { name: /severity/i }))[0];
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
@@ -968,7 +968,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        const severityBtn = (await screen.getAllByRole('button', { name: /severity/i }))[0];
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
@@ -1004,7 +1004,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const severityBtn = await screen.getByRole('button', { name: /severity/i });
+        const severityBtn = (await screen.getAllByRole('button', { name: /severity/i }))[0];
         expect(severityBtn).toBeInTheDocument();
         await user.click(severityBtn);
 
@@ -1037,7 +1037,7 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // Set up some filters first
-        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        const sourceBtn = (await screen.getAllByRole('button', { name: /source/i }))[0];
         await user.click(sourceBtn);
         const srcCheckbox = await screen.getByRole('checkbox', { name: 'cve-finder' });
         await user.click(srcCheckbox);
@@ -1093,7 +1093,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        const packagesBtn = (await screen.getAllByRole('button', { name: /^packages$/i }))[0];
         expect(packagesBtn).toBeInTheDocument();
         await user.click(packagesBtn);
 
@@ -1119,7 +1119,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        const packagesBtn = (await screen.getAllByRole('button', { name: /^packages$/i }))[0];
         await user.click(packagesBtn);
 
         // ACT - Search inside the dropdown
@@ -1160,7 +1160,7 @@ describe('Vulnerability Table', () => {
         });
 
         // ASSERT - The package is checked inside the Packages filter dropdown
-        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        const packagesBtn = (await screen.getAllByRole('button', { name: /^packages$/i }))[0];
         await user.click(packagesBtn);
         const pkgCheckbox = await screen.getByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' });
         expect(pkgCheckbox).toBeChecked();
@@ -1178,7 +1178,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
-        const sourceBtn = await screen.getByRole('button', { name: /source/i });
+        const sourceBtn = (await screen.getAllByRole('button', { name: /source/i }))[0];
         await user.click(sourceBtn);
 
         // Select multiple sources
@@ -2467,9 +2467,9 @@ describe('Vulnerability Table', () => {
      test('filter buttons have no active border by default', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
-        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
-        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+        const sourceBtn = screen.getAllByRole('button', { name: /^source$/i })[0];
+        const severityBtn = screen.getAllByRole('button', { name: /^severity$/i })[0];
+        const statusBtn = screen.getAllByRole('button', { name: /^status$/i })[0];
 
         expect(sourceBtn).toHaveClass('border-transparent');
         expect(sourceBtn).not.toHaveClass('border-cyan-400');
@@ -2485,21 +2485,21 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
 
         // Source filter
-        const sourceBtn = screen.getByRole('button', { name: /^source$/i });
+        const sourceBtn = screen.getAllByRole('button', { name: /^source$/i })[0];
         await user.click(sourceBtn);
         await user.click(screen.getByRole('checkbox', { name: 'hardcoded' }));
         expect(sourceBtn).toHaveClass('border-cyan-400');
         expect(sourceBtn).not.toHaveClass('border-transparent');
 
         // Severity filter
-        const severityBtn = screen.getByRole('button', { name: /^severity$/i });
+        const severityBtn = screen.getAllByRole('button', { name: /^severity$/i })[0];
         await user.click(severityBtn);
         await user.click(screen.getByRole('checkbox', { name: 'low' }));
         expect(severityBtn).toHaveClass('border-cyan-400');
         expect(severityBtn).not.toHaveClass('border-transparent');
 
         // Status filter
-        const statusBtn = screen.getByRole('button', { name: /^status$/i });
+        const statusBtn = screen.getAllByRole('button', { name: /^status$/i })[0];
         await user.click(statusBtn);
         await user.click(screen.getByRole('checkbox', { name: /exploitable/i }));
         expect(statusBtn).toHaveClass('border-cyan-400');
@@ -3212,7 +3212,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
         // The Packages dropdown shows the package as checked
         const user = userEvent.setup();
-        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        const packagesBtn = (await screen.getAllByRole('button', { name: /^packages$/i }))[0];
         await user.click(packagesBtn);
         expect(screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).toBeChecked();
     });
@@ -3235,7 +3235,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         });
 
         // Uncheck the package inside the Packages dropdown
-        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        const packagesBtn = (await screen.getAllByRole('button', { name: /^packages$/i }))[0];
         await user.click(packagesBtn);
         const pkgCheckbox = screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
         await user.click(pkgCheckbox);
@@ -3558,15 +3558,16 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         const user = userEvent.setup();
 
         // Open the Severity filter dropdown, then click the "by score" checkbox
-        await user.click(screen.getByRole('button', { name: /severity/i }));
+        await user.click(screen.getAllByRole('button', { name: /^severity$/i })[0]);
         const byScoreCheckbox = await screen.findByRole('checkbox', { name: /by score/i });
         await user.click(byScoreCheckbox);
 
         // Now click the Severity column header to trigger sortSeverityByScoreFn
         const severityHeader = screen.getByRole('columnheader', { name: /severity/i });
-        await user.click(severityHeader);
+        const severitySortButton = within(severityHeader).getByRole('button');
+        await user.click(severitySortButton);
         // Click again to reverse
-        await user.click(severityHeader);
+        await user.click(severitySortButton);
 
         await waitFor(() => {
             expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);

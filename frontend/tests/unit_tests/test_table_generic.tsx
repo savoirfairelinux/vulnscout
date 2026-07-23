@@ -1,5 +1,5 @@
 /// <reference types="jest" />
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import { useState } from 'react';
@@ -195,6 +195,23 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
       expect(screen.getByText(/1-600 \/ 600/)).toBeInTheDocument();
     });
   }, 10000);
+
+  test('exposes sortable headers and page size with accessible names', async () => {
+    const user = userEvent.setup();
+    render(
+      <TableGeneric
+        columns={columns}
+        data={DATA.slice(0, 10)}
+        tableHeight="auto"
+      />
+    );
+
+    const valueHeader = screen.getByRole('columnheader', { name: /value/i });
+    expect(valueHeader).toHaveAttribute('aria-sort', 'none');
+    await user.click(within(valueHeader).getByRole('button'));
+    expect(['ascending', 'descending']).toContain(valueHeader.getAttribute('aria-sort'));
+    expect(screen.getByRole('combobox', { name: 'Results per page' })).toBeInTheDocument();
+  });
 
   test('search feature: exact match with apostrophe prefix and exclude match with exclamation mark (lines 52-69)', async () => {
     render(

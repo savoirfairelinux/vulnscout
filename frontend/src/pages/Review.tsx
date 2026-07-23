@@ -824,13 +824,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
             size: 130,
             cell: info => (
-                <div
-                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                <button
+                    type="button"
+                    className="flex items-center justify-center w-full h-full text-center hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                     onClick={() => handleVulnClickWithNav(info.getValue())}
+                    aria-label={`View details for ${info.getValue()}`}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
-                </div>
+                </button>
             ),
         }),
         columnHelper.accessor("packages", {
@@ -1059,13 +1061,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
             size: 160,
             cell: info => (
-                <div
-                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                <button
+                    type="button"
+                    className="flex items-center justify-center w-full h-full text-center hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                     onClick={() => handleVulnClickWithNav(info.getValue())}
+                    aria-label={`View details for ${info.getValue()}`}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
-                </div>
+                </button>
             ),
         }),
         teColumnHelper.accessor("variant_id", {
@@ -1120,13 +1124,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
             size: 160,
             cell: info => (
-                <div
-                    className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                <button
+                    type="button"
+                    className="flex items-center justify-center w-full h-full text-center hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                     onClick={() => handleVulnClickWithNav(info.getValue())}
+                    aria-label={`View details for ${info.getValue()}`}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
-                </div>
+                </button>
             ),
         }),
         cvssColumnHelper.accessor("variant_id", {

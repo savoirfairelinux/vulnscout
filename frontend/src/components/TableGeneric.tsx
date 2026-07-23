@@ -391,24 +391,39 @@ function TableGeneric<DataType> ({
                             {headerGroup.headers.map(header => {
                                 const hintText = getColumnHint(header.column.columnDef);
                                 const hintAriaLabel = getColumnHintAriaLabel(header.column.columnDef, header.column.id);
+                                const sortDirection = header.column.getIsSorted();
                                 return (
                                 <th
                                     key={header.id}
                                     className={[
-                                        `relative p-4 border border-slate-600 flex-auto`,
-                                        header.column.getCanSort() ? 'cursor-pointer select-none' : ''
+                                        'relative p-4 border border-slate-600 flex-auto'
                                     ].join(' ')}
                                     style={{width: header.getSize()}}
-                                    onClick={header.column.getToggleSortingHandler()}
+                                    aria-sort={sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : 'none'}
+                                    onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                                 >
                                     {hintText ? (
                                         <div className="relative flex items-center justify-center gap-1">
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
+                                            {header.column.getCanSort() ? (
+                                                <button
+                                                    type="button"
+                                                    className="cursor-pointer select-none"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        header.column.getToggleSortingHandler()?.(event);
+                                                    }}
+                                                >
+                                                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                                                    {sortDirection === false
+                                                        ? <FontAwesomeIcon className="ml-2" icon={faSort} />
+                                                        : sortDirection === 'asc'
+                                                            ? <FontAwesomeIcon className="ml-2" icon={faArrowUpShortWide} />
+                                                            : <FontAwesomeIcon className="ml-2" icon={faArrowDownWideShort} />
+                                                    }
+                                                </button>
+                                            ) : (
+                                                header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())
+                                            )}
                                             <button
                                                 type="button"
                                                 aria-label={hintAriaLabel}
@@ -434,24 +449,29 @@ function TableGeneric<DataType> ({
                                             )}
                                         </div>
                                     ) : (
-                                        <span className="mr-2">
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
-                                        </span>
-                                    )}
-                                    {header.column.getCanSort()
-                                        ? (header.column.getIsSorted() === false
-                                            ? <FontAwesomeIcon icon={faSort} />
-                                            : (header.column.getIsSorted() === 'asc'
-                                                ? <FontAwesomeIcon icon={faArrowUpShortWide} />
-                                                : <FontAwesomeIcon icon={faArrowDownWideShort} />
-                                            )
+                                        header.column.getCanSort() ? (
+                                            <button
+                                                type="button"
+                                                className="cursor-pointer select-none"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    header.column.getToggleSortingHandler()?.(event);
+                                                }}
+                                            >
+                                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                                                {sortDirection === false
+                                                    ? <FontAwesomeIcon className="ml-2" icon={faSort} />
+                                                    : sortDirection === 'asc'
+                                                        ? <FontAwesomeIcon className="ml-2" icon={faArrowUpShortWide} />
+                                                        : <FontAwesomeIcon className="ml-2" icon={faArrowDownWideShort} />
+                                                }
+                                            </button>
+                                        ) : (
+                                            <span className="mr-2">
+                                                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                                            </span>
                                         )
-                                        : ''}
+                                    )}
                                 </th>
                                 );
                             })}
@@ -587,6 +607,7 @@ function TableGeneric<DataType> ({
                 </span>
                 <span>- Results per page:</span>
                 <select
+                aria-label="Results per page"
                 value={itemsPerPage}
                 onChange={(e) => {
                     setPagination({ pageIndex: 0, pageSize: Number(e.target.value) })

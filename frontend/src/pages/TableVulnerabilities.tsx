@@ -838,6 +838,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     <input
                         type="checkbox"
                         title={row.getIsSelected() ? "Unselect" : "Select"}
+                        aria-label={row.getIsSelected() ? 'Unselect vulnerability' : 'Select vulnerability'}
+                        aria-describedby={`vulnerability-${row.original.id}`}
                         checked={row.getIsSelected()}
                         disabled={!row.getCanSelect()}
                         onChange={row.getToggleSelectedHandler()}
@@ -852,6 +854,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                             if (el) el.indeterminate = table.getIsSomePageRowsSelected();
                         }}
                         title={table.getIsAllPageRowsSelected() ? "Unselect all" : "Select all"}
+                        aria-label={table.getIsAllPageRowsSelected() ? 'Unselect all vulnerabilities on this page' : 'Select all vulnerabilities on this page'}
                         checked={table.getIsAllPageRowsSelected()}
                         onChange={table.getToggleAllPageRowsSelectedHandler()}
                     />
@@ -870,8 +873,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 id: 'id',
                 header: () => <div className="flex items-center justify-center">ID</div>,
                 cell: info => (
-                    <div
-                        className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
+                    <button
+                        type="button"
+                        id={`vulnerability-${info.getValue()}`}
+                        className="flex items-center justify-center w-full h-full text-center hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
                         onClick={() => {
                             const vuln = info.row.original;
                             const index = searchFilteredData.findIndex(v => v.id === vuln.id);
@@ -880,10 +885,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                             setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
                             setIsEditing(false);
                         }}
+                        aria-label={`View details for ${info.getValue()}`}
                         title="Click to view details"
                     >
                         {info.getValue()}
-                    </div>
+                    </button>
                 ),
                 sortDescFirst: true,
                 footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,

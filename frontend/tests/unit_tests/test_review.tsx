@@ -251,7 +251,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
 const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
     const editBtn = await screen.findByTitle('Edit assessment');
     await user.click(editBtn);
-    await screen.findByText('Apply to variants:');
+    await screen.findByRole('group', { name: 'Apply to variants' });
 };
 
 const variantCheckbox = (name: string): HTMLInputElement =>
@@ -393,7 +393,7 @@ describe('Review — editing "Apply to variants"', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByRole('group', { name: 'Apply to variants' })).not.toBeInTheDocument();
         });
     });
 
@@ -409,7 +409,7 @@ describe('Review — editing "Apply to variants"', () => {
         fireEvent.click(backdrop as Element);
 
         await waitFor(() => {
-            expect(screen.queryByText('Apply to variants:')).not.toBeInTheDocument();
+            expect(screen.queryByRole('group', { name: 'Apply to variants' })).not.toBeInTheDocument();
         });
     });
 });
