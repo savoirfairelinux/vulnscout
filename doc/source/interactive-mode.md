@@ -73,7 +73,7 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 
 ### Match Condition
 
-The **Match condition** field in the toolbar filters packages using the same condition language as CI fail conditions (e.g. `cvss >= 7 and pending`). Press **Enter** or click **Apply** to evaluate the expression against every vulnerability in the current scope; the table is then reduced to packages that have at least one matching vulnerability. Clearing the field and applying again removes the filter. Whenever vulnerability data is refreshed the filter is cleared so it never shows stale results — apply the condition again to evaluate the fresh data.
+The **Match condition** field in the toolbar filters packages using the same condition language as CI fail conditions (e.g. `cvss >= 7 and pending`). Press **Enter** to evaluate the expression against every vulnerability in the current scope; the table is then reduced to packages that have at least one matching vulnerability. Clearing the field and pressing **Enter** again removes the filter. Whenever vulnerability data is refreshed the filter is cleared so it never shows stale results — apply the condition again to evaluate the fresh data.
 
 While a match condition is active, the **Show Vulnerabilities** button carries the matching set along: the Vulnerability Table opens pre-filtered to that package *and* to the vulnerabilities that satisfied the condition.
 
@@ -103,6 +103,10 @@ The search bar accepts free-text queries that match against CVE identifiers, pac
 - **`-term`** — NOT: rows containing the term are excluded.
 
 A small **info icon** next to the search bar opens a quick-reference panel for this syntax, so you don't need to memorise it.
+
+### Match Condition
+
+The **Match condition** field filters the table with the same vulnerability facts and expression syntax used by CI fail conditions. Press **Enter** to apply the condition. This filter combines with the other toolbar filters and with package filters carried over from the SBOM table. Clearing the field and pressing **Enter**, or using **Reset Filters**, restores the full vulnerability set.
 
 ### Column Visibility
 
@@ -301,6 +305,8 @@ The columns include:
 ### Search and Filters
 
 The toolbar mirrors the vulnerability table's search bar. Filters are available for **Status** and **Justification**, and a **Reset Filters** button clears everything back to defaults.
+
+The **Match condition** field uses the same vulnerability facts and expression syntax as CI fail conditions. Press **Enter** to apply it. Matching vulnerability IDs filter every Review subtab: handmade assessments, AI assessments, time estimates, and custom CVSS scores.
 
 ### Import and Export
 

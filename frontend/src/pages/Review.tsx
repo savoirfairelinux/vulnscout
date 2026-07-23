@@ -5,7 +5,7 @@ import Assessments from "../handlers/assessments";
 import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
 import { asAssessment } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
-import { asVulnerability } from "../handlers/vulnerabilities";
+import Vulnerabilities, { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
@@ -17,6 +17,7 @@ import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
+import MatchConditionFilter from '../components/MatchConditionFilter';
 import Variants from '../handlers/variant';
 import Packages from '../handlers/packages';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -30,10 +31,13 @@ type AssessmentMutation =
 type ReviewTab = 'assessments' | 'ai-assessments' | 'time-estimates' | 'custom-cvss';
 
 type Props = {
+    vulnerabilities?: Vulnerability[];
     variantId?: string;
     projectId?: string;
     onAssessmentChanged?: (mutation: AssessmentMutation) => void;
 };
+
+const EMPTY_VULNERABILITIES: Vulnerability[] = [];
 
 export type { AssessmentMutation };
 
@@ -114,7 +118,7 @@ function formatDate(iso: string): string {
     });
 }
 
-function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
+function Review({ vulnerabilities = EMPTY_VULNERABILITIES, variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<Assessment[]>([]);
@@ -125,6 +129,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState<string>('');
+    const [matchCondition, setMatchCondition] = useState('');
+    const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
+    const [matchConditionError, setMatchConditionError] = useState('');
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
@@ -389,7 +396,34 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setDeselectedVariants(variantList.filter(v => !values.includes(v)));
     }, [variantList]);
 
+    useEffect(() => {
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
+    }, [vulnerabilities]);
+
+    const applyMatchCondition = async () => {
+        const condition = matchCondition.trim();
+        if (!condition) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError('');
+            return;
+        }
+        setMatchConditionError('');
+        try {
+            setMatchingVulnerabilityIds(await Vulnerabilities.matchCondition(condition, vulnerabilities));
+        } catch (error) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError(error instanceof Error ? error.message : 'Unable to evaluate match condition');
+        }
+    };
+
+    const matchingIds = useMemo(
+        () => matchingVulnerabilityIds ? new Set(matchingVulnerabilityIds) : null,
+        [matchingVulnerabilityIds]
+    );
+
     const filteredAssessments = useMemo(() => assessments.filter((a) => {
+        if (matchingIds && !matchingIds.has(a.vuln_id)) return false;
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -406,7 +440,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
+    }), [assessments, matchingIds, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames]);
+
+    const filteredTimeEstimates = useMemo(
+        () => timeEstimates.filter(item => !matchingIds || matchingIds.has(item.vuln_id)),
+        [timeEstimates, matchingIds]
+    );
+    const filteredCustomCvss = useMemo(
+        () => customCvss.filter(item => !matchingIds || matchingIds.has(item.vuln_id)),
+        [customCvss, matchingIds]
+    );
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -425,6 +468,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const resetFilters = () => {
         setSearch('');
+        setMatchCondition('');
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
@@ -1214,6 +1260,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }
 
     const filterReviewRows = (list: Assessment[]) => list.filter((a) => {
+        if (matchingIds && !matchingIds.has(a.vuln_id)) return false;
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -1276,6 +1323,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     return (
         <div>
+            {matchConditionError && (
+                <MessageBanner
+                    type="error"
+                    message={matchConditionError}
+                    isVisible={true}
+                    onClose={() => setMatchConditionError('')}
+                />
+            )}
             <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
                 <div>Search</div>
                 <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by vulnerability, package, status, ..." />
@@ -1308,6 +1363,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         </div>
                     )}
                 </div>
+
+                <MatchConditionFilter
+                    id="review-match-condition"
+                    condition={matchCondition}
+                    error={matchConditionError}
+                    subject="review rows"
+                    onConditionChange={setMatchCondition}
+                    onApply={() => { void applyMatchCondition(); }}
+                />
 
                 {(activeTab === 'assessments' || activeTab === 'ai-assessments') && (
                     <>
@@ -1512,7 +1576,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             )}
 
             {activeTab === 'time-estimates' && (
-                timeEstimates.length === 0 ? (
+                filteredTimeEstimates.length === 0 ? (
                     <div className="text-center py-10 text-gray-400">
                         <p className="text-lg">No time estimates found</p>
                         <p className="text-sm mt-2">
@@ -1522,7 +1586,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 ) : (
                     <TableGeneric<ReviewTimeEstimate & { texts: { title: string; content: string }[] }>
                         columns={teColumns as any}
-                        data={timeEstimates.map(te => ({
+                        data={filteredTimeEstimates.map(te => ({
                             ...te,
                             id: `${te.vuln_id}::${te.variant_id ?? 'none'}`,
                             texts: vulnDescriptions[te.vuln_id] ?? [],
@@ -1539,7 +1603,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             )}
 
             {activeTab === 'custom-cvss' && (
-                customCvss.length === 0 ? (
+                filteredCustomCvss.length === 0 ? (
                     <div className="text-center py-10 text-gray-400">
                         <p className="text-lg">No custom CVSS scores found</p>
                         <p className="text-sm mt-2">
@@ -1549,7 +1613,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 ) : (
                     <TableGeneric<ReviewCustomCvss & { texts: { title: string; content: string }[] }>
                         columns={cvssColumns as any}
-                        data={customCvss.map(c => ({
+                        data={filteredCustomCvss.map(c => ({
                             ...c,
                             id: `${c.vuln_id}::${c.variant_id ?? 'none'}::${c.author}`,
                             texts: vulnDescriptions[c.vuln_id] ?? [],

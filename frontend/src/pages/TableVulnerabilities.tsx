@@ -18,6 +18,7 @@ import { useDocUrl } from "../helpers/useDocUrl";
 import { formatPkgId } from "../helpers/pkgId";
 
 import MessageBanner from "../components/MessageBanner";
+import MatchConditionFilter from "../components/MatchConditionFilter";
 import NVDProgressHandler from "../handlers/nvd_progress";
 import EPSSProgressHandler from "../handlers/epss_progress";
 import GHSAProgressHandler from "../handlers/ghsa_progress";
@@ -434,8 +435,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [search, setSearch] = useState<string>('');
     const [draftSearch, setDraftSearch] = useState<string>('');
     const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
-    const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
     const [descriptionSearchError, setDescriptionSearchError] = useState(false);
+    const [matchCondition, setMatchCondition] = useState('');
+    const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
+    const [matchConditionError, setMatchConditionError] = useState('');
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -528,6 +531,27 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         () => vulnerabilities.some(v => !!v.published),
         [vulnerabilities]
     );
+
+    useEffect(() => {
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
+    }, [vulnerabilities]);
+
+    const applyMatchCondition = async () => {
+        const condition = matchCondition.trim();
+        if (!condition) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError('');
+            return;
+        }
+        setMatchConditionError('');
+        try {
+            setMatchingVulnerabilityIds(await Vulnerabilities.matchCondition(condition, vulnerabilities));
+        } catch (error) {
+            setMatchingVulnerabilityIds(null);
+            setMatchConditionError(error instanceof Error ? error.message : 'Unable to evaluate match condition');
+        }
+    };
 
     const isMissingEuvdDataBannerDismissed = missingEuvdDataBannerDismissed ?? localMissingEuvdDataBannerDismissed;
     const isMissingPublishedDateDataBannerDismissed = missingPublishedDateDataBannerDismissed ?? localMissingPublishedDateDataBannerDismissed;
@@ -1282,8 +1306,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     const dataToDisplay = useMemo(() => {
         const allowedVulnerabilityIds = filterVulnerabilityIds ? new Set(filterVulnerabilityIds) : null;
+        const matchedVulnerabilityIds = matchingVulnerabilityIds ? new Set(matchingVulnerabilityIds) : null;
         return vulnerabilities.filter((el) => {
             if (allowedVulnerabilityIds && !allowedVulnerabilityIds.has(el.id)) return false;
+            if (matchedVulnerabilityIds && !matchedVulnerabilityIds.has(el.id)) return false;
             if (aiSuggestionFilter === 'has' && !aiSuggestionVulnIds.has(el.id)) return false;
             if (aiSuggestionFilter === 'no' && aiSuggestionVulnIds.has(el.id)) return false;
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
@@ -1386,7 +1412,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             return true;
         });
-    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+    }, [vulnerabilities, filterVulnerabilityIds, matchingVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
         ...vuln,
@@ -1406,13 +1432,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             vulnerabilities.every(vuln => vuln.details_loaded !== false)) {
             if (!nextSearch) setDescriptionMatches({});
             setSearch(nextSearch);
-            setDescriptionSearchLoading(false);
             return;
         }
 
         const controller = new AbortController();
         descriptionSearchController.current = controller;
-        setDescriptionSearchLoading(true);
         try {
             const matches = await Vulnerabilities.searchDescriptionTerms(
                 vulnerabilities.map(vuln => vuln.id),
@@ -1431,8 +1455,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             setDescriptionMatches({});
             setDescriptionSearchError(true);
             setSearch(nextSearch);
-        } finally {
-            if (!controller.signal.aborted) setDescriptionSearchLoading(false);
         }
     }, [draftSearch, vulnerabilities, variantId, projectId]);
 
@@ -1464,7 +1486,9 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setDraftSearch('');
         setDescriptionMatches({});
         setDescriptionSearchError(false);
-        setDescriptionSearchLoading(false);
+        setMatchCondition('');
+        setMatchingVulnerabilityIds(null);
+        setMatchConditionError('');
         setSelectedSources([]);
         setSelectedSeverities([]);
         setSelectedStatuses([]);
@@ -1575,6 +1599,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
 
     return (<>
+        {matchConditionError && (
+            <MessageBanner
+                type="error"
+                message={matchConditionError}
+                isVisible={true}
+                onClose={() => setMatchConditionError('')}
+            />
+        )}
         {bannerVisible && (
             <MessageBanner
                 type={bannerType}
@@ -1610,14 +1642,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]"
                     placeholder="Search by ID, packages, description, ..."
                 />
-                <button
-                    type="button"
-                    disabled={descriptionSearchLoading}
-                    onClick={() => void applySearch()}
-                    className="py-1 px-3 rounded bg-cyan-700 hover:bg-cyan-600 disabled:cursor-wait disabled:opacity-60"
-                >
-                    {descriptionSearchLoading ? 'Searching…' : 'Apply'}
-                </button>
             </div>
             {descriptionSearchError && (
                 <span role="alert" className="text-sm text-red-200">
@@ -1653,6 +1677,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     </div>
                 )}
             </div>
+
+            <MatchConditionFilter
+                id="vulnerabilities-match-condition"
+                condition={matchCondition}
+                error={matchConditionError}
+                subject="vulnerabilities"
+                onConditionChange={setMatchCondition}
+                onApply={() => { void applyMatchCondition(); }}
+            />
 
             <FilterOption
                 label="Columns"

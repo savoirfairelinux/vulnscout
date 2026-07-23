@@ -325,7 +325,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
-                {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
+                {tab === 'review' && <Review vulnerabilities={vulns} variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} />}
                 {tab === 'transfer' && <Transfer projectId={currentProjectId} onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);

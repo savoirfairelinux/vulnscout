@@ -91,6 +91,7 @@ jest.mock('../../src/helpers/exportJson', () => ({
 
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
+import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
 
@@ -269,6 +270,30 @@ const fileInput = (): HTMLInputElement =>
 
 beforeEach(() => {
     mockedDownloadJson.mockClear();
+});
+
+describe('Review match condition', () => {
+    test('filters review rows by matching vulnerability IDs', async () => {
+        const first = makeAssessment('a1', 'v1');
+        const second = { ...makeAssessment('a2', 'v1'), vuln_id: 'CVE-2020-2222' };
+        const vulnerabilities = [
+            { id: first.vuln_id },
+            { id: second.vuln_id },
+        ] as Vulnerability[];
+        mockNetwork([first, second]);
+        jest.spyOn(Vulnerabilities, 'matchCondition').mockResolvedValue([second.vuln_id]);
+
+        render(<Review vulnerabilities={vulnerabilities} projectId="proj1" />);
+
+        await waitFor(() => expect(screen.getAllByTestId('mock-table-row')).toHaveLength(2));
+        fireEvent.change(screen.getByLabelText('Match condition'), { target: { value: 'cvss >= 7' } });
+        fireEvent.keyDown(screen.getByLabelText('Match condition'), { key: 'Enter' });
+
+        await waitFor(() => expect(screen.getAllByTestId('mock-table-row')).toHaveLength(1));
+        expect(Vulnerabilities.matchCondition).toHaveBeenCalledWith('cvss >= 7', vulnerabilities);
+        expect(screen.getByText(second.vuln_id)).toBeInTheDocument();
+        expect(screen.queryByText(first.vuln_id)).not.toBeInTheDocument();
+    });
 });
 
 describe('Review — editing "Apply to variants"', () => {
