@@ -153,7 +153,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
             <p className="mb-6">Generate reports and SBOM files from your scan results.</p>
 
             {/* Tabs */}
-            <div className="flex gap-2 bg-sky-800 rounded-2xl p-2 shadow-lg backdrop-blur-md justify-center">
+            <div role="tablist" aria-label="Export categories" className="flex gap-2 bg-sky-800 rounded-2xl p-2 shadow-lg backdrop-blur-md justify-center">
             {[
                 { key: "all", icon: faBoxes, label: "All" },
 
@@ -164,6 +164,10 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
             ].map(({ key, icon, label }) => (
                 <button
                 key={key}
+                id={`export-tab-${key}`}
+                role="tab"
+                aria-selected={tab === key}
+                aria-controls="export-documents-panel"
                 onClick={(e) => {
                     e.stopPropagation()
                     setTab(key)
@@ -184,7 +188,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
     </div>
 </div>
 
-<div className="w-full pt-4 flex justify-center">
+<div id="export-documents-panel" role="tabpanel" aria-labelledby={`export-tab-${tab}`} className="w-full pt-4 flex justify-center">
   <div className="w-[70%] bg-gray-700 from-zinc-800 to-zinc-900 rounded-3xl p-6 grid grid-cols-3 gap-6 justify-center shadow-xl border border-white/10 backdrop-blur-sm">
     {visibleDocs.map((doc) => (
       <FileTag

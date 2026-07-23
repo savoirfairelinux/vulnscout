@@ -146,7 +146,7 @@ describe('Exports Page', () => {
         const { container } = render(<Exports />);
         await screen.findByText(/custom\.pdf/i);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Custom assets' }));
+        fireEvent.click(screen.getByRole('tab', { name: 'Custom assets' }));
 
         expect(screen.queryByText(/report\.adoc/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/custom\.pdf/i)).not.toBeInTheDocument();
