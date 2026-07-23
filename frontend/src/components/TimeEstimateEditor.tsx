@@ -125,14 +125,14 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
         )}
 
         <div className="flex items-center gap-2">
-            <h3 className="font-bold">Estimated efforts to fix</h3><button type='button' className='hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)}>
+            <h3 className="font-bold">Estimated efforts to fix</h3><button type='button' className='hover:text-blue-400' onClick={() => setEstimateHelp(!estimateHelp)} aria-label="Show time estimate help" aria-expanded={estimateHelp} aria-controls="time-estimate-help">
                 <FontAwesomeIcon icon={faCircleQuestion} size='lg' className='pr-2' data-testid='estimated-effort-helper-button' />
             </button>
         </div>
 
         {!hideInputs && variants && variants.length > 0 && selectedVariantIds && onSelectedVariantIdsChange && (
-            <div className="mt-2 mb-2 ml-1">
-                <p className="text-sm font-medium text-gray-300 mb-1">Select variants:</p>
+            <fieldset className="mt-2 mb-2 ml-1">
+                <legend className="text-sm font-medium text-gray-300 mb-1">Select variants</legend>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {variants.map(v => (
                         <label key={v.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
@@ -152,7 +152,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
                         </label>
                     ))}
                 </div>
-            </div>
+            </fieldset>
         )}
 
         <div className="flex flex-row space-x-4 max-w-[900px]">
@@ -160,43 +160,46 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
                 <h4 className="font-bold">Optimistic</h4>
                 <p>{actualEstimate.optimistic ?? "N/A"}</p>
                 {!hideInputs && (
-                    <input
+                    <><label htmlFor="time-estimate-optimistic" className="sr-only">Optimistic estimate</label><input
+                        id="time-estimate-optimistic"
                         value={newOptimistic}
                         onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewOptimistic(event.target.value)}
                         type="text"
                         className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
                         placeholder="shortest estimate [eg: 5h]"
-                    />
+                    /></>
                 )}
             </div>
             <div className="flex-1">
                 <h4 className="font-bold">Most Likely</h4>
                 <p>{actualEstimate.likely ?? "N/A"}</p>
                 {!hideInputs && (
-                    <input
+                    <><label htmlFor="time-estimate-likely" className="sr-only">Likely estimate</label><input
+                        id="time-estimate-likely"
                         value={newLikely}
                         onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewLikely(event.target.value)}
                         type="text"
                         className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
                         placeholder="balanced estimate [eg: 2d 4h, or 2.5d]"
-                    />
+                    /></>
                 )}
             </div>
             <div className="flex-1">
                 <h4 className="font-bold">Pessimistic</h4>
                 <p>{actualEstimate.pessimistic ?? "N/A"}</p>
                 {!hideInputs && (
-                    <input
+                    <><label htmlFor="time-estimate-pessimistic" className="sr-only">Pessimistic estimate</label><input
+                        id="time-estimate-pessimistic"
                         value={newPessimistic}
                         onInput={(event: React.ChangeEvent<HTMLInputElement>) => setNewPessimistic(event.target.value)}
                         type="text"
                         className="bg-gray-800 w-full p-1 px-2 placeholder:text-slate-400"
                         placeholder="longest estimate [eg: 1w]"
-                    />
+                    /></>
                 )}
             </div>
         </div>
-        {estimateHelp && <div className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
+        {estimateHelp && <div id="time-estimate-help" className="m-2 p-2 rounded-lg bg-gray-800/70 border-2 border-gray-800">
             We follow the same time scale as Gitlab, which count only worked days.<br/>
             When estimating a task to 12h, it's in fact 1 day (8h) and a half (4h).<br/>
             Time scale: 1 month = 4 weeks; 1 week = 5 days = 40 hours.<br/>
@@ -215,7 +218,7 @@ function TimeEstimateEditor ({onSaveTimeEstimation, clearFields: shouldClearFiel
         )}
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
-             <progress max={1} value={progressBar} className="w-full h-2"></progress>
+             <progress max={1} value={progressBar} aria-label="Time estimate save progress" className="w-full h-2"></progress>
         </div>}
     </>);
 }

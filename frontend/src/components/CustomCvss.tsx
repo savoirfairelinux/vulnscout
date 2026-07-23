@@ -63,8 +63,9 @@ function CustomCvss({
       )}
 
       <div>
-        <label className="block text-sm text-gray-300 mb-1">Vector String</label>
+        <label htmlFor="custom-cvss-vector" className="block text-sm text-gray-300 mb-1">Vector String</label>
         <input
+          id="custom-cvss-vector"
           type="text"
           value={vectorString}
           onChange={(e) => setVectorString(e.target.value)}

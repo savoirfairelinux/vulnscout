@@ -248,9 +248,10 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             />
         )}
 
-        <h3 className="m-1">
-            Status:
+        <div className="m-1">
+            <label htmlFor="new-assessment-status" className="mr-2">Status</label>
             <select
+                id="new-assessment-status"
                 value={status}
                 onChange={(event) => setStatus(event.target.value)}
                 className="p-1 px-2 bg-gray-800 mr-4"
@@ -263,8 +264,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 <option value="false_positive">False positive</option>
             </select>
             {status == "not_affected" && <>
-                Justification:
+                <label htmlFor="new-assessment-justification" className="mr-2">Justification</label>
                 <select
+                    id="new-assessment-justification"
                     value={justification}
                     onChange={(event) => setJustification(event.target.value)}
                     className="p-1 px-2 bg-gray-800"
@@ -279,10 +281,10 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                     <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
                 </select>
             </>}
-        </h3>
+        </div>
         {variants && variants.length > 0 && (
-            <div className="mt-2 mb-2 ml-1">
-                <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
+            <fieldset className="mt-2 mb-2 ml-1">
+                <legend className="text-sm font-medium text-gray-300 mb-1">Apply to variants</legend>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {variants.map(v => {
                         const incompatible = allowedVariants !== null && !allowedVariants.has(v.id);
@@ -304,11 +306,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                         );
                     })}
                 </div>
-            </div>
+            </fieldset>
         )}
         {availablePackages && availablePackages.length >= 1 && (
-            <div className="mt-2 mb-2 ml-1">
-                <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+            <fieldset className="mt-2 mb-2 ml-1">
+                <legend className="text-sm font-medium text-gray-300 mb-1">Apply to packages</legend>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {availablePackages.map(pkg => {
                         const isActive = !defaultSelectedPackages || defaultSelectedPackages.length === 0 || defaultSelectedPackages.includes(pkg);
@@ -331,10 +333,12 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                         );
                     })}
                 </div>
-            </div>
+            </fieldset>
         )}
         {(status == "not_affected" || status == "false_positive") && <>
+            <label htmlFor="new-assessment-impact" className="sr-only">Impact statement</label>
             <textarea
+                id="new-assessment-impact"
                 value={impact}
                 onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
                 name="new_assessment_impact"
@@ -343,7 +347,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 placeholder="why this vulnerability is not exploitable ?"
             /><br/>
         </>}
+        <label htmlFor="new-assessment-status-notes" className="sr-only">Status notes</label>
         <textarea
+            id="new-assessment-status-notes"
             value={statusNotes}
             onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
             name="new_assessment_status_notes"
@@ -351,7 +357,9 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             rows={3}
             placeholder="Free text notes about your review, details, actions taken, ..."
         /><br/>
+        <label htmlFor="new-assessment-workaround" className="sr-only">Workaround</label>
         <textarea
+            id="new-assessment-workaround"
             value={workaround}
             onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
             name="new_assessment_workaround"
@@ -366,7 +374,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         >Add assessment</button>
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
-             <progress max={1} value={progressBar} className="w-full h-2"></progress>
+             <progress max={1} value={progressBar} aria-label="Assessment save progress" className="w-full h-2"></progress>
         </div>}
     </>);
 }

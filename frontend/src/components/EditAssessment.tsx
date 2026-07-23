@@ -248,9 +248,10 @@ function EditAssessment({
 
             <h4 className="text-lg font-semibold text-white mb-3">Edit Assessment</h4>
 
-            <h3 className="m-1 text-white">
-                Status:
+            <div className="m-1 text-white">
+                <label htmlFor="edit-assessment-status" className="mr-2">Status</label>
                 <select
+                    id="edit-assessment-status"
                     value={status}
                     onChange={(event) => setStatus(event.target.value)}
                     className="p-1 px-2 bg-gray-700 text-white mr-4 ml-2 rounded"
@@ -263,8 +264,9 @@ function EditAssessment({
                     <option value="false_positive">False positive</option>
                 </select>
                 {status == "not_affected" && <>
-                    Justification:
+                    <label htmlFor="edit-assessment-justification" className="mr-2">Justification</label>
                     <select
+                        id="edit-assessment-justification"
                         value={justification}
                         onChange={(event) => setJustification(event.target.value)}
                         className="p-1 px-2 bg-gray-700 text-white ml-2 rounded"
@@ -279,11 +281,11 @@ function EditAssessment({
                         <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
                     </select>
                 </>}
-            </h3>
+            </div>
 
             {availableVariants && availableVariants.length > 0 && (
-                <div className="mt-2 mb-2 ml-1">
-                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
+                <fieldset className="mt-2 mb-2 ml-1">
+                    <legend className="text-sm font-medium text-gray-300 mb-1">Apply to variants</legend>
                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                         {availableVariants.map(v => {
                             const incompatible = allowedVariants !== null && !allowedVariants.has(v.id);
@@ -305,11 +307,11 @@ function EditAssessment({
                             );
                         })}
                     </div>
-                </div>
+                </fieldset>
             )}
             {availablePackages && availablePackages.length > 1 && (
-                <div className="mt-2 mb-2 ml-1">
-                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+                <fieldset className="mt-2 mb-2 ml-1">
+                    <legend className="text-sm font-medium text-gray-300 mb-1">Apply to packages</legend>
                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                         {availablePackages.map(pkg => {
                             const incompatible = allowedPackages !== null && !allowedPackages.has(pkg);
@@ -331,11 +333,12 @@ function EditAssessment({
                             );
                         })}
                     </div>
-                </div>
+                </fieldset>
             )}
 
             {(status === 'not_affected' || status === 'false_positive') && (
-                <><textarea
+                <><label htmlFor="edit-assessment-impact" className="sr-only">Impact statement</label><textarea
+                        id="edit-assessment-impact"
                         value={impact}
                         onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
                         name="edit_assessment_impact"
@@ -345,7 +348,9 @@ function EditAssessment({
                     /><br/></>
             )}
 
+                <label htmlFor="edit-assessment-status-notes" className="sr-only">Status notes</label>
                 <textarea
+                    id="edit-assessment-status-notes"
                     value={statusNotes}
                     onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
                     name="edit_assessment_status_notes"
@@ -354,7 +359,9 @@ function EditAssessment({
                     placeholder="Free text notes about your review, details, actions taken, ..."
                 /><br/>
 
+                <label htmlFor="edit-assessment-workaround" className="sr-only">Workaround</label>
                 <textarea
+                    id="edit-assessment-workaround"
                     value={workaround}
                     onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
                     name="edit_assessment_workaround"

@@ -665,7 +665,7 @@ describe('EditAssessment Component', () => {
             />
         );
 
-        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+        expect(screen.getByRole('group', { name: 'Apply to variants' })).toBeInTheDocument();
         expect(screen.getByText('default')).toBeInTheDocument();
         expect(screen.getByText('release')).toBeInTheDocument();
     });
@@ -776,7 +776,7 @@ describe('EditAssessment Component', () => {
             />
         );
 
-        expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
+        expect(screen.getByRole('group', { name: 'Apply to packages' })).toBeInTheDocument();
         expect(screen.getByText('pkg1@1.0.0')).toBeInTheDocument();
         expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
     });

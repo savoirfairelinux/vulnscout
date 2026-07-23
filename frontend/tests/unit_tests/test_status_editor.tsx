@@ -295,7 +295,7 @@ describe('StatusEditor', () => {
         ];
         render(<StatusEditor {...defaultProps} variants={variants} />);
 
-        expect(screen.getByText('Apply to variants:')).toBeInTheDocument();
+        expect(screen.getByRole('group', { name: 'Apply to variants' })).toBeInTheDocument();
         expect(screen.getByText('default')).toBeInTheDocument();
         expect(screen.getByText('release')).toBeInTheDocument();
     });
@@ -364,7 +364,7 @@ describe('StatusEditor', () => {
         const packages = ['only-pkg@1.0.0'];
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);
 
-        expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
+        expect(screen.getByRole('group', { name: 'Apply to packages' })).toBeInTheDocument();
         expect(screen.getByText('only-pkg@1.0.0')).toBeInTheDocument();
     });
 
@@ -372,7 +372,7 @@ describe('StatusEditor', () => {
         const packages = ['pkg1@1.0.0', 'pkg2@2.0.0'];
         render(<StatusEditor {...defaultProps} availablePackages={packages} />);
 
-        expect(screen.getByText('Apply to packages:')).toBeInTheDocument();
+        expect(screen.getByRole('group', { name: 'Apply to packages' })).toBeInTheDocument();
         expect(screen.getByText('pkg1@1.0.0')).toBeInTheDocument();
         expect(screen.getByText('pkg2@2.0.0')).toBeInTheDocument();
     });
