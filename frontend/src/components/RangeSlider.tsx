@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 
 type Props = {
+  label: string;
   min: number;
   max: number;
   step?: number;
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export default function RangeSlider({
+  label,
   min,
   max,
   step = 1,
@@ -40,8 +42,8 @@ export default function RangeSlider({
   return (
     <div className="w-full">
       <div className="flex justify-between text-sm text-white mb-2">
-        <span>Min: {minVal}</span>
-        <span>Max: {maxVal}</span>
+        <span>{label} minimum: {minVal}</span>
+        <span>{label} maximum: {maxVal}</span>
       </div>
 
       <div className="relative h-8">
@@ -58,6 +60,7 @@ export default function RangeSlider({
         {/* min thumb */}
         <input
           type="range"
+          aria-label={`${label} minimum`}
           min={min}
           max={max}
           step={step}
@@ -69,6 +72,7 @@ export default function RangeSlider({
         {/* max thumb */}
         <input
           type="range"
+          aria-label={`${label} maximum`}
           min={min}
           max={max}
           step={step}

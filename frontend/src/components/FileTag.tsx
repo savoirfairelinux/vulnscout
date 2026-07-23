@@ -29,11 +29,14 @@ function FileTag({ name, extension, variantId, projectId, opened, onOpen }: Read
       <button
         className="border-2 border-sfl-light rounded-lg px-4 py-2 bg-slate-800 text-white shadow hover:bg-sfl-light w-full"
         onClick={onOpen}
+        aria-expanded={opened}
+        aria-controls={`export-formats-${encodeURIComponent(name)}`}
       >
         {name} ({extension})
       </button>
 
       <div
+        id={`export-formats-${encodeURIComponent(name)}`}
         className={[
           "absolute left-0 z-10 mt-2 w-72 origin-top-left rounded-2xl bg-white shadow-lg border border-gray-200 p-4 grid gap-4",
           !opened && "hidden"
@@ -48,6 +51,7 @@ function FileTag({ name, extension, variantId, projectId, opened, onOpen }: Read
                 name
               )}?ext=${encodeURIComponent(value)}${scopeQuery}`}
               target="_blank"
+              rel="noopener noreferrer"
               className="flex items-left justify-left gap-2 rounded-xl bg-sfl-dark text-white py-2 px-4"
             >
               <FontAwesomeIcon icon={faDownload} />

@@ -1567,7 +1567,7 @@ describe('Vulnerability Table', () => {
     test('shows an EU KEV sync information banner when EU KEV data is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent(
+        expect(await screen.findByRole('status')).toHaveTextContent(
             'EU KEV data needs updating. Use the "Refresh vulnerability data" button to update it.'
         );
         expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
@@ -1587,7 +1587,7 @@ describe('Vulnerability Table', () => {
         }));
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent(
+        expect(await screen.findByRole('status')).toHaveTextContent(
             'Published date data needs updating. Use the "Refresh vulnerability data" button to update it.'
         );
         expect(screen.getByText('Published date data').classList.contains('font-bold')).toBe(true);
@@ -1597,9 +1597,9 @@ describe('Vulnerability Table', () => {
         const withoutPublishedDates = vulnerabilities.map(v => ({ ...v, published: undefined }));
         render(<TableVulnerabilities vulnerabilities={withoutPublishedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const alerts = await screen.findAllByRole('alert');
-        expect(alerts).toHaveLength(1);
-        expect(alerts[0]).toHaveTextContent(
+        const statuses = await screen.findAllByRole('status');
+        expect(statuses).toHaveLength(1);
+        expect(statuses[0]).toHaveTextContent(
             'EU KEV data and published date data need updating. Use the "Refresh vulnerability data" button to update them.'
         );
         expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
@@ -1626,14 +1626,14 @@ describe('Vulnerability Table', () => {
 
         render(<VulnerabilityTab />);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('EU KEV data needs updating');
+        expect(await screen.findByRole('status')).toHaveTextContent('EU KEV data needs updating');
         fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
         fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
 
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
     test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {

@@ -13,7 +13,8 @@ export default function ToggleSwitch({ enabled, setEnabled, label }: Props) {
             <button
                 onClick={() => setEnabled(!enabled)}
                 aria-label={accessible}
-                aria-pressed={enabled}
+                role="switch"
+                aria-checked={enabled}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-300 ${
                     enabled ? 'bg-green-500' : 'bg-gray-400'
                 }`}

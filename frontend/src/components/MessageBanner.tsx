@@ -37,7 +37,7 @@ function MessageBanner({
   const icon = bannerConfig[type].icon;
 
   return (
-    <div role="alert" className={`${bannerClasses} p-4 rounded-lg shadow-lg relative mb-4`}>
+    <div role={type === 'error' ? 'alert' : 'status'} className={`${bannerClasses} p-4 rounded-lg shadow-lg relative mb-4`}>
       <div className="flex items-center">
         <div className="flex-shrink-0">
           <FontAwesomeIcon 

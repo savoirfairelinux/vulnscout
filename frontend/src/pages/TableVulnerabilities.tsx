@@ -1699,6 +1699,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 setSelected={setSelectedSeverities}
                 CustomFilterComponent={() => (
                     <RangeSlider
+                        label="Severity score"
                         min={SEVERITY_RANGE_MIN}
                         max={SEVERITY_RANGE_MAX}
                         initialMin={severityRange.min}
@@ -1789,6 +1790,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                                 {showCustomEpssFilter && (
                                     <div className="ml-2">
                                         <RangeSlider
+                                            label="EPSS score"
                                             min={0}
                                             max={100}
                                             initialMin={epssRange.min}

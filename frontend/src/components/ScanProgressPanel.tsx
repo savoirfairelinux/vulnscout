@@ -48,7 +48,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                     : "complete";
 
     return (
-        <div className={`mb-4 rounded-lg border ${colors.border} bg-neutral-900 overflow-hidden`}>
+        <section aria-label={`${label} for ${variantName}`} className={`mb-4 rounded-lg border ${colors.border} bg-neutral-900 overflow-hidden`}>
             {/* Header */}
             <div className={`px-4 py-2 flex items-center gap-3 ${colors.headerBg}`}>
                 <FontAwesomeIcon icon={icon} className={colors.iconText} />
@@ -63,6 +63,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                     <button
                         onClick={onDismiss}
                         title="Close"
+                        aria-label={`Dismiss ${label} for ${variantName}`}
                         className="text-neutral-400 hover:text-white transition-colors ml-1"
                     >
                         <FontAwesomeIcon icon={faXmark} className="text-sm" />
@@ -84,10 +85,16 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                     />
                 )}
             </div>
+            <progress className="sr-only" max={total || 1} value={doneCount} aria-label={`${label} progress for ${variantName}`}>
+                {pct}%
+            </progress>
 
             {/* Log box */}
             <div
                 ref={logBoxRef}
+                role="log"
+                aria-live="polite"
+                aria-label={`${label} log for ${variantName}`}
                 className="max-h-52 overflow-y-auto px-4 py-2 font-mono text-xs text-neutral-300 space-y-0.5 scrollbar-thin scrollbar-thumb-neutral-700"
             >
                 {logs.length === 0 && status === "running" && (
@@ -108,6 +115,6 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                     </div>
                 ))}
             </div>
-        </div>
+        </section>
     );
 }

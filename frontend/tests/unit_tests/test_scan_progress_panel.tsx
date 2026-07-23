@@ -79,7 +79,7 @@ describe('ScanProgressPanel', () => {
             />,
         );
 
-        await user.click(screen.getByRole('button', { name: /close/i }));
+        await user.click(screen.getByRole('button', { name: /dismiss nvd scan for variant 1/i }));
         expect(onDismiss).toHaveBeenCalledTimes(1);
         expect(screen.getByText(/nvd scan – variant 1 complete/i)).toBeInTheDocument();
         expect(document.body.querySelector('.bg-green-500')).toBeInTheDocument();
