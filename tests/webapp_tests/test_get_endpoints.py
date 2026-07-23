@@ -143,6 +143,32 @@ def test_get_vulnerabilities_compact_defers_modal_details(client):
         assert set(cvss) == {"version", "base_score", "attack_vector"}
 
 
+def test_search_vulnerability_descriptions(client):
+    response = client.post(
+        "/api/vulnerabilities/search-descriptions",
+        json={
+            "vulnerability_ids": ["CVE-2020-35492"],
+            "terms": ["IMAGE-COMPOSITOR", "yocto", "missing"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "matches": {
+            "image-compositor": ["CVE-2020-35492"],
+            "yocto": ["CVE-2020-35492"],
+            "missing": [],
+        }
+    }
+
+
+def test_search_vulnerability_descriptions_validates_payload(client):
+    response = client.post(
+        "/api/vulnerabilities/search-descriptions",
+        json={"vulnerability_ids": "CVE-2020-35492", "terms": ["cairo"]},
+    )
+    assert response.status_code == 400
+
+
 def test_get_vulnerabilities_dict(client):
     response = client.get("/api/vulnerabilities?format=dict")
     assert response.status_code == 200

@@ -151,8 +151,20 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 const fuseKeys = [
     'id',
     'packages',
-    'texts.content'
+    'texts.content',
+    'description_search_terms'
 ]
+
+const descriptionSearchTerms = (rawSearch: string): string[] => {
+    const terms = rawSearch
+        .split('|')
+        .flatMap(group => group.trim().split(/\s+/))
+        .filter(token => token && !/^only:/i.test(token))
+        .map(token => token.startsWith('-') ? token.slice(1) : token)
+        .filter(Boolean)
+        .map(token => token.toLocaleLowerCase());
+    return [...new Set(terms)];
+};
 
 type PublishedDateFilterProps = {
     filterType: string;
@@ -420,6 +432,10 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
+    const [draftSearch, setDraftSearch] = useState<string>('');
+    const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
+    const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
+    const [descriptionSearchError, setDescriptionSearchError] = useState(false);
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -464,6 +480,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const descriptionSearchController = useRef<AbortController | null>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
@@ -684,13 +701,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setEuvdBanner(null);
         setGeneralBanner(null);
     };
-
-    const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.value.length < 2) {
-            if (search != '') setSearch('');
-        }
-        setSearch(event.target.value);
-    }, 750, { maxWait: 5000 });
 
     const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
         setSeverityRange(value);
@@ -1378,6 +1388,56 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         });
     }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
+    const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
+        ...vuln,
+        description_search_terms: Object.entries(descriptionMatches)
+            .filter(([, ids]) => ids.has(vuln.id))
+            .map(([term]) => term)
+            .join(' ') || '\0',
+    })), [dataToDisplay, descriptionMatches]);
+
+    const applySearch = useCallback(async () => {
+        const nextSearch = draftSearch.trim();
+        const terms = descriptionSearchTerms(nextSearch);
+        descriptionSearchController.current?.abort();
+        setDescriptionSearchError(false);
+
+        if (nextSearch.length <= 2 || terms.length === 0 ||
+            vulnerabilities.every(vuln => vuln.details_loaded !== false)) {
+            if (!nextSearch) setDescriptionMatches({});
+            setSearch(nextSearch);
+            setDescriptionSearchLoading(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        descriptionSearchController.current = controller;
+        setDescriptionSearchLoading(true);
+        try {
+            const matches = await Vulnerabilities.searchDescriptionTerms(
+                vulnerabilities.map(vuln => vuln.id),
+                terms,
+                variantId,
+                projectId,
+                controller.signal,
+            );
+            if (controller.signal.aborted) return;
+            setDescriptionMatches(Object.fromEntries(
+                Object.entries(matches).map(([term, ids]) => [term, new Set(ids)])
+            ));
+            setSearch(nextSearch);
+        } catch (error: any) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) return;
+            setDescriptionMatches({});
+            setDescriptionSearchError(true);
+            setSearch(nextSearch);
+        } finally {
+            if (!controller.signal.aborted) setDescriptionSearchLoading(false);
+        }
+    }, [draftSearch, vulnerabilities, variantId, projectId]);
+
+    useEffect(() => () => descriptionSearchController.current?.abort(), []);
+
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
     }, [selectedRows])
@@ -1399,7 +1459,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     };
 
     function resetFilters() {
+        descriptionSearchController.current?.abort();
         setSearch('');
+        setDraftSearch('');
+        setDescriptionMatches({});
+        setDescriptionSearchError(false);
+        setDescriptionSearchLoading(false);
         setSelectedSources([]);
         setSelectedSeverities([]);
         setSelectedStatuses([]);
@@ -1528,8 +1593,37 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         )}
 
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
-            <div>Search</div>
-            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+            <div className="contents">
+                <label htmlFor="vulnerability-search">Search</label>
+                <input
+                    id="vulnerability-search"
+                    ref={searchInputRef}
+                    value={draftSearch}
+                    onChange={event => setDraftSearch(event.target.value)}
+                    onKeyDown={event => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void applySearch();
+                        }
+                    }}
+                    type="search"
+                    className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]"
+                    placeholder="Search by ID, packages, description, ..."
+                />
+                <button
+                    type="button"
+                    disabled={descriptionSearchLoading}
+                    onClick={() => void applySearch()}
+                    className="py-1 px-3 rounded bg-cyan-700 hover:bg-cyan-600 disabled:cursor-wait disabled:opacity-60"
+                >
+                    {descriptionSearchLoading ? 'Searching…' : 'Apply'}
+                </button>
+            </div>
+            {descriptionSearchError && (
+                <span role="alert" className="text-sm text-red-200">
+                    Description search failed; ID and package matches are still available.
+                </span>
+            )}
 
             <div className="relative">
                 <button
@@ -1871,7 +1965,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     `calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - ${visibleBannerCount * 64}px)` :
                     'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)'
             }
-            data={dataToDisplay}
+            data={searchableData}
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}

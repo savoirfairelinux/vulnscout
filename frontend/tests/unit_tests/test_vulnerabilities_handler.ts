@@ -121,6 +121,35 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     );
   });
 
+  test('searchDescriptionTerms posts IDs and terms in variant scope', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({
+      matches: { kernel: ['CVE-TEST-1', 42], overflow: [] },
+    }));
+
+    const matches = await Vulnerabilities.searchDescriptionTerms(
+      ['CVE-TEST-1'], ['kernel', 'overflow'], 'variant-1', 'project-1',
+    );
+
+    expect(matches).toEqual({ kernel: ['CVE-TEST-1'], overflow: [] });
+    const [requestUrl, request] = fetchMock.mock.calls[0];
+    const calledUrl = new URL(requestUrl as string);
+    expect(calledUrl.pathname).toContain('/api/vulnerabilities/search-descriptions');
+    expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
+    expect(calledUrl.searchParams.has('project_id')).toBe(false);
+    expect(request?.method).toBe('POST');
+    expect(JSON.parse(request?.body as string)).toEqual({
+      vulnerability_ids: ['CVE-TEST-1'],
+      terms: ['kernel', 'overflow'],
+    });
+  });
+
+  test('searchDescriptionTerms rejects non-success responses with the status', async () => {
+    fetchMock.mockResponseOnce('', { status: 502 });
+
+    await expect(Vulnerabilities.searchDescriptionTerms(['CVE-TEST-1'], ['kernel']))
+      .rejects.toThrow('Failed to search vulnerability descriptions (502)');
+  });
+
   test('list with compareVariantId but no operation omits operation param', async () => {
     fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
     const vulns = await Vulnerabilities.list('variant-1', undefined, 'variant-2');

@@ -840,6 +840,85 @@ def init_app(app: Flask) -> None:
             case _ as fmt:
                 raise ValueError("Unknown format", fmt)
 
+    @app.post('/api/vulnerabilities/search-descriptions')
+    def search_vulnerability_descriptions() -> ResponseReturnValue:
+        """Return vulnerability IDs whose scoped descriptions contain each term."""
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return {"error": "Expected a JSON object"}, 400
+
+        raw_vuln_ids = payload.get("vulnerability_ids")
+        raw_terms = payload.get("terms")
+        if not isinstance(raw_vuln_ids, list) or not all(
+            isinstance(vuln_id, str) for vuln_id in raw_vuln_ids
+        ):
+            return {"error": "vulnerability_ids must be a list of strings"}, 400
+        if not isinstance(raw_terms, list) or not all(
+            isinstance(term, str) for term in raw_terms
+        ):
+            return {"error": "terms must be a list of strings"}, 400
+        if len(raw_vuln_ids) > 100_000:
+            return {"error": "Too many vulnerability IDs"}, 400
+        if len(raw_terms) > 50 or any(len(term) > 256 for term in raw_terms):
+            return {"error": "Too many or excessively long search terms"}, 400
+
+        vuln_ids = list(dict.fromkeys(raw_vuln_ids))
+        terms = list(dict.fromkeys(term.casefold() for term in raw_terms if term))
+        matches: dict[str, set[str]] = {term: set() for term in terms}
+        if not vuln_ids or not terms:
+            return {"matches": {term: [] for term in terms}}
+
+        scan_ids: list[uuid.UUID] | None = None
+        variant_id = request.args.get("variant_id")
+        project_id = request.args.get("project_id")
+        if variant_id:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
+            scan_ids = active_scan_ids_for_variant(variant_uuid)
+        elif project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
+            scan_ids = active_scan_ids_for_project(project_uuid)
+
+        description_rows = db.session.execute(
+            db.select(Vulnerability.id, Vulnerability.description)
+            .where(Vulnerability.id.in_(vuln_ids))
+            .where(Vulnerability.description.is_not(None))
+        ).all()
+
+        observation_query = (
+            db.select(SBOMObservation.vulnerability_id, SBOMObservation.description)
+            .where(SBOMObservation.vulnerability_id.in_(vuln_ids))
+        )
+        if scan_ids is not None:
+            observation_query = (
+                observation_query
+                .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id)
+                .where(SBOMDocument.scan_id.in_(scan_ids))
+            )
+        observation_rows = db.session.execute(observation_query).all()
+
+        for vuln_id, content in (*description_rows, *observation_rows):
+            if not isinstance(content, str):
+                continue
+            folded_content = content.casefold()
+            for term in terms:
+                if term in folded_content:
+                    matches[term].add(str(vuln_id))
+
+        return {
+            "matches": {
+                term: sorted(matched_ids)
+                for term, matched_ids in matches.items()
+            }
+        }
+
     @app.get('/api/vulnerabilities/<id>')
     def get_vuln(id: str) -> ResponseReturnValue:
         record = Vulnerability.get_by_id(id)

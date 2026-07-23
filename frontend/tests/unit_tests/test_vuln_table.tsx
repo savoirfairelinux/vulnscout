@@ -524,13 +524,13 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        // Capture the row that should disappear before triggering the search.
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, '2018-5678');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-        // Allow for debounce + filter render (debounce is 750ms in component)
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        // Allow the applied filter to render.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -543,11 +543,12 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, 'yyy');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -560,11 +561,12 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, '-2010');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -578,6 +580,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-2010 2024');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
         // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
         await waitFor(() => {
@@ -596,14 +599,44 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2018-5678/});
-
         await user.type(search_bar, 'authentification process');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
+    })
+
+    test('applies server-side description matches for compact vulnerabilities', async () => {
+        const compactVulnerabilities = vulnerabilities.map(vuln => ({
+            ...vuln,
+            texts: [],
+            details_loaded: false,
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            matches: {
+                authentification: ['CVE-2010-1234'],
+                process: ['CVE-2010-1234'],
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={compactVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox');
+        await user.type(searchBar, 'authentification process');
+        expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        await user.keyboard('{Enter}');
+
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+        expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+            terms: ['authentification', 'process'],
+        });
     })
 
     test('filter by source', async () => {
@@ -1012,6 +1045,7 @@ describe('Vulnerability Table', () => {
         // Set search
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, '2018-5678');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
 
         // Wait for filters to take effect
         await waitFor(() => {
@@ -1030,8 +1064,7 @@ describe('Vulnerability Table', () => {
             expect(vuln2).toBeInTheDocument();
         });
 
-        // Search bar should be cleared (it doesn't have a value attribute when cleared)
-        expect(search_bar.getAttribute('value')).toBeNull();
+        expect(search_bar).toHaveValue('');
     })
 
     test('initial filter props set correct filters', async () => {
@@ -1162,7 +1195,7 @@ describe('Vulnerability Table', () => {
         expect(vuln2).toBeInTheDocument();
     })
 
-    test('search debounce functionality', async () => {
+    test('search remains unapplied while typing', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 

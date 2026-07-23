@@ -74,6 +74,8 @@ type Vulnerability = {
     assessments: Assessment[];
     /** False only for compact list records whose modal-only data is deferred. */
     details_loaded?: boolean;
+    /** Atomic terms confirmed in deferred descriptions by server-side search. */
+    description_search_terms?: string;
 };
 
 export type { Vulnerability, CVSS };
@@ -373,6 +375,43 @@ class Vulnerabilities {
         }
         const parsed = asVulnerability(await response.json());
         return Array.isArray(parsed) ? null : parsed;
+    }
+
+    static async searchDescriptionTerms(
+        vulnerabilityIds: string[],
+        terms: string[],
+        variantId?: string,
+        projectId?: string,
+        signal?: AbortSignal,
+    ): Promise<Record<string, string[]>> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + '/api/vulnerabilities/search-descriptions',
+            window.location.href,
+        );
+        if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vulnerability_ids: vulnerabilityIds, terms }),
+            signal,
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to search vulnerability descriptions (${response.status})`);
+        }
+        const data: unknown = await response.json();
+        if (!data || typeof data !== 'object' || !('matches' in data)) return {};
+        const matches = (data as { matches?: unknown }).matches;
+        if (!matches || typeof matches !== 'object' || Array.isArray(matches)) return {};
+        return Object.fromEntries(
+            Object.entries(matches).flatMap(([term, ids]) =>
+                Array.isArray(ids) ? [[term, asStringArray(ids)]] : []
+            )
+        );
     }
 
     // Re-fetch a single vulnerability in the given (project) scope and return
