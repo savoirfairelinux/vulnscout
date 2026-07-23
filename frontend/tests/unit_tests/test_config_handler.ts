@@ -7,6 +7,7 @@ import Config from '../../src/handlers/config';
 describe('Config.get', () => {
     beforeEach(() => {
         fetchMock.resetMocks();
+        window.localStorage.clear();
     });
 
     test('maps report metadata fields', async () => {
@@ -47,6 +48,64 @@ describe('Config.get', () => {
         expect(result.author_name).toBe('vulnscout');
         expect(result.client_name).toBe('');
         expect(result.contact_email).toBe('');
+    });
+});
+
+
+describe('Config frontend scope storage', () => {
+    beforeEach(() => {
+        window.localStorage.clear();
+    });
+
+    test('stores and restores a valid frontend scope locally', () => {
+        const scope = {
+            project_id: 'p1',
+            mode: 'select' as const,
+            variant_ids: ['v1'],
+            compare_base_id: '',
+            compare_operation: 'difference' as const,
+            compare_variant_id: '',
+        };
+
+        Config.setFrontendScope(scope);
+
+        expect(Config.getFrontendScope()).toEqual(scope);
+    });
+
+    test('ignores malformed stored scope data', () => {
+        window.localStorage.setItem('vulnscout.frontendScope', '{"mode":"select"}');
+
+        expect(Config.getFrontendScope()).toBeNull();
+    });
+
+    test('clears a saved frontend scope', () => {
+        Config.setFrontendScope({
+            project_id: 'p1',
+            mode: 'select',
+            variant_ids: [],
+            compare_base_id: '',
+            compare_operation: 'difference',
+            compare_variant_id: '',
+        });
+
+        Config.clearFrontendScope();
+
+        expect(Config.getFrontendScope()).toBeNull();
+    });
+
+    test('detects unavailable projects and variants in saved scopes', () => {
+        const scope = {
+            project_id: 'p1',
+            mode: 'select' as const,
+            variant_ids: ['v1'],
+            compare_base_id: '',
+            compare_operation: 'difference' as const,
+            compare_variant_id: '',
+        };
+
+        expect(Config.isFrontendScopeAvailable(scope, ['p2'], ['v1'])).toBe(false);
+        expect(Config.isFrontendScopeAvailable(scope, ['p1'], ['v2'])).toBe(false);
+        expect(Config.isFrontendScopeAvailable(scope, ['p1'], ['v1'])).toBe(true);
     });
 });
 

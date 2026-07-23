@@ -1,6 +1,7 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft, faRobot } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
+import type { FrontendScope } from '../handlers/config';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-cyan-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -14,10 +15,11 @@ type Props = {
   setDarkMode: (mode: boolean) => void;
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
+  defaultScope?: FrontendScope | null;
   onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
 };
 
-function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, onApply }: Readonly<Props>) {
+function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, defaultScope, onApply }: Readonly<Props>) {
   return (
   <nav aria-label="Main navigation">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -145,6 +147,7 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <ProjectVariantSelector
           defaultProject={defaultProject}
           defaultVariant={defaultVariant}
+          defaultScope={defaultScope}
           onApply={onApply}
         />
       </li>

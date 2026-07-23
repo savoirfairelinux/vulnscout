@@ -20,6 +20,9 @@ import AIContext from './AIContext';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
+import type { FrontendScope } from "../handlers/config";
+import Projects from '../handlers/project';
+import Variants from '../handlers/variant';
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -62,6 +65,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         contact_email: "",
         grype_memlimit: "",
     });
+    const [frontendScope, setFrontendScope] = useState<FrontendScope | null>(null);
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
@@ -122,16 +126,73 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
 
     // On mount: fetch default project/variant from config, then load data
     useEffect(() => {
+        let cancelled = false;
+
         Config.get()
-            .then(config => {
+            .then(async config => {
+                let scope = Config.getFrontendScope();
+                let discardedScope = false;
+                // Validate the saved scope against the live project/variant
+                // lists. A transient fetch failure here must not discard the
+                // successfully-loaded config: fall back to the server default
+                // scope while keeping the config and loading default data.
+                try {
+                    if (scope) {
+                        const projects = await Projects.list();
+                        const projectExists = projects.some(project => project.id === scope?.project_id);
+                        const canConfirmProjectAbsence = projects.length > 0 || !config.project;
+                        if (!projectExists && canConfirmProjectAbsence) {
+                            Config.clearFrontendScope();
+                            scope = null;
+                            discardedScope = true;
+                        } else if (projectExists) {
+                            const variants = await Variants.list(scope.project_id);
+                            if (!Config.isFrontendScopeAvailable(scope, projects.map(project => project.id), variants.map(variant => variant.id))) {
+                                Config.clearFrontendScope();
+                                scope = null;
+                                discardedScope = true;
+                            }
+                        }
+                    }
+                } catch {
+                    // Validation could not complete (e.g. network hiccup);
+                    // keep the loaded config and use the server default scope.
+                    scope = null;
+                }
+                if (cancelled) return;
                 setDefaultConfig(config);
-                const variantId = config.variant?.id || undefined;
-                const projectId = variantId ? undefined : (config.project?.id || undefined);
-                setCurrentVariantId(variantId);
-                setCurrentProjectId(config.project?.id || undefined);
-                loadData(variantId, projectId);
+                setFrontendScope(scope);
+                if (discardedScope) {
+                    triggerBanner("Saved selection is no longer available; using the default scope", "error");
+                }
+                const multiActive = scope?.mode === 'select' && scope.variant_ids.length >= 2;
+                const compareActive = scope?.mode === 'compare';
+                const variantId = compareActive
+                    ? scope?.compare_base_id
+                    : scope?.mode === 'select' && scope.variant_ids.length === 1
+                        ? scope.variant_ids[0]
+                        : config.variant?.id || undefined;
+                const projectId = scope?.project_id || config.project?.id || undefined;
+                const compareVariantId = compareActive ? scope?.compare_variant_id : undefined;
+                setCurrentVariantId(compareVariantId || variantId);
+                setCurrentProjectId(projectId);
+                setCurrentBaseVariantId(compareActive ? variantId : undefined);
+                setCurrentOperation(compareActive ? scope?.compare_operation : undefined);
+                setCurrentVariantIds(multiActive ? scope?.variant_ids : undefined);
+                setCurrentMultiOperation(multiActive ? 'union' : undefined);
+                loadData(
+                    multiActive ? undefined : variantId,
+                    (multiActive || !variantId) ? projectId : undefined,
+                    compareVariantId,
+                    compareActive ? scope?.compare_operation : undefined,
+                    multiActive ? scope?.variant_ids : undefined,
+                    multiActive ? 'union' : undefined,
+                );
             })
-            .catch(() => loadData(undefined));
+            .catch(() => {
+                if (!cancelled) loadData(undefined);
+            });
+        return () => { cancelled = true; };
     }, [loadData]);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
@@ -144,6 +205,20 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setCurrentOperation((!multiActive && compareVariantId) ? (operation || undefined) : undefined);
         setCurrentVariantIds(multiActive ? variantIds : undefined);
         setCurrentMultiOperation(multiActive ? (multiOperation || undefined) : undefined);
+        const frontendScope: FrontendScope = {
+            project_id: projectId,
+            mode: compareVariantId ? 'compare' : 'select',
+            variant_ids: compareVariantId ? [] : (variantIds.length ? variantIds : (variantId ? [variantId] : [])),
+            compare_base_id: compareVariantId ? variantId : '',
+            compare_operation: operation === 'intersection' ? 'intersection' : 'difference',
+            compare_variant_id: compareVariantId,
+        };
+        try {
+            Config.setFrontendScope(frontendScope);
+            setFrontendScope(frontendScope);
+        } catch {
+            triggerBanner("Selection applied, but it could not be saved for restart", "error");
+        }
         loadData(
             multiActive ? undefined : (variantId || undefined),
             (multiActive || !variantId) ? (projectId || undefined) : undefined,
@@ -295,6 +370,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     setDarkMode={setDarkMode}
                     defaultProject={defaultConfig.project}
                     defaultVariant={defaultConfig.variant}
+                    defaultScope={frontendScope}
                     onApply={handleApply}
                 />
             </header>

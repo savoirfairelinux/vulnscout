@@ -6,6 +6,7 @@ import Projects from '../handlers/project';
 import type { Project } from '../handlers/project';
 import Variants from '../handlers/variant';
 import type { Variant } from '../handlers/variant';
+import type { FrontendScope } from '../handlers/config';
 
 const greenTheme = true;
 const bgHoverColor = greenTheme ? 'hover:bg-cyan-700' : 'dark:hover:bg-neutral-700';
@@ -27,10 +28,11 @@ type AppliedScope = {
 type Props = {
     defaultProject?: { id: string; name: string } | null;
     defaultVariant?: { id: string; name: string } | null;
+    defaultScope?: FrontendScope | null;
     onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
 };
 
-function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
+function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -77,20 +79,19 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
     useEffect(() => { variantsRef.current = variants; }, [variants]);
     useEffect(() => { selectedProjectIdRef.current = selectedProjectId; }, [selectedProjectId]);
 
-    // Sync display state when default config arrives from the server
+    // A persisted browser scope supersedes the server's default project.
     useEffect(() => {
-        if (defaultProject?.id) {
-            // All variants are selected by default on first load.
-            setSelectedProjectId(defaultProject.id);
-            setAppliedProject(defaultProject.name);
+        const initialProjectId = defaultScope?.project_id ?? defaultProject?.id;
+        if (initialProjectId) {
+            if (defaultScope?.mode === 'select') {
+                pendingRestoreRef.current = defaultScope.variant_ids;
+            }
+            const initialProject = projects.find(project => project.id === initialProjectId)
+                ?? (defaultProject?.id === initialProjectId ? defaultProject : null);
+            setSelectedProjectId(initialProjectId);
+            setAppliedProject(initialProject?.name ?? '');
         }
-    }, [defaultProject?.id, defaultProject?.name]);
-
-    useEffect(() => {
-        if (defaultProject?.id) {
-            setAppliedLabel('All variants');
-        }
-    }, [defaultProject?.id]);
+    }, [defaultProject, defaultScope, projects]);
 
     // Default the compare base / compare variant once variants are available
     useEffect(() => {
@@ -116,10 +117,12 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
 
     // Load variants when selected project changes
     useEffect(() => {
+        let cancelled = false;
         setVariants([]);
         if (!selectedProjectId) return;
         Variants.list(selectedProjectId)
             .then(vs => {
+                if (cancelled) return;
                 setVariants(vs);
                 const restore = pendingRestoreRef.current;
                 pendingRestoreRef.current = null;
@@ -133,25 +136,55 @@ function ProjectVariantSelector({ defaultProject, onApply }: Readonly<Props>) {
                     setSelectedVariantIds(vs.map(v => v.id));
                 }
             })
-            .catch(() => setVariants([]));
+            .catch(() => {
+                if (!cancelled) setVariants([]);
+            });
+        return () => { cancelled = true; };
     }, [selectedProjectId]);
 
     // Establish the initial applied scope from config once variants are known,
     // so the first reopen reflects the configured project/variant.
     useEffect(() => {
+        const initialProjectId = defaultScope?.project_id ?? defaultProject?.id;
         if (appliedScope || variants.length === 0 || !selectedProjectId) return;
-        if (defaultProject?.id !== selectedProjectId) return;
-        // All variants are selected by default.
-        const variantIds = variants.map(v => v.id);
-        applyScope({
+        if (initialProjectId !== selectedProjectId) return;
+        const validVariantIds = (defaultScope?.mode === 'select' && defaultScope.variant_ids.length > 0)
+            ? defaultScope.variant_ids.filter(id => variants.some(v => v.id === id))
+            : variants.map(v => v.id);
+        const initialScope: AppliedScope = defaultScope ? {
+            projectId: selectedProjectId,
+            mode: defaultScope.mode,
+            variantIds: validVariantIds,
+            compareBaseId: defaultScope.compare_base_id,
+            compareOp: defaultScope.compare_operation,
+            compareId: defaultScope.compare_variant_id,
+        } : {
             projectId: selectedProjectId,
             mode: 'select',
-            variantIds,
+            variantIds: validVariantIds,
             compareBaseId: variants[0]?.id ?? '',
             compareOp: 'difference',
             compareId: '',
-        });
-    }, [variants, selectedProjectId, appliedScope, defaultProject?.id]);
+        };
+        applyScope(initialScope);
+        setMode(initialScope.mode);
+        setSelectedVariantIds(initialScope.variantIds);
+        setCompareBaseVariantId(initialScope.compareBaseId);
+        setCompareOperation(initialScope.compareOp);
+        setSelectedCompareVariantId(initialScope.compareId);
+        if (initialScope.mode === 'compare') {
+            const base = variants.find(v => v.id === initialScope.compareBaseId);
+            const compare = variants.find(v => v.id === initialScope.compareId);
+            const symbol = initialScope.compareOp === 'difference' ? '∖' : '∩';
+            setAppliedLabel(`${base?.name ?? 'All'} ${symbol} ${compare?.name ?? ''}`);
+        } else if (initialScope.variantIds.length === variants.length) {
+            setAppliedLabel('All variants');
+        } else if (initialScope.variantIds.length === 1) {
+            setAppliedLabel(variants.find(v => v.id === initialScope.variantIds[0])?.name ?? '');
+        } else {
+            setAppliedLabel(`${initialScope.variantIds.length} variants (∪)`);
+        }
+    }, [variants, selectedProjectId, appliedScope, defaultProject?.id, defaultScope]);
 
     // Restore the panel controls from the applied scope each time it opens.
     useEffect(() => {
