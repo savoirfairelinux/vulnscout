@@ -18,17 +18,22 @@ type VariantContext = VariantContextData & {
 
 type MergedContext = ProjectContext & VariantContext;
 
-/** One variant's full context, as used by the import/export file format. */
-type ContextEntry = {
-    project_name: string;
+/** One variant's context, as used by the import/export file format. */
+type VariantEntry = {
     variant_name: string;
-    description: string | null;
     variant_description: string | null;
     codebase_path: string | null;
     environment: string | null;
     threat_model: string | null;
     risks: string | null;
     other_info: string | null;
+};
+
+/** One project with its variants nested underneath. */
+type ProjectEntry = {
+    project_name: string;
+    project_description: string | null;
+    variants: VariantEntry[];
 };
 
 type ImportResultItem = {
@@ -47,7 +52,7 @@ type ImportResult = {
 type ContextExport = {
     version: string;
     exported_at: string;
-    entries: ContextEntry[];
+    projects: ProjectEntry[];
 };
 
 export type {
@@ -55,7 +60,8 @@ export type {
     VariantContext,
     VariantContextData,
     MergedContext,
-    ContextEntry,
+    VariantEntry,
+    ProjectEntry,
     ImportResultItem,
     ImportResult,
     ContextExport,
@@ -115,14 +121,6 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/context/export`,
             { mode: 'cors' }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
-        return data as ContextExport;
-    }
-
-    static async exportVariant(projectId: string, variantId: string): Promise<ContextExport> {
-        const url = `${import.meta.env.VITE_API_URL}/api/context/export?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
-        const res = await fetch(url, { mode: 'cors' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
         return data as ContextExport;

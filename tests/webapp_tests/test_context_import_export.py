@@ -83,16 +83,49 @@ def client_and_data(app_with_data):
     return application.test_client(), data
 
 
-def _export_entries(client, url="/api/context/export"):
-    """GET the export endpoint and return the entries list from the envelope."""
+def _export_variants(client, url="/api/context/export"):
+    """GET the export endpoint and return a flat list of variant records.
+
+    Each record merges the project's ``project_name`` / ``project_description``
+    (exposed as ``description``) with the variant fields, so tests can assert
+    on a single variant regardless of the nested envelope shape.
+    """
     response = client.get(url)
     assert response.status_code == 200
     body = json.loads(response.data)
     assert isinstance(body, dict)
     assert body["version"]
     assert body["exported_at"]
-    assert isinstance(body["entries"], list)
-    return body["entries"]
+    assert isinstance(body["projects"], list)
+    flat = []
+    for project in body["projects"]:
+        for variant in project["variants"]:
+            flat.append({
+                "project_name": project["project_name"],
+                "description": project["project_description"],
+                **variant,
+            })
+    return flat
+
+
+def _nest(flat_entries):
+    """Group flat ``{project_name, description, variant...}`` dicts into the
+    nested ``projects``/``variants`` import payload."""
+    by_project: dict = {}
+    order: list = []
+    for entry in flat_entries:
+        pname = entry.get("project_name")
+        if pname not in by_project:
+            by_project[pname] = {
+                "project_name": pname,
+                "project_description": entry.get("description"),
+                "variants": [],
+            }
+            order.append(pname)
+        variant = {k: v for k, v in entry.items()
+                   if k not in ("project_name", "description")}
+        by_project[pname]["variants"].append(variant)
+    return [by_project[p] for p in order]
 
 
 # ===========================================================================
@@ -105,13 +138,28 @@ class TestExportContext:
         client, _ = client_and_data
         body = json.loads(client.get("/api/context/export").data)
         assert isinstance(body, dict)
-        assert body["version"] == "1.0"
+        assert body["version"] == "2.0"
         assert isinstance(body["exported_at"], str) and body["exported_at"]
-        assert isinstance(body["entries"], list)
+        assert isinstance(body["projects"], list)
+
+    def test_export_groups_variants_under_projects(self, client_and_data):
+        client, _ = client_and_data
+        body = json.loads(client.get("/api/context/export").data)
+        projects = body["projects"]
+        # EmptyProject contributes nothing.
+        by_name = {p["project_name"]: p for p in projects}
+        assert set(by_name) == {"ProjectA", "ProjectB"}
+        assert by_name["ProjectA"]["project_description"] == "ProjectA description"
+        a_variants = {v["variant_name"] for v in by_name["ProjectA"]["variants"]}
+        assert a_variants == {"VariantA1", "VariantA2"}
+        # Project fields are not repeated on the variant objects.
+        sample = by_name["ProjectA"]["variants"][0]
+        assert "project_name" not in sample
+        assert "description" not in sample
 
     def test_export_all_returns_one_entry_per_variant(self, client_and_data):
         client, _ = client_and_data
-        entries = _export_entries(client)
+        entries = _export_variants(client)
         # 3 variants total; EmptyProject contributes nothing.
         assert len(entries) == 3
         keys = {(e["project_name"], e["variant_name"]) for e in entries}
@@ -123,7 +171,7 @@ class TestExportContext:
 
     def test_export_entry_shape_and_values(self, client_and_data):
         client, _ = client_and_data
-        entries = _export_entries(client)
+        entries = _export_variants(client)
         entry = next(e for e in entries if e["variant_name"] == "VariantA1")
         assert entry["description"] == "ProjectA description"
         assert entry["variant_description"] == "A1 variant desc"
@@ -135,7 +183,7 @@ class TestExportContext:
 
     def test_export_single_variant(self, client_and_data):
         client, data = client_and_data
-        entries = _export_entries(
+        entries = _export_variants(
             client,
             f"/api/context/export?project_id={data['project_a_id']}"
             f"&variant_id={data['variant_a1_id']}",
@@ -173,6 +221,10 @@ class TestImportContext:
             content_type="application/json",
         )
 
+    def _post_entries(self, client, flat_entries):
+        """Nest flat variant dicts into the projects payload before posting."""
+        return self._post(client, _nest(flat_entries))
+
     def test_import_non_array_rejected(self, client_and_data):
         client, _ = client_and_data
         response = self._post(client, {"project_name": "ProjectA"})
@@ -181,13 +233,15 @@ class TestImportContext:
     def test_import_envelope_accepted(self, client_and_data):
         client, _ = client_and_data
         payload = {
-            "version": "1.0",
+            "version": "2.0",
             "exported_at": "2026-07-22T00:00:00+00:00",
-            "entries": [{
+            "projects": [{
                 "project_name": "ProjectA",
-                "variant_name": "VariantA1",
-                "description": "From envelope",
-                "threat_model": "t",
+                "project_description": "From envelope",
+                "variants": [{
+                    "variant_name": "VariantA1",
+                    "threat_model": "t",
+                }],
             }],
         }
         response = self._post(client, payload)
@@ -196,26 +250,25 @@ class TestImportContext:
         assert body["imported"] == [
             {"project_name": "ProjectA", "variant_name": "VariantA1"}
         ]
-        entries = _export_entries(client)
+        entries = _export_variants(client)
         entry = next(e for e in entries if e["variant_name"] == "VariantA1")
         assert entry["description"] == "From envelope"
 
-    def test_import_envelope_missing_entries_rejected(self, client_and_data):
+    def test_import_envelope_missing_projects_rejected(self, client_and_data):
         client, _ = client_and_data
-        response = self._post(client, {"version": "1.0", "exported_at": "x"})
+        response = self._post(client, {"version": "2.0", "exported_at": "x"})
         assert response.status_code == 400
 
     def test_import_valid_overwrites(self, client_and_data):
         client, _ = client_and_data
-        payload = [{
+        response = self._post_entries(client, [{
             "project_name": "ProjectA",
             "variant_name": "VariantA1",
             "description": "New ProjectA description",
             "variant_description": "new variant desc",
             "threat_model": "new threat model",
             "risks": "new risks",
-        }]
-        response = self._post(client, payload)
+        }])
         assert response.status_code == 200
         body = json.loads(response.data)
         assert body["imported"] == [
@@ -225,7 +278,7 @@ class TestImportContext:
         assert body["failed"] == []
 
         # Verify overwrite via export.
-        exported = _export_entries(client)
+        exported = _export_variants(client)
         entry = next(e for e in exported if e["variant_name"] == "VariantA1")
         assert entry["description"] == "New ProjectA description"
         assert entry["variant_description"] == "new variant desc"
@@ -236,38 +289,35 @@ class TestImportContext:
 
     def test_import_unknown_project_ignored(self, client_and_data):
         client, _ = client_and_data
-        payload = [{
+        body = json.loads(self._post_entries(client, [{
             "project_name": "NoSuchProject",
             "variant_name": "VariantA1",
             "description": "d",
             "threat_model": "t",
-        }]
-        body = json.loads(self._post(client, payload).data)
+        }]).data)
         assert body["imported"] == []
         assert len(body["ignored"]) == 1
         assert body["ignored"][0]["reason"] == "Project not found"
 
     def test_import_unknown_variant_ignored(self, client_and_data):
         client, _ = client_and_data
-        payload = [{
+        body = json.loads(self._post_entries(client, [{
             "project_name": "ProjectA",
             "variant_name": "NoSuchVariant",
             "description": "d",
             "threat_model": "t",
-        }]
-        body = json.loads(self._post(client, payload).data)
+        }]).data)
         assert body["imported"] == []
         assert body["ignored"][0]["reason"] == "Variant not found"
 
     def test_import_missing_mandatory_fails(self, client_and_data):
         client, _ = client_and_data
-        payload = [{
+        body = json.loads(self._post_entries(client, [{
             "project_name": "ProjectA",
             "variant_name": "VariantA1",
             "description": "  ",  # blank
             # threat_model missing
-        }]
-        body = json.loads(self._post(client, payload).data)
+        }]).data)
         assert body["imported"] == []
         assert len(body["failed"]) == 1
         reason = body["failed"][0]["reason"]
@@ -276,39 +326,38 @@ class TestImportContext:
 
     def test_import_missing_identity_ignored(self, client_and_data):
         client, _ = client_and_data
-        payload = [{"description": "d", "threat_model": "t"}]
-        body = json.loads(self._post(client, payload).data)
+        body = json.loads(self._post_entries(client, [
+            {"description": "d", "threat_model": "t"}
+        ]).data)
         assert body["ignored"][0]["reason"] == "Missing project_name or variant_name"
 
     def test_import_ignores_unknown_and_nontext_fields(self, client_and_data):
         client, _ = client_and_data
-        payload = [{
+        body = json.loads(self._post_entries(client, [{
             "project_name": "ProjectB",
             "variant_name": "VariantB1",
             "description": "d",
             "threat_model": "t",
             "risks": 12345,          # non-text -> ignored (cleared)
             "bogus_field": "hello",  # unknown -> ignored
-        }]
-        body = json.loads(self._post(client, payload).data)
+        }]).data)
         assert body["imported"] == [
             {"project_name": "ProjectB", "variant_name": "VariantB1"}
         ]
-        exported = _export_entries(client)
+        exported = _export_variants(client)
         entry = next(e for e in exported if e["variant_name"] == "VariantB1")
         assert entry["risks"] is None
 
     def test_import_mixed_batch(self, client_and_data):
         client, _ = client_and_data
-        payload = [
+        body = json.loads(self._post_entries(client, [
             {"project_name": "ProjectA", "variant_name": "VariantA1",
              "description": "d", "threat_model": "t"},
             {"project_name": "ProjectA", "variant_name": "NoSuchVariant",
              "description": "d", "threat_model": "t"},
             {"project_name": "ProjectB", "variant_name": "VariantB1",
              "description": "d"},  # missing threat_model
-        ]
-        body = json.loads(self._post(client, payload).data)
+        ]).data)
         assert len(body["imported"]) == 1
         assert len(body["ignored"]) == 1
         assert len(body["failed"]) == 1

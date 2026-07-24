@@ -65,6 +65,15 @@ def ids(app):
 
 class TestExportContextCLI:
 
+    @staticmethod
+    def _flat(doc):
+        """Flatten the nested export document to (project_name, variant_name)
+        records for assertions."""
+        return [
+            {"project_name": p["project_name"], **v}
+            for p in doc["projects"] for v in p["variants"]
+        ]
+
     def test_export_all_writes_envelope(self, app, tmp_path):
         out = tmp_path / "ctx.json"
         result = app.test_cli_runner().invoke(args=[
@@ -73,9 +82,9 @@ class TestExportContextCLI:
         assert result.exit_code == 0, result.output
         assert out.exists()
         doc = json.loads(out.read_text())
-        assert doc["version"] == "1.0"
+        assert doc["version"] == "2.0"
         assert isinstance(doc["exported_at"], str) and doc["exported_at"]
-        keys = {(e["project_name"], e["variant_name"]) for e in doc["entries"]}
+        keys = {(e["project_name"], e["variant_name"]) for e in self._flat(doc)}
         assert keys == {
             ("ProjectA", "VariantA1"),
             ("ProjectA", "VariantA2"),
@@ -89,8 +98,8 @@ class TestExportContextCLI:
         ])
         assert result.exit_code == 0, result.output
         doc = json.loads(out.read_text())
-        assert {e["project_name"] for e in doc["entries"]} == {"ProjectA"}
-        assert len(doc["entries"]) == 2
+        assert {p["project_name"] for p in doc["projects"]} == {"ProjectA"}
+        assert len(self._flat(doc)) == 2
 
     def test_export_single_variant(self, app, tmp_path):
         out = tmp_path / "ctx.json"
@@ -100,8 +109,9 @@ class TestExportContextCLI:
         ])
         assert result.exit_code == 0, result.output
         doc = json.loads(out.read_text())
-        assert len(doc["entries"]) == 1
-        assert doc["entries"][0]["variant_name"] == "VariantA1"
+        flat = self._flat(doc)
+        assert len(flat) == 1
+        assert flat[0]["variant_name"] == "VariantA1"
 
     def test_export_variant_without_project_errors(self, app, tmp_path):
         out = tmp_path / "ctx.json"
@@ -129,13 +139,15 @@ class TestImportContextCLI:
 
     def test_import_envelope_overwrites(self, app, tmp_path):
         payload = {
-            "version": "1.0",
+            "version": "2.0",
             "exported_at": "2026-07-22T00:00:00+00:00",
-            "entries": [{
+            "projects": [{
                 "project_name": "ProjectA",
-                "variant_name": "VariantA1",
-                "description": "New description",
-                "threat_model": "new threat model",
+                "project_description": "New description",
+                "variants": [{
+                    "variant_name": "VariantA1",
+                    "threat_model": "new threat model",
+                }],
             }],
         }
         path = self._write(tmp_path, payload)
@@ -152,9 +164,11 @@ class TestImportContextCLI:
     def test_import_bare_array(self, app, tmp_path):
         payload = [{
             "project_name": "ProjectA",
-            "variant_name": "VariantA1",
-            "description": "d",
-            "threat_model": "t",
+            "project_description": "d",
+            "variants": [{
+                "variant_name": "VariantA1",
+                "threat_model": "t",
+            }],
         }]
         path = self._write(tmp_path, payload)
         result = app.test_cli_runner().invoke(args=["import-context", path])
@@ -163,12 +177,13 @@ class TestImportContextCLI:
 
     def test_import_reports_ignored_and_failed(self, app, tmp_path):
         payload = [
-            {"project_name": "ProjectA", "variant_name": "VariantA1",
-             "description": "d", "threat_model": "t"},
-            {"project_name": "ProjectA", "variant_name": "NoSuchVariant",
-             "description": "d", "threat_model": "t"},
-            {"project_name": "ProjectB", "variant_name": "VariantB1",
-             "description": "d"},  # missing threat_model
+            {"project_name": "ProjectA", "project_description": "d", "variants": [
+                {"variant_name": "VariantA1", "threat_model": "t"},
+                {"variant_name": "NoSuchVariant", "threat_model": "t"},
+            ]},
+            {"project_name": "ProjectB", "project_description": "d", "variants": [
+                {"variant_name": "VariantB1"},  # missing threat_model
+            ]},
         ]
         path = self._write(tmp_path, payload)
         result = app.test_cli_runner().invoke(args=["import-context", path])
@@ -185,7 +200,7 @@ class TestImportContextCLI:
         assert "file not found" in result.output.lower()
 
     def test_import_malformed_body_errors(self, app, tmp_path):
-        path = self._write(tmp_path, {"version": "1.0"})  # no entries
+        path = self._write(tmp_path, {"version": "2.0"})  # no projects
         result = app.test_cli_runner().invoke(args=["import-context", path])
         assert result.exit_code != 0
-        assert "entries" in result.output.lower()
+        assert "projects" in result.output.lower()

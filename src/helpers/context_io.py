@@ -24,11 +24,9 @@ from ..models.variant_context import VariantContext
 EXPORT_VERSION = "1.0"
 
 
-class ContextEntry(TypedDict):
-    """One exported (project, variant) context record."""
-    project_name: str
+class VariantEntry(TypedDict):
+    """One exported variant's context (nested under its project)."""
     variant_name: str
-    description: Optional[str]
     variant_description: Optional[str]
     codebase_path: Optional[str]
     environment: Optional[str]
@@ -37,20 +35,24 @@ class ContextEntry(TypedDict):
     other_info: Optional[str]
 
 
+class ProjectEntry(TypedDict):
+    """One exported project with its variants nested underneath."""
+    project_name: str
+    project_description: Optional[str]
+    variants: list[VariantEntry]
+
+
 class ExportDocument(TypedDict):
-    """Versioned export envelope wrapping a list of context entries."""
+    """Versioned export envelope grouping variants under their project."""
     version: str
     exported_at: str
-    entries: list[ContextEntry]
+    projects: list[ProjectEntry]
 
 
-def context_entry(project: Project, variant: Variant,
-                  pc: Optional[ProjectContext], vc: Optional[VariantContext]) -> ContextEntry:
-    """Build one export entry for a (project, variant) pair."""
+def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntry:
+    """Build one export entry for a variant."""
     return {
-        "project_name": project.name,
         "variant_name": variant.name,
-        "description": pc.description if pc else None,
         "variant_description": vc.variant_description if vc else None,
         "codebase_path": vc.codebase_path if vc else None,
         "environment": vc.environment if vc else None,
@@ -60,13 +62,23 @@ def context_entry(project: Project, variant: Variant,
     }
 
 
-def collect_entries(project_id: Optional[uuid.UUID] = None,
-                    variant_id: Optional[uuid.UUID] = None) -> list[ContextEntry]:
-    """Collect export entries.
+def project_entry(project: Project, pc: Optional[ProjectContext],
+                  variants: list[VariantEntry]) -> ProjectEntry:
+    """Build one export entry for a project with its variants nested."""
+    return {
+        "project_name": project.name,
+        "project_description": pc.description if pc else None,
+        "variants": variants,
+    }
 
-    With no arguments, returns one entry per variant across every project.
-    With both *project_id* and *variant_id*, returns a single-entry list for
-    that pair.
+
+def collect_entries(project_id: Optional[uuid.UUID] = None,
+                    variant_id: Optional[uuid.UUID] = None) -> list[ProjectEntry]:
+    """Collect export entries grouped by project.
+
+    With no arguments, returns one project entry per project (each with its
+    variants nested). With both *project_id* and *variant_id*, returns a
+    single-project list containing only that variant.
 
     Raises
     ------
@@ -90,46 +102,76 @@ def collect_entries(project_id: Optional[uuid.UUID] = None,
             raise ValueError("Variant does not belong to the specified project")
         pc = ProjectContext.get_by_project(project_id)
         vc = VariantContext.get_by_variant(variant_id)
-        return [context_entry(project, variant, pc, vc)]
+        return [project_entry(project, pc, [variant_entry(variant, vc)])]
 
-    entries: list[ContextEntry] = []
+    projects: list[ProjectEntry] = []
     for project in Project.get_all():
         pc = ProjectContext.get_by_project(project.id)
+        variants: list[VariantEntry] = []
         for variant in Variant.get_by_project(project.id):
             vc = VariantContext.get_by_variant(variant.id)
-            entries.append(context_entry(project, variant, pc, vc))
-    return entries
+            variants.append(variant_entry(variant, vc))
+        if not variants:
+            continue
+        projects.append(project_entry(project, pc, variants))
+    return projects
 
 
-def build_export_document(entries: list[ContextEntry]) -> ExportDocument:
-    """Wrap *entries* in the versioned export envelope."""
+def build_export_document(projects: list[ProjectEntry]) -> ExportDocument:
+    """Wrap *projects* in the versioned export envelope."""
     return {
         "version": EXPORT_VERSION,
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "entries": entries,
+        "projects": projects,
     }
 
 
 def extract_entries(body) -> list:
-    """Normalise an import payload into a list of entries.
+    """Normalise an import payload into a flat list of per-variant records.
 
-    Accepts either the versioned envelope (a dict with an ``entries`` list) or
-    a bare list of entries. The ``version`` / ``exported_at`` fields are
-    ignored (lenient).
+    Accepts either the versioned envelope (a dict with a ``projects`` list) or
+    a bare list of project objects. Each project object carries
+    ``project_name`` / ``project_description`` and a ``variants`` list. The
+    returned records are flattened so each carries ``project_name``,
+    ``project_description`` and the variant fields, matching what
+    :func:`import_entries` consumes. The ``version`` / ``exported_at`` fields
+    are ignored (lenient).
 
     Raises
     ------
     ValueError
-        If *body* is neither a list nor a dict containing an ``entries`` list.
+        If *body* is neither a list of projects nor a dict containing a
+        ``projects`` list, or if a project's ``variants`` is not a list.
     """
     if isinstance(body, list):
-        return body
-    if isinstance(body, dict):
-        entries = body.get("entries")
-        if isinstance(entries, list):
-            return entries
-        raise ValueError("Object body must contain an 'entries' array")
-    raise ValueError("Body must be a JSON array of entries or an object with an 'entries' array")
+        projects = body
+    elif isinstance(body, dict):
+        projects = body.get("projects")
+        if not isinstance(projects, list):
+            raise ValueError("Object body must contain a 'projects' array")
+    else:
+        raise ValueError("Body must be a JSON array of projects or an object with a 'projects' array")
+
+    records: list = []
+    for project in projects:
+        if not isinstance(project, dict):
+            records.append(project)
+            continue
+        project_name = project.get("project_name")
+        project_description = project.get("project_description")
+        variants = project.get("variants")
+        if not isinstance(variants, list):
+            raise ValueError("Each project must contain a 'variants' array")
+        for variant in variants:
+            if not isinstance(variant, dict):
+                records.append(variant)
+                continue
+            records.append({
+                "project_name": project_name,
+                "description": project_description,
+                **variant,
+            })
+    return records
 
 
 def import_entries(entries: list) -> dict:

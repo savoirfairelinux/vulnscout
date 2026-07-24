@@ -34,21 +34,22 @@ def export_context_command(output: str, project: str | None, variant: str | None
 
     if project and variant:
         project_obj, variant_obj = resolve_project_variant(project, variant, create=False)
-        entries = collect_entries(project_obj.id, variant_obj.id)
+        projects = collect_entries(project_obj.id, variant_obj.id)
     elif project:
         project_obj = resolve_project(project)
-        entries = [
-            entry for entry in collect_entries()
-            if entry["project_name"] == project_obj.name
+        projects = [
+            group for group in collect_entries()
+            if group["project_name"] == project_obj.name
         ]
     else:
-        entries = collect_entries()
+        projects = collect_entries()
 
-    document = build_export_document(entries)
+    document = build_export_document(projects)
     with open(output, "w") as fh:
         _json.dump(document, fh, indent=2)
 
-    click.echo(f"Context exported: {output} ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'})")
+    count = sum(len(group["variants"]) for group in projects)
+    click.echo(f"Context exported: {output} ({count} entr{'y' if count == 1 else 'ies'})")
 
 
 @click.command("import-context")

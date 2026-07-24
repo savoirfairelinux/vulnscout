@@ -140,13 +140,13 @@ def init_app(app):
                 return err
 
         try:
-            entries = collect_entries(project_uuid, variant_uuid)
+            projects = collect_entries(project_uuid, variant_uuid)
         except LookupError as exc:
             return jsonify({"error": str(exc)}), 404
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        return jsonify(build_export_document(entries))
+        return jsonify(build_export_document(projects))
 
     @app.route('/api/context/import', methods=['POST'])
     def import_context():

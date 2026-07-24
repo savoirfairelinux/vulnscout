@@ -411,13 +411,19 @@ describe('AIContext page', () => {
 
             // Export selected -> exportAll, filtered to the checked variant
             fetchMock.mockResponseOnce(JSON.stringify({
-                version: '1.0',
+                version: '2.0',
                 exported_at: '2026-07-22T00:00:00+00:00',
-                entries: [
+                projects: [
                     {
-                        project_name: 'Project A', variant_name: 'Variant 1', description: 'd',
-                        variant_description: null, codebase_path: null, environment: null,
-                        threat_model: 't', risks: null, other_info: null,
+                        project_name: 'Project A',
+                        project_description: 'd',
+                        variants: [
+                            {
+                                variant_name: 'Variant 1',
+                                variant_description: null, codebase_path: null, environment: null,
+                                threat_model: 't', risks: null, other_info: null,
+                            },
+                        ],
                     },
                 ],
             }));
@@ -429,12 +435,6 @@ describe('AIContext page', () => {
             expect(exportCall).toBeDefined();
         });
 
-        test('export this variant is enabled after selecting a variant', async () => {
-            setupWithVariant();
-            render(<AIContext />);
-            await selectProjectAndVariant();
-            expect(screen.getByRole('button', { name: /export this variant/i })).not.toBeDisabled();
-        });
 
         test('import shows summary banner and detail list', async () => {
             fetchMock.mockResponseOnce(JSON.stringify([{ id: 'p1', name: 'Project A' }])); // projects
@@ -448,7 +448,11 @@ describe('AIContext page', () => {
             }));
 
             const payload = JSON.stringify([
-                { project_name: 'Project A', variant_name: 'Variant 1', description: 'd', threat_model: 't' },
+                {
+                    project_name: 'Project A',
+                    project_description: 'd',
+                    variants: [{ variant_name: 'Variant 1', threat_model: 't' }],
+                },
             ]);
             const file = new File([payload], 'ctx.json', { type: 'application/json' });
             (file as any).text = () => Promise.resolve(payload);
@@ -475,10 +479,16 @@ describe('AIContext page', () => {
             }));
 
             const envelope = JSON.stringify({
-                version: '1.0',
+                version: '2.0',
                 exported_at: '2026-07-22T00:00:00+00:00',
-                entries: [
-                    { project_name: 'Project A', variant_name: 'Variant 1', description: 'd', threat_model: 't' },
+                projects: [
+                    {
+                        project_name: 'Project A',
+                        project_description: 'd',
+                        variants: [
+                            { variant_name: 'Variant 1', threat_model: 't' },
+                        ],
+                    },
                 ],
             });
             const file = new File([envelope], 'ctx.json', { type: 'application/json' });
@@ -490,7 +500,7 @@ describe('AIContext page', () => {
                 c => String(c[0]).includes('/api/context/import') && (c[1] as any)?.method === 'POST'
             );
             expect(importCall).toBeDefined();
-            expect(JSON.parse((importCall![1] as any).body).version).toBe('1.0');
+            expect(JSON.parse((importCall![1] as any).body).version).toBe('2.0');
         });
 
         test('import rejects a file that is not valid JSON', async () => {

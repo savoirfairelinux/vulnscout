@@ -269,29 +269,22 @@ function AIContext() {
         setIoBusy(true);
         try {
             const all = await Context.exportAll();
-            // Keep only entries whose variant is checked in the selector.
-            const keys = new Set(
+            // Keep only variants whose id is checked in the selector.
+            const chosenKeys = new Set(
                 allVariants
                     .filter(v => exportSelection.has(v.id))
                     .map(v => `${projectNameById(v.project_id)}\u0000${v.name}`)
             );
-            const chosen = all.entries.filter(e => keys.has(`${e.project_name}\u0000${e.variant_name}`));
-            handleFileDownload({ ...all, entries: chosen }, "vulnscout-context.json");
+            const projects = all.projects
+                .map(p => ({
+                    ...p,
+                    variants: p.variants.filter(
+                        v => chosenKeys.has(`${p.project_name}\u0000${v.variant_name}`)
+                    ),
+                }))
+                .filter(p => p.variants.length > 0);
+            handleFileDownload({ ...all, projects }, "vulnscout-context.json");
             if (!unmountedRef.current) setExportMenuOpen(false);
-        } catch (e: any) {
-            if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");
-        } finally {
-            if (!unmountedRef.current) setIoBusy(false);
-        }
-    };
-
-    const handleExportVariant = async () => {
-        if (ioBusy || !selectedProjectId || !selectedVariantId) return;
-        setIoBusy(true);
-        try {
-            const doc = await Context.exportVariant(selectedProjectId, selectedVariantId);
-            const variantName = variants.find(v => v.id === selectedVariantId)?.name ?? "variant";
-            handleFileDownload(doc, `vulnscout-context-${variantName}.json`);
         } catch (e: any) {
             if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");
         } finally {
@@ -483,10 +476,10 @@ function AIContext() {
                                 className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[320px] text-sm text-left font-normal"
                             >
                                 Importing overwrites the existing context for each matching
-                                project/variant. Entries whose project or variant does not exist
-                                are ignored; entries missing mandatory fields (description, threat
-                                model) fail. Accepts an exported file or a plain JSON array of
-                                entries.
+                                project/variant. Variants whose project or variant does not exist
+                                are ignored; variants missing mandatory fields (description, threat
+                                model) fail. Accepts an exported file, whose projects each nest
+                                their variants.
                             </div>
                         )}
                     </div>
@@ -669,20 +662,6 @@ function AIContext() {
                     placeholder={variantSelected ? "Any additional context..." : "Select a variant to enable"}
                 />
             </div>
-
-                {/* Export this variant */}
-                <div>
-                    <button
-                        type="button"
-                        aria-label="Export this variant"
-                        onClick={handleExportVariant}
-                        disabled={!variantSelected || ioBusy}
-                        className={btnSecondary + " flex items-center gap-2"}
-                    >
-                        <FontAwesomeIcon icon={faFileExport} />
-                        Export this variant
-                    </button>
-                </div>
 
                 {/* Save */}
                 <div>
