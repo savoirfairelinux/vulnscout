@@ -404,7 +404,7 @@ def init_app(app: Flask) -> None:
         * **api** — queries the NVD REST API v2 using CPE identifiers from
           packages; honours NVD_API_KEY and rate limits.
         """
-        from ..controllers.scc_engine import get_engine
+        from ..controllers.scc_engine import get_engine, serialized_engine_operation
         from ..bin.cmd_vuln_scan import _SccBulkWriter
 
         variant_uuid, variant, err = validate_trigger(
@@ -423,6 +423,7 @@ def init_app(app: Flask) -> None:
             with app.app_context():
                 _do_nvd_scan(vid_str, variant_uuid)
 
+        @serialized_engine_operation
         def _do_nvd_scan(vid_str: str, variant_uuid: uuid.UUID) -> None:
             try:
                 _nvd_scans_in_progress[vid_str]["logs"].append(
@@ -855,6 +856,8 @@ def init_app(app: Flask) -> None:
         applies product-name aliasing and semantic version-range analysis, and
         records each engine VEX verdict.  Works once the databases are cloned.
         """
+        from ..controllers.scc_engine import serialized_engine_operation
+
         variant_uuid, variant, err = validate_trigger(
             variant_id, _sbom_cve_check_scans_in_progress, "sbom-cve-check scan")
         if err is not None:
@@ -1005,6 +1008,10 @@ def init_app(app: Flask) -> None:
             except Exception as e:
                 db.session.rollback()
                 set_error(_sbom_cve_check_scans_in_progress, vid_str, str(e)[:500])
+
+        _do_sbom_cve_check_scan = serialized_engine_operation(
+            _do_sbom_cve_check_scan
+        )
 
         thread = threading.Thread(
             target=_run_sbom_cve_check_scan,

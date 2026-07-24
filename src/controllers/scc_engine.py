@@ -25,11 +25,14 @@ Configuration (environment variables):
 from __future__ import annotations
 
 import functools
+import fcntl
 import logging
 import os
 import pathlib
+import tempfile
 import threading
 from collections.abc import Generator
+from contextlib import contextmanager
 from typing import cast
 
 from sbom_cve_check.database.db_git import GitDatabase
@@ -46,6 +49,8 @@ from .scc_adapter import build_comp_build
 _logger = logging.getLogger(__name__)
 
 _ENGINE_LOCK = threading.Lock()
+_ENGINE_OPERATION_LOCK = threading.RLock()
+_ENGINE_OPERATION_STATE = threading.local()
 _ENGINE: "SccEngine | None" = None
 _PURE_CACHES_INSTALLED = False
 
@@ -108,6 +113,37 @@ def _databases_dir() -> pathlib.Path:
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+@contextmanager
+def _serialized_engine_operation() -> Generator[None, None, None]:
+    """Serialize local advisory-engine work across threads and processes."""
+    with _ENGINE_OPERATION_LOCK:
+        depth = getattr(_ENGINE_OPERATION_STATE, "depth", 0)
+        if depth:
+            _ENGINE_OPERATION_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                _ENGINE_OPERATION_STATE.depth -= 1
+            return
+
+        databases_dir = _databases_dir()
+        try:
+            databases_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = databases_dir / ".vulnscout-engine.lock"
+        except OSError:
+            lock_path = pathlib.Path(tempfile.gettempdir()).joinpath(
+                f"vulnscout-engine-{os.getuid()}.lock"
+            )
+        with lock_path.open("a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _ENGINE_OPERATION_STATE.depth = 1
+            try:
+                yield
+            finally:
+                _ENGINE_OPERATION_STATE.depth = 0
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _trust_git_directories(paths: list[pathlib.Path]) -> None:
@@ -463,16 +499,8 @@ class SccEngine:
         return None
 
 
-def get_engine() -> SccEngine:
-    """Return the process-wide indexed engine, building it on first use.
-
-    The engine is expensive to build and is cached for the lifetime of the
-    process.  Every call refreshes the advisory git clones before returning so
-    scans always run against up-to-date data.  Call this from full-scan paths.
-    For single-CVE look-ups that do not need an immediate git fetch, use
-    :func:`get_cve_json` instead (it reuses the cached engine without
-    triggering a refresh).
-    """
+def _get_engine() -> SccEngine:
+    """Build or reuse the process-wide engine and refresh its databases."""
     global _ENGINE
     with _ENGINE_LOCK:
         if _ENGINE is None:
@@ -488,6 +516,30 @@ def get_engine() -> SccEngine:
             )
     _ENGINE.refresh_databases()
     return _ENGINE
+
+
+def get_engine() -> SccEngine:
+    """Return the process-wide indexed engine, building it on first use.
+
+    The engine is expensive to build and is cached for the lifetime of the
+    process.  Every call refreshes the advisory git clones before returning so
+    scans always run against up-to-date data.  Call this from full-scan paths.
+    For single-CVE look-ups that do not need an immediate git fetch, use
+    :func:`get_cve_json` instead (it reuses the cached engine without
+    triggering a refresh).
+    """
+    with _serialized_engine_operation():
+        return _get_engine()
+
+
+def serialized_engine_operation(func):
+    """Serialize a decorated local advisory-engine operation end to end."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _serialized_engine_operation():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def reset_engine() -> None:
@@ -508,13 +560,14 @@ def get_cve_json(cve_id: str) -> "dict | None":
     Returns the raw NVD CVE JSON dict (same schema as NVD API v2) or ``None``
     if the CVE is not found or the database is not yet initialised.
     """
-    with _ENGINE_LOCK:
-        engine = _ENGINE
-    if engine is None:
-        # Engine not yet built — the first build includes a fetch.
-        engine = get_engine()
-    try:
-        return engine.get_nvd_cve_json(cve_id)
-    except Exception as exc:
-        _logger.warning("Failed to look up %s in local NVD database: %s", cve_id, exc)
-        return None
+    with _serialized_engine_operation():
+        with _ENGINE_LOCK:
+            engine = _ENGINE
+        if engine is None:
+            # Engine not yet built — the first build includes a fetch.
+            engine = _get_engine()
+        try:
+            return engine.get_nvd_cve_json(cve_id)
+        except Exception as exc:
+            _logger.warning("Failed to look up %s in local NVD database: %s", cve_id, exc)
+            return None

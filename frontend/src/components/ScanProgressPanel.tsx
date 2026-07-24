@@ -32,8 +32,11 @@ type Props = {
 };
 
 export default function ScanProgressPanel({ entry, label, icon, colors, onDismiss }: Props) {
-    const { status, variantName, progress, logs, total, doneCount } = entry;
+    const { status, variantName, variantPosition, variantCount, progress, logs, total, doneCount } = entry;
     const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+    const variantProgress = variantPosition && variantCount && variantCount > 1
+        ? ` (variant ${variantPosition} of ${variantCount})`
+        : "";
 
     const logBoxRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -53,7 +56,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
             <div className={`px-4 py-2 flex items-center gap-3 ${colors.headerBg}`}>
                 <FontAwesomeIcon icon={icon} className={colors.iconText} />
                 <span className={`text-sm font-semibold ${colors.titleText}`}>
-                    {label} – {variantName} {statusText}
+                    {label} – {variantName} {statusText}{variantProgress}
                 </span>
                 <span className={`text-xs ${colors.subtitleText} ml-auto`}>
                     {progress ?? ""}

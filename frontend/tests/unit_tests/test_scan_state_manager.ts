@@ -318,6 +318,11 @@ describe('ScanStateManager.triggerScan (serial)', () => {
         expect(snap.find((s) => s.variantId === 'v1')?.status).toBe('running');
         expect(snap.find((s) => s.variantId === 'v2')?.status).toBe('queued');
         expect(snap.find((s) => s.variantId === 'v3')?.status).toBe('queued');
+        expect(snap.map((s) => [s.variantPosition, s.variantCount])).toEqual([
+            [1, 3],
+            [2, 3],
+            [3, 3],
+        ]);
         expect(triggerFn).toHaveBeenCalledTimes(1);
         expect(triggerFn).toHaveBeenCalledWith('v1', {});
     });

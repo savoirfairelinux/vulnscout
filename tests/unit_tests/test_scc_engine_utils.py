@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import threading
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -67,6 +68,68 @@ class TestDatabasesDir:
         result = mod._databases_dir()
         assert "local_databases" in str(result)
 
+
+class TestSerializedEngineOperation:
+
+    def test_concurrent_operations_run_one_at_a_time(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        from src.controllers.scc_engine import serialized_engine_operation
+
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_calling = threading.Event()
+        second_entered = threading.Event()
+        order: list[str] = []
+
+        @serialized_engine_operation
+        def operation(name: str) -> None:
+            order.append(f"enter-{name}")
+            if name == "first":
+                first_entered.set()
+                assert release_first.wait(timeout=2)
+            else:
+                second_entered.set()
+            order.append(f"exit-{name}")
+
+        first = threading.Thread(target=operation, args=("first",))
+
+        def run_second() -> None:
+            second_calling.set()
+            operation("second")
+
+        second = threading.Thread(target=run_second)
+        first.start()
+        assert first_entered.wait(timeout=2)
+        second.start()
+        assert second_calling.wait(timeout=2)
+        assert not second_entered.wait(timeout=0.05)
+
+        release_first.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert order == ["enter-first", "exit-first", "enter-second", "exit-second"]
+
+    def test_nested_operations_are_reentrant(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("SBOM_CVE_CHECK_DATABASES_DIR", str(tmp_path))
+        from src.controllers.scc_engine import serialized_engine_operation
+
+        calls: list[str] = []
+
+        @serialized_engine_operation
+        def inner() -> None:
+            calls.append("inner")
+
+        @serialized_engine_operation
+        def outer() -> None:
+            calls.append("outer")
+            inner()
+
+        outer()
+
+        assert calls == ["outer", "inner"]
 
 class TestTrustGitDirectories:
 

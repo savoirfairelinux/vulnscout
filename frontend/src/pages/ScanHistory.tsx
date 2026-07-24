@@ -1720,7 +1720,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 ))
             }
             {nvdEntries
-                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
                 .map(entry => (
                     <ScanProgressPanel key={`nvd-${entry.variantId}`} entry={entry} label="NVD Scan" icon={faShieldHalved} colors={nvdColors} onDismiss={() => nvdDismiss(entry.variantId)} />
                 ))
@@ -1732,7 +1732,7 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                 ))
             }
             {sccEntries
-                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
+                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
                 .map(entry => (
                     <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
                 ))
