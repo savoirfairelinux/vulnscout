@@ -944,7 +944,7 @@ def init_app(app: Flask) -> None:
         )
         if invalid_findings:
             return {
-                "error": "Invalid finding for vulnerability and variant: "
+                "error": "Invalid package version for vulnerability and variant: "
                 + ", ".join(invalid_findings)
             }, 400
 
@@ -975,94 +975,105 @@ def init_app(app: Flask) -> None:
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
 
-        results = []
-        errors = []
-        # Cache resolved packages across the batch to avoid repeated SELECTs
-        pkg_cache: dict = {}
-        finding_cache: dict = {}
+        errors: list[dict[str, Any]] = []
+        prepared: list[tuple[DBAssessment, UUID, list[Package], dict[UUID, Finding]]] = []
+        pkg_cache: dict[str, Package] = {}
 
-        with batch_session():
-            for item in payload_data["assessments"]:
-                if not isinstance(item, dict) or "vuln_id" not in item:
-                    errors.append({"error": "Invalid assessment data", "item": item})
-                    continue
+        # Validate the complete request before opening the write transaction.
+        # A batch represents one user action, so one invalid package/variant
+        # relationship must cancel every assessment in that action.
+        for item in payload_data["assessments"]:
+            if not isinstance(item, dict) or "vuln_id" not in item:
+                errors.append({"error": "Invalid assessment data", "item": item})
+                continue
 
-                assessment, status = payload_to_assessment(item)
-                if status != 200:
-                    if not isinstance(assessment, dict):
-                        errors.append({"vuln_id": item.get("vuln_id"), "error": "Internal error"})
-                        continue
-                    errors.append({"vuln_id": item.get("vuln_id"), "error": assessment.get("error", "Unknown error")})
-                    continue
-                if not isinstance(assessment, DBAssessment):
-                    errors.append({"vuln_id": item.get("vuln_id"), "error": "Internal error"})
-                    continue
+            assessment, status = payload_to_assessment(item)
+            if status != 200:
+                error = assessment.get("error", "Unknown error") if isinstance(assessment, dict) else "Internal error"
+                errors.append({"vuln_id": item.get("vuln_id"), "error": error})
+                continue
+            if not isinstance(assessment, DBAssessment):
+                errors.append({"vuln_id": item.get("vuln_id"), "error": "Internal error"})
+                continue
 
-                vuln_id = assessment.vuln_id
-                # variant_id is required for every batch item
-                variant_id_raw = item.get('variant_id') or None
-                if not variant_id_raw:
-                    errors.append({"vuln_id": vuln_id, "error": "variant_id is required"})
-                    continue
-                variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
-                if err:
-                    errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
-                    continue
-                pkg_list = assessment.packages or []
-                if not pkg_list:
-                    errors.append({"vuln_id": vuln_id, "error": "No valid package found"})
-                    continue
+            vuln_id = assessment.vuln_id
+            variant_id_raw = item.get("variant_id") or None
+            if not variant_id_raw:
+                errors.append({"vuln_id": vuln_id, "error": "variant_id is required"})
+                continue
+            variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
+            if err:
+                errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                continue
 
-                # Assessments must never create a package. Resolve every package
-                # for this item up front; if any is missing, reject the whole
-                # item (other items in the batch are unaffected).
-                item_packages: list[Package] = []
-                item_missing: list[str] = []
-                for pkg_string_id in pkg_list:
-                    db_pkg = pkg_cache.get(pkg_string_id)
-                    if db_pkg is None:
-                        db_pkg = _resolve_package(pkg_string_id)
-                        if db_pkg is not None:
-                            pkg_cache[pkg_string_id] = db_pkg
-                    if db_pkg is None:
-                        item_missing.append(pkg_string_id)
-                    else:
-                        item_packages.append(db_pkg)
-                if item_missing:
-                    errors.append({
-                        "vuln_id": vuln_id,
-                        "error": "Package not found: " + ", ".join(item_missing)
-                        + ". Assessments can only be written for existing packages.",
-                    })
-                    continue
+            pkg_list = assessment.packages or []
+            if not pkg_list:
+                errors.append({"vuln_id": vuln_id, "variant_id": str(variant_id), "error": "No valid package found"})
+                continue
 
-                valid_findings, invalid_findings = _validate_assessment_findings(
-                    item_packages, vuln_id, variant_id
-                )
-                if invalid_findings:
-                    errors.append({
-                        "vuln_id": vuln_id,
-                        "error": "Invalid finding for vulnerability and variant: "
-                        + ", ".join(invalid_findings),
-                    })
-                    continue
+            item_packages: list[Package] = []
+            item_missing: list[str] = []
+            for pkg_string_id in pkg_list:
+                db_pkg = pkg_cache.get(pkg_string_id)
+                if db_pkg is None:
+                    db_pkg = _resolve_package(pkg_string_id)
+                    if db_pkg is not None:
+                        pkg_cache[pkg_string_id] = db_pkg
+                if db_pkg is None:
+                    item_missing.append(pkg_string_id)
+                else:
+                    item_packages.append(db_pkg)
+            if item_missing:
+                errors.append({
+                    "vuln_id": vuln_id,
+                    "variant_id": str(variant_id),
+                    "error": "Package not found: " + ", ".join(item_missing)
+                    + ". Assessments can only be written for existing packages.",
+                })
+                continue
 
-                for db_pkg in item_packages:
-                    try:
-                        f_key = (db_pkg.id, vuln_id)
-                        finding = finding_cache.get(f_key)
-                        if finding is None:
-                            finding = valid_findings[db_pkg.id]
-                            finding_cache[f_key] = finding
-                        # Always create a new record — never overwrite an existing assessment.
-                        # Honour the per-item timestamp so rows added for the same action
-                        # (e.g. one assessment across several variants) share a value.
+            valid_findings, invalid_findings = _validate_assessment_findings(
+                item_packages, vuln_id, variant_id
+            )
+            if invalid_findings:
+                errors.append({
+                    "vuln_id": vuln_id,
+                    "variant_id": str(variant_id),
+                    "error": "Invalid package version for vulnerability and variant: "
+                    + ", ".join(invalid_findings),
+                })
+                continue
+            prepared.append((assessment, variant_id, item_packages, valid_findings))
+
+        if errors:
+            return {
+                "status": "error",
+                "assessments": [],
+                "count": 0,
+                "vuln_count": 0,
+                "errors": errors,
+                "error_count": len(errors),
+            }, 400
+
+        results: list[AssessmentDict] = []
+        try:
+            with batch_session():
+                for assessment, variant_id, item_packages, valid_findings in prepared:
+                    for db_pkg in item_packages:
                         db_a = _create_assessment_record(
-                            assessment, finding.id, variant_id,
-                            timestamp=getattr(assessment, 'timestamp', None))
+                            assessment, valid_findings[db_pkg.id].id, variant_id,
+                            timestamp=getattr(assessment, "timestamp", None),
+                        )
                         results.append(db_a.to_dict())
-                    except Exception as e:
-                        errors.append({"vuln_id": vuln_id, "error": str(e)})
+        except Exception as e:
+            return {
+                "status": "error",
+                "assessments": [],
+                "count": 0,
+                "vuln_count": 0,
+                "errors": [{"error": f"DB error: {e}"}],
+                "error_count": 1,
+            }, 500
 
         distinct_vulns = len({r.get("vuln_id") for r in results if r.get("vuln_id")})
         response = {
@@ -1071,9 +1082,6 @@ def init_app(app: Flask) -> None:
             "count": len(results),
             "vuln_count": distinct_vulns
         }
-        if errors:
-            response["errors"] = errors
-            response["error_count"] = len(errors)
         return response, 200 if results else 400
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
@@ -1090,7 +1098,7 @@ def init_app(app: Flask) -> None:
             existing.finding.vulnerability_id,
             existing.variant_id,
         ) is None:
-            return {"error": "Assessment references a finding that is not valid for its variant"}, 400
+            return {"error": "Assessment references a package version that is not valid for its variant"}, 400
 
         was_non_custom = (existing.origin or "") != "custom"
         # Editing a pending AI assessment directly must not silently approve

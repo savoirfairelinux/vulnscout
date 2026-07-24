@@ -241,13 +241,16 @@ def test_post_assessment_rejects_unobserved_finding(client):
         'variant_id': '22222222-2222-2222-2222-222222222222',
     })
     assert response.status_code == 400
-    assert "Invalid finding" in response.get_data(as_text=True)
+    assert "Invalid package version" in response.get_data(as_text=True)
 
 
-def test_batch_missing_package_skips_item_only(client):
-    # In a batch, an item referencing a missing package is rejected with a
-    # per-item error while valid items still succeed.
+def test_batch_missing_package_cancels_whole_batch(client):
+    # A missing package cancels the complete user action, including valid items.
+    from src.models.assessment import Assessment
     from src.models.package import Package
+
+    with client.application.app_context():
+        before = len(Assessment.get_by_vulnerability("CVE-1999-12345"))
 
     response = client.post("/api/assessments/batch", json={
         'assessments': [
@@ -265,14 +268,16 @@ def test_batch_missing_package_skips_item_only(client):
             },
         ]
     })
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["count"] == 1
+    assert data["count"] == 0
+    assert data["assessments"] == []
     assert data.get("error_count") == 1
     assert any("ghost@0.0.1" in e.get("error", "") for e in data["errors"])
 
     with client.application.app_context():
         assert Package.get_by_string_id("ghost@0.0.1") is None
+        assert len(Assessment.get_by_vulnerability("CVE-1999-12345")) == before
 
 
 def test_patch_vulnerability_empty(client):

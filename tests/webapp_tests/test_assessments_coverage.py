@@ -208,7 +208,7 @@ def test_post_assessments_batch_all_valid(client):
 
 # Test POST assessment batch - mixed valid and invalid
 def test_post_assessments_batch_mixed_validity(client):
-    """Test batch creation with mix of valid and invalid assessments"""
+    """A mix of valid and invalid assessments cancels the whole batch."""
     response = client.post("/api/assessments/batch", json={
         'assessments': [
             {
@@ -228,10 +228,11 @@ def test_post_assessments_batch_mixed_validity(client):
             }
         ]
     })
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["count"] == 1
-    assert data["vuln_count"] == 1
+    assert data["count"] == 0
+    assert data["vuln_count"] == 0
+    assert data["assessments"] == []
     assert data["error_count"] == 2
     assert len(data["errors"]) == 2
 
@@ -285,7 +286,7 @@ def test_post_assessments_batch_not_a_list(client):
 
 # Test POST assessment batch - invalid item structure
 def test_post_assessments_batch_invalid_item_structure(client):
-    """Test batch creation with invalid item structure"""
+    """An invalid item structure cancels valid entries in the same batch."""
     response = client.post("/api/assessments/batch", json={
         'assessments': [
             'not_a_dict',
@@ -293,9 +294,10 @@ def test_post_assessments_batch_invalid_item_structure(client):
              'variant_id': DEMO_VARIANT_ID}
         ]
     })
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["count"] == 1
+    assert data["count"] == 0
+    assert data["assessments"] == []
     assert data["error_count"] == 1
 
 
@@ -631,6 +633,40 @@ def test_post_assessments_batch_invalid_variant_id(client):
     assert data["error_count"] >= 1
     assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
                for e in data["errors"])
+
+
+def test_post_assessments_batch_is_atomic_when_one_variant_is_invalid(client, app):
+    """One invalid package/variant pair cancels every item in the batch."""
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        before = len(Assessment.get_by_vulnerability("CVE-2021-11111"))
+
+    response = client.post("/api/assessments/batch", json={
+        "assessments": [
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                "variant_id": DEMO_VARIANT_ID,
+            },
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                "variant_id": "22222222-2222-2222-2222-222222222223",
+            },
+        ]
+    })
+
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert data["status"] == "error"
+    assert data["count"] == 0
+    assert data["assessments"] == []
+    assert data["error_count"] == 1
+    with app.app_context():
+        assert len(Assessment.get_by_vulnerability("CVE-2021-11111")) == before
 
 
 # ---------------------------------------------------------------------------
