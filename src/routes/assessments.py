@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Literal, overload
 from uuid import UUID
 
-from ..models import Assessment as DBAssessment, Package, Finding
+from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..extensions import db, batch_session
 from ..models.vulnerability import Vulnerability as DBVuln
@@ -799,30 +799,52 @@ def init_app(app: Flask) -> None:
             if f.package_id and f.package:
                 pkg_string_by_id[f.package_id] = f.package.string_id
 
-        # Distinct variants with a finding for this vuln (Observation -> Scan -> Variant)
+        # Distinct variants and findings for this vuln
+        # (Finding -> Observation -> Scan -> Variant).
         seen_variant_ids: set[UUID] = set()
         variant_ids: list[UUID] = []
+        finding_ids_by_variant: dict[UUID, set[UUID]] = {}
         for finding in findings:
             for obs in Observation.get_by_finding(finding.id):
                 scan = db.session.get(Scan, obs.scan_id)
-                if scan is None or scan.variant_id in seen_variant_ids:
+                if scan is None:
                     continue
-                seen_variant_ids.add(scan.variant_id)
                 if project_uuid is not None:
                     variant = db.session.get(DBVariant, scan.variant_id)
                     if variant is None or variant.project_id != project_uuid:
                         continue
-                variant_ids.append(scan.variant_id)
+                finding_ids_by_variant.setdefault(scan.variant_id, set()).add(finding.id)
+                if scan.variant_id not in seen_variant_ids:
+                    seen_variant_ids.add(scan.variant_id)
+                    variant_ids.append(scan.variant_id)
 
         result = []
         vuln_pkg_ids = set(pkg_string_by_id.keys())
         for vid in variant_ids:
-            active_ids = active_package_ids_for_scans(
-                active_sbom_scan_ids_for_variant(vid),
-                restrict_to_package_ids=vuln_pkg_ids,
-            )
+            active_scan_ids = active_sbom_scan_ids_for_variant(vid)
+            active_ids = active_package_ids_for_scans(active_scan_ids, restrict_to_package_ids=vuln_pkg_ids)
             active_packages = [sid for pid, sid in pkg_string_by_id.items() if pid in active_ids]
-            result.append({"variant_id": str(vid), "active_packages": active_packages})
+            active_identities = set(db.session.execute(
+                db.select(Package.name, Package.version)
+                .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                .where(SBOMDocument.scan_id.in_(active_scan_ids))
+                .distinct()
+            ).all()) if active_scan_ids else set()
+            variant_findings = []
+            for finding in findings:
+                if finding.id not in finding_ids_by_variant.get(vid, set()) or finding.package is None:
+                    continue
+                variant_findings.append({
+                    "finding_id": str(finding.id),
+                    "package": finding.package.string_id,
+                    "outdated": (finding.package.name, finding.package.version) not in active_identities,
+                })
+            result.append({
+                "variant_id": str(vid),
+                "active_packages": active_packages,
+                "findings": sorted(variant_findings, key=lambda item: (item["package"], item["finding_id"])),
+            })
         return result, 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])

@@ -123,6 +123,11 @@ class TestVariantActivePackages:
             assert isinstance(entry["variant_id"], str)
             assert isinstance(entry["active_packages"], list)
             assert all(isinstance(p, str) for p in entry["active_packages"])
+            assert isinstance(entry["findings"], list)
+            for finding in entry["findings"]:
+                assert isinstance(finding["finding_id"], str)
+                assert isinstance(finding["package"], str)
+                assert isinstance(finding["outdated"], bool)
 
     def test_project_id_filter(self, client):
         """project_id filters variants without error."""

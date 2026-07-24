@@ -410,6 +410,37 @@ class TestConfigEndpoint:
 
 class TestPackagesFiltering:
 
+    def test_packages_include_outdated_finding_variant_rows(self, client_and_data, app_with_data):
+        client, data = client_and_data
+        application, _ = app_with_data
+        from src.extensions import db
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
+
+        with application.app_context():
+            old_package = Package.find_or_create("cairo", "1.15.0")
+            Vulnerability.create_record("CVE-2099-OLD1")
+            old_finding = Finding.get_or_create(old_package.id, "CVE-2099-OLD1")
+            scan_id = db.session.execute(
+                db.select(Scan.id).where(Scan.variant_id == uuid.UUID(data["variant_a_id"]))
+            ).scalar_one()
+            Observation.create(old_finding.id, scan_id)
+            db.session.commit()
+
+        response = client.get(
+            f"/api/packages?variant_id={data['variant_a_id']}&format=list&outdated_only=true"
+        )
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        old_row = next(item for item in body if item["id"] == "cairo@1.15.0")
+        assert old_row["outdated"] is True
+        assert old_row["variants"] == ["VariantA"]
+        assert old_row["vulnerability_ids"] == ["CVE-2099-OLD1"]
+        assert all(item["outdated"] is True for item in body)
+
     def test_packages_no_filter_returns_all(self, client_and_data):
         client, _ = client_and_data
         response = client.get("/api/packages?format=list")
