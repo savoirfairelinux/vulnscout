@@ -559,7 +559,7 @@ describe('StatusEditor', () => {
         expect(checkboxes[2].disabled).toBe(false);
     });
 
-    test('should deselect an incompatible variant when a conflicting package is checked', async () => {
+    test('should disable a package that is not available in every selected variant', async () => {
         const user = userEvent.setup();
         const variants = [
             { id: 'v1', name: 'default', project_id: 'p1' },
@@ -590,11 +590,9 @@ describe('StatusEditor', () => {
         expect(checkboxes[0].checked).toBe(true);
         expect(checkboxes[1].checked).toBe(true);
 
-        // Check pkgB, which only exists in v2.
-        await user.click(checkboxes[3]);
-
-        // v1 is no longer compatible with the selected package → auto-deselected
-        expect(checkboxes[0].checked).toBe(false);
+        // pkgB only exists in v2, so it cannot be applied while v1 is selected.
+        expect(checkboxes[3].disabled).toBe(true);
+        expect(checkboxes[0].checked).toBe(true);
         expect(checkboxes[1].checked).toBe(true);
     });
 
@@ -711,8 +709,10 @@ describe('StatusEditor', () => {
         );
 
         expect(screen.queryByText('pkg@1.0.0')).not.toBeInTheDocument();
-        const includeOutdated = screen.getByRole('checkbox', {name: 'Include previous package versions'});
+        const includeOutdated = screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'});
         await user.click(includeOutdated);
+        expect(screen.getByText('default').closest('label')!.querySelector('input')).not.toBeChecked();
+        expect(screen.getByText('pkg@2.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
         const outdatedPackage = screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')!;
         await user.click(outdatedPackage);
         expect(screen.queryByText('Outdated')).not.toBeInTheDocument();
@@ -738,7 +738,51 @@ describe('StatusEditor', () => {
             />
         );
 
-        expect(screen.getByRole('checkbox', {name: 'Include previous package versions'})).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'})).toBeInTheDocument();
+    });
+
+    test('requires every enabled variant to support every selected package', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[
+                    {id: 'a', name: 'variant a', project_id: 'p'},
+                    {id: 'b', name: 'variant b', project_id: 'p'},
+                    {id: 'c', name: 'variant c', project_id: 'p'},
+                    {id: 'd', name: 'variant d', project_id: 'p'},
+                ]}
+                availablePackages={['p1@1.0.0', 'p2@1.0.0']}
+                variantPackageMap={{
+                    a: ['p2@1.0.0'],
+                    b: ['p1@1.0.0', 'p2@1.0.0'],
+                    c: ['p2@1.0.0'],
+                    d: ['p2@1.0.0'],
+                }}
+                variantFindingsMap={{
+                    a: [
+                        {pkg: 'p1@1.0.0', outdated: true},
+                        {pkg: 'p2@1.0.0', outdated: false},
+                    ],
+                    b: [
+                        {pkg: 'p1@1.0.0', outdated: false},
+                        {pkg: 'p2@1.0.0', outdated: false},
+                    ],
+                    c: [{pkg: 'p2@1.0.0', outdated: false}],
+                    d: [{pkg: 'p2@1.0.0', outdated: false}],
+                }}
+            />
+        );
+
+        await user.click(screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'}));
+        await user.click(screen.getByText('variant a').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('p1@1.0.0').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('p2@1.0.0').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('variant a').closest('label')!.querySelector('input')).not.toBeDisabled();
+        expect(screen.getByText('variant b').closest('label')!.querySelector('input')).not.toBeDisabled();
+        expect(screen.getByText('variant c').closest('label')!.querySelector('input')).toBeDisabled();
+        expect(screen.getByText('variant d').closest('label')!.querySelector('input')).toBeDisabled();
     });
 
     test('shows historical finding discovery while scope data loads', () => {

@@ -868,18 +868,43 @@ describe('EditAssessment Component', () => {
         );
 
         expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
-        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
+        const allowOutdated = screen.getByRole('checkbox', {name: 'Allow edit assessments on outdated packages/variant'});
+        await user.click(allowOutdated);
+        expect(screen.getByText('default').closest('label')!.querySelector('input')).not.toBeChecked();
+        expect(screen.getByText('package@2.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
         const outdatedPackage = screen.getByText('package@1.0.0');
         await user.click(outdatedPackage.closest('label')!.querySelector('input')!);
-        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
-        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
+        await user.click(allowOutdated);
+        await user.click(allowOutdated);
         const restoredOutdatedPackage = screen.getByText('package@1.0.0').closest('label')!.querySelector('input')!;
         expect(restoredOutdatedPackage).not.toBeChecked();
+        await user.click(screen.getByText('default').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('package@2.0.0').closest('label')!.querySelector('input')!);
         await user.click(restoredOutdatedPackage);
         await user.click(screen.getByText('Save Changes'));
 
         expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
             packages: expect.arrayContaining(['package@2.0.0', 'package@1.0.0']),
         }));
+    });
+
+    test('enables outdated package editing when an original finding is outdated', () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@1.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                variantPackageMap={{v1: []}}
+                variantFindingsMap={{v1: [{pkg: 'package@1.0.0', outdated: true}]}}
+            />
+        );
+
+        expect(screen.getByRole('checkbox', {
+            name: 'Allow edit assessments on outdated packages/variant',
+        })).toBeChecked();
     });
 });

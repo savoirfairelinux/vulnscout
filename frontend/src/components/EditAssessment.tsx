@@ -47,6 +47,15 @@ function EditAssessment({
     findingsLoading = false
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
+    const hasSelectedOutdatedFinding = useMemo(() => {
+        const selectedPackages = new Set(defaultSelectedPackages ?? []);
+        const variantIds = defaultSelectedVariantIds ?? Object.keys(variantFindingsMap ?? {});
+        return variantIds.some(variantId =>
+            (variantFindingsMap?.[variantId] ?? []).some(finding =>
+                finding.outdated && (selectedPackages.size === 0 || selectedPackages.has(finding.pkg))
+            )
+        );
+    }, [defaultSelectedPackages, defaultSelectedVariantIds, variantFindingsMap]);
     const [status, setStatus] = useState(assessment.status || "under_investigation");
     const [justification, setJustification] = useState(assessment.justification || "none");
     // For non-impact statuses (fixed, affected, …) Yocto stores its notes in impact_statement.
@@ -62,7 +71,7 @@ function EditAssessment({
     const [selectedPackages, setSelectedPackages] = useState<string[]>(
         defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
     );
-    const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
+    const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(hasSelectedOutdatedFinding);
     const outdatedPackages = useMemo(() => {
         const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
@@ -100,51 +109,32 @@ function EditAssessment({
         return result;
     }, [variantPackageMap, variantFindingsMap, defaultSelectedPackages, includeOutdatedPackages]);
 
-    // Derived: which packages are reachable from the currently selected variants,
-    // and which variants are reachable from the currently selected packages.
+    // A saved assessment applies to the full package × variant product.
+    // Therefore each enabled package must exist in every selected variant, and
+    // each enabled variant must contain every selected package.
     const allowedPackages = useMemo<Set<string> | null>(() => {
-        if (!effectiveVariantPackageMap) return null;
+        if (!effectiveVariantPackageMap || selectedVariantIds.length === 0) return null;
 
-        let effectiveVariantIds: string[];
-        if (selectedVariantIds.length > 0) {
-            effectiveVariantIds = selectedVariantIds;
-        } else if (selectedPackages.length > 0) {
-            effectiveVariantIds = Object.entries(effectiveVariantPackageMap)
-                .filter(([, pkgs]) => selectedPackages.some(p => pkgs.includes(p)))
-                .map(([vid]) => vid);
-        } else {
-            return null;
+        const [firstVariantId, ...remainingVariantIds] = selectedVariantIds;
+        const intersection = new Set(effectiveVariantPackageMap[firstVariantId] ?? []);
+        for (const variantId of remainingVariantIds) {
+            const packages = new Set(effectiveVariantPackageMap[variantId] ?? []);
+            for (const pkg of intersection) {
+                if (!packages.has(pkg)) intersection.delete(pkg);
+            }
         }
-
-        const union = new Set<string>();
-        for (const vid of effectiveVariantIds) {
-            for (const pkg of effectiveVariantPackageMap[vid] ?? []) union.add(pkg);
-        }
-        return union.size > 0 ? union : null;
-    }, [effectiveVariantPackageMap, selectedVariantIds, selectedPackages]);
+        return intersection;
+    }, [effectiveVariantPackageMap, selectedVariantIds]);
 
     const allowedVariants = useMemo<Set<string> | null>(() => {
-        if (!effectiveVariantPackageMap) return null;
-
-        let effectivePackages: string[];
-        if (selectedPackages.length > 0) {
-            effectivePackages = selectedPackages;
-        } else if (selectedVariantIds.length > 0) {
-            const union = new Set<string>();
-            for (const vid of selectedVariantIds) {
-                for (const pkg of effectiveVariantPackageMap[vid] ?? []) union.add(pkg);
-            }
-            effectivePackages = [...union];
-        } else {
-            return null;
-        }
+        if (!effectiveVariantPackageMap || selectedPackages.length === 0) return null;
 
         const allowed = new Set<string>();
         for (const [vid, pkgs] of Object.entries(effectiveVariantPackageMap)) {
-            if (effectivePackages.some(p => pkgs.includes(p))) allowed.add(vid);
+            if (selectedPackages.every(pkg => pkgs.includes(pkg))) allowed.add(vid);
         }
-        return allowed.size > 0 ? allowed : null;
-    }, [effectiveVariantPackageMap, selectedPackages, selectedVariantIds]);
+        return allowed;
+    }, [effectiveVariantPackageMap, selectedPackages]);
 
     // When a variant is unchecked, drop packages that are no longer reachable.
     const handleVariantToggle = (variantId: string, checked: boolean) => {
@@ -176,7 +166,7 @@ function EditAssessment({
         if (effectiveVariantPackageMap && nextPackages.length > 0) {
             setSelectedVariantIds(prev =>
                 prev.filter(vid =>
-                    nextPackages.some(p => (effectiveVariantPackageMap[vid] ?? []).includes(p))
+                    nextPackages.every(p => (effectiveVariantPackageMap[vid] ?? []).includes(p))
                 )
             );
         }
@@ -184,12 +174,8 @@ function EditAssessment({
 
     const handleIncludeOutdatedPackages = (checked: boolean) => {
         setIncludeOutdatedPackages(checked);
-        if (!checked) {
-            const originalPackages = new Set(defaultSelectedPackages ?? []);
-            setSelectedPackages(prev => prev.filter(pkg =>
-                !outdatedPackages.has(pkg) || originalPackages.has(pkg)
-            ));
-        }
+        setSelectedVariantIds([]);
+        setSelectedPackages([]);
     };
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
@@ -204,6 +190,10 @@ function EditAssessment({
     const closeBanner = () => {
         setBannerVisible(false);
     };
+
+    useEffect(() => {
+        setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
+    }, [hasSelectedOutdatedFinding]);
 
     // Check if fields have changes compared to original assessment
     useEffect(() => {
@@ -276,10 +266,10 @@ function EditAssessment({
         setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
         setWorkaround(assessment.workaround || "");
         setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
-        setIncludeOutdatedPackages(false);
+        setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
         setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages]);
+    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages, hasSelectedOutdatedFinding]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -333,6 +323,24 @@ function EditAssessment({
                 </>}
             </h3>
 
+            {findingsLoading && (
+                <p className="mt-3 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
+            )}
+            {!findingsLoading && outdatedPackages.size > 0 && (
+                <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
+                    <span>
+                        <span className="block font-medium">Allow edit assessments on outdated packages/variant</span>
+                        <span className="block text-xs text-amber-200/70">Changing this option resets the selected variants and packages.</span>
+                    </span>
+                    <input
+                        type="checkbox"
+                        aria-label="Allow edit assessments on outdated packages/variant"
+                        checked={includeOutdatedPackages}
+                        onChange={event => handleIncludeOutdatedPackages(event.target.checked)}
+                        className="h-4 w-4 accent-amber-500"
+                    />
+                </label>
+            )}
             {availableVariants && availableVariants.length > 0 && (
                 <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                     <p className="mb-2 text-sm font-medium text-gray-200">Apply to variants:</p>
@@ -370,24 +378,6 @@ function EditAssessment({
                 <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
                     <p className="mb-2 text-sm font-medium text-gray-200">Apply to packages:</p>
                     <span className="float-right -mt-7 text-xs text-gray-400">{selectedPackages.length} selected</span>
-                    {findingsLoading && (
-                        <p className="mb-2 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
-                    )}
-                    {!findingsLoading && outdatedPackages.size > 0 && (
-                        <label className="mb-3 flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
-                            <span>
-                                <span className="block font-medium">Include previous package versions</span>
-                                <span className="block text-xs text-amber-200/70">Show package versions from previous scans ({outdatedPackages.size})</span>
-                            </span>
-                            <input
-                                type="checkbox"
-                                aria-label="Include previous package versions"
-                                checked={includeOutdatedPackages}
-                                onChange={event => handleIncludeOutdatedPackages(event.target.checked)}
-                                className="h-4 w-4 accent-amber-500"
-                            />
-                        </label>
-                    )}
                     <div className="flex flex-wrap gap-2">
                         {packageOptions.map(pkg => {
                             const isOutdated = outdatedPackages.has(pkg);
