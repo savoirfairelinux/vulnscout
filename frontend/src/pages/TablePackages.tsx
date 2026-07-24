@@ -46,6 +46,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
     const [packagesWithOutdated, setPackagesWithOutdated] = useState<Package[] | null>(null);
+    const [outdatedLoading, setOutdatedLoading] = useState(false);
     const [outdatedLoadError, setOutdatedLoadError] = useState('');
     const [matchCondition, setMatchCondition] = useState('');
     const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
@@ -225,10 +226,18 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
     useEffect(() => {
         if (!showOnlyOutdated || packagesWithOutdated !== null || !onLoadOutdatedPackages) return;
         let cancelled = false;
+        setOutdatedLoading(true);
         setOutdatedLoadError('');
         onLoadOutdatedPackages()
-            .then(loaded => { if (!cancelled) setPackagesWithOutdated(loaded); })
-            .catch(() => { if (!cancelled) setOutdatedLoadError('Unable to load outdated findings'); });
+            .then(loaded => {
+                if (!cancelled) setPackagesWithOutdated(loaded);
+            })
+            .catch(() => {
+                if (!cancelled) setOutdatedLoadError('Unable to load outdated findings');
+            })
+            .finally(() => {
+                if (!cancelled) setOutdatedLoading(false);
+            });
         return () => { cancelled = true; };
     }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages]);
 
@@ -495,6 +504,14 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
     }, [packages, packagesWithOutdated, onLoadOutdatedPackages, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
+        {showOnlyOutdated && outdatedLoading && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
+                <div className="flex flex-col items-center gap-3 text-white">
+                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
+                    <span className="text-sm font-semibold">Loading outdated packages…</span>
+                </div>
+            </div>
+        )}
         {matchConditionError && (
             <MessageBanner
                 type="error"

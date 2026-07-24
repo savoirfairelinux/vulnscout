@@ -174,7 +174,10 @@ describe('Packages Table', () => {
             findingIds: ['finding-old'],
             findingVulnerabilityIds: ['CVE-2026-0001'],
         };
-        const loadOutdatedPackages = jest.fn<() => Promise<Package[]>>().mockResolvedValue([...activePackages, outdatedPackage]);
+        let finishLoading: (packages: Package[]) => void = () => undefined;
+        const loadOutdatedPackages = jest.fn<() => Promise<Package[]>>().mockImplementation(() =>
+            new Promise(resolve => { finishLoading = resolve; })
+        );
         render(<TablePackages packages={activePackages} onLoadOutdatedPackages={loadOutdatedPackages} />);
 
         const user = userEvent.setup();
@@ -184,8 +187,12 @@ describe('Packages Table', () => {
 
         await user.click(outdatedToggle);
 
+        expect((await screen.findByRole('status')).textContent).toContain('Loading outdated packages…');
+        finishLoading([...activePackages, outdatedPackage]);
+
         await waitFor(() => {
             expect(loadOutdatedPackages).toHaveBeenCalledTimes(1);
+            expect(screen.queryByRole('status')).toBeNull();
             expect(screen.getByRole('cell', {name: /^0\.9\.0$/})).toBeTruthy();
             expect(screen.getAllByText('Outdated').length).toBeGreaterThanOrEqual(2);
             expect(screen.queryByRole('cell', {name: /^1\.0\.0$/})).toBeNull();
