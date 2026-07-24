@@ -886,9 +886,19 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <div className="flex flex-wrap gap-1 items-center justify-center h-full">
                         {vids.map(vid => {
                             const name = variantNames[vid] ?? vid.slice(0, 8);
+                            const variantAssessments = (row._assessments ?? [row]).filter(a => a.variant_id === vid);
+                            const isOutdated = variantAssessments.length > 0 && variantAssessments.every(a =>
+                                a.outdated === true
+                                || (a.packages.length > 0 && a.packages.every(pkg => (a.superseded_map?.[pkg]?.length ?? 0) > 0))
+                            );
                             return (
-                                <span key={vid} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                <span
+                                    key={vid}
+                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'}`}
+                                    title={isOutdated ? 'Package version is not present in this variant’s current SBOM' : undefined}
+                                >
                                     {name}
+                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">Outdated</span>}
                                 </span>
                             );
                         })}
@@ -900,37 +910,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             header: () => <div className="flex items-center justify-center">Status</div>,
             size: 110,
             cell: info => {
-                const row = info.row.original as ReviewRow;
-                const rawAssessments = row._assessments ?? [row];
-                // Per-package staleness: union each stale package reference to the
-                // version(s) that supersede it, matching the detail shown in VulnModal.
-                const supersededMap: Record<string, string[]> = {};
-                for (const a of rawAssessments) {
-                    if (a.outdated && a.superseded_map) {
-                        for (const [ref, versions] of Object.entries(a.superseded_map)) {
-                            supersededMap[ref] = [...new Set([...(supersededMap[ref] ?? []), ...versions])].sort();
-                        }
-                    }
-                }
-                // The row is only flagged outdated once every package it covers is
-                // stale — a row spanning some current and some superseded packages
-                // is not fully outdated yet.
-                const isOutdated = row.packages.length > 0 && row.packages.every(p => p in supersededMap);
-                const supersededEntries = Object.entries(supersededMap);
-                const supersededTitle = supersededEntries.length > 0
-                    ? `Assessed against an older version — now present as ${supersededEntries.map(([ref, versions]) => `${ref} → ${versions.join(', ')}`).join('; ')}`
-                    : 'Assessed against an older version that is no longer in the active SBOM';
                 return (
-                    <div className="flex flex-col items-center justify-center gap-1 h-full">
+                    <div className="flex items-center justify-center h-full">
                         <code>{info.getValue()}</code>
-                        {isOutdated && (
-                            <span
-                                className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300"
-                                title={supersededTitle}
-                            >
-                                Outdated
-                            </span>
-                        )}
                     </div>
                 );
             },

@@ -463,6 +463,23 @@ describe('Review — rendering columns and tabs', () => {
         expect(screen.getAllByText('—').length).toBeGreaterThan(0);
     });
 
+    test('shows outdated on the affected variant instead of the status', async () => {
+        mockNetwork([
+            {
+                ...makeAssessment('a1', 'v1'),
+                outdated: true,
+                superseded_map: {'pkgA@1.0.0': ['pkgA@2.0.0']},
+            },
+            makeAssessment('a2', 'v2'),
+        ]);
+        render(<Review projectId="proj1" />);
+
+        const outdated = await screen.findByText('Outdated');
+        expect(outdated.parentElement).toHaveTextContent(/Variant Alpha.*Outdated/);
+        expect(screen.getByText('Variant Beta').closest('span')).not.toHaveTextContent('Outdated');
+        expect(screen.getByText('Exploitable').closest('td')).not.toHaveTextContent('Outdated');
+    });
+
     test('shows the assessments empty state when there are none', async () => {
         mockNetwork([]);
         render(<Review projectId="proj1" />);

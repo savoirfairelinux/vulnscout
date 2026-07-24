@@ -115,6 +115,12 @@ type AssessmentGroup = {
 
 type StatusSortKey = 'variant' | 'package' | 'status' | 'justification' | 'impact' | 'notes' | 'workaround';
 
+type VariantFinding = {
+    findingId: string;
+    pkg: string;
+    outdated: boolean;
+};
+
 type VariantScopedSnapshot = {
     variantId: string;
     variantName: string;
@@ -147,6 +153,7 @@ type VariantScopedSnapshot = {
     const [selectedTargetVariantIds, setSelectedTargetVariantIds] = useState<string[]>([]);
     const [variantSnapshots, setVariantSnapshots] = useState<VariantScopedSnapshot[]>([]);
     const [variantPackageMap, setVariantPackageMap] = useState<Record<string, string[]>>({});
+    const [variantFindingsMap, setVariantFindingsMap] = useState<Record<string, VariantFinding[]>>({});
     // True once the active-SBOM package list has been fetched for every variant,
     // so deprecated packages can reliably be split into their own table.
     const [variantPackageMapLoaded, setVariantPackageMapLoaded] = useState(false);
@@ -295,6 +302,7 @@ type VariantScopedSnapshot = {
         const controller = new AbortController();
         const signal = controller.signal;
         setVariantPackageMapLoaded(false);
+        setVariantFindingsMap({});
         if (availableVariants.length === 0) {
             // Only mark as loaded once we know variants have been resolved.
             // If variants are still loading (variantsLoadedForVulnId !== vuln.id),
@@ -322,20 +330,33 @@ type VariantScopedSnapshot = {
                 const response = await fetch(url.toString(), { mode: 'cors', signal });
                 const data = response.ok ? await response.json() : [];
                 const map: Record<string, string[]> = {};
+                const findingsMap: Record<string, VariantFinding[]> = {};
                 if (Array.isArray(data)) {
                     for (const entry of data) {
                         if (entry && typeof entry.variant_id === 'string' && Array.isArray(entry.active_packages)) {
                             map[entry.variant_id] = entry.active_packages.filter((p: unknown): p is string => typeof p === 'string');
+                            if (Array.isArray(entry.findings)) {
+                                findingsMap[entry.variant_id] = entry.findings.flatMap((finding: any): VariantFinding[] => {
+                                    if (typeof finding?.finding_id !== 'string' || typeof finding?.package !== 'string') return [];
+                                    return [{
+                                        findingId: finding.finding_id,
+                                        pkg: finding.package,
+                                        outdated: finding.outdated === true,
+                                    }];
+                                });
+                            }
                         }
                     }
                 }
                 if (!signal.aborted) {
                     setVariantPackageMap(map);
+                    setVariantFindingsMap(findingsMap);
                     setVariantPackageMapLoaded(true);
                 }
             } catch {
                 if (!signal.aborted) {
                     setVariantPackageMap({});
+                    setVariantFindingsMap({});
                     setVariantPackageMapLoaded(true);
                 }
             }
@@ -1703,13 +1724,13 @@ type VariantScopedSnapshot = {
                             <h3 className="font-bold mb-2">Assessments</h3>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOMs packages</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOM packages and variants</h4>
                                     {renderStatusTable(sortStatusRows(currentAssessmentRows))}
                                 </div>
                             )}
                             {deprecatedAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on old packages (not present in current SBOMs)</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on old packages and variants (not present in current SBOMs)</h4>
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
@@ -1772,11 +1793,21 @@ type VariantScopedSnapshot = {
                                                 {group.packages.map(pkg => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
                                                     const supplierName = extractSupplierName(supplier);
+                                                    const variant = availableVariants.find(v => v.id === firstAssess.variant_id);
+                                                    const finding = firstAssess.variant_id
+                                                        ? variantFindingsMap[firstAssess.variant_id]?.find(item => item.pkg === pkg)
+                                                        : undefined;
                                                     return (
                                                         <span key={pkg} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
                                                             {nameVersion}
                                                             {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
+                                                            {variant && <span className="ml-1.5 opacity-80">· {variant.name}</span>}
+                                                            {finding?.outdated && (
+                                                                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-100">
+                                                                    Outdated
+                                                                </span>
+                                                            )}
                                                         </span>
                                                     );
                                                 })}
@@ -1800,19 +1831,31 @@ type VariantScopedSnapshot = {
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
                                     const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
-                                    // Per-package staleness: map each stale package reference to the
-                                    // version(s) that supersede it, so the "Outdated" pill can be shown
-                                    // next to the specific affected package rather than the whole group.
-                                    const supersededMap: Record<string, string[]> = {};
-                                    for (const a of group.assessments) {
-                                        if (a.outdated && a.superseded_map) {
-                                            for (const [ref, versions] of Object.entries(a.superseded_map)) {
-                                                // Union the replacement versions when several assessments
-                                                // in the group flag the same package reference.
-                                                supersededMap[ref] = [...new Set([...(supersededMap[ref] ?? []), ...versions])].sort();
-                                            }
-                                        }
-                                    }
+                                    const groupDateKey = new Date(group.timestamp).toDateString();
+                                    const groupFingerprint = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
+                                    const matchingAssessmentsFromApi = allVulnAssessments.filter(a => {
+                                        const fingerprint = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
+                                        return new Date(a.timestamp).toDateString() === groupDateKey && fingerprint === groupFingerprint;
+                                    });
+                                    const matchingAssessments = matchingAssessmentsFromApi.length > 0
+                                        ? matchingAssessmentsFromApi
+                                        : group.assessments;
+                                    const findingTags = [...new Map(
+                                        matchingAssessments.flatMap(assessment => assessment.packages.map(pkg => {
+                                            const variant = availableVariants.find(v => v.id === assessment.variant_id);
+                                            const finding = assessment.variant_id
+                                                ? variantFindingsMap[assessment.variant_id]?.find(item => item.pkg === pkg)
+                                                : undefined;
+                                            const outdated = finding?.outdated ?? (
+                                                variantPackageMapLoaded
+                                                && !!assessment.variant_id
+                                                && variantPackageMap[assessment.variant_id] !== undefined
+                                                && !variantPackageMap[assessment.variant_id].includes(pkg)
+                                            );
+                                            const key = `${assessment.variant_id ?? ''}::${pkg}`;
+                                            return [key, {key, pkg, variant, outdated}] as const;
+                                        }))
+                                    ).values()];
 
                                     return (
                                         <li key={encodeURIComponent(group.key)} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
@@ -1826,17 +1869,16 @@ type VariantScopedSnapshot = {
                                                 ))}
                                             </div>
                                             <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                {group.packages.map(pkg => {
+                                                {findingTags.map(({key, pkg, variant, outdated}) => {
                                                     const { nameVersion, supplier } = splitPkgId(pkg);
                                                     const supplierName = extractSupplierName(supplier);
-                                                    const supersededVersions = supersededMap[pkg];
-                                                    const pkgOutdated = Array.isArray(supersededVersions) && supersededVersions.length > 0;
                                                     return (
-                                                        <span key={pkg} className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${pkgOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'}`} title={pkgOutdated ? `Assessed against an older version — now present as ${supersededVersions.join(', ')}` : (supplierName ? `Supplier: ${supplierName}` : undefined)}>
+                                                        <span key={key} className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${outdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'}`} title={supplierName ? `Supplier: ${supplierName}` : undefined}>
                                                             <FontAwesomeIcon icon={faBox} className="w-3 h-3 mr-1" />
                                                             {nameVersion}
                                                             {supplierName && <span className="ml-1 opacity-70 text-xs">({supplierName})</span>}
-                                                            {pkgOutdated && (
+                                                            {variant && <span className="ml-1.5 opacity-80">· {variant.name}</span>}
+                                                            {outdated && (
                                                                 <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-amber-200 text-amber-900 dark:bg-amber-700 dark:text-amber-100">
                                                                     Outdated
                                                                 </span>
@@ -1845,35 +1887,6 @@ type VariantScopedSnapshot = {
                                                     );
                                                 })}
                                             </div>
-                                            {(() => {
-                                                // Build the same group key (date + content fingerprint) used by
-                                                // groupAssessments, then find ALL matching records in the
-                                                // unfiltered allVulnAssessments so we can show every variant tag
-                                                // even when the explorer is filtered to a single variant.
-                                                const groupDateKey = new Date(group.timestamp).toDateString();
-                                                const fp = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
-                                                const allVariantIds = [...new Set(
-                                                    allVulnAssessments
-                                                        .filter(a => {
-                                                            const aDateKey = new Date(a.timestamp).toDateString();
-                                                            const afp = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
-                                                            return aDateKey === groupDateKey && afp === fp && !!a.variant_id;
-                                                        })
-                                                        .map(a => a.variant_id as string)
-                                                )];
-                                                const variantTags = allVariantIds
-                                                    .map(vid => availableVariants.find(v => v.id === vid))
-                                                    .filter(Boolean) as Variant[];
-                                                return variantTags.length > 0 ? (
-                                                    <div className="text-sm mb-2 flex flex-wrap gap-1">
-                                                        {variantTags.map(v => (
-                                                            <span key={v.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
-                                                                {v.name}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                ) : null;
-                                            })()}
                                             <div className="flex items-start justify-between">
                                                 <div className="flex-1">
                                                     <h3 className="text-lg font-semibold text-white mb-2 flex items-center">

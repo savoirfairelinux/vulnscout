@@ -2170,35 +2170,57 @@ describe('Vulnerability Modal', () => {
             }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
-        // Only pkgA is still active in the variant; pkgOld is deprecated.
+        // Finding rows carry their own package/variant outdated state.
         fetchMock.mockResponseOnce(JSON.stringify([
-            { variant_id: 'var-1', active_packages: ['pkgA@1.0.0'] }
+            {
+                variant_id: 'var-1',
+                active_packages: ['pkgA@1.0.0'],
+                findings: [
+                    {finding_id: 'finding-current', package: 'pkgA@1.0.0', outdated: false},
+                    {finding_id: 'finding-old', package: 'pkgOld@0.9.0', outdated: true},
+                ],
+            }
         ]));
 
         const multiPkgVuln: Vulnerability = {
             ...vulnerability,
             packages: ['pkgA@1.0.0'],
             packages_current: [],
-            assessments: [],
+            assessments: [
+                {
+                    id: 'assess-current', vuln_id: 'CVE-2010-1234', packages: ['pkgA@1.0.0'],
+                    status: 'affected', simplified_status: 'Exploitable', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '',
+                    timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+                },
+                {
+                    id: 'assess-old', vuln_id: 'CVE-2010-1234', packages: ['pkgOld@0.9.0'],
+                    status: 'fixed', simplified_status: 'Fixed', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '',
+                    timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+                },
+            ],
         };
 
         render(<VulnModal vuln={multiPkgVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
-        // Wait for the deprecated split to appear once variant-active-packages loads.
-        const deprecatedHeading = await screen.findByText('Assessments on old packages (not present in current SBOMs)');
+        const deprecatedHeading = await screen.findByText('Assessments on old packages and variants (not present in current SBOMs)');
         const deprecated = deprecatedHeading.parentElement as HTMLElement;
-        // The stale package version is broken out into the deprecated table.
         expect(within(deprecated).getByText('pkgOld@0.9.0')).toBeInTheDocument();
         expect(within(deprecated).getByText('Fixed')).toBeInTheDocument();
         expect(within(deprecated).queryByText('pkgA@1.0.0')).not.toBeInTheDocument();
 
-        // The active (variant, package) pair stays in the current table.
-        const current = screen.getByText('Assessments on current SBOMs packages').parentElement as HTMLElement;
+        const current = screen.getByText('Assessments on current SBOM packages and variants').parentElement as HTMLElement;
         expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
         expect(within(current).getByText('Exploitable')).toBeInTheDocument();
         expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
-        // Production appears as the variant tag in the current table.
-        expect(within(current).getByText('Production')).toBeInTheDocument();
+
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        const outdatedHistoryTag = within(history).getByText('pkgOld@0.9.0').closest('span');
+        expect(outdatedHistoryTag).toHaveTextContent(/pkgOld@0\.9\.0.*Production.*Outdated/);
+        const currentHistoryTag = within(history).getByText('pkgA@1.0.0').closest('span');
+        expect(currentHistoryTag).toHaveTextContent(/pkgA@1\.0\.0.*Production/);
+        expect(currentHistoryTag).not.toHaveTextContent('Outdated');
     });
 
     const pendingAiAssessment = {
@@ -2500,7 +2522,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recapHeading = await screen.findByText('Assessments on current SBOM packages and variants');
         const recap = recapHeading.parentElement as HTMLElement;
         // Production reflects its most recent assessment (Not affected), not the older Exploitable
         expect(within(recap).getByText('Production')).toBeInTheDocument();
@@ -2535,7 +2557,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recapHeading = await screen.findByText('Assessments on current SBOM packages and variants');
         const recap = recapHeading.parentElement as HTMLElement;
         // Staging has no assessment yet, so it is flagged as "No status"
         expect(within(recap).getByText('Staging')).toBeInTheDocument();
