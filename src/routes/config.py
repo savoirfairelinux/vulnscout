@@ -68,6 +68,11 @@ def init_app(app):
 
     @app.route('/api/config', methods=['GET'])
     def get_config():
+        """Return active UI and scanning configuration values.
+
+        OpenAPI:
+        response 200 JsonObject Active configuration payload.
+        """
         project_name = os.environ.get('PROJECT_NAME', '')
         variant_name = os.environ.get('VARIANT_NAME', 'default')
         author_name = os.environ.get('AUTHOR_NAME', 'vulnscout')
@@ -103,6 +108,13 @@ def init_app(app):
 
     @app.route('/api/config', methods=['PATCH'])
     def patch_config():
+        """Update mutable configuration keys and persist them to config.env.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing mutable config keys.
+        response 200 JsonObject Updated configuration payload.
+        response 400 Error Invalid request payload.
+        """
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return jsonify({"error": "Expected a JSON object body."}), 400
@@ -175,6 +187,11 @@ def init_app(app):
 
     @app.route('/api/config/nvd-api-key', methods=['GET'])
     def get_nvd_api_key():
+        """Return NVD API key presence and masked representation.
+
+        OpenAPI:
+        response 200 JsonObject Masked NVD API key status.
+        """
         key = os.environ.get('NVD_API_KEY', '')
         if not key:
             return jsonify({"has_key": False, "masked_key": ""})
@@ -182,6 +199,14 @@ def init_app(app):
 
     @app.route('/api/config/nvd-api-key', methods=['PUT'])
     def set_nvd_api_key():
+        """Validate and store a new NVD API key.
+
+        OpenAPI:
+        body JsonObject optional JSON body containing api_key.
+        response 200 JsonObject Stored NVD API key status.
+        response 400 Error Invalid NVD API key payload.
+        response 503 Error NVD API unavailable for validation.
+        """
         data = request.get_json(silent=True)
         if data is None or "api_key" not in data:
             return {"error": "Missing 'api_key' field"}, 400

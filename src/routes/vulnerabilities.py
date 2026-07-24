@@ -361,6 +361,20 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities')
     def index_vulns() -> ResponseReturnValue:
+        """List vulnerabilities with optional variant and project filters.
+
+        Supports single-variant, project-wide, pairwise comparison, and
+        multi-variant union or intersection modes.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to a single project.
+        query compare_variant_id uuid optional Compare against a second variant.
+        query variant_ids string optional Comma-separated list of variant IDs.
+        query operation string optional Comparison mode such as difference, intersection, or union.
+        query format string optional Response format such as list or dict.
+        response 200 JsonObject Vulnerability collection.
+        """
         response_format = request.args.get('format', 'list')
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
@@ -921,6 +935,13 @@ def init_app(app: Flask) -> None:
 
     @app.get('/api/vulnerabilities/<id>')
     def get_vuln(id: str) -> ResponseReturnValue:
+        """Return a single vulnerability.
+
+        OpenAPI:
+        query variant_id uuid optional Apply variant-scoped CVSS and effort overrides.
+        response 200 JsonObject Vulnerability payload.
+        response 404 Error Vulnerability not found.
+        """
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -978,6 +999,11 @@ def init_app(app: Flask) -> None:
         observes this vulnerability, in a single response.
 
         Replaces the previous per-variant N+1 fetch performed by the modal.
+
+        OpenAPI:
+        query project_id uuid optional Restrict snapshots to variants from one project.
+        response 200 JsonObject Variant-scoped vulnerability snapshots.
+        response 404 Error Vulnerability not found.
         """
         record = Vulnerability.get_by_id(id)
         if not record:
@@ -1017,6 +1043,14 @@ def init_app(app: Flask) -> None:
 
     @app.patch('/api/vulnerabilities/<id>')
     def patch_vuln(id: str) -> ResponseReturnValue:
+        """Update variant-scoped effort or custom CVSS data for a vulnerability.
+
+        OpenAPI:
+        body JsonObject optional Vulnerability update payload.
+        response 200 JsonObject Updated vulnerability payload.
+        response 400 Error Invalid update payload.
+        response 404 Error Vulnerability not found.
+        """
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -1097,6 +1131,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
     def update_vulns_batch() -> ResponseReturnValue:
+        """Update multiple vulnerabilities in a single request.
+
+        OpenAPI:
+        body JsonObject optional Batch vulnerability update payload.
+        response 200 JsonObject Batch update summary.
+        response 400 Error Invalid batch payload.
+        """
         payload_data = request.get_json()
         if (not payload_data
                 or "vulnerabilities" not in payload_data
@@ -1210,6 +1251,15 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
     def refresh_single_cve(cve_id: str) -> ResponseReturnValue:
+        """Refresh NVD data for a single CVE.
+
+        OpenAPI:
+        body JsonObject optional Request body containing mode: local or api.
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 404 Error CVE not found.
+        response 429 Error NVD API rate limit exceeded.
+        response 503 Error NVD data source unavailable.
+        """
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1316,6 +1366,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
     def refresh_single_cve_epss(cve_id: str) -> ResponseReturnValue:
+        """Refresh EPSS data for a single CVE.
+
+        OpenAPI:
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 404 Error CVE not found.
+        response 503 Error EPSS data source unavailable.
+        """
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1351,6 +1408,15 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
     def refresh_single_ghsa(ghsa_id: str) -> ResponseReturnValue:
+        """Refresh GitHub advisory metadata for a single GHSA identifier.
+
+        OpenAPI:
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 400 Error Invalid GHSA identifier.
+        response 404 Error GHSA advisory not found.
+        response 502 Error Upstream GitHub advisory error.
+        response 503 Error GitHub advisory data source unavailable.
+        """
         ghsa_id_upper = ghsa_id.upper()
         if not _GHSA_RE.match(ghsa_id_upper):
             return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400

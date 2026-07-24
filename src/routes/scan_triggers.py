@@ -130,6 +130,11 @@ def init_app(app: Flask) -> None:
 
         Exports the variant's packages as CycloneDX, runs ``grype`` on the
         export, and merges the results back into the DB as a tool scan.
+
+        OpenAPI:
+        query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        response 202 JsonObject Scan job accepted.
+        response 503 Error Grype binary not available.
         """
         import subprocess
         import tempfile
@@ -384,7 +389,11 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/<variant_id>/grype-scan/status')
     def grype_scan_status(variant_id: str) -> ResponseReturnValue:
-        """Check the status of a running Grype scan for the given variant."""
+        """Check the status of a running Grype scan for the given variant.
+
+        OpenAPI:
+        response 200 JsonObject Grype scan progress payload.
+        """
         return scan_status_response(variant_id, _grype_scans_in_progress)
 
     # ------------------------------------------------------------------
@@ -403,6 +412,11 @@ def init_app(app: Flask) -> None:
           sbom-cve-check engine; no network, no rate limits.
         * **api** — queries the NVD REST API v2 using CPE identifiers from
           packages; honours NVD_API_KEY and rate limits.
+
+                OpenAPI:
+                query exclude_kernel string optional Disable kernel package exclusion by passing false.
+                query mode string optional Select local or api mode.
+                response 202 JsonObject Scan job accepted.
         """
         from ..controllers.scc_engine import get_engine, serialized_engine_operation
         from ..bin.cmd_vuln_scan import _SccBulkWriter
@@ -637,7 +651,11 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/<variant_id>/nvd-scan/status')
     def nvd_scan_status(variant_id: str) -> ResponseReturnValue:
-        """Check the status of a running NVD scan for the given variant."""
+        """Check the status of a running NVD scan for the given variant.
+
+        OpenAPI:
+        response 200 JsonObject NVD scan progress payload.
+        """
         return scan_status_response(variant_id, _nvd_scans_in_progress)
 
     # ------------------------------------------------------------------
@@ -653,6 +671,10 @@ def init_app(app: Flask) -> None:
         For every active package that has PURL identifiers, query the OSV API
         and create findings/observations for any vulnerabilities returned.
         The result is stored as a tool scan.
+
+        OpenAPI:
+        query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        response 202 JsonObject Scan job accepted.
         """
         variant_uuid, variant, err = validate_trigger(
             variant_id, _osv_scans_in_progress, "OSV scan")
@@ -839,7 +861,11 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/<variant_id>/osv-scan/status')
     def osv_scan_status(variant_id: str) -> ResponseReturnValue:
-        """Check the status of a running OSV scan for the given variant."""
+        """Check the status of a running OSV scan for the given variant.
+
+        OpenAPI:
+        response 200 JsonObject OSV scan progress payload.
+        """
         return scan_status_response(variant_id, _osv_scans_in_progress)
 
     # ------------------------------------------------------------------
@@ -855,6 +881,10 @@ def init_app(app: Flask) -> None:
         Matches every active package against locally-cloned advisory databases,
         applies product-name aliasing and semantic version-range analysis, and
         records each engine VEX verdict.  Works once the databases are cloned.
+
+        OpenAPI:
+        query exclude_kernel string optional Disable kernel package exclusion by passing false.
+        response 202 JsonObject Scan job accepted.
         """
         from ..controllers.scc_engine import serialized_engine_operation
 
@@ -1024,7 +1054,11 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/<variant_id>/sbom-cve-check-scan/status')
     def sbom_cve_check_scan_status(variant_id: str) -> ResponseReturnValue:
-        """Check the status of a running sbom-cve-check scan for the given variant."""
+        """Check the status of a running sbom-cve-check scan for the given variant.
+
+        OpenAPI:
+        response 200 JsonObject sbom-cve-check progress payload.
+        """
         return scan_status_response(variant_id, _sbom_cve_check_scans_in_progress)
 
     # ------------------------------------------------------------------
@@ -1038,6 +1072,9 @@ def init_app(app: Flask) -> None:
         Lets the frontend restore in-progress scan panels after a page
         refresh with a single request instead of polling each variant's
         per-type ``/status`` endpoint individually.
+
+        OpenAPI:
+        response 200 JsonObject Running scan groups.
         """
         groups = {
             "grype": _grype_scans_in_progress,

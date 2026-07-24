@@ -91,6 +91,12 @@ def init_app(app: Flask) -> None:
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
         Returns 400 if cve_ids is empty or contains no valid CVE identifiers.
+
+        OpenAPI:
+        body JsonObject optional JSON body containing cve_ids and mode.
+        response 202 JsonObject Refresh job accepted.
+        response 400 Error Invalid refresh request.
+        response 409 Error Refresh already running.
         """
         body = request.get_json(force=True, silent=True) or {}
         raw_ids = body.get("cve_ids", [])
@@ -199,6 +205,10 @@ def init_app(app: Flask) -> None:
 
         Returns 200 when the cancellation was accepted (refresh was running).
         Returns 409 when no bulk NVD refresh is currently in progress.
+
+        OpenAPI:
+        response 200 JsonObject Cancellation accepted.
+        response 409 Error No running NVD refresh.
         """
         if NVDProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
@@ -213,6 +223,12 @@ def init_app(app: Flask) -> None:
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
         Returns 400 if cve_ids is empty or contains no valid CVE identifiers.
+
+        OpenAPI:
+        body JsonObject optional JSON body containing cve_ids.
+        response 202 JsonObject Refresh job accepted.
+        response 400 Error Invalid refresh request.
+        response 409 Error Refresh already running.
         """
         body = request.get_json(force=True, silent=True) or {}
         raw_ids = body.get("cve_ids", [])
@@ -300,6 +316,10 @@ def init_app(app: Flask) -> None:
 
         Returns 200 when the cancellation was accepted (refresh was running).
         Returns 409 when no bulk EPSS refresh is currently in progress.
+
+        OpenAPI:
+        response 200 JsonObject Cancellation accepted.
+        response 409 Error No running EPSS refresh.
         """
         if EPSSProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
@@ -315,6 +335,12 @@ def init_app(app: Flask) -> None:
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
         Returns 400 if ghsa_ids is empty or contains no valid GHSA identifiers.
+
+        OpenAPI:
+        body JsonObject optional JSON body containing ghsa_ids.
+        response 202 JsonObject Refresh job accepted.
+        response 400 Error Invalid refresh request.
+        response 409 Error Refresh already running.
         """
         body = request.get_json(force=True, silent=True) or {}
         raw_ids = body.get("ghsa_ids", [])
@@ -409,6 +435,10 @@ def init_app(app: Flask) -> None:
 
         Returns 200 when the cancellation was accepted (refresh was running).
         Returns 409 when no bulk GHSA refresh is currently in progress.
+
+        OpenAPI:
+        response 200 JsonObject Cancellation accepted.
+        response 409 Error No running GHSA refresh.
         """
         if GHSAProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200
@@ -428,6 +458,12 @@ def init_app(app: Flask) -> None:
         Returns 202 immediately and runs the enrichment in a background thread.
         Returns 409 if an enrichment is already in progress.
         Returns 400 if cve_ids is empty or contains no valid CVE identifiers.
+
+        OpenAPI:
+        body JsonObject optional JSON body containing cve_ids.
+        response 202 JsonObject Refresh job accepted.
+        response 400 Error Invalid refresh request.
+        response 409 Error Refresh already running.
         """
         body = request.get_json(force=True, silent=True) or {}
         raw_ids = body.get("cve_ids", [])
@@ -511,6 +547,10 @@ def init_app(app: Flask) -> None:
 
         Returns 200 when the cancellation was accepted (refresh was running).
         Returns 409 when no bulk EUVD refresh is currently in progress.
+
+        OpenAPI:
+        response 200 JsonObject Cancellation accepted.
+        response 409 Error No running EUVD refresh.
         """
         if EUVDProgressTracker.cancel():
             return jsonify({"status": "cancelling"}), 200

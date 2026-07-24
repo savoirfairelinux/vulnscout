@@ -10,5 +10,10 @@ def init_app(app):
 
     @app.route('/api/projects')
     def list_projects():
+        """List all projects currently stored in the database.
+
+        OpenAPI:
+        response 200 JsonObject Project collection.
+        """
         projects = ProjectController.get_all()
         return jsonify(ProjectController.serialize_list(projects))

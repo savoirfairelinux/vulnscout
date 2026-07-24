@@ -11,6 +11,11 @@ def init_app(app):
 
     @app.route('/api/variants')
     def list_all_variants():
+        """List all variants across every project.
+
+        OpenAPI:
+        response 200 JsonObject Variant collection.
+        """
         projects = ProjectController.get_all()
         all_variants = []
         for project in projects:
@@ -21,6 +26,12 @@ def init_app(app):
 
     @app.route('/api/projects/<project_id>/variants')
     def list_variants_by_project(project_id):
+        """List variants belonging to a specific project.
+
+        OpenAPI:
+        response 200 JsonObject Variant collection for the selected project.
+        response 404 Error Project not found.
+        """
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found"}), 404

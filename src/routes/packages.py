@@ -26,6 +26,20 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/packages')
     def index_pkg() -> ResponseReturnValue:
+        """List packages with optional project/variant comparison filters.
+
+        Supports single-variant, project-wide, and multi-variant modes,
+        including union/intersection/difference operations.
+
+        OpenAPI:
+        query variant_id uuid optional Filter by a single variant ID.
+        query project_id uuid optional Filter by a single project ID.
+        query compare_variant_id uuid optional Compare against a second variant ID.
+        query variant_ids string optional Comma-separated list of variant IDs.
+        query operation string optional Comparison mode such as difference, intersection, or union.
+        query format string optional Response format such as list or dict.
+        response 200 JsonObject Filtered package collection.
+        """
         from flask import request
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')

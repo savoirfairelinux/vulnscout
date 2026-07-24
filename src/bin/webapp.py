@@ -17,6 +17,7 @@ import os
 import threading
 from datetime import datetime, timezone
 import signal
+from flask import request
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
@@ -197,11 +198,24 @@ def create_app():
     # provide version info
     @app.route("/api/version")
     def version():
+        """Return the running VulnScout backend version.
+
+        OpenAPI:
+        response 200 JsonObject Backend version payload.
+        """
         return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
     # bypass fail_scan middleware because it's before
     @app.route("/api/scan/status")
     def loading():
+        """Return initial import progress status for the web UI loader.
+
+        This endpoint remains available while other API routes are gated by the
+        scan-completion middleware.
+
+        OpenAPI:
+        response 200 JsonObject Scan bootstrap progress payload.
+        """
         with open(app.config["SCAN_FILE"], "r") as f:
             text = f.read()
             if "__END_OF_SCAN_SCRIPT__" in text:
@@ -222,6 +236,8 @@ def create_app():
 
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
+        if request.path in {"/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui"}:
+            return None
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 

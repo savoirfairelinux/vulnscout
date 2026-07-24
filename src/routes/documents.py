@@ -189,6 +189,12 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs() -> ResponseReturnValue:
+        """List available report templates and SBOM export formats.
+
+        OpenAPI:
+        response 200 JsonObject Available document descriptors.
+        response 500 Error Document discovery failed.
+        """
         controllers = ControllersCache()
         controllers.vulnerabilities = None  # type: ignore
         # to avoid pre-loading cache, TODO change that, maybe by moving list_documents somewhere else
@@ -230,6 +236,12 @@ def init_app(app: Flask) -> None:
         Expects a ``multipart/form-data`` request with a single ``file`` field.
         The template is saved under the first writable templates directory so it
         becomes available as a "custom" report.
+
+        OpenAPI:
+        body multipart optional Multipart request containing a template file.
+        response 201 JsonObject Imported template descriptor.
+        response 400 Error Invalid upload request.
+        response 500 Error Template storage failed.
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload."}, 400
@@ -309,6 +321,21 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:
+        """Render or export a document template or SBOM format.
+
+        OpenAPI:
+        query ext string optional Output extension or conversion target.
+        query author string optional Author metadata injected into the document.
+        query client_name string optional Client metadata injected into the document.
+        query export_date string optional Export date override.
+        query ignore_before string optional Lower bound for historical data inclusion.
+        query only_epss_greater number optional Minimum EPSS threshold to include.
+        query variant_id uuid optional Restrict export to a single variant.
+        query project_id uuid optional Restrict export to a single project.
+        response 200 JsonObject Exported document payload or download response.
+        response 400 Error Invalid export request.
+        response 503 Error Required conversion tool not available.
+        """
         try:
             base_mime = guess_mime_type(doc_name)
             if base_mime is None:

@@ -3,6 +3,12 @@
 VulnScout exposes a REST API served by the Flask backend, available at `http://localhost:7275/api/` by default.
 All endpoints return JSON unless otherwise noted. Routes are registered directly on the Flask application without URL prefixes or blueprints.
 
+The backend also exposes a machine-readable OpenAPI document at `GET /api/openapi`.
+For compatibility, the same document is also available at `GET /api/openapi.json`.
+An interactive Swagger UI is available at `GET /api/openapi/ui` and is preconfigured to load the canonical spec from `/api/openapi`.
+This JSON document is generated from the registered Flask routes and is intended to be the canonical API specification for external tooling.
+It is fully route-driven: the path inventory comes from currently registered Flask routes, and operation descriptions are inferred from route docstrings when available.
+
 ---
 
 ## Version & Status

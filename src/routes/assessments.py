@@ -325,6 +325,17 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
+        """List assessments with optional variant or project filtering.
+
+        By default returns every assessment; with ``format=dict`` the response
+        is keyed by assessment ID.
+
+        OpenAPI:
+        query variant_id uuid optional Filter by a single variant ID.
+        query project_id uuid optional Filter by a single project ID.
+        query format string optional Response format such as list or dict.
+        response 200 JsonObject Assessment collection.
+        """
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compact = request.args.get('format') == 'compact'
@@ -408,17 +419,37 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review')
     def review_assessments() -> ResponseReturnValue:
-        """Return assessments not linked to any scan (handmade via the web UI)."""
+        """Return custom assessments awaiting review.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to every variant of a project.
+        response 200 JsonObject Custom assessment collection.
+        """
         return _review_assessments_by_origin("custom")
 
     @app.route('/api/assessments/review/ai')
     def review_ai_assessments() -> ResponseReturnValue:
-        """Return pending AI-generated assessments (``origin == 'ai'``)."""
+        """Return pending AI-generated assessments.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to every variant of a project.
+        response 200 JsonObject AI assessment collection.
+        """
         return _review_assessments_by_origin("ai")
 
     @app.route('/api/assessments/review/export')
     def export_review_openvex() -> ResponseReturnValue:
-        """Export review assessments for one variant as an OpenVEX JSON document."""
+        """Export custom assessments for one variant as an OpenVEX JSON document.
+
+        OpenAPI:
+        query variant_id uuid required Variant to export.
+        query author string optional Author name embedded in exported OpenVEX documents.
+        response 200 binary OpenVEX JSON download.
+        response 400 Error Exactly one variant was not supplied.
+        response 404 Error No review assessments available.
+        """
         from ..models.variant import Variant as DBVariant
 
         raw_variant_ids = request.args.getlist('variant_id')
@@ -448,8 +479,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/review/import', methods=['POST'])
     def import_review_openvex() -> ResponseReturnValue:
-        """Import a JSON OpenVEX document into exactly one selected variant."""
+        """Import an uploaded JSON OpenVEX document into one selected variant.
 
+        OpenAPI:
+        body multipart required Multipart request containing the JSON file and variant_id.
+        response 200 JsonObject Import summary.
+        response 400 Error Invalid uploaded OpenVEX payload.
+        response 404 Error Variant not found.
+        """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload"}, 400
         uploaded = request.files.get('file')
@@ -500,6 +537,11 @@ def init_app(app: Flask) -> None:
         Each entry contains the vulnerability ID and its three-point estimate
         (optimistic / likely / pessimistic) as ISO 8601 durations plus the
         raw hour values.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to every variant of a project.
+        response 200 JsonObject Vulnerabilities with time estimates.
         """
         from ..models.time_estimate import TimeEstimate
         from ..models.iso8601_duration import Iso8601Duration
@@ -598,6 +640,11 @@ def init_app(app: Flask) -> None:
         """Return vulnerabilities that have custom CVSS scores.
 
         A custom CVSS score is identified by ``origin == 'custom'``.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to every variant of a project.
+        response 200 JsonObject Vulnerabilities with custom CVSS scores.
         """
         from ..models.metrics import Metrics
 
@@ -658,6 +705,12 @@ def init_app(app: Flask) -> None:
 
         * ``variant_id`` - restrict to selected variants; may be repeated.
         * ``project_id`` - restrict to all variants in a project.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict export to selected variants; may be repeated.
+        query project_id uuid optional Restrict export to a single project.
+        response 200 binary Custom review data download.
+        response 404 Error No custom data available.
         """
         raw_variant_ids = request.args.getlist('variant_id')
         project_id = request.args.get('project_id')
@@ -719,6 +772,10 @@ def init_app(app: Flask) -> None:
           file.
         * ``application/json`` body with the custom-data payload directly.
 
+        OpenAPI:
+        body JsonObject optional JSON payload or uploaded custom-data file.
+        response 200 JsonObject Import summary.
+        response 400 Error Invalid import payload.
         """
         import json as _json
         if request.args.getlist('variant_id'):
@@ -760,6 +817,12 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str) -> ResponseReturnValue:
+        """Return a single assessment by identifier.
+
+        OpenAPI:
+        response 200 JsonObject Assessment payload.
+        response 404 Error Assessment not found.
+        """
         item = DBAssessment.get_by_id(assessment_id)
         if item is None:
             return {"error": "Not found"}, 404
@@ -767,6 +830,12 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<vuln_id>/assessments')
     def list_assess_by_vuln(vuln_id: str) -> ResponseReturnValue:
+        """List assessments linked to a vulnerability.
+
+        OpenAPI:
+        query format string optional Response format such as list or dict.
+        response 200 JsonObject Assessment collection for the vulnerability.
+        """
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         assessments = []
@@ -781,7 +850,11 @@ def init_app(app: Flask) -> None:
     @app.route('/api/vulnerabilities/<vuln_id>/variants', methods=['GET'])
     def list_variants_by_vuln(vuln_id: str) -> ResponseReturnValue:
         """Return all distinct variants that have a finding for this vulnerability
-        (via the Observation → Scan → Variant chain)."""
+        (via the Observation → Scan → Variant chain).
+
+        OpenAPI:
+        response 200 JsonObject Variants impacted by the vulnerability.
+        """
         from ..models.observation import Observation
         from ..models.scan import Scan
         from ..models.variant import Variant as DBVariant
@@ -812,6 +885,10 @@ def init_app(app: Flask) -> None:
 
         Lets the front-end classify deprecated (variant, package) pairs in a
         single request instead of one ``/api/packages`` call per variant.
+
+        OpenAPI:
+        query project_id uuid optional Restrict the result to one project.
+        response 200 JsonObject Active packages by variant.
         """
         from ..models.observation import Observation
         from ..models.scan import Scan
@@ -888,6 +965,14 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
+        """Create one or more custom assessments for a vulnerability.
+
+        OpenAPI:
+        body JsonObject optional Assessment creation payload.
+        response 200 JsonObject Created assessment payload.
+        response 400 Error Invalid assessment payload.
+        response 500 Error Database error while creating the assessment.
+        """
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -975,6 +1060,13 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/assessments/batch", methods=["POST"])
     def add_assessments_batch() -> ResponseReturnValue:
+        """Create multiple custom assessments in a single request.
+
+        OpenAPI:
+        body JsonObject optional Batch assessment creation payload.
+        response 200 JsonObject Batch creation summary.
+        response 400 Error Invalid batch payload.
+        """
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
@@ -1093,6 +1185,14 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/assessments/<assessment_id>", methods=["PUT", "PATCH"])
     def update_assessment(assessment_id: str) -> ResponseReturnValue:
+        """Update a custom assessment or override an automated one.
+
+        OpenAPI:
+        body JsonObject optional Assessment update payload.
+        response 200 JsonObject Updated assessment payload.
+        response 400 Error Invalid assessment update.
+        response 404 Error Assessment not found.
+        """
         payload_data = request.get_json()
         if not payload_data:
             return {"error": "Invalid request data"}, 400
@@ -1162,6 +1262,12 @@ def init_app(app: Flask) -> None:
 
     @app.route("/api/assessments/<assessment_id>", methods=["DELETE"])
     def delete_assessment(assessment_id: str) -> ResponseReturnValue:
+        """Delete an assessment.
+
+        OpenAPI:
+        response 200 JsonObject Deletion summary.
+        response 404 Error Assessment not found.
+        """
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
