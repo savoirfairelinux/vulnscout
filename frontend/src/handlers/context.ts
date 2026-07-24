@@ -126,6 +126,17 @@ class Context {
         return data as ContextExport;
     }
 
+    static async exportSelected(variantIds: string[]): Promise<ContextExport> {
+        const query = encodeURIComponent(variantIds.join(','));
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/context/export?variant_ids=${query}`,
+            { mode: 'cors' }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to export context (${res.status})`);
+        return data as ContextExport;
+    }
+
     static async importContext(entries: unknown): Promise<ImportResult> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/context/import`,

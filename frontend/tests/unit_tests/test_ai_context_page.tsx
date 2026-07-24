@@ -409,9 +409,9 @@ describe('AIContext page', () => {
             const checkbox = await screen.findByLabelText('Export Project A / Variant 1');
             fireEvent.click(checkbox);
 
-            // Export selected -> exportAll, filtered to the checked variant
+            // Export selected -> server-side exportSelected(variant_ids), no client filtering
             fetchMock.mockResponseOnce(JSON.stringify({
-                version: '2.0',
+                version: '1.0',
                 exported_at: '2026-07-22T00:00:00+00:00',
                 projects: [
                     {
@@ -433,6 +433,7 @@ describe('AIContext page', () => {
             expect(createObjSpy).toHaveBeenCalled();
             const exportCall = fetchMock.mock.calls.find(c => String(c[0]).includes('/api/context/export'));
             expect(exportCall).toBeDefined();
+            expect(String(exportCall![0])).toContain('variant_ids=v1');
         });
 
 
@@ -479,7 +480,7 @@ describe('AIContext page', () => {
             }));
 
             const envelope = JSON.stringify({
-                version: '2.0',
+                version: '1.0',
                 exported_at: '2026-07-22T00:00:00+00:00',
                 projects: [
                     {
@@ -500,7 +501,7 @@ describe('AIContext page', () => {
                 c => String(c[0]).includes('/api/context/import') && (c[1] as any)?.method === 'POST'
             );
             expect(importCall).toBeDefined();
-            expect(JSON.parse((importCall![1] as any).body).version).toBe('2.0');
+            expect(JSON.parse((importCall![1] as any).body).version).toBe('1.0');
         });
 
         test('import rejects a file that is not valid JSON', async () => {

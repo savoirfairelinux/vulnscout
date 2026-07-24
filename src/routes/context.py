@@ -127,9 +127,11 @@ def init_app(app):
     def export_context():
         project_id_str = request.args.get('project_id')
         variant_id_str = request.args.get('variant_id')
+        variant_ids_str = request.args.get('variant_ids')
 
         project_uuid = None
         variant_uuid = None
+        variant_ids: set[uuid.UUID] | None = None
         # Single-variant export requires both identifiers.
         if project_id_str or variant_id_str:
             project_uuid, err = parse_uuid_or_400(project_id_str or '', 'project_id')
@@ -138,9 +140,21 @@ def init_app(app):
             variant_uuid, err = parse_uuid_or_400(variant_id_str or '', 'variant_id')
             if err:
                 return err
+        elif variant_ids_str is not None:
+            # Selective export: comma-separated list of variant UUIDs.
+            variant_ids = set()
+            for raw in variant_ids_str.split(','):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                vid, err = parse_uuid_or_400(raw, 'variant_ids')
+                if err:
+                    return err
+                assert vid is not None
+                variant_ids.add(vid)
 
         try:
-            projects = collect_entries(project_uuid, variant_uuid)
+            projects = collect_entries(project_uuid, variant_uuid, variant_ids)
         except LookupError as exc:
             return jsonify({"error": str(exc)}), 404
         except ValueError as exc:
@@ -169,6 +183,16 @@ def init_app(app):
 
         return jsonify(result)
 
+    # ------------------------------------------------------------------
+    # Supplemental context files (currently hidden from the UI)
+    # ------------------------------------------------------------------
+    # NOTE: The AI-context page no longer exposes a UI for uploading or
+    # deleting supplemental files, so these endpoints (and the ContextFile
+    # model / context_files table) are unused by the frontend today. They are
+    # intentionally kept for potential future reuse rather than removed, to
+    # avoid a destructive schema migration. If this feature is confirmed dead,
+    # remove these routes, the ContextFile model, and add a migration dropping
+    # the context_files table.
     @app.route('/api/variants/<variant_id>/context/files', methods=['POST'])
     def post_context_file(variant_id):
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')

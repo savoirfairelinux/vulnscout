@@ -73,23 +73,31 @@ def project_entry(project: Project, pc: Optional[ProjectContext],
 
 
 def collect_entries(project_id: Optional[uuid.UUID] = None,
-                    variant_id: Optional[uuid.UUID] = None) -> list[ProjectEntry]:
+                    variant_id: Optional[uuid.UUID] = None,
+                    variant_ids: Optional[set[uuid.UUID]] = None) -> list[ProjectEntry]:
     """Collect export entries grouped by project.
 
     With no arguments, returns one project entry per project (each with its
     variants nested). With both *project_id* and *variant_id*, returns a
-    single-project list containing only that variant.
+    single-project list containing only that variant. With *variant_ids*, only
+    variants whose id is in the set are included (projects with no matching
+    variant are dropped); *variant_ids* cannot be combined with the
+    single-variant arguments.
 
     Raises
     ------
     ValueError
-        If exactly one of *project_id* / *variant_id* is given, or the variant
-        does not belong to the project.
+        If exactly one of *project_id* / *variant_id* is given, the variant
+        does not belong to the project, or *variant_ids* is combined with the
+        single-variant arguments.
     LookupError
         If the requested project or variant does not exist.
     """
     if (project_id is None) != (variant_id is None):
         raise ValueError("Both project_id and variant_id are required for a single-variant export")
+
+    if variant_ids is not None and (project_id is not None or variant_id is not None):
+        raise ValueError("variant_ids cannot be combined with a single-variant export")
 
     if project_id is not None and variant_id is not None:
         project = Project.get_by_id(project_id)
@@ -109,6 +117,8 @@ def collect_entries(project_id: Optional[uuid.UUID] = None,
         pc = ProjectContext.get_by_project(project.id)
         variants: list[VariantEntry] = []
         for variant in Variant.get_by_project(project.id):
+            if variant_ids is not None and variant.id not in variant_ids:
+                continue
             vc = VariantContext.get_by_variant(variant.id)
             variants.append(variant_entry(variant, vc))
         if not variants:
@@ -144,11 +154,12 @@ def extract_entries(body) -> list:
         ``projects`` list, or if a project's ``variants`` is not a list.
     """
     if isinstance(body, list):
-        projects = body
+        projects: list = body
     elif isinstance(body, dict):
-        projects = body.get("projects")
-        if not isinstance(projects, list):
+        raw_projects = body.get("projects")
+        if not isinstance(raw_projects, list):
             raise ValueError("Object body must contain a 'projects' array")
+        projects = raw_projects
     else:
         raise ValueError("Body must be a JSON array of projects or an object with a 'projects' array")
 

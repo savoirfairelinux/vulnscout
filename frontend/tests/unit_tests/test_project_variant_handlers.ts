@@ -254,11 +254,11 @@ describe('Variants', () => {
         );
     });
 
-    test('Variants.listAll returns empty array when response is not ok', async () => {
+    test('Variants.listAll throws when response is not ok', async () => {
         fetchMock.mockImplementationOnce(() =>
-            Promise.resolve({ ok: false, json: () => Promise.resolve([]) } as Response)
+            Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve([]) } as Response)
         );
-        expect(await Variants.listAll()).toEqual([]);
+        await expect(Variants.listAll()).rejects.toThrow('Failed to load variants (500)');
     });
 
     test('Variants.listAll returns empty array when server returns non-array', async () => {

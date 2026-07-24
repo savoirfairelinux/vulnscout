@@ -82,7 +82,7 @@ class TestExportContextCLI:
         assert result.exit_code == 0, result.output
         assert out.exists()
         doc = json.loads(out.read_text())
-        assert doc["version"] == "2.0"
+        assert doc["version"] == "1.0"
         assert isinstance(doc["exported_at"], str) and doc["exported_at"]
         keys = {(e["project_name"], e["variant_name"]) for e in self._flat(doc)}
         assert keys == {
@@ -139,7 +139,7 @@ class TestImportContextCLI:
 
     def test_import_envelope_overwrites(self, app, tmp_path):
         payload = {
-            "version": "2.0",
+            "version": "1.0",
             "exported_at": "2026-07-22T00:00:00+00:00",
             "projects": [{
                 "project_name": "ProjectA",
@@ -187,10 +187,25 @@ class TestImportContextCLI:
         ]
         path = self._write(tmp_path, payload)
         result = app.test_cli_runner().invoke(args=["import-context", path])
-        assert result.exit_code == 0, result.output
+        # A failed entry makes the command exit non-zero.
+        assert result.exit_code != 0, result.output
         assert "1 ignored" in result.output
         assert "1 failed" in result.output
         assert "Variant not found" in result.output
+
+    def test_import_ignored_only_exits_zero(self, app, tmp_path):
+        payload = [
+            {"project_name": "ProjectA", "project_description": "d", "variants": [
+                {"variant_name": "VariantA1", "threat_model": "t"},
+                {"variant_name": "NoSuchVariant", "threat_model": "t"},
+            ]},
+        ]
+        path = self._write(tmp_path, payload)
+        result = app.test_cli_runner().invoke(args=["import-context", path])
+        # Ignored entries are not failures, so the command still succeeds.
+        assert result.exit_code == 0, result.output
+        assert "1 ignored" in result.output
+        assert "0 failed" in result.output
 
     def test_import_missing_file_errors(self, app, tmp_path):
         result = app.test_cli_runner().invoke(args=[
@@ -200,7 +215,7 @@ class TestImportContextCLI:
         assert "file not found" in result.output.lower()
 
     def test_import_malformed_body_errors(self, app, tmp_path):
-        path = self._write(tmp_path, {"version": "2.0"})  # no projects
+        path = self._write(tmp_path, {"version": "1.0"})  # no projects
         result = app.test_cli_runner().invoke(args=["import-context", path])
         assert result.exit_code != 0
         assert "projects" in result.output.lower()

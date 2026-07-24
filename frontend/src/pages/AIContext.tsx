@@ -259,31 +259,12 @@ function AIContext() {
         URL.revokeObjectURL(url);
     };
 
-    const projectNameById = useCallback(
-        (projectId: string) => projects.find(p => p.id === projectId)?.name ?? '',
-        [projects]
-    );
-
     const handleExportSelected = async () => {
         if (ioBusy || exportSelection.size === 0) return;
         setIoBusy(true);
         try {
-            const all = await Context.exportAll();
-            // Keep only variants whose id is checked in the selector.
-            const chosenKeys = new Set(
-                allVariants
-                    .filter(v => exportSelection.has(v.id))
-                    .map(v => `${projectNameById(v.project_id)}\u0000${v.name}`)
-            );
-            const projects = all.projects
-                .map(p => ({
-                    ...p,
-                    variants: p.variants.filter(
-                        v => chosenKeys.has(`${p.project_name}\u0000${v.variant_name}`)
-                    ),
-                }))
-                .filter(p => p.variants.length > 0);
-            handleFileDownload({ ...all, projects }, "vulnscout-context.json");
+            const doc = await Context.exportSelected([...exportSelection]);
+            handleFileDownload(doc, "vulnscout-context.json");
             if (!unmountedRef.current) setExportMenuOpen(false);
         } catch (e: any) {
             if (!unmountedRef.current) showBanner(e?.message || "Failed to export context.", "error");

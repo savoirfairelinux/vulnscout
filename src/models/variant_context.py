@@ -32,7 +32,14 @@ def _delete_context_dir(variant_context_id: uuid.UUID) -> None:
 
 
 class ContextFile(Base):
-    """Supplemental file attached to a variant's context."""
+    """Supplemental file attached to a variant's context.
+
+    NOTE: The AI-context UI for managing these files was removed, so this model
+    and its ``context_files`` table are currently unused by the app. They are
+    intentionally retained for potential future reuse (see the file endpoints
+    in ``src/routes/context.py``). Remove this model and drop the table via a
+    migration only if the feature is confirmed dead.
+    """
 
     __tablename__ = "context_files"
 

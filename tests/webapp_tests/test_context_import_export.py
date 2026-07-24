@@ -138,7 +138,7 @@ class TestExportContext:
         client, _ = client_and_data
         body = json.loads(client.get("/api/context/export").data)
         assert isinstance(body, dict)
-        assert body["version"] == "2.0"
+        assert body["version"] == "1.0"
         assert isinstance(body["exported_at"], str) and body["exported_at"]
         assert isinstance(body["projects"], list)
 
@@ -207,6 +207,37 @@ class TestExportContext:
         )
         assert response.status_code == 404
 
+    def test_export_selected_variant_ids_filters_server_side(self, client_and_data):
+        client, data = client_and_data
+        entries = _export_variants(
+            client,
+            f"/api/context/export?variant_ids={data['variant_a1_id']},{data['variant_b1_id']}",
+        )
+        keys = {(e["project_name"], e["variant_name"]) for e in entries}
+        assert keys == {("ProjectA", "VariantA1"), ("ProjectB", "VariantB1")}
+
+    def test_export_selected_single_project_only(self, client_and_data):
+        client, data = client_and_data
+        body = json.loads(client.get(
+            f"/api/context/export?variant_ids={data['variant_a1_id']}"
+        ).data)
+        # Only ProjectA appears; ProjectB (and EmptyProject) are dropped.
+        by_name = {p["project_name"]: p for p in body["projects"]}
+        assert set(by_name) == {"ProjectA"}
+        assert {v["variant_name"] for v in by_name["ProjectA"]["variants"]} == {"VariantA1"}
+
+    def test_export_selected_unknown_id_yields_empty(self, client_and_data):
+        client, _ = client_and_data
+        body = json.loads(client.get(
+            "/api/context/export?variant_ids=00000000-0000-0000-0000-000000000000"
+        ).data)
+        assert body["projects"] == []
+
+    def test_export_selected_invalid_id_rejected(self, client_and_data):
+        client, _ = client_and_data
+        response = client.get("/api/context/export?variant_ids=not-a-uuid")
+        assert response.status_code == 400
+
 
 # ===========================================================================
 # Import
@@ -233,7 +264,7 @@ class TestImportContext:
     def test_import_envelope_accepted(self, client_and_data):
         client, _ = client_and_data
         payload = {
-            "version": "2.0",
+            "version": "1.0",
             "exported_at": "2026-07-22T00:00:00+00:00",
             "projects": [{
                 "project_name": "ProjectA",
@@ -256,7 +287,7 @@ class TestImportContext:
 
     def test_import_envelope_missing_projects_rejected(self, client_and_data):
         client, _ = client_and_data
-        response = self._post(client, {"version": "2.0", "exported_at": "x"})
+        response = self._post(client, {"version": "1.0", "exported_at": "x"})
         assert response.status_code == 400
 
     def test_import_valid_overwrites(self, client_and_data):

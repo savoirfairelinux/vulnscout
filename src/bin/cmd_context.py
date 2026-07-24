@@ -102,6 +102,9 @@ def import_context_command(file_path: str) -> None:
         f" ({len(ignored)} ignored, {len(failed)} failed)"
     )
 
+    if failed:
+        raise SystemExit(1)
+
 
 def _label(item: dict) -> str:
     project = item.get("project_name") or "?"

@@ -1265,6 +1265,9 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         fetchVariants.then(vs => {
             setAllVariants(vs);
             setSelectedVariantIds(new Set(vs.map(v => v.id)));
+        }).catch(() => {
+            setAllVariants([]);
+            setSelectedVariantIds(new Set());
         });
     }, [variantId, projectId]);
 
