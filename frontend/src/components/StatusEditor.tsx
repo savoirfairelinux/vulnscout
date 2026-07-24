@@ -26,16 +26,29 @@ type Props = {
     defaultSelectedPackages?: string[];
     /** variant_id -> packages that exist for this CVE in that variant */
     variantPackageMap?: Record<string, string[]>;
+    /** variant_id -> historical findings that may be selected explicitly */
+    variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
 }
 
-function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap}: Readonly<Props>) {
+function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFields, onFieldsChange, triggerBanner, defaultStatus = "under_investigation", variants, availablePackages, defaultSelectedPackages, variantPackageMap, variantFindingsMap}: Readonly<Props>) {
+    const outdatedPackages = useMemo(() => {
+        const findingStates = new Map<string, boolean>();
+        for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
+            findingStates.set(finding.pkg, (findingStates.get(finding.pkg) ?? true) && finding.outdated);
+        }
+        return new Set([...findingStates].filter(([, outdated]) => outdated).map(([pkg]) => pkg));
+    }, [variantFindingsMap]);
+    const currentPackages = useMemo(
+        () => (availablePackages ?? []).filter(pkg => !outdatedPackages.has(pkg)),
+        [availablePackages, outdatedPackages]
+    );
     // When multiple choices exist, start fully unchecked so the user makes an
     // explicit selection; when exactly one exists auto-select it.
     const initialPackages = useMemo(() => {
-        if (availablePackages && availablePackages.length === 1) return availablePackages;
+        if (currentPackages.length === 1) return currentPackages;
         if (defaultSelectedPackages && defaultSelectedPackages.length === 1) return defaultSelectedPackages;
         return [];
-    }, [defaultSelectedPackages, availablePackages]);
+    }, [defaultSelectedPackages, currentPackages]);
 
     const [status, setStatus] = useState(defaultStatus);
     const [justification, setJustification] = useState("none");
@@ -46,18 +59,41 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         variants?.length === 1 ? [variants[0].id] : []
     );
     const [selectedPackages, setSelectedPackages] = useState<string[]>(initialPackages);
+    const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
+
+    const packageOptions = useMemo(() => {
+        const options = new Set(currentPackages);
+        if (includeOutdatedPackages) {
+            for (const pkg of outdatedPackages) options.add(pkg);
+        }
+        return [...options];
+    }, [currentPackages, includeOutdatedPackages, outdatedPackages]);
+    const effectiveVariantPackageMap = useMemo(() => {
+        if (!variantPackageMap) return undefined;
+        const result: Record<string, string[]> = {};
+        for (const [variantId, packages] of Object.entries(variantPackageMap)) {
+            const selectable = new Set(packages);
+            if (includeOutdatedPackages) {
+                for (const finding of variantFindingsMap?.[variantId] ?? []) {
+                    if (finding.outdated) selectable.add(finding.pkg);
+                }
+            }
+            result[variantId] = [...selectable];
+        }
+        return result;
+    }, [variantPackageMap, variantFindingsMap, includeOutdatedPackages]);
 
     // Derived: which packages are reachable from the currently selected variants,
     // and which variants are reachable from the currently selected packages.
     const allowedPackages = useMemo<Set<string> | null>(() => {
-        if (!variantPackageMap) return null;
+        if (!effectiveVariantPackageMap) return null;
 
         // Use selected variant IDs if any are checked; otherwise derive from selected packages.
         let effectiveVariantIds: string[];
         if (selectedVariantIds.length > 0) {
             effectiveVariantIds = selectedVariantIds;
         } else if (selectedPackages.length > 0) {
-            effectiveVariantIds = Object.entries(variantPackageMap)
+            effectiveVariantIds = Object.entries(effectiveVariantPackageMap)
                 .filter(([, pkgs]) => selectedPackages.some(p => pkgs.includes(p)))
                 .map(([vid]) => vid);
         } else {
@@ -66,13 +102,13 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
 
         const union = new Set<string>();
         for (const vid of effectiveVariantIds) {
-            for (const pkg of variantPackageMap[vid] ?? []) union.add(pkg);
+            for (const pkg of effectiveVariantPackageMap[vid] ?? []) union.add(pkg);
         }
         return union.size > 0 ? union : null;
-    }, [variantPackageMap, selectedVariantIds, selectedPackages]);
+    }, [effectiveVariantPackageMap, selectedVariantIds, selectedPackages]);
 
     const allowedVariants = useMemo<Set<string> | null>(() => {
-        if (!variantPackageMap) return null;
+        if (!effectiveVariantPackageMap) return null;
 
         // Use selected packages if any are checked; otherwise derive from selected variants.
         let effectivePackages: string[];
@@ -81,7 +117,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         } else if (selectedVariantIds.length > 0) {
             const union = new Set<string>();
             for (const vid of selectedVariantIds) {
-                for (const pkg of variantPackageMap[vid] ?? []) union.add(pkg);
+                for (const pkg of effectiveVariantPackageMap[vid] ?? []) union.add(pkg);
             }
             effectivePackages = [...union];
         } else {
@@ -89,11 +125,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         }
 
         const allowed = new Set<string>();
-        for (const [vid, pkgs] of Object.entries(variantPackageMap)) {
+        for (const [vid, pkgs] of Object.entries(effectiveVariantPackageMap)) {
             if (effectivePackages.some(p => pkgs.includes(p))) allowed.add(vid);
         }
         return allowed.size > 0 ? allowed : null;
-    }, [variantPackageMap, selectedPackages, selectedVariantIds]);
+    }, [effectiveVariantPackageMap, selectedPackages, selectedVariantIds]);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
@@ -125,10 +161,10 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             : selectedVariantIds.filter(id => id !== variantId);
         setSelectedVariantIds(nextVariants);
 
-        if (!checked && variantPackageMap) {
+        if (!checked && effectiveVariantPackageMap) {
             const stillAllowed = new Set<string>();
             for (const vid of nextVariants) {
-                for (const pkg of variantPackageMap[vid] ?? []) stillAllowed.add(pkg);
+                for (const pkg of effectiveVariantPackageMap[vid] ?? []) stillAllowed.add(pkg);
             }
             if (stillAllowed.size > 0) {
                 setSelectedPackages(prev => prev.filter(p => stillAllowed.has(p)));
@@ -147,12 +183,19 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             : selectedPackages.filter(p => p !== pkg);
         setSelectedPackages(nextPackages);
 
-        if (variantPackageMap && nextPackages.length > 0) {
+        if (effectiveVariantPackageMap && nextPackages.length > 0) {
             setSelectedVariantIds(prev =>
                 prev.filter(vid =>
-                    nextPackages.some(p => (variantPackageMap[vid] ?? []).includes(p))
+                    nextPackages.some(p => (effectiveVariantPackageMap[vid] ?? []).includes(p))
                 )
             );
+        }
+    };
+
+    const handleIncludeOutdatedPackages = (checked: boolean) => {
+        setIncludeOutdatedPackages(checked);
+        if (!checked) {
+            setSelectedPackages(prev => prev.filter(pkg => !outdatedPackages.has(pkg)));
         }
     };
 
@@ -225,6 +268,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setStatusNotes("");
         setWorkaround("");
         setImpact("");
+        setIncludeOutdatedPackages(false);
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
         setSelectedPackages(
             (availablePackages?.length === 1 ? availablePackages :
@@ -306,18 +350,30 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {availablePackages && availablePackages.length >= 1 && (
+        {availablePackages && (availablePackages.length >= 1 || outdatedPackages.size > 0) && (
             <div className="mt-2 mb-2 ml-1">
                 <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
+                {outdatedPackages.size > 0 && (
+                    <label className="flex items-center gap-1.5 mb-1 text-sm text-amber-300 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={includeOutdatedPackages}
+                            onChange={event => handleIncludeOutdatedPackages(event.target.checked)}
+                            className="accent-amber-500"
+                        />
+                        Include outdated package versions
+                    </label>
+                )}
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    {availablePackages.map(pkg => {
+                    {packageOptions.map(pkg => {
                         const isActive = !defaultSelectedPackages || defaultSelectedPackages.length === 0 || defaultSelectedPackages.includes(pkg);
+                        const isOutdated = outdatedPackages.has(pkg);
                         const incompatible = allowedPackages !== null && !allowedPackages.has(pkg);
                         return (
                         <label
                             key={pkg}
                             className={['flex items-center gap-1.5 text-sm select-none', incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'].join(' ')}
-                            title={incompatible ? 'Package is not present in selected variants' : (isActive ? undefined : 'Not in active SBOM')}
+                            title={incompatible ? 'Package has no finding in the selected variants' : (isOutdated ? 'Not in the current SBOM' : undefined)}
                         >
                             <input
                                 type="checkbox"
@@ -327,6 +383,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                                 className="accent-blue-400"
                             />
                             <span className={`font-mono ${incompatible ? 'text-gray-500' : isActive ? 'text-gray-200' : 'text-gray-500 italic'}`}>{formatPkgId(pkg)}</span>
+                            {isOutdated && <span className="text-xs font-semibold uppercase tracking-wide text-amber-300">Outdated</span>}
                         </label>
                         );
                     })}

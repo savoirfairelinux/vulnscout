@@ -847,4 +847,39 @@ describe('EditAssessment Component', () => {
             expect.objectContaining({ packages: expect.arrayContaining(['pkg1@1.0.0', 'pkg2@2.0.0']) })
         );
     });
+
+    test('allows adding an outdated package only after enabling the option', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@2.0.0']}
+                defaultSelectedPackages={['package@2.0.0']}
+                variantPackageMap={{v1: ['package@2.0.0']}}
+                variantFindingsMap={{v1: [
+                    {pkg: 'package@2.0.0', outdated: false},
+                    {pkg: 'package@1.0.0', outdated: true},
+                ]}}
+            />
+        );
+
+        expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
+        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
+        const outdatedPackage = screen.getByText('package@1.0.0');
+        await user.click(outdatedPackage.closest('label')!.querySelector('input')!);
+        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
+        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
+        const restoredOutdatedPackage = screen.getByText('package@1.0.0').closest('label')!.querySelector('input')!;
+        expect(restoredOutdatedPackage).not.toBeChecked();
+        await user.click(restoredOutdatedPackage);
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            packages: expect.arrayContaining(['package@2.0.0', 'package@1.0.0']),
+        }));
+    });
 });

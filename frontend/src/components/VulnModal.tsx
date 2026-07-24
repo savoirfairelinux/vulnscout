@@ -1750,6 +1750,7 @@ type VariantScopedSnapshot = {
                                             availablePackages={projectPackages}
                                             defaultSelectedPackages={vuln.packages_current}
                                             variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                            variantFindingsMap={variantFindingsMap}
                                         />
                                     </li>
                                 )}
@@ -1935,6 +1936,8 @@ type VariantScopedSnapshot = {
                                                         )]}
                                                         availablePackages={projectPackages}
                                                         defaultSelectedPackages={group.packages}
+                                                        variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
+                                                        variantFindingsMap={variantFindingsMap}
                                                     />
                                                 </div>
                                             )}

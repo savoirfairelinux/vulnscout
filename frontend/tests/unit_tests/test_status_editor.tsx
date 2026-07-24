@@ -693,4 +693,31 @@ describe('StatusEditor', () => {
         await user.click(checkboxes[1]);
         expect(checkboxes[1].checked).toBe(false);
     });
+
+    test('includes an outdated package only after enabling the option', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                availablePackages={['pkg@2.0.0']}
+                defaultSelectedPackages={['pkg@2.0.0']}
+                variantPackageMap={{v1: ['pkg@2.0.0']}}
+                variantFindingsMap={{v1: [
+                    {pkg: 'pkg@2.0.0', outdated: false},
+                    {pkg: 'pkg@1.0.0', outdated: true},
+                ]}}
+            />
+        );
+
+        expect(screen.queryByText('pkg@1.0.0')).not.toBeInTheDocument();
+        const includeOutdated = screen.getByRole('checkbox', {name: 'Include outdated package versions'});
+        await user.click(includeOutdated);
+        const outdatedPackage = screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')!;
+        await user.click(outdatedPackage);
+        expect(screen.getByText('Outdated')).toBeInTheDocument();
+        await user.click(includeOutdated);
+        await user.click(includeOutdated);
+        expect(screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+    });
 });
