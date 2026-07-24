@@ -1109,7 +1109,7 @@ type VariantScopedSnapshot = {
             body: JSON.stringify({ assessments: items })
         });
         const data = await response.json();
-        if (data?.status === 'success') {
+        if (response.ok !== false && data?.status === 'success') {
             // Backend returns one record per (package, variant) pair.
             const rawList: unknown[] = Array.isArray(data?.assessments) ? data.assessments : [];
             for (const raw of rawList) {
@@ -1139,11 +1139,12 @@ type VariantScopedSnapshot = {
                     vuln.simplified_status = casted.simplified_status;
                 }
             }
-            if (Array.isArray(data?.errors) && data.errors.length > 0) {
-                showMessage(`Some assessments failed: ${escape(JSON.stringify(data.errors))}`, 'error');
-            }
         } else {
-            showMessage(`Failed to add assessment: HTTP code ${Number(response?.status)} | ${escape(JSON.stringify(data))}`, 'error');
+            const errors = Array.isArray(data?.errors)
+                ? data.errors.map((entry: {error?: unknown}) => String(entry?.error ?? '')).filter(Boolean).join('; ')
+                : '';
+            const detail = errors || String(data?.error ?? 'The selected package versions are not valid for every selected variant.');
+            showMessage(`Assessment not added: ${escape(detail)}`, 'error');
         }
 
         if (lastCasted) {
@@ -1751,6 +1752,7 @@ type VariantScopedSnapshot = {
                                             defaultSelectedPackages={vuln.packages_current}
                                             variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                             variantFindingsMap={variantFindingsMap}
+                                            findingsLoading={!variantPackageMapLoaded}
                                         />
                                     </li>
                                 )}
@@ -1938,6 +1940,7 @@ type VariantScopedSnapshot = {
                                                         defaultSelectedPackages={group.packages}
                                                         variantPackageMap={Object.keys(variantPackageMap).length > 0 ? variantPackageMap : undefined}
                                                         variantFindingsMap={variantFindingsMap}
+                                                        findingsLoading={!variantPackageMapLoaded}
                                                     />
                                                 </div>
                                             )}

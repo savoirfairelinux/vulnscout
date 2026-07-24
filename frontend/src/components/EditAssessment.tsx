@@ -28,6 +28,7 @@ type Props = {
     defaultSelectedPackages?: string[];
     variantPackageMap?: Record<string, string[]>;
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
+    findingsLoading?: boolean;
 }
 
 function EditAssessment({
@@ -42,7 +43,8 @@ function EditAssessment({
     availablePackages,
     defaultSelectedPackages,
     variantPackageMap,
-    variantFindingsMap
+    variantFindingsMap,
+    findingsLoading = false
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const [status, setStatus] = useState(assessment.status || "under_investigation");
@@ -62,20 +64,27 @@ function EditAssessment({
     );
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
     const outdatedPackages = useMemo(() => {
-        const findingStates = new Map<string, boolean>();
+        const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
-            findingStates.set(finding.pkg, (findingStates.get(finding.pkg) ?? true) && finding.outdated);
+            if (finding.outdated) packages.add(finding.pkg);
         }
-        return new Set([...findingStates].filter(([, outdated]) => outdated).map(([pkg]) => pkg));
+        return packages;
     }, [variantFindingsMap]);
+    const packagesWithCurrentFindings = useMemo(() => new Set(
+        Object.values(variantFindingsMap ?? {}).flatMap(findings =>
+            findings.filter(finding => !finding.outdated).map(finding => finding.pkg)
+        )
+    ), [variantFindingsMap]);
     const packageOptions = useMemo(() => {
-        const options = new Set((availablePackages ?? []).filter(pkg => !outdatedPackages.has(pkg)));
+        const options = new Set((availablePackages ?? []).filter(pkg =>
+            !outdatedPackages.has(pkg) || packagesWithCurrentFindings.has(pkg)
+        ));
         for (const pkg of defaultSelectedPackages ?? []) options.add(pkg);
         if (includeOutdatedPackages) {
             for (const pkg of outdatedPackages) options.add(pkg);
         }
         return [...options];
-    }, [availablePackages, defaultSelectedPackages, includeOutdatedPackages, outdatedPackages]);
+    }, [availablePackages, defaultSelectedPackages, includeOutdatedPackages, outdatedPackages, packagesWithCurrentFindings]);
     const effectiveVariantPackageMap = useMemo(() => {
         if (!variantPackageMap) return undefined;
         const result: Record<string, string[]> = {};
@@ -325,25 +334,32 @@ function EditAssessment({
             </h3>
 
             {availableVariants && availableVariants.length > 0 && (
-                <div className="mt-2 mb-2 ml-1">
-                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to variants:</p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
+                    <p className="mb-2 text-sm font-medium text-gray-200">Apply to variants:</p>
+                    <span className="float-right -mt-7 text-xs text-gray-400">{selectedVariantIds.length} selected</span>
+                    <div className="flex flex-wrap gap-2">
                         {availableVariants.map(v => {
                             const incompatible = allowedVariants !== null && !allowedVariants.has(v.id);
+                            const selected = selectedVariantIds.includes(v.id);
                             return (
                             <label
                                 key={v.id}
-                                className={['flex items-center gap-1.5 text-sm select-none', incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'].join(' ')}
-                                title={incompatible ? 'No selected package is present in this variant' : undefined}
+                                className={[
+                                    'inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition-colors select-none',
+                                    selected ? 'border-blue-400 bg-blue-500/20 text-blue-100' : 'border-gray-600 bg-gray-700/60 text-gray-300 hover:border-gray-500',
+                                    incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                                ].join(' ')}
+                                title={incompatible ? 'Not every selected package version applies to this variant' : undefined}
                             >
                                 <input
                                     type="checkbox"
-                                    checked={selectedVariantIds.includes(v.id)}
+                                    checked={selected}
                                     disabled={incompatible}
                                     onChange={(e) => handleVariantToggle(v.id, e.target.checked)}
-                                    className="accent-blue-500"
+                                    className="sr-only"
                                 />
-                                <span className="text-gray-200">{v.name}</span>
+                                <span aria-hidden="true" className="mr-1.5 text-xs">{selected ? '✓' : '+'}</span>
+                                <span>{v.name}</span>
                             </label>
                             );
                         })}
@@ -351,38 +367,51 @@ function EditAssessment({
                 </div>
             )}
             {availablePackages && (packageOptions.length > 1 || outdatedPackages.size > 0) && (
-                <div className="mt-2 mb-2 ml-1">
-                    <p className="text-sm font-medium text-gray-300 mb-1">Apply to packages:</p>
-                    {outdatedPackages.size > 0 && (
-                        <label className="flex items-center gap-1.5 mb-1 text-sm text-amber-300 cursor-pointer select-none">
+                <div className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
+                    <p className="mb-2 text-sm font-medium text-gray-200">Apply to packages:</p>
+                    <span className="float-right -mt-7 text-xs text-gray-400">{selectedPackages.length} selected</span>
+                    {findingsLoading && (
+                        <p className="mb-2 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
+                    )}
+                    {!findingsLoading && outdatedPackages.size > 0 && (
+                        <label className="mb-3 flex items-center justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 cursor-pointer select-none">
+                            <span>
+                                <span className="block font-medium">Include previous package versions</span>
+                                <span className="block text-xs text-amber-200/70">Show package versions from previous scans ({outdatedPackages.size})</span>
+                            </span>
                             <input
                                 type="checkbox"
+                                aria-label="Include previous package versions"
                                 checked={includeOutdatedPackages}
                                 onChange={event => handleIncludeOutdatedPackages(event.target.checked)}
-                                className="accent-amber-500"
+                                className="h-4 w-4 accent-amber-500"
                             />
-                            Include outdated package versions
                         </label>
                     )}
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <div className="flex flex-wrap gap-2">
                         {packageOptions.map(pkg => {
                             const isOutdated = outdatedPackages.has(pkg);
                             const incompatible = allowedPackages !== null && !allowedPackages.has(pkg);
+                            const selected = selectedPackages.includes(pkg);
                             return (
                             <label
                                 key={pkg}
-                                className={['flex items-center gap-1.5 text-sm select-none', incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'].join(' ')}
-                                title={incompatible ? 'Package has no finding in the selected variants' : (isOutdated ? 'Not in the current SBOM' : undefined)}
+                                className={[
+                                    'inline-flex items-center rounded-full border px-3 py-1.5 text-sm transition-colors select-none',
+                                    selected ? 'border-blue-400 bg-blue-500/20 text-blue-100' : 'border-gray-600 bg-gray-700/60 text-gray-300 hover:border-gray-500',
+                                    incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                                ].join(' ')}
+                                title={incompatible ? 'This package version does not apply to every selected variant' : (isOutdated ? 'From a previous scan' : undefined)}
                             >
                                 <input
                                     type="checkbox"
-                                    checked={selectedPackages.includes(pkg)}
+                                    checked={selected}
                                     disabled={incompatible}
                                     onChange={(e) => handlePackageToggle(pkg, e.target.checked)}
-                                    className="accent-blue-400"
+                                    className="sr-only"
                                 />
-                                <span className={`font-mono ${incompatible ? 'text-gray-500' : 'text-gray-200'}`}>{formatPkgId(pkg)}</span>
-                                {isOutdated && <span className="text-xs font-semibold uppercase tracking-wide text-amber-300">Outdated</span>}
+                                <span aria-hidden="true" className="mr-1.5 text-xs">{selected ? '✓' : '+'}</span>
+                                <span className={`font-mono ${incompatible ? 'text-gray-500' : ''}`}>{formatPkgId(pkg)}</span>
                             </label>
                             );
                         })}

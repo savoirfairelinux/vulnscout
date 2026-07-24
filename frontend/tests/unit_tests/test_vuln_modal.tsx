@@ -296,6 +296,32 @@ describe('Vulnerability Modal', () => {
         alertSpy.mockRestore();
     })
 
+    test('an invalid batch adds nothing and displays only the API error', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'error',
+            assessments: [],
+            count: 0,
+            errors: [{error: 'Invalid package version for vulnerability and variant: pkgB@1.0'}],
+        }), {status: 400});
+
+        const appendAssessment = jest.fn();
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={appendAssessment} appendCVSS={() => null} patchVuln={patchVuln} />);
+        const user = userEvent.setup();
+        const selectStatus = screen.getAllByRole('combobox').find((el) =>
+            el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectStatus, 'fixed');
+        await user.click(screen.getByText(/add assessment/i));
+
+        expect(await screen.findByText(/Assessment not added:.*pkgB@1\.0/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Successfully added assessment/i)).not.toBeInTheDocument();
+        expect(appendAssessment).not.toHaveBeenCalled();
+        expect(patchVuln).not.toHaveBeenCalled();
+    });
+
     test('success message falls back to package-only when no variant touched', async () => {
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
         await submitAssessment({
@@ -721,7 +747,7 @@ describe('Vulnerability Modal', () => {
         expect(updateCb).not.toHaveBeenCalled();
         expect(patchVuln).not.toHaveBeenCalled();
 
-        const errorBanner = await screen.findByText(/failed to add assessment/i);
+        const errorBanner = await screen.findByText(/assessment not added/i);
         expect(errorBanner).toBeInTheDocument();
     });
 

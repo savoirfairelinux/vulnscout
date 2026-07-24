@@ -711,13 +711,38 @@ describe('StatusEditor', () => {
         );
 
         expect(screen.queryByText('pkg@1.0.0')).not.toBeInTheDocument();
-        const includeOutdated = screen.getByRole('checkbox', {name: 'Include outdated package versions'});
+        const includeOutdated = screen.getByRole('checkbox', {name: 'Include previous package versions'});
         await user.click(includeOutdated);
         const outdatedPackage = screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')!;
         await user.click(outdatedPackage);
-        expect(screen.getByText('Outdated')).toBeInTheDocument();
+        expect(screen.queryByText('Outdated')).not.toBeInTheDocument();
         await user.click(includeOutdated);
         await user.click(includeOutdated);
         expect(screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+    });
+
+    test('offers outdated findings when a package is current in another variant', () => {
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[
+                    {id: 'v1', name: 'current', project_id: 'p1'},
+                    {id: 'v2', name: 'historical', project_id: 'p1'},
+                ]}
+                availablePackages={['pkg@1.0.0']}
+                variantPackageMap={{v1: ['pkg@1.0.0'], v2: []}}
+                variantFindingsMap={{
+                    v1: [{pkg: 'pkg@1.0.0', outdated: false}],
+                    v2: [{pkg: 'pkg@1.0.0', outdated: true}],
+                }}
+            />
+        );
+
+        expect(screen.getByRole('checkbox', {name: 'Include previous package versions'})).toBeInTheDocument();
+    });
+
+    test('shows historical finding discovery while scope data loads', () => {
+        render(<StatusEditor {...defaultProps} availablePackages={['pkg@2.0.0']} findingsLoading={true} />);
+        expect(screen.getByText('Checking for previous package versions…')).toBeInTheDocument();
     });
 });

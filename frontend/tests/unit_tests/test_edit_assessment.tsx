@@ -868,11 +868,11 @@ describe('EditAssessment Component', () => {
         );
 
         expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
-        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
+        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
         const outdatedPackage = screen.getByText('package@1.0.0');
         await user.click(outdatedPackage.closest('label')!.querySelector('input')!);
-        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
-        await user.click(screen.getByRole('checkbox', {name: 'Include outdated package versions'}));
+        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
+        await user.click(screen.getByRole('checkbox', {name: 'Include previous package versions'}));
         const restoredOutdatedPackage = screen.getByText('package@1.0.0').closest('label')!.querySelector('input')!;
         expect(restoredOutdatedPackage).not.toBeChecked();
         await user.click(restoredOutdatedPackage);
