@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 import matchers from '@testing-library/jest-dom/matchers';
 expect.extend(matchers);
 
@@ -159,6 +159,38 @@ describe('Packages Table', () => {
         render(<TablePackages packages={packages} />);
 
         expect(screen.queryByRole('button', {name: /severity/i})).toBeNull();
+    })
+
+    test('outdated toggle is off by default and loads historical finding rows', async () => {
+        const activePackages = packages.map(pkg => pkg.id === 'aaabbbccc@1.0.0'
+            ? {...pkg, variants: ['Variant A']}
+            : pkg);
+        const outdatedPackage: Package = {
+            ...packages[0],
+            id: 'aaabbbccc@0.9.0',
+            version: '0.9.0',
+            variants: ['Variant A'],
+            outdated: true,
+            findingIds: ['finding-old'],
+            findingVulnerabilityIds: ['CVE-2026-0001'],
+        };
+        const loadOutdatedPackages = jest.fn<() => Promise<Package[]>>().mockResolvedValue([...activePackages, outdatedPackage]);
+        render(<TablePackages packages={activePackages} onLoadOutdatedPackages={loadOutdatedPackages} />);
+
+        const user = userEvent.setup();
+        const outdatedToggle = screen.getByRole('button', {name: 'Show Outdated'});
+        expect(outdatedToggle.getAttribute('aria-pressed')).toBe('false');
+        expect(screen.queryByRole('cell', {name: /^0\.9\.0$/})).toBeNull();
+
+        await user.click(outdatedToggle);
+
+        await waitFor(() => {
+            expect(loadOutdatedPackages).toHaveBeenCalledTimes(1);
+            expect(screen.getByRole('cell', {name: /^0\.9\.0$/})).toBeTruthy();
+            expect(screen.getAllByText('Outdated').length).toBeGreaterThanOrEqual(2);
+            expect(screen.queryByRole('cell', {name: /^1\.0\.0$/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /^2\.0\.0$/})).toBeNull();
+        });
     })
 
     test('sorting by name', async () => {
@@ -366,6 +398,8 @@ describe('Packages Table', () => {
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
         await user.click(cveFinderCheckbox);
 
+        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+
         // ACT: Click reset filters
         const resetBtn = await screen.getByRole('button', { name: /reset filters/i });
         await user.click(resetBtn);
@@ -373,6 +407,7 @@ describe('Packages Table', () => {
         // ASSERT: All packages should be visible again
         await waitFor(() => {
             expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+            expect(screen.getByRole('button', { name: 'Show Outdated' }).getAttribute('aria-pressed')).toBe('false');
         });
     })
 

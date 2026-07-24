@@ -235,6 +235,21 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setTab('vulnerabilities');
     }
 
+    const loadOutdatedPackages = useCallback(async () => {
+        const baseVariantId = currentBaseVariantId ?? currentVariantId;
+        const compareVariantId = currentBaseVariantId ? currentVariantId : undefined;
+        const loaded = await Packages.list(
+            baseVariantId,
+            baseVariantId ? undefined : currentProjectId,
+            compareVariantId,
+            currentOperation,
+            currentVariantIds,
+            currentMultiOperation,
+            true,
+        );
+        return Packages.enrich_with_vulns(loaded, vulnsRef.current);
+    }, [currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
+
     function showVulnsForPackage(packageId: string, matchingVulnerabilityIds?: string[]) {
         setFilterVulnerabilityIds(matchingVulnerabilityIds);
         goToVulnsTabWithFilter("Package", packageId);
@@ -304,7 +319,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     appendCVSS={appendCVSS}
                     projectId={currentProjectId}
                 />}
-                {tab === 'packages' && <TablePackages packages={pkgs} vulnerabilities={vulns} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' && <TablePackages packages={pkgs} vulnerabilities={vulns} onShowVulns={showVulnsForPackage} onLoadOutdatedPackages={loadOutdatedPackages} />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}

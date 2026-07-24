@@ -4,6 +4,7 @@ import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -17,6 +18,7 @@ type Props = {
     packages: Package[];
     vulnerabilities?: Vulnerability[];
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
+    onLoadOutdatedPackages?: () => Promise<Package[]>;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -36,12 +38,15 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutdatedPackages }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
+    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [packagesWithOutdated, setPackagesWithOutdated] = useState<Package[] | null>(null);
+    const [outdatedLoadError, setOutdatedLoadError] = useState('');
     const [matchCondition, setMatchCondition] = useState('');
     const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
     const [matchConditionError, setMatchConditionError] = useState('');
@@ -217,6 +222,16 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
         setMatchConditionError('');
     }, [vulnerabilities]);
 
+    useEffect(() => {
+        if (!showOnlyOutdated || packagesWithOutdated !== null || !onLoadOutdatedPackages) return;
+        let cancelled = false;
+        setOutdatedLoadError('');
+        onLoadOutdatedPackages()
+            .then(loaded => { if (!cancelled) setPackagesWithOutdated(loaded); })
+            .catch(() => { if (!cancelled) setOutdatedLoadError('Unable to load outdated findings'); });
+        return () => { cancelled = true; };
+    }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages]);
+
     const applyMatchCondition = async () => {
         const condition = matchCondition.trim();
         if (!condition) {
@@ -242,6 +257,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
         setMatchCondition('');
         setMatchingVulnerabilityIds(null);
         setMatchConditionError('');
+        setShowOnlyOutdated(false);
         setVisibleColumns(defaultVisibleColumns);
     }
 
@@ -263,7 +279,14 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
             columnHelper.accessor('name', {
                 id: 'name',
                 header: () => <div className="flex items-center justify-center">Name</div>,
-                cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue()}</div>,
+                cell: info => (
+                    <div className="flex items-center justify-center gap-2 h-full text-center">
+                        <span>{info.getValue()}</span>
+                        {info.row.original.outdated && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-900 text-amber-200">Outdated</span>
+                        )}
+                    </div>
+                ),
                 footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
@@ -410,9 +433,12 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                         <button
                             className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
                             onClick={() => {
-                                const packageId = info.getValue().id;
+                                const packageRow = info.getValue();
+                                const packageId = packageRow.id;
                                 if (matchingVulnerabilityIds) {
                                     onShowVulns?.(packageId, matchingVulnerabilityIds);
+                                } else if (packageRow.findingVulnerabilityIds?.length) {
+                                    onShowVulns?.(packageId, packageRow.findingVulnerabilityIds);
                                 } else {
                                     onShowVulns?.(packageId);
                                 }
@@ -439,6 +465,9 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const filteredPackages = useMemo(() => {
+        const availablePackages = showOnlyOutdated
+            ? (packagesWithOutdated ?? packages)
+            : packages;
         let matchedPackageIds: Set<string> | null = null;
         if (matchingVulnerabilityIds !== null) {
             const matchingIds = new Set(matchingVulnerabilityIds);
@@ -446,7 +475,8 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                 .filter(vulnerability => matchingIds.has(vulnerability.id))
                 .flatMap(vulnerability => vulnerability.packages_current));
         }
-        return packages.filter((el) => {
+        return availablePackages.filter((el) => {
+            if (showOnlyOutdated ? !el.outdated : el.outdated) return false;
             if (matchedPackageIds && !matchedPackageIds.has(el.id)) return false;
             if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
                 return false;
@@ -462,7 +492,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
             }
             return true;
         });
-    }, [packages, vulnerabilities, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
+    }, [packages, packagesWithOutdated, onLoadOutdatedPackages, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
         {matchConditionError && (
@@ -473,6 +503,14 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                 onClose={() => setMatchConditionError('')}
             />
         )}
+                {outdatedLoadError && (
+                    <MessageBanner
+                        type="error"
+                        message={outdatedLoadError}
+                        isVisible={true}
+                        onClose={() => setOutdatedLoadError('')}
+                    />
+                )}
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
             <div>Search</div>
             <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
@@ -593,6 +631,12 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                     setSelected={setSelectedVariants}
                 />
             )}
+
+            <ToggleSwitch
+                enabled={showOnlyOutdated}
+                setEnabled={setShowOnlyOutdated}
+                label="Outdated"
+            />
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button

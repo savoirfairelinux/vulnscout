@@ -70,6 +70,7 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 ### Filters
 
 - **Source**: restrict the table to packages originating from a specific SBOM source (e.g. a particular SPDX or CycloneDX document).
+- **Outdated**: enable the toggle to show only historical package/variant combinations whose package version is no longer present in that variant's current SBOM. The toggle is off by default.
 
 ### Match Condition
 
