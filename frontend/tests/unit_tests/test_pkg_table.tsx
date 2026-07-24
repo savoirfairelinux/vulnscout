@@ -155,24 +155,10 @@ describe('Packages Table', () => {
         expect(source_col).toBeTruthy();
     })
 
-    test('render severity when toggle activated', async () => {
-        // ARRANGE
+    test('does not render the obsolete severity toggle', () => {
         render(<TablePackages packages={packages} />);
 
-        // ACT
-        const user = userEvent.setup();
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
-
-        await user.click(severity_toggle); // switch to enabled mode
-
-        const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
-        const severity_high = await screen.getByText('high');
-        const severity_mediums = await screen.getAllByText('medium');
-
-        // ASSERT
-        expect(btn_enabled).toBeTruthy();
-        expect(severity_high).toBeTruthy();
-        expect(severity_mediums.length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', {name: /severity/i})).toBeNull();
     })
 
     test('sorting by name', async () => {
@@ -374,9 +360,6 @@ describe('Packages Table', () => {
         // Set some filters
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, 'xyz');
-
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
-        await user.click(severity_toggle);
 
         const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);

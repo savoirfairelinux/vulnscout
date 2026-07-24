@@ -1,11 +1,9 @@
-import type { Package, VulnCounts, Severities } from "../handlers/packages";
+import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
-import SeverityTag from "../components/SeverityTag";
 import TableGeneric from "../components/TableGeneric";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faC, faCircleQuestion, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -30,17 +28,6 @@ const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
     }, 0)
 }
 
-const highestSeverity = (severities: Severities, ignore: string[]) => {
-    return Object.keys(severities).reduce((acc, key) => {
-        if (!ignore.includes(key)) {
-            if (severities[key].index > acc.index) {
-                return severities[key]
-            }
-        }
-        return acc
-    }, {label: 'NONE', index: 0})
-}
-
 const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: string[]) => {
     const vulnsA = addVulnCounts(rowA.original.vulnerabilities, ignore)
     const vulnsB = addVulnCounts(rowB.original.vulnerabilities, ignore)
@@ -51,7 +38,6 @@ const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
 function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
-    const [showSeverity, setShowSeverity] = useState(false);
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
@@ -256,7 +242,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
         setMatchCondition('');
         setMatchingVulnerabilityIds(null);
         setMatchConditionError('');
-        setShowSeverity(false);
         setVisibleColumns(defaultVisibleColumns);
     }
 
@@ -343,7 +328,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                 size: 200,
             }),
             columnHelper.accessor(
-            row => ({ counts: row.vulnerabilities, severity: row.maxSeverity }),
+            row => row.vulnerabilities,
             {
                 id: 'vulnerabilities',
                 header: () => <div className="flex items-center justify-center">Vulnerabilities</div>,
@@ -363,8 +348,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                             </span>
                             {matchedCount ?? 0}
                         </span>
-                    ) : <span>{addVulnCounts(value.counts, [])}</span>}
-                    {showSeverity && <SeverityTag severity={highestSeverity(value.severity, []).label} />}
+                    ) : <span>{addVulnCounts(value, [])}</span>}
                     </div>
                 );
                 },
@@ -443,7 +427,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                 size: 10
             })
         ]
-    }, [showSeverity, onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -609,14 +593,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns }: Readonly
                     setSelected={setSelectedVariants}
                 />
             )}
-
-            <div className="ml-4">
-                <ToggleSwitch
-                    enabled={showSeverity}
-                    setEnabled={setShowSeverity}
-                    label="Severity"
-                />
-            </div>
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button

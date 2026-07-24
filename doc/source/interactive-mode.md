@@ -79,10 +79,6 @@ While a match condition is active, the **Show Vulnerabilities** button carries t
 
 See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
 
-### Severity Toggle
-
-The **Severity** toggle switch in the toolbar adds a colour-coded severity tag next to each package's vulnerability count, showing the highest severity among the package's associated vulnerabilities. This gives an at-a-glance view of which packages carry the most critical exposure.
-
 ### Actions
 
 Each row has a **Show Vulnerabilities** button that navigates to the Vulnerability Table pre-filtered to show only the vulnerabilities associated with that specific package.
