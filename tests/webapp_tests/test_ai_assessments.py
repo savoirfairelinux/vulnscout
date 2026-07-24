@@ -49,6 +49,16 @@ def app(init_files):
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db",
         })
         setup_demo_db(application, extra_packages=["abc@1.2.3"])
+        with application.app_context():
+            from src.models.finding import Finding
+            from src.models.observation import Observation
+            from src.models.package import Package
+
+            package = Package.get_by_string_id(PKG2)
+            assert package is not None
+            finding = Finding.get_or_create(package.id, VULN_ID)
+            Observation.create(finding.id, SCAN_UUID, commit=False)
+            db.session.commit()
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
@@ -94,15 +104,7 @@ def test_ai_post_second_variant_allowed(client, app):
     assert first.status_code == 200
 
     other_variant = "22222222-2222-2222-2222-222222222223"
-    with app.app_context():
-        db.session.add(
-            Variant(
-                id=uuid.UUID(other_variant),
-                project_id=PROJECT_UUID,
-                name="variant-b",
-            )
-        )
-        db.session.commit()
+    _add_variant(app, other_variant)
 
     second = _post_ai(client, variant_id=other_variant)
     assert second.status_code == 200
@@ -197,9 +199,19 @@ def test_approve_non_ai_returns_400(client):
 
 def _add_variant(app, variant_id):
     with app.app_context():
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
+
+        variant_uuid = uuid.UUID(variant_id)
         db.session.add(
-            Variant(id=uuid.UUID(variant_id), project_id=PROJECT_UUID, name="variant-b")
+            Variant(id=variant_uuid, project_id=PROJECT_UUID, name="variant-b")
         )
+        scan = Scan(id=uuid.uuid4(), variant_id=variant_uuid)
+        db.session.add(scan)
+        db.session.flush()
+        for finding in Finding.get_by_vulnerability(VULN_ID):
+            Observation.create(finding.id, scan.id, commit=False)
         db.session.commit()
 
 

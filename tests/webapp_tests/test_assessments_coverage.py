@@ -36,6 +36,21 @@ def app(init_files):
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
         })
         setup_demo_db(application, extra_packages=["test@1.0.0", "pkg@1.0.0", "pkg1@1.0.0", "pkg2@2.0.0", "pkg3@3.0.0"])
+        with application.app_context():
+            from src.extensions import db
+            from src.models.finding import Finding
+            from src.models.observation import Observation
+            from src.models.package import Package
+            from src.models.vulnerability import Vulnerability
+
+            for vuln_id in ("CVE-2021-99999", "CVE-2021-11111", "CVE-2021-22222"):
+                Vulnerability.get_or_create(vuln_id)
+                for package_id in ("test@1.0.0", "pkg@1.0.0", "pkg1@1.0.0", "pkg2@2.0.0", "pkg3@3.0.0"):
+                    package = Package.get_by_string_id(package_id)
+                    assert package is not None
+                    finding = Finding.get_or_create(package.id, vuln_id)
+                    Observation.create(finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+            db.session.commit()
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)

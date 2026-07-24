@@ -36,6 +36,19 @@ def app(init_files):
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
         })
         setup_demo_db(application)
+        with application.app_context():
+            from src.extensions import db
+            from src.models.finding import Finding
+            from src.models.observation import Observation
+            from src.models.package import Package
+            from src.models.vulnerability import Vulnerability
+
+            package = Package.get_by_string_id("cairo@1.16.0")
+            assert package is not None
+            Vulnerability.get_or_create("CVE-1999-12345")
+            finding = Finding.get_or_create(package.id, "CVE-1999-12345")
+            Observation.create(finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+            db.session.commit()
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
@@ -191,6 +204,44 @@ def test_post_assessment_any_missing_package_blocks_all(client):
         assert Package.get_by_string_id("missing@1.0.0") is None
     after = client.get("/api/assessments?format=list")
     assert len(json.loads(after.data)) == before_count
+
+
+def test_post_assessment_accepts_outdated_observed_finding(client):
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+
+    with client.application.app_context():
+        old_package = Package.find_or_create("cairo", "1.15.0")
+        old_finding = Finding.get_or_create(old_package.id, "CVE-1999-12345")
+        Observation.create(old_finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+        db.session.commit()
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['cairo@1.15.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessment"]["packages"] == ["cairo@1.15.0"]
+
+
+def test_post_assessment_rejects_unobserved_finding(client):
+    from src.models.package import Package
+
+    with client.application.app_context():
+        Package.find_or_create("cairo", "1.14.0")
+        from src.extensions import db
+        db.session.commit()
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['cairo@1.14.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 400
+    assert "Invalid finding" in response.get_data(as_text=True)
 
 
 def test_batch_missing_package_skips_item_only(client):

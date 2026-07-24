@@ -68,6 +68,43 @@ def _resolve_package(pkg_string_id: str) -> "Package | None":
     return Package.get_by_string_id(pkg_string_id)
 
 
+def _find_valid_finding(package_id: UUID, vuln_id: str, variant_id: UUID) -> "Finding | None":
+    """Return the finding when it was actually observed for the variant.
+
+    Assessment writes may target active or historical package versions, but
+    they must never invent a package/vulnerability/variant relationship that
+    was not produced by a scan.
+    """
+    from ..models.observation import Observation
+    from ..models.scan import Scan
+
+    return db.session.execute(
+        db.select(Finding)
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(
+            Finding.package_id == package_id,
+            Finding.vulnerability_id == vuln_id.upper(),
+            Scan.variant_id == variant_id,
+        )
+        .distinct()
+    ).scalar_one_or_none()
+
+
+def _validate_assessment_findings(
+    packages: list[Package], vuln_id: str, variant_id: UUID
+) -> "tuple[dict[UUID, Finding], list[str]]":
+    findings: dict[UUID, Finding] = {}
+    invalid: list[str] = []
+    for package in packages:
+        finding = _find_valid_finding(package.id, vuln_id, variant_id)
+        if finding is None:
+            invalid.append(package.string_id)
+        else:
+            findings[package.id] = finding
+    return findings, invalid
+
+
 def _create_assessment_record(
     assessment: "DBAssessment",
     finding_id: UUID,
@@ -902,13 +939,20 @@ def init_app(app: Flask) -> None:
                 + ". Assessments can only be written for existing packages."
             }, 400
 
+        valid_findings, invalid_findings = _validate_assessment_findings(
+            resolved_packages, vuln_id, variant_id
+        )
+        if invalid_findings:
+            return {
+                "error": "Invalid finding for vulnerability and variant: "
+                + ", ".join(invalid_findings)
+            }, 400
+
         created = []
         try:
             with batch_session():
                 for db_pkg in resolved_packages:
-                    # Ensure vulnerability record exists before creating Finding (FK constraint)
-                    DBVuln.get_or_create(vuln_id)
-                    finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                    finding = valid_findings[db_pkg.id]
                     # Always create a new record — never merge with an existing one.
                     # from_vuln_assessment does a find-or-update which would overwrite
                     # previous user assessments on the same (finding, variant).
@@ -992,15 +1036,23 @@ def init_app(app: Flask) -> None:
                     })
                     continue
 
+                valid_findings, invalid_findings = _validate_assessment_findings(
+                    item_packages, vuln_id, variant_id
+                )
+                if invalid_findings:
+                    errors.append({
+                        "vuln_id": vuln_id,
+                        "error": "Invalid finding for vulnerability and variant: "
+                        + ", ".join(invalid_findings),
+                    })
+                    continue
+
                 for db_pkg in item_packages:
                     try:
-                        # Ensure vulnerability record exists before creating Finding (FK constraint)
-                        DBVuln.get_or_create(vuln_id)
-                        # Resolve finding from cache first, then DB
                         f_key = (db_pkg.id, vuln_id)
                         finding = finding_cache.get(f_key)
                         if finding is None:
-                            finding = Finding.get_or_create(db_pkg.id, vuln_id)
+                            finding = valid_findings[db_pkg.id]
                             finding_cache[f_key] = finding
                         # Always create a new record — never overwrite an existing assessment.
                         # Honour the per-item timestamp so rows added for the same action
@@ -1033,6 +1085,12 @@ def init_app(app: Flask) -> None:
         existing = DBAssessment.get_by_id(assessment_id)
         if existing is None:
             return {"error": "Assessment not found"}, 404
+        if existing.finding is None or existing.variant_id is None or _find_valid_finding(
+            existing.finding.package_id,
+            existing.finding.vulnerability_id,
+            existing.variant_id,
+        ) is None:
+            return {"error": "Assessment references a finding that is not valid for its variant"}, 400
 
         was_non_custom = (existing.origin or "") != "custom"
         # Editing a pending AI assessment directly must not silently approve
