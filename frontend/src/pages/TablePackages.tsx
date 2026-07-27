@@ -397,6 +397,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             columnHelper.accessor('source', {
                 id: 'source',
                 header: () => <div className="flex items-center justify-center">Sources</div>,
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">Sources</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>Lists the SBOM sources that reported this package.</p>
+                        <p>Use this information to trace where package information originated.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package Sources helper',
                 cell: info => (
                     <div className="flex items-center justify-center h-full text-center">
                         {info.getValue()?.map(formatSourceName).join(', ')}

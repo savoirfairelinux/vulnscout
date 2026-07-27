@@ -936,6 +936,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     </div>
                 );
             },
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">EPSS Score</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Estimates the probability that this vulnerability will be exploited in the next 30 days.</p>
+                    <p>Higher percentages indicate a higher likelihood of exploitation.</p>
+                    <p>Refresh EPSS data to populate this score.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'EPSS Score helper',
             cell: info => {
                 const epss = info.getValue();
                 const fetching = epssProgress?.in_progress && (!epss.score || epss.score === 0);
@@ -962,6 +971,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('severity', {
             id: 'severity',
             header: () => <div className="flex items-center justify-center">Attack Vector</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Attack Vector</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows how an attacker needs to reach the vulnerable component.</p>
+                    <p>Values come from CVSS records, such as Network, Adjacent, Local, or Physical.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Attack Vector helper',
             cell: info => <div className="flex items-center justify-center h-full text-center">
                 {[...(new Set(info.getValue().cvss.map(cvss => cvss.attack_vector).filter(av => av != undefined)))]?.join(', ')}
             </div>,
@@ -997,6 +1014,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('effort.likely', {
             id: 'effort.likely',
             header: () => <div className="flex items-center justify-center">Estimated Effort</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Estimated Effort</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows the estimated time required to assess the vulnerability.</p>
+                    <p>The value reflects the likely effort estimate for the current vulnerability.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Estimated Effort helper',
             cell: info => <div className="flex items-center justify-center h-full text-center">{info.getValue().formatHumanShort()}</div>,
             enableSorting: true,
             sortingFn: (rowA, rowB) => rowA.original.effort.likely.total_seconds - rowB.original.effort.likely.total_seconds,
@@ -1005,6 +1030,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('assessments', {
             id: 'assessments',
             header: () => <div className="flex items-center justify-center">Last Assessed</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Assessed</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows the most recent creation or update time across all assessments in the current scope.</p>
+                    <p>Vulnerabilities without an assessment display “No assessment”.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Assessed helper',
             cell: info => {
                 const assessments = info.getValue();
                 if (!assessments || assessments.length === 0) {
@@ -1068,6 +1101,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     <p>Select vulnerabilities and refresh their data when a date is unavailable.</p>
                 </div>
             </>,
+            HintAriaLabel: 'Published Date helper',
             cell: info => {
                 const published = info.getValue();
                 const fetching = nvdProgress?.in_progress && !published;
@@ -1107,6 +1141,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('first_scan_date', {
             id: 'first_scan_date',
             header: () => <div className="flex items-center justify-center">First Scan Date</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">First Scan Date</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when this vulnerability was first detected in the scanned SBOM data.</p>
+                    <p>This date is recorded by VulnScout and is not the vulnerability publication date.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'First Scan Date helper',
             cell: info => {
                 const scanDate = info.getValue();
                 if (!scanDate) {
@@ -1139,6 +1181,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('data_fetched_at', {
             id: 'data_fetched_at',
             header: () => <div className="flex items-center justify-center">Last Fetched</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Fetched</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when vulnerability data was last retrieved from an external source.</p>
+                    <p>A value of “Never” means no external vulnerability data has been fetched yet.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Fetched helper',
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -1165,6 +1215,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('data_updated_at', {
             id: 'data_updated_at',
             header: () => <div className="flex items-center justify-center">Last Updated</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Last Updated</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when the vulnerability record was last updated with new data.</p>
+                    <p>A value of “Never” means the record has not received an external data update.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Last Updated helper',
             cell: info => {
                 const val = info.getValue();
                 if (!val) return <div className="flex items-center justify-center h-full text-center text-gray-400">Never</div>;
@@ -1208,6 +1266,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             columnHelper.accessor('found_by', {
             id: 'found_by',
             header: () => <div className="flex items-center justify-center">Sources</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Sources</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Lists the vulnerability sources that reported this vulnerability.</p>
+                    <p>Use this information to trace the origin of the vulnerability data.</p>
+                </div>
+            </>,
+            HintAriaLabel: 'Vulnerability Sources helper',
             cell: info => (
                 <div className="flex items-center justify-center h-full text-center">
                     {info.renderValue()
