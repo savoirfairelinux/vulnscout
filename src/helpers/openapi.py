@@ -16,9 +16,11 @@ _VISIBLE_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _DOC_OPENAPI_MARKER = "OpenAPI:"
 _COMPONENT_SCHEMAS = {"JsonObject", "Error"}
 _SCAN_EXEMPT_PATHS = {
+    "/api",
     "/api/openapi",
     "/api/openapi.json",
     "/api/openapi/ui",
+    "/api/scan/status",
     "/api/version",
 }
 
@@ -30,7 +32,7 @@ def build_openapi_spec(app: Flask) -> dict[str, Any]:
         key=lambda entry: (entry.rule, sorted(entry.methods or set())),
     )
     for rule in rules:
-        if not rule.rule.startswith("/api/"):
+        if rule.rule != "/api" and not rule.rule.startswith("/api/"):
             continue
         methods = sorted((rule.methods or set()) & _VISIBLE_METHODS)
         if not methods:
@@ -122,6 +124,8 @@ def _build_summary(path: str, method: str) -> str:
 
 
 def _build_tag(path: str) -> str:
+    if path == "/api":
+        return "system"
     suffix = path.removeprefix("/api/")
     system_paths = {"version", "openapi", "openapi.json", "openapi/ui", "scan/status"}
     if not suffix or suffix in system_paths:

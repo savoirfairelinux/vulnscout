@@ -33,6 +33,15 @@ def init_app(app):
 
     @app.route('/api/context', methods=['GET'])
     def get_merged_context():
+        """Return merged project and variant context.
+
+        OpenAPI:
+        query project_id uuid required Project UUID.
+        query variant_id uuid required Variant UUID belonging to the project.
+        response 200 JsonObject Merged project and variant context.
+        response 400 Error Invalid identifiers or mismatched project and variant.
+        response 404 Error Project or variant not found.
+        """
         project_id_str = request.args.get('project_id', '')
         variant_id_str = request.args.get('variant_id', '')
 
@@ -73,6 +82,13 @@ def init_app(app):
 
     @app.route('/api/projects/<project_id>/context', methods=['GET'])
     def get_project_context(project_id):
+        """Return context for a project.
+
+        OpenAPI:
+        response 200 JsonObject Project context.
+        response 400 Error Invalid project identifier.
+        response 404 Error Project not found.
+        """
         project_uuid, err = parse_uuid_or_400(project_id, 'project_id')
         if err:
             return err
@@ -89,6 +105,14 @@ def init_app(app):
 
     @app.route('/api/projects/<project_id>/context', methods=['PUT'])
     def put_project_context(project_id):
+        """Create or update context for a project.
+
+        OpenAPI:
+        body JsonObject required Project context fields.
+        response 200 JsonObject Updated project context.
+        response 400 Error Invalid project identifier.
+        response 404 Error Project not found.
+        """
         project_uuid, err = parse_uuid_or_400(project_id, 'project_id')
         if err:
             return err
@@ -104,6 +128,14 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context', methods=['PUT'])
     def put_variant_context(variant_id):
+        """Create or update context for a variant.
+
+        OpenAPI:
+        body JsonObject required Variant context fields.
+        response 200 JsonObject Updated variant context.
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
             return err
@@ -125,6 +157,20 @@ def init_app(app):
 
     @app.route('/api/context/export', methods=['GET'])
     def export_context():
+        """Export project and variant context.
+
+        With no filters, exports all context. A single-variant export requires
+        both ``project_id`` and ``variant_id``. ``variant_ids`` selects a
+        comma-separated set of variants.
+
+        OpenAPI:
+        query project_id uuid optional Project UUID for a single-variant export.
+        query variant_id uuid optional Variant UUID for a single-variant export.
+        query variant_ids string optional Comma-separated variant UUIDs.
+        response 200 JsonObject Exported context document.
+        response 400 Error Invalid or inconsistent filters.
+        response 404 Error Requested project or variant not found.
+        """
         project_id_str = request.args.get('project_id')
         variant_id_str = request.args.get('variant_id')
         variant_ids_str = request.args.get('variant_ids')
@@ -164,6 +210,14 @@ def init_app(app):
 
     @app.route('/api/context/import', methods=['POST'])
     def import_context():
+        """Import project and variant context atomically.
+
+        OpenAPI:
+        body JsonObject required Context export document to import.
+        response 200 JsonObject Import result.
+        response 400 Error Invalid context document.
+        response 500 Error Context could not be persisted.
+        """
         body = request.get_json(silent=True)
         try:
             entries = extract_entries(body)
@@ -195,6 +249,18 @@ def init_app(app):
     # the context_files table.
     @app.route('/api/variants/<variant_id>/context/files', methods=['POST'])
     def post_context_file(variant_id):
+        """Upload a supplemental context file for a variant.
+
+        Files are limited to 10 MB. The multipart payload accepts a required
+        ``file`` field and an optional ``description`` field.
+
+        OpenAPI:
+        body multipart required Supplemental file and optional description.
+        response 201 JsonObject Uploaded context-file metadata.
+        response 400 Error Invalid identifier, missing file, or oversized file.
+        response 404 Error Variant not found.
+        response 500 Error File could not be stored.
+        """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
             return err
@@ -243,6 +309,13 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>', methods=['DELETE'])
     def delete_context_file(variant_id, file_id):
+        """Delete a supplemental context file.
+
+        OpenAPI:
+        response 204 string Context file deleted.
+        response 400 Error Invalid variant or file identifier.
+        response 404 Error Variant or context file not found.
+        """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
             return err

@@ -4,10 +4,10 @@ VulnScout exposes a REST API served by the Flask backend, available at `http://l
 All endpoints return JSON unless otherwise noted. Routes are registered directly on the Flask application without URL prefixes or blueprints.
 
 The backend also exposes a machine-readable OpenAPI document at `GET /api/openapi`.
-For compatibility, the same document is also available at `GET /api/openapi.json`.
+For compatibility, the same document is also available at `GET /api` and `GET /api/openapi.json`.
 An interactive Swagger UI is available at `GET /api/openapi/ui` and is preconfigured to load the canonical spec from `/api/openapi`.
 This JSON document is generated from the registered Flask routes and is intended to be the canonical API specification for external tooling.
-It is fully route-driven: the path inventory comes from currently registered Flask routes, and operation descriptions are inferred from route docstrings when available.
+It is fully route-driven: every registered `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` operation under `/api` is included, and operation descriptions and request metadata are inferred from route docstrings when available.
 
 ---
 
@@ -187,6 +187,57 @@ DELETE /api/variants/<variant_id>
 
 ---
 
+## Context
+
+### Get Merged Context
+
+```
+GET /api/context?project_id=<project_id>&variant_id=<variant_id>
+```
+
+Returns the merged project and variant context, including supplemental file metadata. Both UUID parameters are required,
+and the variant must belong to the selected project.
+
+### Get or Update Project Context
+
+```
+GET /api/projects/<project_id>/context
+PUT /api/projects/<project_id>/context
+```
+
+The `PUT` request accepts a JSON object with a `description` field.
+
+### Update Variant Context
+
+```
+PUT /api/variants/<variant_id>/context
+```
+
+Accepts a JSON object containing any of `variant_description`, `codebase_path`, `environment`, `threat_model`, `risks`,
+and `other_info`.
+
+### Import or Export Context
+
+```
+GET /api/context/export
+POST /api/context/import
+```
+
+Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
+export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
+
+### Manage Supplemental Context Files
+
+```
+POST /api/variants/<variant_id>/context/files
+DELETE /api/variants/<variant_id>/context/files/<file_id>
+```
+
+Upload uses `multipart/form-data` with a required `file`, an optional `description`, and a 10 MB size limit. These
+endpoints are retained for API compatibility but are not currently exposed by the frontend.
+
+---
+
 ## Packages
 
 ### List Packages
@@ -294,6 +345,39 @@ PATCH /api/vulnerabilities/batch
   "count": 2,
   "errors": [],
   "error_count": 0
+}
+```
+
+### Evaluate a Match Condition
+
+```
+POST /api/vulnerabilities/match-condition
+```
+
+Evaluates a condition expression against supplied objects and returns the matching IDs.
+
+**Request body:**
+```json
+{
+  "condition": "severity.cvss.base_score >= 7",
+  "items": [{ "id": "CVE-2026-0001", "data": { "severity": { "cvss": { "base_score": 8.1 } } } }]
+}
+```
+
+### Search Vulnerability Descriptions
+
+```
+POST /api/vulnerabilities/search-descriptions
+```
+
+Searches the supplied vulnerability IDs for each term. Optional `variant_id` or `project_id` query parameters scope
+observation descriptions to active scans.
+
+**Request body:**
+```json
+{
+  "vulnerability_ids": ["CVE-2026-0001"],
+  "terms": ["buffer overflow"]
 }
 ```
 

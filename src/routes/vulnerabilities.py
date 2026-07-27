@@ -327,6 +327,13 @@ def init_app(app: Flask) -> None:
 
     @app.post('/api/vulnerabilities/match-condition')
     def match_condition() -> ResponseReturnValue:
+        """Evaluate a condition against supplied data objects.
+
+        OpenAPI:
+        body JsonObject required Condition string and items containing id and data fields.
+        response 200 JsonObject IDs of items matching the condition.
+        response 400 Error Invalid request or condition.
+        """
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return {"error": "Request body must be a JSON object"}, 400
@@ -856,7 +863,15 @@ def init_app(app: Flask) -> None:
 
     @app.post('/api/vulnerabilities/search-descriptions')
     def search_vulnerability_descriptions() -> ResponseReturnValue:
-        """Return vulnerability IDs whose scoped descriptions contain each term."""
+        """Return vulnerability IDs whose scoped descriptions contain each term.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict descriptions to a variant's active scans.
+        query project_id uuid optional Restrict descriptions to a project's active scans.
+        body JsonObject required Vulnerability ID and search-term arrays.
+        response 200 JsonObject Matching vulnerability IDs grouped by normalized term.
+        response 400 Error Invalid identifiers, arrays, or size limits.
+        """
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return {"error": "Expected a JSON object"}, 400
