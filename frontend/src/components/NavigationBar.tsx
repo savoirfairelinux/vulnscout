@@ -2,6 +2,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft, faRobot } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
+import VersionDisplay from './VersionDisplay';
 
 const greenTheme = true;
 const bgColor = greenTheme ? 'bg-cyan-800 text-neutral-50' : 'dark:bg-neutral-900 dark:text-neutral-50';
@@ -35,7 +36,12 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
             alt="VulnScout Logo"
             className="w-8 h-8 mr-2 align-middle"
           />
-          VulnScout
+          <span className="flex flex-col items-start gap-0.5">
+            <span>VulnScout</span>
+            <span className="self-start">
+              <VersionDisplay inline showName={false} />
+            </span>
+          </span>
         </button>
       </li>
 

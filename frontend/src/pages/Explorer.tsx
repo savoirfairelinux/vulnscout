@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
-import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -456,9 +455,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                 {tab === 'ai' && <AIContext />}
             </div>
             </main>
-            <footer>
-                <VersionDisplay />
-            </footer>
         </div>
     )
 }
