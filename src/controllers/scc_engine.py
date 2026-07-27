@@ -132,9 +132,18 @@ def _serialized_engine_operation() -> Generator[None, None, None]:
         try:
             databases_dir.mkdir(parents=True, exist_ok=True)
             lock_path = databases_dir / ".vulnscout-engine.lock"
-        except OSError:
+        except OSError as exc:
             lock_path = pathlib.Path(tempfile.gettempdir()).joinpath(
                 f"vulnscout-engine-{os.getuid()}.lock"
+            )
+            _logger.warning(
+                "Could not create engine lock under %s (%s); falling back to "
+                "%s. Mutual exclusion is only guaranteed if every process "
+                "resolves to the same lock file, so concurrent scans may not "
+                "be serialized in this state.",
+                databases_dir,
+                exc,
+                lock_path,
             )
         with lock_path.open("a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -560,14 +569,18 @@ def get_cve_json(cve_id: str) -> "dict | None":
     Returns the raw NVD CVE JSON dict (same schema as NVD API v2) or ``None``
     if the CVE is not found or the database is not yet initialised.
     """
-    with _serialized_engine_operation():
-        with _ENGINE_LOCK:
-            engine = _ENGINE
-        if engine is None:
-            # Engine not yet built — the first build includes a fetch.
-            engine = _get_engine()
-        try:
-            return engine.get_nvd_cve_json(cve_id)
-        except Exception as exc:
-            _logger.warning("Failed to look up %s in local NVD database: %s", cve_id, exc)
-            return None
+    with _ENGINE_LOCK:
+        engine = _ENGINE
+    if engine is None:
+        # Engine not yet built — the first build includes a fetch and is
+        # serialized against concurrent scans via get_engine().  Read-only
+        # look-ups against an already-built engine deliberately skip that
+        # serialization so a running scan (which holds the exclusive engine
+        # lock for its full multi-minute duration) does not stall vuln-detail
+        # requests.
+        engine = get_engine()
+    try:
+        return engine.get_nvd_cve_json(cve_id)
+    except Exception as exc:
+        _logger.warning("Failed to look up %s in local NVD database: %s", cve_id, exc)
+        return None
