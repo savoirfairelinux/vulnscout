@@ -336,20 +336,21 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                     {variants.map(v => {
                         const incompatible = allowedVariants !== null && !allowedVariants.has(v.id);
                         const selected = selectedVariantIds.includes(v.id);
+                        const blocked = incompatible && !selected;
                         return (
                         <label
                             key={v.id}
                             className={[
                                 'inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition-colors select-none',
                                 selected ? 'border-blue-400 bg-blue-500/20 text-blue-100' : 'border-gray-600 bg-gray-700/60 text-gray-300 hover:border-gray-500',
-                                incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                                blocked ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
                             ].join(' ')}
-                            title={incompatible ? 'Not every selected package version applies to this variant' : undefined}
+                            title={blocked ? 'Not every selected package version applies to this variant' : undefined}
                         >
                             <input
                                 type="checkbox"
                                 checked={selected}
-                                disabled={incompatible}
+                                disabled={blocked}
                                 onChange={(e) => handleVariantToggle(v.id, e.target.checked)}
                                 className="sr-only"
                             />
@@ -371,25 +372,26 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                         const isOutdated = outdatedPackages.has(pkg);
                         const incompatible = allowedPackages !== null && !allowedPackages.has(pkg);
                         const selected = selectedPackages.includes(pkg);
+                        const blocked = incompatible && !selected;
                         return (
                         <label
                             key={pkg}
                             className={[
                                 'inline-flex items-center rounded-full border px-3 py-1.5 text-sm transition-colors select-none',
                                 selected ? 'border-blue-400 bg-blue-500/20 text-blue-100' : 'border-gray-600 bg-gray-700/60 text-gray-300 hover:border-gray-500',
-                                incompatible ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+                                blocked ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
                             ].join(' ')}
-                            title={incompatible ? 'This package version does not apply to every selected variant' : (isOutdated ? 'From a previous scan' : undefined)}
+                            title={blocked ? 'This package version does not apply to every selected variant' : (isOutdated ? 'From a previous scan' : undefined)}
                         >
                             <input
                                 type="checkbox"
                                 checked={selected}
-                                disabled={incompatible}
+                                disabled={blocked}
                                 onChange={(e) => handlePackageToggle(pkg, e.target.checked)}
                                 className="sr-only"
                             />
                             <span aria-hidden="true" className="mr-1.5 text-xs">{selected ? '✓' : '+'}</span>
-                            <span className={`font-mono ${incompatible ? 'text-gray-500' : isActive ? '' : 'italic'}`}>{formatPkgId(pkg)}</span>
+                            <span className={`font-mono ${blocked ? 'text-gray-500' : isActive ? '' : 'italic'}`}>{formatPkgId(pkg)}</span>
                         </label>
                         );
                     })}

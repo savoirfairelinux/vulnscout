@@ -11,7 +11,6 @@ from uuid import UUID
 from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..extensions import db, batch_session
-from ..models.vulnerability import Vulnerability as DBVuln
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -855,7 +854,7 @@ def init_app(app: Flask) -> None:
                     seen_variant_ids.add(scan.variant_id)
                     variant_ids.append(scan.variant_id)
 
-        result = []
+        result: list[dict[str, Any]] = []
         vuln_pkg_ids = set(pkg_string_by_id.keys())
         for vid in variant_ids:
             active_scan_ids = active_sbom_scan_ids_for_variant(vid)
@@ -868,7 +867,7 @@ def init_app(app: Flask) -> None:
                 .where(SBOMDocument.scan_id.in_(active_scan_ids))
                 .distinct()
             ).all()) if active_scan_ids else set()
-            variant_findings = []
+            variant_findings: list[dict[str, str | bool]] = []
             for finding in findings:
                 if finding.id not in finding_ids_by_variant.get(vid, set()) or finding.package is None:
                     continue
@@ -880,7 +879,10 @@ def init_app(app: Flask) -> None:
             result.append({
                 "variant_id": str(vid),
                 "active_packages": active_packages,
-                "findings": sorted(variant_findings, key=lambda item: (item["package"], item["finding_id"])),
+                "findings": sorted(
+                    variant_findings,
+                    key=lambda item: (str(item.get("package", "")), str(item.get("finding_id", ""))),
+                ),
             })
         return result, 200
 
@@ -910,6 +912,8 @@ def init_app(app: Flask) -> None:
         variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
         if err:
             return err
+        if variant_id is None:
+            return {"error": "Invalid variant_id"}, 400
 
         ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
@@ -1003,6 +1007,9 @@ def init_app(app: Flask) -> None:
                 continue
             variant_id, err = parse_uuid_or_400(variant_id_raw, "variant_id")
             if err:
+                errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
+                continue
+            if variant_id is None:
                 errors.append({"vuln_id": vuln_id, "error": "Invalid variant_id"})
                 continue
 

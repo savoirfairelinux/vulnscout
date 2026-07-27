@@ -501,7 +501,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
             }
             return true;
         });
-    }, [packages, packagesWithOutdated, onLoadOutdatedPackages, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
+    }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
 
     return (<>
         {showOnlyOutdated && outdatedLoading && (

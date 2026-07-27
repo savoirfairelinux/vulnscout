@@ -267,13 +267,16 @@ def init_app(app: Flask) -> None:
                 if not scan_ids:
                     active_identities_by_variant[scope_variant_id] = set()
                     continue
-                active_identities_by_variant[scope_variant_id] = set(db.session.execute(
-                    db.select(Package.name, Package.version)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(scan_ids))
-                    .distinct()
-                ).all())
+                active_identities_by_variant[scope_variant_id] = {
+                    (name, version)
+                    for name, version in db.session.execute(
+                        db.select(Package.name, Package.version)
+                        .join(SBOMPackage, Package.id == SBOMPackage.package_id)
+                        .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
+                        .where(SBOMDocument.scan_id.in_(scan_ids))
+                        .distinct()
+                    )
+                }
 
             historical_rows = db.session.execute(
                 db.select(Finding, Package, Variant, Scan.scan_source)
@@ -289,8 +292,8 @@ def init_app(app: Flask) -> None:
             for finding, package, variant, scan_source in historical_rows:
                 if (package.name, package.version) in active_identities_by_variant.get(variant.id, set()):
                     continue
-                key = (package.id, variant.id)
-                if key not in outdated_rows:
+                outdated_key = (package.id, variant.id)
+                if outdated_key not in outdated_rows:
                     item = package.to_dict()
                     item.update({
                         "variants": [variant.name],
@@ -300,8 +303,8 @@ def init_app(app: Flask) -> None:
                         "finding_ids": [],
                         "vulnerability_ids": [],
                     })
-                    outdated_rows[key] = item
-                item = outdated_rows[key]
+                    outdated_rows[outdated_key] = item
+                item = outdated_rows[outdated_key]
                 finding_id = str(finding.id)
                 if finding_id not in item["finding_ids"]:
                     item["finding_ids"].append(finding_id)

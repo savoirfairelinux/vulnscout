@@ -329,8 +329,10 @@ def test_review_ai_list_after_create(client):
 def test_review_ai_does_not_leak_into_custom_review(client):
     """AI-origin assessments must not appear in the custom /review list, and
     custom assessments must not appear in the AI review list."""
-    _create_ai_assessment(client)
-    _create_handmade_assessment(client, vuln_id="CVE-2020-35492", packages=["abc@1.2.3"])
+    ai_create_resp = _create_ai_assessment(client)
+    custom_create_resp = _create_handmade_assessment(client)
+    assert ai_create_resp.status_code == 200
+    assert custom_create_resp.status_code == 200
 
     custom_resp = client.get("/api/assessments/review")
     ai_resp = client.get("/api/assessments/review/ai")
