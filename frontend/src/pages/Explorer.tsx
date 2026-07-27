@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import NavigationBar from "../components/NavigationBar";
+import ScanProgressModal from "../components/ScanProgressModal";
 import MessageBanner from "../components/MessageBanner";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
@@ -22,6 +23,10 @@ import type { AppConfig } from "../handlers/config";
 import type { FrontendScope } from "../handlers/config";
 import Projects from '../handlers/project';
 import Variants from '../handlers/variant';
+import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot } from "../handlers/grypeScanState";
+import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot } from "../handlers/nvdScanState";
+import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot } from "../handlers/osvScanState";
+import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot } from "../handlers/sccScanState";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -66,6 +71,25 @@ function Explorer() {
     const [currentOperation, setCurrentOperation] = useState<string | undefined>(undefined);
     const [currentVariantIds, setCurrentVariantIds] = useState<string[] | undefined>(undefined);
     const [currentMultiOperation, setCurrentMultiOperation] = useState<string | undefined>(undefined);
+    const [scanProgressOpen, setScanProgressOpen] = useState(false);
+    const hadActiveScans = useRef(false);
+    const grypeScanEntries = useSyncExternalStore(grypeSubscribe, grypeGetSnapshot);
+    const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
+    const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
+    const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
+    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries];
+    const trackedScanCount = scanEntries.length;
+    const finishedScanCount = scanEntries
+        .filter(entry => entry.status === "done" || entry.status === "error").length;
+    const activeScanCount = scanEntries
+        .filter(entry => entry.status === "queued" || entry.status === "running").length;
+
+    useEffect(() => {
+        if (activeScanCount > 0 && !hadActiveScans.current) {
+            setScanProgressOpen(true);
+        }
+        hadActiveScans.current = activeScanCount > 0;
+    }, [activeScanCount]);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -364,8 +388,13 @@ function Explorer() {
                     defaultVariant={defaultConfig.variant}
                     defaultScope={frontendScope}
                     onApply={handleApply}
+                    trackedScanCount={trackedScanCount}
+                    finishedScanCount={finishedScanCount}
+                    activeScanCount={activeScanCount}
+                    onOpenScanProgress={() => setScanProgressOpen(true)}
                 />
             </header>
+            <ScanProgressModal isOpen={scanProgressOpen} onClose={() => setScanProgressOpen(false)} />
 
             <main id="main-content" aria-label={tabLabels[tab] ?? 'Content'} className="flex-1 flex flex-col overflow-hidden">
             <div className="px-8 pt-4">

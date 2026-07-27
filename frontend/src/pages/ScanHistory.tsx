@@ -2,33 +2,35 @@ import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "
 import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult, RunningScanEntry } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, triggerScan, dismiss as grypeDismiss, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
+import { subscribe, getSnapshot, setOnDone, queueScan as grypeQueueScan, startQueuedScan as grypeStartQueuedScan, waitForCompletion as grypeWaitForCompletion, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
     getSnapshot as nvdGetSnapshot,
     setOnDone as nvdSetOnDone,
-    triggerScan as nvdTriggerScan,
-    dismiss as nvdDismiss,
+    queueScan as nvdQueueScan,
+    startQueuedScan as nvdStartQueuedScan,
+    waitForCompletion as nvdWaitForCompletion,
     restoreFromStatus as nvdRestore,
 } from "../handlers/nvdScanState";
 import {
     subscribe as osvSubscribe,
     getSnapshot as osvGetSnapshot,
     setOnDone as osvSetOnDone,
-    triggerScan as osvTriggerScan,
-    dismiss as osvDismiss,
+    queueScan as osvQueueScan,
+    startQueuedScan as osvStartQueuedScan,
+    waitForCompletion as osvWaitForCompletion,
     restoreFromStatus as osvRestore,
 } from "../handlers/osvScanState";
 import {
     subscribe as sccSubscribe,
     getSnapshot as sccGetSnapshot,
     setOnDone as sccSetOnDone,
-    triggerScan as sccTriggerScan,
-    dismiss as sccDismiss,
+    queueScan as sccQueueScan,
+    startQueuedScan as sccStartQueuedScan,
+    waitForCompletion as sccWaitForCompletion,
     restoreFromStatus as sccRestore,
 } from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
-import ScanProgressPanel from "../components/ScanProgressPanel";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
@@ -1332,12 +1334,22 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
         setScanMenuOpen(false);
         const opts = { excludeKernel, nvdMode: nvdScanMode };
-        const promises: Promise<void>[] = [];
-        if (selectedScanTypes.has('grype')) promises.push(triggerScan(variants, opts));
-        if (selectedScanTypes.has('nvd')) promises.push(nvdTriggerScan(variants, opts));
-        if (selectedScanTypes.has('osv')) promises.push(osvTriggerScan(variants, opts));
-        if (selectedScanTypes.has('scc')) promises.push(sccTriggerScan(variants, opts));
-        await Promise.all(promises);
+        const scanQueue = [
+            ['grype', grypeQueueScan, grypeStartQueuedScan, grypeWaitForCompletion],
+            ['nvd', nvdQueueScan, nvdStartQueuedScan, nvdWaitForCompletion],
+            ['osv', osvQueueScan, osvStartQueuedScan, osvWaitForCompletion],
+            ['scc', sccQueueScan, sccStartQueuedScan, sccWaitForCompletion],
+        ] as const;
+
+        await Promise.all(scanQueue.map(async ([scanType, queueScan]) => {
+            if (selectedScanTypes.has(scanType)) await queueScan(variants, opts);
+        }));
+
+        for (const [scanType, , startQueuedScan, waitForCompletion] of scanQueue) {
+            if (!selectedScanTypes.has(scanType)) continue;
+            await startQueuedScan();
+            await waitForCompletion();
+        }
     }
 
     useEffect(() => {
@@ -1705,41 +1717,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         </div>
     );
 
-    // ---- Per-variant progress panels ----
-    const grypeColors = { border: "border-purple-700/60", headerBg: "bg-purple-900/40", iconText: "text-purple-400", titleText: "text-purple-200", subtitleText: "text-purple-300/80", bar: "bg-purple-500" };
-    const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40", iconText: "text-orange-400", titleText: "text-orange-200", subtitleText: "text-orange-300/80", bar: "bg-orange-500" };
-    const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
-    const sccColors = { border: "border-sky-700/60", headerBg: "bg-sky-900/40", iconText: "text-sky-400", titleText: "text-sky-200", subtitleText: "text-sky-300/80", bar: "bg-sky-500" };
-
-    const progressPanels = (
-        <>
-            {grypeEntries
-                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
-                .map(entry => (
-                    <ScanProgressPanel key={`grype-${entry.variantId}`} entry={entry} label="Grype Scan" icon={faBug} colors={grypeColors} onDismiss={() => grypeDismiss(entry.variantId)} />
-                ))
-            }
-            {nvdEntries
-                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
-                .map(entry => (
-                    <ScanProgressPanel key={`nvd-${entry.variantId}`} entry={entry} label="NVD Scan" icon={faShieldHalved} colors={nvdColors} onDismiss={() => nvdDismiss(entry.variantId)} />
-                ))
-            }
-            {osvEntries
-                .filter(e => e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
-                .map(entry => (
-                    <ScanProgressPanel key={`osv-${entry.variantId}`} entry={entry} label="OSV Scan" icon={faLeaf} colors={osvColors} onDismiss={() => osvDismiss(entry.variantId)} />
-                ))
-            }
-            {sccEntries
-                .filter(e => e.status === "queued" || e.status === "running" || e.status === "done" || (e.status === "error" && e.logs.length > 0))
-                .map(entry => (
-                    <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
-                ))
-            }
-        </>
-    );
-
     if (loading) {
         return (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -1754,7 +1731,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return (
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {progressPanels}
                 <div className="flex items-center justify-center h-32 text-red-400">
                     {error}
                 </div>
@@ -1765,7 +1741,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         return (
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {progressPanels}
                 <div className="flex items-center justify-center h-32 text-gray-400 dark:text-neutral-400">
                     No scans found.
                 </div>
@@ -1802,7 +1777,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
             <div className="w-full px-6 py-6">
                 {menuBar}
-                {progressPanels}
 
                 {/* Timeline rows */}
                 <div className="relative">

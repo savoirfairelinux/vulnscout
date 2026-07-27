@@ -327,6 +327,21 @@ describe('ScanStateManager.triggerScan (serial)', () => {
         expect(triggerFn).toHaveBeenCalledWith('v1', {});
     });
 
+    test('shows a prepared batch as queued before it starts', async () => {
+        const { manager, triggerFn } = makeSerialManager({});
+        await manager.queueScan([
+            { id: 'v1', name: 'V1' },
+            { id: 'v2', name: 'V2' },
+        ]);
+
+        expect(manager.getSnapshot().every((state) => state.status === 'queued')).toBe(true);
+        expect(triggerFn).not.toHaveBeenCalled();
+
+        await manager.startQueuedScan();
+        expect(manager.getSnapshot().find((state) => state.variantId === 'v1')?.status).toBe('running');
+        expect(triggerFn).toHaveBeenCalledWith('v1', {});
+    });
+
     test('advances the queue as each scan finishes', async () => {
         const replies: Record<string, Status> = {
             v1: { status: 'done' },
@@ -348,6 +363,25 @@ describe('ScanStateManager.triggerScan (serial)', () => {
         // Second poll: v2 finishes
         await jest.advanceTimersByTimeAsync(3000);
         expect(manager.getSnapshot().find((s) => s.variantId === 'v2')?.status).toBe('done');
+    });
+
+    test('resolves completion only after the entire queue finishes', async () => {
+        const { manager } = makeSerialManager({
+            v1: { status: 'done' },
+            v2: { status: 'done' },
+        });
+        await manager.triggerScan([
+            { id: 'v1', name: 'V1' },
+            { id: 'v2', name: 'V2' },
+        ]);
+        const completion = jest.fn();
+        void manager.waitForCompletion().then(completion);
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(completion).not.toHaveBeenCalled();
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(completion).toHaveBeenCalledTimes(1);
     });
 
     test('marks the first variant as error and advances when its trigger fails', async () => {

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
@@ -28,6 +28,50 @@ describe('ScanProgressPanel', () => {
         ...overrides,
     });
 
+    it('keeps a scan queued until progress content arrives', async () => {
+        const { rerender } = render(
+            <ScanProgressPanel
+                entry={makeEntry('queued', { progress: 'Queued', logs: ['Waiting for previous scan to finish…'] })}
+                label="Grype Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        const toggle = screen.getByRole('button', { name: /grype scan – variant 1 queued/i });
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.queryByText('Waiting for previous scan to finish…')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /close/i })).not.toBeInTheDocument();
+
+        rerender(
+            <ScanProgressPanel
+                entry={makeEntry('running', { progress: 'starting', total: 0, doneCount: 0 })}
+                label="Grype Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        expect(screen.getByRole('button', { name: /grype scan – variant 1 queued/i }))
+            .toHaveAttribute('aria-expanded', 'false');
+
+        rerender(
+            <ScanProgressPanel
+                entry={makeEntry('running', { progress: '1 / 4', logs: ['Scanning package metadata'] })}
+                label="Grype Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        await waitFor(() => expect(screen.getByRole('button', { name: /grype scan – variant 1 in progress/i }))
+            .toHaveAttribute('aria-expanded', 'true'));
+        expect(screen.getByText('Scanning package metadata')).toBeInTheDocument();
+    });
+
     it('shows the queued state without a dismiss button', () => {
         render(
             <ScanProgressPanel
@@ -41,7 +85,7 @@ describe('ScanProgressPanel', () => {
 
         expect(screen.getByText(/grype scan – variant 1 queued/i)).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /close/i })).not.toBeInTheDocument();
-        expect(document.body.querySelector('.animate-pulse')).toBeInTheDocument();
+        expect(document.body.querySelector('.animate-pulse')).not.toBeInTheDocument();
     });
 
     it('shows the position for a multi-variant scan', () => {
@@ -77,7 +121,7 @@ describe('ScanProgressPanel', () => {
         expect(screen.queryByText(/variant 1 of 1/i)).not.toBeInTheDocument();
     });
 
-    it('renders running and complete states with the expected log styling', async () => {
+    it('renders running logs then collapses a completed scan with a success indicator', async () => {
         const user = userEvent.setup();
         const onDismiss = jest.fn();
 
@@ -112,9 +156,13 @@ describe('ScanProgressPanel', () => {
             />,
         );
 
+        await waitFor(() => expect(screen.getByRole('button', { name: /nvd scan – variant 1 complete/i }))
+            .toHaveAttribute('aria-expanded', 'false'));
+        expect(screen.getByLabelText('Complete')).toHaveClass('text-green-400');
+        expect(screen.queryByText('✓ completed')).not.toBeInTheDocument();
+
         await user.click(screen.getByRole('button', { name: /close/i }));
         expect(onDismiss).toHaveBeenCalledTimes(1);
         expect(screen.getByText(/nvd scan – variant 1 complete/i)).toBeInTheDocument();
-        expect(document.body.querySelector('.bg-green-500')).toBeInTheDocument();
     });
 });

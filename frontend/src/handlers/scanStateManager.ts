@@ -66,6 +66,12 @@ export class ScanStateManager {
     /** Optional callback invoked when *all* running scans finish */
     private onDoneCallback: (() => void) | null = null;
 
+    /** Resolves when the current scan batch has no running or queued entries. */
+    private completionPromise: Promise<void> | null = null;
+
+    /** Resolver for the current scan batch completion promise. */
+    private resolveCompletion: (() => void) | null = null;
+
     /** Queue of variants waiting to be triggered (serial mode only) */
     private pendingQueue: Array<{ id: string; name: string }> = [];
 
@@ -105,6 +111,51 @@ export class ScanStateManager {
 
     setOnDone = (cb: (() => void) | null) => {
         this.onDoneCallback = cb;
+    };
+
+    waitForCompletion = (): Promise<void> => this.completionPromise ?? Promise.resolve();
+
+    /**
+     * Register a serial scan batch without starting it, so callers can show
+     * the entire global queue before allowing its turn to begin.
+     */
+    queueScan = async (variants: Array<{ id: string; name: string }>, opts: ScanTriggerOptions = {}) => {
+        if (variants.length === 0) return;
+
+        this.currentOptions = opts;
+        this.completionPromise = new Promise(resolve => {
+            this.resolveCompletion = resolve;
+        });
+
+        for (let i = 0; i < variants.length; i++) {
+            const variant = variants[i];
+            this.states.set(variant.id, {
+                variantId: variant.id,
+                variantName: variant.name,
+                variantPosition: i + 1,
+                variantCount: variants.length,
+                status: "queued",
+                error: null,
+                progress: "Queued",
+                logs: ["Waiting for previous scan to finish…"],
+                total: 0,
+                doneCount: 0,
+            });
+        }
+        this.pendingQueue = [...variants];
+        this.rebuildSnapshot();
+    };
+
+    /** Start the next previously queued serial scan batch. */
+    startQueuedScan = async () => {
+        if (!this.serial || this.pendingQueue.length === 0) return;
+
+        this.triggerNextInQueue();
+        if ([...this.states.values()].some((state) => state.status === "running")) {
+            this.startPolling();
+        } else {
+            this.completeRunIfFinished();
+        }
     };
 
     /** Dismiss one variant's panel */
@@ -181,6 +232,9 @@ export class ScanStateManager {
         if (variants.length === 0) return;
 
         this.currentOptions = opts;
+        this.completionPromise = new Promise(resolve => {
+            this.resolveCompletion = resolve;
+        });
 
         if (this.serial) {
             // Show all entries immediately; first is "running", rest are "queued"
@@ -217,6 +271,8 @@ export class ScanStateManager {
             // Start polling (will also advance the queue as variants finish)
             if ([...this.states.values()].some((s) => s.status === "running")) {
                 this.startPolling();
+            } else {
+                this.completeRunIfFinished();
             }
             return;
         }
@@ -255,6 +311,8 @@ export class ScanStateManager {
         // Start polling if any variant is still running
         if ([...this.states.values()].some((s) => s.status === "running")) {
             this.startPolling();
+        } else {
+            this.completeRunIfFinished();
         }
     };
 
@@ -282,6 +340,17 @@ export class ScanStateManager {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
         }
+    }
+
+    private completeRunIfFinished() {
+        const hasRunningScan = [...this.states.values()].some((s) => s.status === "running");
+        if (hasRunningScan || this.pendingQueue.length > 0) return;
+
+        this.stopPolling();
+        this.resolveCompletion?.();
+        this.resolveCompletion = null;
+        this.completionPromise = null;
+        this.onDoneCallback?.();
     }
 
     /**
@@ -321,7 +390,7 @@ export class ScanStateManager {
                 if (activeIds.length === 0) {
                     // Nothing running; if there are queued items, don't stop
                     if (this.pendingQueue.length === 0) {
-                        this.stopPolling();
+                        this.completeRunIfFinished();
                     }
                     return;
                 }
@@ -388,8 +457,7 @@ export class ScanStateManager {
                     (s) => s.status === "running",
                 );
                 if (!stillRunning && this.pendingQueue.length === 0) {
-                    this.stopPolling();
-                    this.onDoneCallback?.();
+                    this.completeRunIfFinished();
                 }
             } catch {
                 // Network hiccup — keep polling
