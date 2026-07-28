@@ -183,6 +183,45 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Scc')).not.toBeInTheDocument();
     })
 
+    test('keeps independent same-day assessments with identical content separate', async () => {
+        const first = {
+            ...vulnerability.assessments[0],
+            id: 'same-day-first',
+            packages: ['first@1.0.0'],
+            timestamp: '2026-07-28T09:00:00Z',
+        };
+        const second = {
+            ...vulnerability.assessments[0],
+            id: 'same-day-second',
+            packages: ['second@1.0.0'],
+            timestamp: '2026-07-28T15:00:00Z',
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([first, second]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{...vulnerability, assessments: [first, second]}}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getAllByRole('listitem')).toHaveLength(2);
+        });
+        expect(within(history).getAllByText('first@1.0.0')).toHaveLength(1);
+        expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
+    });
+
 
     test('closing button', async () => {
         // ARRANGE

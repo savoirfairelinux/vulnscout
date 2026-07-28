@@ -883,11 +883,10 @@ type VariantScopedSnapshot = {
         const groups: { [key: string]: Assessment[] } = {};
 
         assessments.forEach(assess => {
-            // Create a key based on timestamp (date only), status, and assessment content
-            const date = new Date(assess.timestamp);
-            const dateKey = date.toDateString(); // This gives us just the date part
+            // Rows created by one user action share the exact timestamp. Keep
+            // separate actions distinct even when their content is identical.
             const contentKey = `${assess.simplified_status}|${assess.justification || ''}|${assess.impact_statement || ''}|${assess.status_notes || ''}|${assess.workaround || ''}`;
-            const groupKey = `${dateKey}::${contentKey}`;
+            const groupKey = `${assess.timestamp}::${contentKey}`;
 
             if (!groups[groupKey]) {
                 groups[groupKey] = [];
@@ -1834,12 +1833,10 @@ type VariantScopedSnapshot = {
                                     const isNewlyAdded = group.assessments.some(assess => newAssessmentIds.has(assess.id));
                                     const isBeingEdited = editingAssessmentId === firstAssess.id;
                                     const groupOrigins = [...new Set(group.assessments.map(a => a.origin).filter(Boolean))];
-                                    const groupDateKey = new Date(group.timestamp).toDateString();
-                                    const groupFingerprint = `${firstAssess.simplified_status}|${firstAssess.justification || ''}|${firstAssess.impact_statement || ''}|${firstAssess.status_notes || ''}|${firstAssess.workaround || ''}`;
-                                    const matchingAssessmentsFromApi = allVulnAssessments.filter(a => {
-                                        const fingerprint = `${a.simplified_status}|${a.justification || ''}|${a.impact_statement || ''}|${a.status_notes || ''}|${a.workaround || ''}`;
-                                        return new Date(a.timestamp).toDateString() === groupDateKey && fingerprint === groupFingerprint;
-                                    });
+                                    const groupAssessmentIds = new Set(group.assessments.map(a => a.id));
+                                    const matchingAssessmentsFromApi = allVulnAssessments.filter(a =>
+                                        groupAssessmentIds.has(a.id)
+                                    );
                                     const matchingAssessments = matchingAssessmentsFromApi.length > 0
                                         ? matchingAssessmentsFromApi
                                         : group.assessments;

@@ -88,7 +88,11 @@ function EditAssessment({
         const options = new Set((availablePackages ?? []).filter(pkg =>
             !outdatedPackages.has(pkg) || packagesWithCurrentFindings.has(pkg)
         ));
-        for (const pkg of defaultSelectedPackages ?? []) options.add(pkg);
+        for (const pkg of defaultSelectedPackages ?? []) {
+            if (includeOutdatedPackages || !outdatedPackages.has(pkg) || packagesWithCurrentFindings.has(pkg)) {
+                options.add(pkg);
+            }
+        }
         if (includeOutdatedPackages) {
             for (const pkg of outdatedPackages) options.add(pkg);
         }
@@ -100,14 +104,14 @@ function EditAssessment({
         for (const [variantId, packages] of Object.entries(variantPackageMap)) {
             const selectable = new Set(packages);
             for (const finding of variantFindingsMap?.[variantId] ?? []) {
-                if (finding.outdated && (includeOutdatedPackages || defaultSelectedPackages?.includes(finding.pkg))) {
+                if (finding.outdated && includeOutdatedPackages) {
                     selectable.add(finding.pkg);
                 }
             }
             result[variantId] = [...selectable];
         }
         return result;
-    }, [variantPackageMap, variantFindingsMap, defaultSelectedPackages, includeOutdatedPackages]);
+    }, [variantPackageMap, variantFindingsMap, includeOutdatedPackages]);
 
     // A saved assessment applies to the full package × variant product.
     // Therefore each enabled package must exist in every selected variant, and

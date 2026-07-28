@@ -908,6 +908,35 @@ describe('EditAssessment Component', () => {
         })).toBeChecked();
     });
 
+    test('hides an originally selected outdated package after opting out', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@2.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                variantPackageMap={{v1: ['package@2.0.0']}}
+                variantFindingsMap={{v1: [{pkg: 'package@1.0.0', outdated: true}]}}
+            />
+        );
+
+        const allowOutdated = screen.getByRole('checkbox', {
+            name: 'Allow edit assessments on outdated packages/variant',
+        });
+        expect(allowOutdated).toBeChecked();
+        expect(screen.getByText('package@1.0.0')).toBeInTheDocument();
+
+        await user.click(allowOutdated);
+
+        expect(allowOutdated).not.toBeChecked();
+        expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
+        expect(screen.getByText('package@2.0.0')).toBeInTheDocument();
+    });
+
     test('prunes selected packages by the intersection of remaining variants', async () => {
         const user = userEvent.setup();
         const variants = [
