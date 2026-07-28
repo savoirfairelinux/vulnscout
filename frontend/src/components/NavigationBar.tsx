@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBox, faShieldHalved, faFileExport, faMoon, faSun, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft, faRobot } from '@fortawesome/free-solid-svg-icons';
+import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRightLeft, faRobot } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import VersionDisplay from './VersionDisplay';
@@ -12,15 +12,13 @@ const bgActiveColor = greenTheme ? 'bg-cyan-900' : 'dark:bg-neutral-800';
 type Props = {
   tab: string;
   changeTab: (tab: string) => void;
-  darkMode: boolean;
-  setDarkMode: (mode: boolean) => void;
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
   defaultScope?: FrontendScope | null;
   onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void;
 };
 
-function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, defaultVariant, defaultScope, onApply }: Readonly<Props>) {
+function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, defaultScope, onApply }: Readonly<Props>) {
   return (
   <nav aria-label="Main navigation">
     <ul className={["flex flex-row font-bold items-stretch", bgColor].join(' ')}>
@@ -164,26 +162,6 @@ function NavigationBar({ tab, changeTab, darkMode, setDarkMode, defaultProject, 
         <div className="border-l h-8 dark:border-neutral-300"></div>
       </li>
 
-      {/* === Dark Mode Toggle === */}
-      <li className="px-4 py-2">
-        <button
-          type="button"
-          onClick={() => setDarkMode(!darkMode)}
-          aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="flex items-center w-14 h-7 bg-neutral-300 dark:bg-neutral-700 rounded-full px-1 cursor-pointer relative transition-all duration-300"
-        >
-          <FontAwesomeIcon icon={faSun} className="text-yellow-500 text-sm" />
-          <div className="flex-1"></div>
-          <FontAwesomeIcon icon={faMoon} className="text-blue-900 text-sm" />
-
-          <div
-            className={[
-              "absolute top-[2px] left-[2px] w-6 h-6 rounded-full bg-white shadow-md transition-transform duration-300",
-              darkMode ? "translate-x-7" : "translate-x-0"
-            ].join(' ')}
-          ></div>
-        </button>
-      </li>
     </ul>
   </nav>
   );

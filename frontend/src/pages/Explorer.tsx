@@ -35,12 +35,7 @@ const tabLabels: Record<string, string> = {
         ai: 'AI Context',
 };
 
-type Props = {
-  darkMode: boolean;
-  setDarkMode: (mode: boolean) => void;
-}
-
-function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
+function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
@@ -365,8 +360,6 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     key={selectorKey}
                     tab={tab}
                     changeTab={handleTabChange}
-                    darkMode={darkMode}
-                    setDarkMode={setDarkMode}
                     defaultProject={defaultConfig.project}
                     defaultVariant={defaultConfig.variant}
                     defaultScope={frontendScope}

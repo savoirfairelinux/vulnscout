@@ -134,7 +134,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(savedScope('deleted-project', ['old-variant']));
         mockProjectsList.mockResolvedValue([{ id: 'other-project', name: 'Other Project' }]);
 
-        render(<Explorer darkMode={false} setDarkMode={jest.fn()} />);
+        render(<Explorer />);
 
         await waitFor(() => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
@@ -149,7 +149,7 @@ describe('Explorer saved-scope validation', () => {
         mockProjectsList.mockResolvedValue([{ id: 'existing-project', name: 'Existing Project' }]);
         mockVariantsList.mockResolvedValue([{ id: 'current-variant', name: 'Current Variant', project_id: 'existing-project' }]);
 
-        render(<Explorer darkMode={false} setDarkMode={jest.fn()} />);
+        render(<Explorer />);
 
         await waitFor(() => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
@@ -163,7 +163,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(scope);
         mockProjectsList.mockResolvedValue([]);
 
-        render(<Explorer darkMode={false} setDarkMode={jest.fn()} />);
+        render(<Explorer />);
 
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
@@ -178,7 +178,7 @@ describe('Explorer saved-scope validation', () => {
         mockGetFrontendScope.mockReturnValue(savedScope('saved-project', ['saved-variant']));
         mockProjectsList.mockRejectedValue(new Error('Temporary network failure'));
 
-        render(<Explorer darkMode={false} setDarkMode={jest.fn()} />);
+        render(<Explorer />);
 
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
