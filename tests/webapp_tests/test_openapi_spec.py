@@ -102,6 +102,20 @@ def test_openapi_spec_includes_every_registered_api_operation(app, client):
     assert documented == registered
 
 
+def test_openapi_operation_ids_are_unique(client):
+    data = json.loads(client.get("/api/openapi").data)
+    operation_ids = [
+        operation["operationId"]
+        for path_item in data["paths"].values()
+        for operation in path_item.values()
+    ]
+
+    assert len(operation_ids) == len(set(operation_ids))
+    assert data["paths"]["/api"]["get"]["operationId"] == "api.get"
+    assert data["paths"]["/api/openapi"]["get"]["operationId"] == "api_openapi.get"
+    assert data["paths"]["/api/openapi.json"]["get"]["operationId"] == "api_openapi_json.get"
+
+
 def test_openapi_spec_marks_scan_blocked_routes(client):
     response = client.get("/api/openapi")
     data = json.loads(response.data)

@@ -71,7 +71,7 @@ def _build_operation(app: Flask, rule: Rule, method: str) -> dict[str, Any]:
     summary, description, metadata = _parse_docstring(view_func)
     path = _normalize_rule_path(rule.rule)
     operation: dict[str, Any] = {
-        "operationId": f"{rule.endpoint}.{method.lower()}",
+        "operationId": _build_operation_id(path, method),
         "summary": summary or _build_summary(rule.rule, method),
         "tags": [_build_tag(rule.rule)],
         "responses": _build_responses(path, method, metadata),
@@ -91,6 +91,12 @@ def _build_operation(app: Flask, rule: Rule, method: str) -> dict[str, Any]:
             "content": _json_content(_schema_ref("JsonObject")),
         }
     return operation
+
+
+def _build_operation_id(path: str, method: str) -> str:
+    """Return a stable ID unique to one normalized path and HTTP method."""
+    path_id = re.sub(r"[^A-Za-z0-9]+", "_", path.strip("/")).strip("_") or "root"
+    return f"{path_id}.{method.lower()}"
 
 
 def _build_path_parameters(rule: Rule) -> list[dict[str, Any]]:
