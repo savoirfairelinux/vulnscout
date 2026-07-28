@@ -7,7 +7,6 @@ import { asAssessment } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
-import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -23,6 +22,7 @@ import Packages from '../handlers/packages';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
 import ReviewTransferModal from '../components/ReviewTransferModal';
+import ExplicitSearchInput from '../components/ExplicitSearchInput';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -172,6 +172,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState<string>('');
+    const [draftSearch, setDraftSearch] = useState<string>('');
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
@@ -336,12 +337,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             });
     }, [variantId, projectId]);
 
-    const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.value.length < 2) {
-            if (search != '') setSearch('');
-        }
-        setSearch(event.target.value);
-    }, 550, { maxWait: 2500 });
+    const applySearch = () => setSearch(draftSearch.trim());
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -482,6 +478,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const resetFilters = () => {
         setSearch('');
+        setDraftSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
@@ -1421,8 +1418,16 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     return (
         <div>
             <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
-                <div>Search</div>
-                <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by vulnerability, package, status, ..." />
+                <ExplicitSearchInput
+                    id="review-search"
+                    ref={searchInputRef}
+                    value={draftSearch}
+                    onChange={setDraftSearch}
+                    onSearch={applySearch}
+                    label="Search"
+                    placeholder="Search by vulnerability, package, status, ..."
+                    ariaLabel="Search reviews"
+                />
 
                 <div className="relative">
                     <button

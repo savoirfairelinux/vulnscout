@@ -2,7 +2,6 @@ import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
-import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -13,6 +12,7 @@ import { formatSourceName, getOriginalSourceName } from '../helpers/sourceNames'
 import type { Vulnerability } from '../handlers/vulnerabilities';
 import Vulnerabilities from '../handlers/vulnerabilities';
 import MessageBanner from '../components/MessageBanner';
+import ExplicitSearchInput from '../components/ExplicitSearchInput';
 
 type Props = {
     packages: Package[];
@@ -42,6 +42,7 @@ const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutdatedPackages, outdatedScopeKey }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const [search, setSearch] = useState<string>('');
+    const [draftSearch, setDraftSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
@@ -82,12 +83,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         { syntax: 'only:text', description: 'Show only packages whose name contains text (e.g. only:native)' },
     ];
 
-    const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.value.length < 2) {
-            if (search != '') setSearch('');
-        }
-        setSearch(event.target.value);
-    }, 550, { maxWait: 2500 });
+    const applySearch = () => setSearch(draftSearch.trim());
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -267,6 +263,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
 
     const resetFilters = () => {
         setSearch('');
+        setDraftSearch('');
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
@@ -537,8 +534,16 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
                     />
                 )}
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
-            <div>Search</div>
-            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by package name, version, ..." />
+            <ExplicitSearchInput
+                id="package-search"
+                ref={searchInputRef}
+                value={draftSearch}
+                onChange={setDraftSearch}
+                onSearch={applySearch}
+                label="Search"
+                placeholder="Search by package name, version, ..."
+                ariaLabel="Search packages"
+            />
 
             <div className="relative">
                 <button
@@ -569,15 +574,18 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
                 )}
             </div>
 
-            <label htmlFor="sbom-match-condition" className="ml-2">Match condition</label>
-            <input
+            <ExplicitSearchInput
                 id="sbom-match-condition"
                 value={matchCondition}
-                onChange={event => setMatchCondition(event.target.value)}
-                onKeyDown={event => { if (event.key === 'Enter') void applyMatchCondition(); }}
-                className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[260px]"
+                onChange={setMatchCondition}
+                onSearch={applyMatchCondition}
+                label="Match condition"
+                labelClassName="ml-2"
+                inputClassName="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[260px]"
+                inputType="text"
                 placeholder="cvss >= 7 and pending"
-                aria-invalid={matchConditionError ? 'true' : 'false'}
+                ariaLabel="Search match condition"
+                ariaInvalid={Boolean(matchConditionError)}
             />
             <div className="relative">
                 <button

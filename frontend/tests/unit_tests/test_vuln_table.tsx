@@ -525,7 +525,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '2018-5678');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         // Allow the applied filter to render.
         await waitFor(() => {
@@ -544,7 +544,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'yyy');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         await waitFor(() => {
             expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
@@ -562,7 +562,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-2010');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         await waitFor(() => {
             expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
@@ -580,7 +580,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-2010 2024');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
         await waitFor(() => {
@@ -600,7 +600,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'authentification process');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         await waitFor(() => {
             expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
@@ -1045,7 +1045,7 @@ describe('Vulnerability Table', () => {
         // Set search
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, '2018-5678');
-        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         // Wait for filters to take effect
         await waitFor(() => {

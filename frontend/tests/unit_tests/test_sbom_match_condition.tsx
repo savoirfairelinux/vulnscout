@@ -83,12 +83,18 @@ describe('SBOM match condition', () => {
         render(<TablePackages packages={packages} vulnerabilities={vulnerabilities} />);
 
         const searchInput = screen.getByPlaceholderText('Search by package name, version, ...');
+        const searchButton = screen.getByRole('button', { name: 'Search packages' });
         const searchHelp = screen.getByRole('button', { name: 'search syntax helper' });
         const matchConditionInput = screen.getByLabelText('Match condition');
+        const matchConditionButton = screen.getByRole('button', { name: 'Search match condition' });
         const matchConditionHelp = screen.getByRole('button', { name: 'match condition help' });
 
-        expect(searchInput.nextElementSibling).toContainElement(searchHelp);
-        expect(matchConditionInput.nextElementSibling).toContainElement(matchConditionHelp);
+        expect(searchInput.nextElementSibling).toBe(searchButton);
+        expect(searchButton.nextElementSibling).toContainElement(searchHelp);
+        expect(matchConditionInput.nextElementSibling).toBe(matchConditionButton);
+        expect(matchConditionButton.nextElementSibling).toContainElement(matchConditionHelp);
+        expect(searchButton.querySelector('[data-icon="magnifying-glass"]')).toBeInTheDocument();
+        expect(matchConditionButton.querySelector('[data-icon="magnifying-glass"]')).toBeInTheDocument();
         expect(searchHelp.querySelector('[data-icon="circle-question"]')).toBeInTheDocument();
         expect(matchConditionHelp.querySelector('[data-icon="circle-info"]')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();

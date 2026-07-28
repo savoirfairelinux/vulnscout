@@ -7,6 +7,7 @@ expect.extend(matchers);
 
 import type { Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
+import Vulnerabilities from '../../src/handlers/vulnerabilities';
 
 
 const getDOMRect = (width: number, height: number) => ({
@@ -153,6 +154,45 @@ describe('Packages Table', () => {
         expect(version_col).toBeTruthy();
         expect(vuln_count_col).toBeTruthy();
         expect(source_col).toBeTruthy();
+    })
+
+    test('package search applies only with the button or Enter', async () => {
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+        const input = screen.getByPlaceholderText('Search by package name, version, ...');
+
+        await user.type(input, 'aaabbbccc');
+        expect(screen.getByText('xxxyyyzzz')).toBeTruthy();
+
+        await user.click(screen.getByRole('button', {name: 'Search packages'}));
+        await waitFor(() => expect(screen.queryByText('xxxyyyzzz')).toBeNull());
+
+        await user.clear(input);
+        await user.type(input, 'dddeeefff');
+        expect(screen.getByText('aaabbbccc')).toBeTruthy();
+
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(screen.queryByText('aaabbbccc')).toBeNull());
+        expect(screen.getByText('dddeeefff')).toBeTruthy();
+    })
+
+    test('match condition applies with the button or Enter', async () => {
+        const matchSpy = jest.spyOn(Vulnerabilities, 'matchCondition').mockResolvedValue([]);
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+        const input = screen.getByLabelText('Match condition');
+
+        await user.type(input, 'cvss >= 7');
+        expect(matchSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', {name: 'Search match condition'}));
+        await waitFor(() => expect(matchSpy).toHaveBeenCalledTimes(1));
+
+        await user.clear(input);
+        await user.type(input, 'pending');
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(matchSpy).toHaveBeenCalledTimes(2));
+        matchSpy.mockRestore();
     })
 
     test('does not render the obsolete severity toggle', () => {
@@ -303,6 +343,7 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'yyy');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
             const html = document.body.innerHTML;
@@ -319,12 +360,12 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-aaabbbccc');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html).not.toContain('aaabbbccc');
-            expect(html).toContain('xxxyyyzzz');
-            expect(html).toContain('dddeeefff');
+            expect(screen.queryByRole('cell', {name: 'aaabbbccc'})).toBeNull();
+            expect(screen.getByRole('cell', {name: 'xxxyyyzzz'})).toBeTruthy();
+            expect(screen.getByRole('cell', {name: 'dddeeefff'})).toBeTruthy();
         }, { timeout: 2000 });
     })
 
@@ -336,12 +377,12 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html).not.toContain('aaabbbccc');
-            expect(html).not.toContain('dddeeefff');
-            expect(html).toContain('xxxyyyzzz');
+            expect(screen.queryByRole('cell', {name: 'aaabbbccc'})).toBeNull();
+            expect(screen.queryByRole('cell', {name: 'dddeeefff'})).toBeNull();
+            expect(screen.getByRole('cell', {name: 'xxxyyyzzz'})).toBeTruthy();
         }, { timeout: 2000 });
     })
 

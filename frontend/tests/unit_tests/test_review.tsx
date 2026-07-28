@@ -832,7 +832,8 @@ function mockNetworkWithDeferredVuln(
 
 const searchAssessments = (value: string) => {
     const input = screen.getByPlaceholderText(/Search by vulnerability/);
-    fireEvent.input(input, { target: { value } });
+    fireEvent.change(input, { target: { value } });
+    fireEvent.keyDown(input, { key: 'Enter' });
 };
 
 describe('Review — Assessments tab navigation', () => {
@@ -1269,19 +1270,26 @@ describe('Review — filters, search and keyboard', () => {
         await screen.findByText('CVE-2020-1111');
     });
 
-    test('typing in the search box updates the table search term', async () => {
+    test('search applies only with the button or Enter', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         await screen.findByTitle('Edit assessment');
+        const user = userEvent.setup();
 
         const input = screen.getByPlaceholderText(/Search by vulnerability/);
-        fireEvent.input(input, { target: { value: 'pkg' } });
+        await user.type(input, 'pkg');
+        expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', '');
+
+        await user.click(screen.getByRole('button', {name: 'Search reviews'}));
         await waitFor(() => {
             expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', 'pkg');
         });
 
-        // Shrinking below 2 chars clears the search term first.
-        fireEvent.input(input, { target: { value: 'p' } });
+        await user.clear(input);
+        await user.type(input, 'p');
+        expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', 'pkg');
+
+        await user.keyboard('{Enter}');
         await waitFor(() => {
             expect(screen.getByTestId('mock-table')).toHaveAttribute('data-search', 'p');
         });

@@ -73,6 +73,7 @@ function useRefreshProgressEffect(
 }
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -1594,30 +1595,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <div className="contents">
-                <label htmlFor="vulnerability-search">Search</label>
-                <input
+                <ExplicitSearchInput
                     id="vulnerability-search"
                     ref={searchInputRef}
                     value={draftSearch}
-                    onChange={event => setDraftSearch(event.target.value)}
-                    onKeyDown={event => {
-                        if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void applySearch();
-                        }
-                    }}
-                    type="search"
-                    className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]"
+                    onChange={setDraftSearch}
+                    onSearch={applySearch}
+                    label="Search"
                     placeholder="Search by ID, packages, description, ..."
+                    ariaLabel="Search vulnerabilities"
+                    loading={descriptionSearchLoading}
                 />
-                <button
-                    type="button"
-                    disabled={descriptionSearchLoading}
-                    onClick={() => void applySearch()}
-                    className="py-1 px-3 rounded bg-cyan-700 hover:bg-cyan-600 disabled:cursor-wait disabled:opacity-60"
-                >
-                    {descriptionSearchLoading ? 'Searching…' : 'Apply'}
-                </button>
             </div>
             {descriptionSearchError && (
                 <span role="alert" className="text-sm text-red-200">
