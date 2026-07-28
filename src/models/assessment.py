@@ -743,6 +743,8 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list[str]] = None,
+        timestamp: Optional[datetime] = None,
+        update_timestamp: bool = True,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:
@@ -763,7 +765,8 @@ class Assessment(Base):
             self.workaround = workaround
         if responses is not None:
             self.responses = responses
-        self.timestamp = datetime.now(timezone.utc)
+        if update_timestamp:
+            self.timestamp = timestamp or datetime.now(timezone.utc)
         db.session.commit()
         return self
 

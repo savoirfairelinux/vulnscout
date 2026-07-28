@@ -1577,7 +1577,8 @@ describe('Vulnerability Modal', () => {
 
         await user.click(editBtn);
 
-        // Should show EditAssessment component, simulate save
+        // The default keeps the current history position and timestamp.
+        expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1585,6 +1586,12 @@ describe('Vulnerability Modal', () => {
             expect.stringContaining('/api/assessments/assessment-1'),
             expect.objectContaining({ method: 'PUT' })
         );
+        const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+        const putBody = JSON.parse(String(putCall?.[1]?.body));
+        expect(putBody).toEqual(expect.objectContaining({
+            update_timestamp: false,
+            timestamp: '2021-01-01T00:00:00Z',
+        }));
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner

@@ -672,8 +672,12 @@ type VariantScopedSnapshot = {
         if (!editingGroup) return;
         setSubmittingMessage('Editing assessment...');
 
-        // Share a single timestamp across all created rows in this edit action
-        const editSharedTimestamp = new Date().toISOString();
+        // Keep every row affected by this edit in one history group. Depending
+        // on the user's choice, reuse the group's timestamp or move the whole
+        // group to the top with one shared current timestamp.
+        const editSharedTimestamp = data.update_timestamp === false
+            ? editingGroup.timestamp
+            : new Date().toISOString();
 
         // Build target (package × variantId) combos from form selection
         const targetVariantIds: Array<string | undefined> =
@@ -727,7 +731,9 @@ type VariantScopedSnapshot = {
                             justification: data.justification,
                             impact_statement: data.impact_statement,
                             status_notes: data.status_notes,
-                            workaround: data.workaround
+                            workaround: data.workaround,
+                            update_timestamp: data.update_timestamp !== false,
+                            timestamp: editSharedTimestamp,
                         })
                     });
                     if (res.ok) {

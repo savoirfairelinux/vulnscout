@@ -1289,6 +1289,18 @@ def init_app(app: Flask) -> None:
         if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
             mem_assess.set_workaround(payload_data["workaround"])
 
+        update_timestamp = payload_data.get("update_timestamp", True)
+        if not isinstance(update_timestamp, bool):
+            return {"error": "update_timestamp must be a boolean"}, 400
+        edit_timestamp = None
+        if update_timestamp and "timestamp" in payload_data:
+            if not isinstance(payload_data["timestamp"], str):
+                return {"error": "timestamp must be an ISO 8601 string"}, 400
+            try:
+                edit_timestamp = datetime.fromisoformat(payload_data["timestamp"].replace("Z", "+00:00"))
+            except ValueError:
+                return {"error": "Invalid timestamp"}, 400
+
         existing.update(
             status=mem_assess.status,
             origin=new_origin,
@@ -1297,6 +1309,8 @@ def init_app(app: Flask) -> None:
             impact_statement=mem_assess.impact_statement,
             workaround=getattr(mem_assess, "workaround", None),
             responses=list(mem_assess.responses or []),
+            timestamp=edit_timestamp,
+            update_timestamp=update_timestamp,
         )
         # Editing an automated assessment removes it from the scan-history
         # counts (it becomes custom-origin), so refresh the cached list view.

@@ -385,6 +385,43 @@ def test_update_assessment_status_only(client):
     assert data["assessment"]["status_notes"] == 'Initial notes'  # Should remain unchanged
 
 
+def test_update_assessment_can_preserve_timestamp(client):
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        'packages': ['test@1.0.0'],
+        'status': 'under_investigation',
+        'variant_id': DEMO_VARIANT_ID,
+        'timestamp': '2024-01-15T12:00:00Z',
+    })
+    assessment = json.loads(response.data)["assessment"]
+
+    response = client.put(f"/api/assessments/{assessment['id']}", json={
+        'status': 'affected',
+        'update_timestamp': False,
+    })
+
+    assert response.status_code == 200
+    updated = json.loads(response.data)["assessment"]
+    assert updated["timestamp"] == assessment["timestamp"]
+
+
+def test_update_assessment_accepts_shared_timestamp(client):
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        'packages': ['test@1.0.0'],
+        'status': 'under_investigation',
+        'variant_id': DEMO_VARIANT_ID,
+    })
+    assessment_id = json.loads(response.data)["assessment"]["id"]
+
+    response = client.put(f"/api/assessments/{assessment_id}", json={
+        'status': 'affected',
+        'update_timestamp': True,
+        'timestamp': '2026-07-28T12:34:56Z',
+    })
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessment"]["timestamp"] == '2026-07-28T12:34:56+00:00'
+
+
 # Test PUT assessment - update status_notes
 def test_update_assessment_status_notes(client):
     """Test updating status notes"""

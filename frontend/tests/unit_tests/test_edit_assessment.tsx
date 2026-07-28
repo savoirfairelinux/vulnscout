@@ -80,6 +80,58 @@ describe('EditAssessment Component', () => {
         expect(mockOnSave).toHaveBeenCalled();
     });
 
+    test('keeps the current assessment timestamp by default', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toHaveAttribute(
+            'aria-checked', 'true'
+        );
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({update_timestamp: false}));
+    });
+
+    test('can move the edited assessment to the top with a new timestamp', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const timestampSwitch = screen.getByRole('switch', {name: 'Keep the current timestamp'});
+        await user.click(timestampSwitch);
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(timestampSwitch).toHaveAttribute('aria-checked', 'false');
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({update_timestamp: true}));
+    });
+
+    test('shows the timestamp choice below package selection', () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={['first@1.0.0', 'second@1.0.0']}
+                defaultSelectedPackages={['first@1.0.0']}
+            />
+        );
+
+        const packagesHeading = screen.getByText('Apply to packages:');
+        const timestampLabel = screen.getByText('Keep the current timestamp');
+        expect(packagesHeading.compareDocumentPosition(timestampLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     test('shows internal banner when validation fails', async () => {
         const minimalAssessment: Assessment = {
             ...mockAssessment,
@@ -258,7 +310,8 @@ describe('EditAssessment Component', () => {
             // not wiped, since the impact textarea is shown and editable for it.
             impact_statement: 'test impact',
             packages: [],
-            variant_ids: undefined
+            variant_ids: undefined,
+            update_timestamp: false,
         });
     });
 
@@ -491,7 +544,8 @@ describe('EditAssessment Component', () => {
             workaround: 'test workaround',
             impact_statement: 'test impact',
             packages: [],
-            variant_ids: undefined
+            variant_ids: undefined,
+            update_timestamp: false,
         });
     });
 

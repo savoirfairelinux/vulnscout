@@ -13,6 +13,7 @@ type EditAssessmentData = {
     workaround?: string;
     variant_ids?: string[];
     packages?: string[];
+    update_timestamp?: boolean;
 }
 
 type Props = {
@@ -72,6 +73,7 @@ function EditAssessment({
         defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : [])
     );
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(hasSelectedOutdatedFinding);
+    const [keepCurrentTimestamp, setKeepCurrentTimestamp] = useState(true);
     const outdatedPackages = useMemo(() => {
         const packages = new Set<string>();
         for (const finding of Object.values(variantFindingsMap ?? {}).flat()) {
@@ -203,10 +205,11 @@ function EditAssessment({
             justification !== (assessment.justification || "none") ||
             statusNotes !== initialStatusNotes ||
             workaround !== (assessment.workaround || "") ||
-            impact !== (isImpactStatus ? (assessment.impact_statement || "") : "")
+            impact !== (isImpactStatus ? (assessment.impact_statement || "") : "") ||
+            !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, onFieldsChange, assessment, isImpactStatus]);
+    }, [status, justification, statusNotes, workaround, impact, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -256,7 +259,8 @@ function EditAssessment({
             // For non-impact statuses the value was folded into status_notes; clear impact_statement.
             impact_statement: includeImpact ? impact : "",
             variant_ids: selectedVariantIds.length > 0 ? selectedVariantIds : undefined,
-            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? [])
+            packages: selectedPackages.length > 0 ? selectedPackages : (availablePackages ?? []),
+            update_timestamp: !keepCurrentTimestamp,
         });
     }
 
@@ -267,6 +271,7 @@ function EditAssessment({
         setWorkaround(assessment.workaround || "");
         setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
         setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
+        setKeepCurrentTimestamp(true);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
         setSelectedPackages(defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []));
     }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, availableVariants, availablePackages, hasSelectedOutdatedFinding]);
@@ -410,6 +415,32 @@ function EditAssessment({
                     </div>
                 </div>
             )}
+
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-gray-600 bg-gray-800/40 px-3 py-2">
+                <span>
+                    <span className="block text-sm font-medium text-gray-200">Keep the current timestamp</span>
+                    <span className="block text-xs text-gray-400">
+                        Turn off to place the edited assessment at the top of the history with the current timestamp.
+                    </span>
+                </span>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-label="Keep the current timestamp"
+                    aria-checked={keepCurrentTimestamp}
+                    onClick={() => setKeepCurrentTimestamp(value => !value)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-300 ${
+                        keepCurrentTimestamp ? 'bg-green-500' : 'bg-gray-400'
+                    }`}
+                >
+                    <span
+                        aria-hidden="true"
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${
+                            keepCurrentTimestamp ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                    />
+                </button>
+            </div>
 
             {(status === 'not_affected' || status === 'false_positive') && (
                 <><textarea
