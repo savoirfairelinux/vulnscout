@@ -19,6 +19,7 @@ type Props = {
     vulnerabilities?: Vulnerability[];
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
     onLoadOutdatedPackages?: () => Promise<Package[]>;
+    outdatedScopeKey?: string;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -38,7 +39,7 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 
-function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutdatedPackages }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutdatedPackages, outdatedScopeKey }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const [search, setSearch] = useState<string>('');
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -223,6 +224,13 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         setMatchConditionError('');
     }, [vulnerabilities]);
 
+    // Discard historical rows from the previous project/variant scope so an
+    // enabled outdated filter immediately fetches the new scope.
+    useEffect(() => {
+        setPackagesWithOutdated(null);
+        setOutdatedLoadError('');
+    }, [outdatedScopeKey]);
+
     useEffect(() => {
         if (!showOnlyOutdated || packagesWithOutdated !== null || !onLoadOutdatedPackages) return;
         let cancelled = false;
@@ -239,7 +247,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
                 if (!cancelled) setOutdatedLoading(false);
             });
         return () => { cancelled = true; };
-    }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages]);
+    }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages, outdatedScopeKey]);
 
     const applyMatchCondition = async () => {
         const condition = matchCondition.trim();

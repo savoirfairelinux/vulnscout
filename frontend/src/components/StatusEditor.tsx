@@ -149,15 +149,11 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setSelectedVariantIds(nextVariants);
 
         if (!checked && effectiveVariantPackageMap) {
-            const stillAllowed = new Set<string>();
-            for (const vid of nextVariants) {
-                for (const pkg of effectiveVariantPackageMap[vid] ?? []) stillAllowed.add(pkg);
-            }
-            if (stillAllowed.size > 0) {
-                setSelectedPackages(prev => prev.filter(p => stillAllowed.has(p)));
-            } else {
-                setSelectedPackages([]);
-            }
+            setSelectedPackages(prev => prev.filter(pkg =>
+                nextVariants.length > 0 && nextVariants.every(vid =>
+                    (effectiveVariantPackageMap[vid] ?? []).includes(pkg)
+                )
+            ));
         }
     };
 

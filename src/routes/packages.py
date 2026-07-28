@@ -34,6 +34,8 @@ def init_app(app: Flask) -> None:
         include_outdated = request.args.get('include_outdated', '').lower() in ('1', 'true', 'yes')
         outdated_only = request.args.get('outdated_only', '').lower() in ('1', 'true', 'yes')
         include_outdated = include_outdated or outdated_only
+        if include_outdated and not any((variant_id, project_id, variant_ids)):
+            return {"error": "A variant or project scope is required for outdated packages"}, 400
         scope_variant_ids: list[uuid.UUID] = []
         if variant_id and compare_variant_id:
             base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
@@ -183,6 +185,7 @@ def init_app(app: Flask) -> None:
             p.setdefault("variants", [])
             p.setdefault("sources", [])
             p.setdefault("sbom_documents", [])
+            p["outdated"] = False
 
         # Enrich each package with its variants and sources derived from the
         # SBOMPackage → SBOMDocument → Scan → Variant chain so that the
@@ -297,6 +300,7 @@ def init_app(app: Flask) -> None:
                     item = package.to_dict()
                     item.update({
                         "variants": [variant.name],
+                        "variant_id": str(variant.id),
                         "sources": [],
                         "sbom_documents": [],
                         "outdated": True,
@@ -323,5 +327,11 @@ def init_app(app: Flask) -> None:
             ))
 
         if request.args.get('format', 'list') == "dict":
-            return {p["name"] + "@" + p["version"]: p for p in result}
+            dict_result = {}
+            for package in result:
+                key = package["name"] + "@" + package["version"]
+                if package["outdated"]:
+                    key += "@" + package["variant_id"]
+                dict_result[key] = package
+            return dict_result
         return result

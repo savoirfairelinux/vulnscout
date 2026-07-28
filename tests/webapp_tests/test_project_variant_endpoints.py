@@ -410,6 +410,14 @@ class TestConfigEndpoint:
 
 class TestPackagesFiltering:
 
+    def test_packages_outdated_requires_scope(self, client):
+        response = client.get("/api/packages?format=list&outdated_only=true")
+
+        assert response.status_code == 400
+        assert json.loads(response.data) == {
+            "error": "A variant or project scope is required for outdated packages"
+        }
+
     def test_packages_include_outdated_finding_variant_rows(self, client_and_data, app_with_data):
         client, data = client_and_data
         application, _ = app_with_data
@@ -440,6 +448,37 @@ class TestPackagesFiltering:
         assert old_row["variants"] == ["VariantA"]
         assert old_row["vulnerability_ids"] == ["CVE-2099-OLD1"]
         assert all(item["outdated"] is True for item in body)
+
+    def test_packages_dict_keeps_active_and_outdated_variant_rows(self, client_and_data, app_with_data):
+        client, data = client_and_data
+        application, _ = app_with_data
+        from src.extensions import db
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.scan import Scan
+
+        with application.app_context():
+            cairo = Package.get_by_string_id("cairo@1.16.0")
+            assert cairo is not None
+            finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
+            variant_b_scan_id = db.session.execute(
+                db.select(Scan.id).where(Scan.variant_id == uuid.UUID(data["variant_b_id"]))
+            ).scalar_one()
+            Observation.create(finding.id, variant_b_scan_id)
+            db.session.commit()
+
+        response = client.get(
+            f"/api/packages?format=dict&include_outdated=true"
+            f"&variant_ids={data['variant_a_id']},{data['variant_b_id']}"
+        )
+
+        assert response.status_code == 200
+        body = json.loads(response.data)
+        assert body["cairo@1.16.0"]["outdated"] is False
+        outdated_key = f"cairo@1.16.0@{data['variant_b_id']}"
+        assert body[outdated_key]["outdated"] is True
+        assert body[outdated_key]["variant_id"] == data["variant_b_id"]
 
     def test_packages_no_filter_returns_all(self, client_and_data):
         client, _ = client_and_data

@@ -249,6 +249,17 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         );
         return Packages.enrich_with_vulns(loaded, vulnsRef.current);
     }, [currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
+    const outdatedPackagesScopeKey = [
+        currentProjectId ?? '',
+        currentBaseVariantId ?? '',
+        currentVariantId ?? '',
+        currentOperation,
+        currentMultiOperation,
+        ...(currentVariantIds ?? []),
+    ].join(':');
+    const hasOutdatedPackagesScope = Boolean(
+        currentProjectId || currentVariantId || (currentVariantIds?.length ?? 0) > 0
+    );
 
     function showVulnsForPackage(packageId: string, matchingVulnerabilityIds?: string[]) {
         setFilterVulnerabilityIds(matchingVulnerabilityIds);
@@ -319,7 +330,13 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     appendCVSS={appendCVSS}
                     projectId={currentProjectId}
                 />}
-                {tab === 'packages' && <TablePackages packages={pkgs} vulnerabilities={vulns} onShowVulns={showVulnsForPackage} onLoadOutdatedPackages={loadOutdatedPackages} />}
+                {tab === 'packages' && <TablePackages
+                    packages={pkgs}
+                    vulnerabilities={vulns}
+                    onShowVulns={showVulnsForPackage}
+                    onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
+                    outdatedScopeKey={outdatedPackagesScopeKey}
+                />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}

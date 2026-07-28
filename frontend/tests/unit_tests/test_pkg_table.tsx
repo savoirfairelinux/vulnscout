@@ -200,6 +200,37 @@ describe('Packages Table', () => {
         });
     })
 
+    test('reloads outdated rows when the project or variant scope changes', async () => {
+        const user = userEvent.setup();
+        const firstOutdated = {...packages[0], id: 'old-a@1', name: 'old-a', outdated: true};
+        const secondOutdated = {...packages[0], id: 'old-b@1', name: 'old-b', outdated: true};
+        const firstLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([firstOutdated]);
+        const secondLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([secondOutdated]);
+        const view = render(
+            <TablePackages
+                packages={packages}
+                onLoadOutdatedPackages={firstLoader}
+                outdatedScopeKey="variant-a"
+            />
+        );
+
+        await user.click(screen.getByRole('button', {name: 'Show Outdated'}));
+        expect(await screen.findByText('old-a')).toBeTruthy();
+
+        view.rerender(
+            <TablePackages
+                packages={packages}
+                onLoadOutdatedPackages={secondLoader}
+                outdatedScopeKey="variant-b"
+            />
+        );
+
+        expect(await screen.findByText('old-b')).toBeTruthy();
+        await waitFor(() => expect(screen.queryByText('old-a')).toBeNull());
+        expect(firstLoader).toHaveBeenCalledTimes(1);
+        expect(secondLoader).toHaveBeenCalledTimes(1);
+    })
+
     test('sorting by name', async () => {
         // ARRANGE
         render(<TablePackages packages={packages} />);

@@ -789,4 +789,44 @@ describe('StatusEditor', () => {
         render(<StatusEditor {...defaultProps} availablePackages={['pkg@2.0.0']} findingsLoading={true} />);
         expect(screen.getByText('Checking for previous package versions…')).toBeInTheDocument();
     });
+
+    test('prunes selected packages by the intersection after scope data changes', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            {id: 'v1', name: 'first', project_id: 'p1'},
+            {id: 'v2', name: 'second', project_id: 'p1'},
+            {id: 'v3', name: 'third', project_id: 'p1'},
+        ];
+        const view = render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={['package@1.0.0']}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: ['package@1.0.0'],
+                }}
+            />
+        );
+        for (const name of ['first', 'second', 'third']) {
+            await user.click(screen.getByText(name).closest('label')!.querySelector('input')!);
+        }
+
+        view.rerender(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={['package@1.0.0']}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: [],
+                }}
+            />
+        );
+        await user.click(screen.getByText('first').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('package@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+    });
 });

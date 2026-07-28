@@ -907,4 +907,52 @@ describe('EditAssessment Component', () => {
             name: 'Allow edit assessments on outdated packages/variant',
         })).toBeChecked();
     });
+
+    test('prunes selected packages by the intersection of remaining variants', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            {id: 'v1', name: 'first', project_id: 'p1'},
+            {id: 'v2', name: 'second', project_id: 'p1'},
+            {id: 'v3', name: 'third', project_id: 'p1'},
+        ];
+        const selectedVariantIds = ['v1', 'v2', 'v3'];
+        const availablePackages = ['package@1.0.0', 'other@1.0.0'];
+        const selectedPackages = ['package@1.0.0'];
+        const view = render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={selectedVariantIds}
+                availablePackages={availablePackages}
+                defaultSelectedPackages={selectedPackages}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: ['package@1.0.0'],
+                }}
+            />
+        );
+        view.rerender(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={selectedVariantIds}
+                availablePackages={availablePackages}
+                defaultSelectedPackages={selectedPackages}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: [],
+                }}
+            />
+        );
+
+        await user.click(screen.getByText('first').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('package@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+    });
 });
