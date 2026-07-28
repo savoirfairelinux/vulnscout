@@ -525,7 +525,7 @@ describe('Review — rendering columns and tabs', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/Time Estimates \(2\)/));
+        await user.click(screen.getByText('Time Estimates'));
 
         expect(await screen.findByText('CVE-2020-3333')).toBeInTheDocument();
         expect(screen.getByText('1h')).toBeInTheDocument();
@@ -549,7 +549,7 @@ describe('Review — rendering columns and tabs', () => {
 
         await screen.findByTitle('Edit assessment');
         // Only the 5 custom-origin scores are shown (the nvd one is filtered out).
-        await user.click(screen.getByText(/Custom CVSS \(5\)/));
+        await user.click(screen.getByText('Custom CVSS'));
 
         expect(await screen.findByText('9.5')).toBeInTheDocument();
         expect(screen.getByText('7.5')).toBeInTheDocument();
@@ -580,7 +580,7 @@ describe('Review — AI Assessments tab', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(screen.getByText('AI Assessments'));
 
         expect(await screen.findByTitle('Approve AI suggestion')).toBeInTheDocument();
         expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
@@ -603,7 +603,7 @@ describe('Review — AI Assessments tab', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(screen.getByText('AI Assessments'));
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText('AI assessment approved!');
@@ -616,7 +616,7 @@ describe('Review — AI Assessments tab', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(screen.getByText('AI Assessments'));
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText('AI assessment rejected.');
@@ -629,7 +629,7 @@ describe('Review — AI Assessments tab', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(screen.getByText('AI Assessments'));
         await user.click(await screen.findByTitle('Approve AI suggestion'));
 
         await screen.findByText(/Failed to approve AI assessment/);
@@ -641,7 +641,7 @@ describe('Review — AI Assessments tab', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/AI Assessments \(1\)/));
+        await user.click(screen.getByText('AI Assessments'));
         await user.click(await screen.findByTitle('Reject AI suggestion'));
 
         await screen.findByText(/Failed to reject AI assessment/);
@@ -694,7 +694,7 @@ describe('Review — vulnerability modal', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/Time Estimates \(2\)/));
+        await user.click(screen.getByText('Time Estimates'));
         const idCell = (await screen.findAllByTitle('Click to view details'))[0];
         await user.click(idCell);
 
@@ -707,7 +707,7 @@ describe('Review — vulnerability modal', () => {
         const user = userEvent.setup();
 
         await screen.findByTitle('Edit assessment');
-        await user.click(screen.getByText(/Custom CVSS \(5\)/));
+        await user.click(screen.getByText('Custom CVSS'));
         const idCell = (await screen.findAllByTitle('Click to view details'))[0];
         await user.click(idCell);
 
@@ -866,7 +866,7 @@ describe('Review — Assessments tab navigation', () => {
         await user.click(screen.getByText('close-vuln-modal'));
         await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
 
-        await user.click(screen.getByText(/Time Estimates \(2\)/));
+        await user.click(screen.getByText('Time Estimates'));
         const teIdCell = (await screen.findAllByTitle('Click to view details'))[0];
         await user.click(teIdCell);
         await screen.findByTestId('vuln-modal');
@@ -874,7 +874,7 @@ describe('Review — Assessments tab navigation', () => {
         await user.click(screen.getByText('close-vuln-modal'));
         await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
 
-        await user.click(screen.getByText(/Custom CVSS \(5\)/));
+        await user.click(screen.getByText('Custom CVSS'));
         const cvssIdCell = (await screen.findAllByTitle('Click to view details'))[0];
         await user.click(cvssIdCell);
         await screen.findByTestId('vuln-modal');
@@ -1103,7 +1103,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        await user.click(await screen.findByText('Time Estimates'));
         const cells = await screen.findAllByTitle('Click to view details');
         await user.click(cells[0]);
         await screen.findByTestId('vuln-modal');
@@ -1120,7 +1120,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        await user.click(await screen.findByText('Time Estimates'));
         const cells = await screen.findAllByTitle('Click to view details');
         // Row 1 is the second occurrence of CVE-TE-1; its distinct index is still
         // 0 and only 2 distinct vuln ids exist.
@@ -1135,7 +1135,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/Custom CVSS \(3\)/));
+        await user.click(await screen.findByText('Custom CVSS'));
         const cells = await screen.findAllByTitle('Click to view details');
         await user.click(cells[0]);
         await screen.findByTestId('vuln-modal');
@@ -1160,7 +1160,7 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
         await waitFor(() => expect(screen.queryByTestId('vuln-modal')).not.toBeInTheDocument());
 
         // Move to Time Estimates: the shared ref now tracks the TE vuln ids.
-        await user.click(await screen.findByText(/Time Estimates \(3\)/));
+        await user.click(await screen.findByText('Time Estimates'));
         let cells = await screen.findAllByTitle('Click to view details');
         await user.click(cells[0]);
         await screen.findByTestId('vuln-modal');
@@ -1360,7 +1360,7 @@ describe('Review — deleting an assessment', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/AI Assessments \(1\)/));
+        await user.click(await screen.findByText('AI Assessments'));
         await selectFirstTableRow(user);
 
         await waitFor(() => {
@@ -1376,7 +1376,7 @@ describe('Review — deleting an assessment', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/Time Estimates \(2\)/));
+        await user.click(await screen.findByText('Time Estimates'));
         await selectFirstTableRow(user);
 
         await waitFor(() => {
@@ -1392,7 +1392,7 @@ describe('Review — deleting an assessment', () => {
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
-        await user.click(await screen.findByText(/Custom CVSS \(5\)/));
+        await user.click(await screen.findByText('Custom CVSS'));
         await selectFirstTableRow(user);
 
         await waitFor(() => {

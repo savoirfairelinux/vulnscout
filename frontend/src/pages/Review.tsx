@@ -1627,7 +1627,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('assessments')}
                 >
-                    Assessments{assessments.length > 0 ? ` (${assessments.length})` : ''}
+                    Assessments
                 </button>
                 <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
@@ -1637,7 +1637,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('time-estimates')}
                 >
-                    Time Estimates{timeEstimates.length > 0 ? ` (${timeEstimates.length})` : ''}
+                    Time Estimates
                 </button>
                 <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
@@ -1647,7 +1647,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('custom-cvss')}
                 >
-                    Custom CVSS{customCvss.length > 0 ? ` (${customCvss.length})` : ''}
+                    Custom CVSS
                 </button>
                 <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
@@ -1657,7 +1657,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('ai-assessments')}
                 >
-                    AI Assessments{aiAssessments.length > 0 ? ` (${aiAssessments.length})` : ''}
+                    AI Assessments
                 </button>
             </div>
 
