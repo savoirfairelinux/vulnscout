@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faXmark, faPenToSquare, faClock, faArrowsRotate, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+import { faXmark, faPenToSquare, faClock } from '@fortawesome/free-solid-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { buildStatusSummary } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
@@ -10,11 +10,6 @@ import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
 import Iso8601Duration from '../handlers/iso8601duration';
 import Variants from '../handlers/variant';
-import { BulkNvdRefreshHandler, BulkEpssRefreshHandler, BulkNvdRefreshCancelHandler, BulkEpssRefreshCancelHandler, BulkGhsaRefreshHandler, BulkGhsaRefreshCancelHandler, BulkEuvdRefreshHandler, BulkEuvdRefreshCancelHandler } from "../handlers/bulkRefresh";
-import type { NVDProgress } from "../handlers/nvd_progress";
-import type { EPSSProgress } from "../handlers/epss_progress";
-import type { GHSAProgress } from "../handlers/ghsa_progress";
-import type { EUVDProgress } from "../handlers/euvd_progress";
 
 type Props = {
     vulnerabilities: Vulnerability[];
@@ -29,26 +24,14 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
-    nvdProgress?: NVDProgress | null;
-    epssProgress?: EPSSProgress | null;
-    ghsaProgress?: GHSAProgress | null;
-    euvdProgress?: EUVDProgress | null;
 };
 
-function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation, nvdProgress, epssProgress, ghsaProgress, euvdProgress} : Readonly<Props>) {
+function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssessment, patchVuln, triggerBanner, hideBanner, variantId, baseVariantId, compareOperation} : Readonly<Props>) {
 
     const [panelOpened, setPanelOpened] = useState<number>(0)
     const [isLoading, setIsLoading] = useState<boolean>(false)
     const [affectedVariantNames, setAffectedVariantNames] = useState<string[]>([])
     const [isAllVariantsMode, setIsAllVariantsMode] = useState<boolean>(false)
-    const [nvdCancelling, setNvdCancelling] = useState<boolean>(false)
-    const [epssCancelling, setEpssCancelling] = useState<boolean>(false)
-    const [ghsaCancelling, setGhsaCancelling] = useState<boolean>(false)
-    const [euvdCancelling, setEuvdCancelling] = useState<boolean>(false)
-    const [refreshMenuOpen, setRefreshMenuOpen] = useState<boolean>(false)
-    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<'nvd' | 'epss' | 'ghsa' | 'euvd'>>(new Set(['nvd', 'epss', 'ghsa', 'euvd']))
-    const [nvdRefreshMode, setNvdRefreshMode] = useState<"local" | "api">("local")
-    const refreshMenuRef = useRef<HTMLDivElement>(null)
     const loadingLabel = selectedVulns.length === 1 ? 'Editing selected CVE...' : 'Editing selected CVEs...'
     const hasSelection = selectedVulns.length >= 1
     const closePanel = () => {
@@ -76,98 +59,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             document.removeEventListener('keydown', handleKeyDown);
         };
     }, [panelOpened, isLoading]);
-
-    // Reset cancelling flag when NVD or EPSS refresh ends
-    useEffect(() => {
-        if (!nvdProgress?.in_progress) setNvdCancelling(false);
-    }, [nvdProgress?.in_progress]);
-
-    useEffect(() => {
-        if (!epssProgress?.in_progress) setEpssCancelling(false);
-    }, [epssProgress?.in_progress]);
-
-    useEffect(() => {
-        if (!ghsaProgress?.in_progress) setGhsaCancelling(false);
-    }, [ghsaProgress?.in_progress]);
-
-    useEffect(() => {
-        if (!euvdProgress?.in_progress) setEuvdCancelling(false);
-    }, [euvdProgress?.in_progress]);
-
-    useEffect(() => {
-        function handleClickOutside(e: MouseEvent) {
-            if (refreshMenuRef.current && !refreshMenuRef.current.contains(e.target as Node)) {
-                setRefreshMenuOpen(false);
-            }
-        }
-        if (refreshMenuOpen) {
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }
-    }, [refreshMenuOpen]);
-
-    function toggleRefreshType(type: 'nvd' | 'epss' | 'ghsa' | 'euvd') {
-        setSelectedRefreshTypes(prev => {
-            const next = new Set(prev);
-            if (next.has(type)) next.delete(type); else next.add(type);
-            return next;
-        });
-    }
-
-    const nvdInProgress = nvdProgress?.in_progress ?? false;
-    const epssInProgress = epssProgress?.in_progress ?? false;
-    const ghsaInProgress = ghsaProgress?.in_progress ?? false;
-    const euvdInProgress = euvdProgress?.in_progress ?? false;
-    const selectedGhsaIds = selectedVulns.filter(id => id.toUpperCase().startsWith('GHSA-'));
-    const hasGhsaIds = selectedGhsaIds.length > 0;
-    const selectedCveIds = selectedVulns.filter(id => id.toUpperCase().startsWith('CVE-'));
-    const hasCveIds = selectedCveIds.length > 0;
-
-    // Number of selected targets that are not currently refreshing (actionable)
-    const actionableRefreshCount = (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds ? 1 : 0)
-        + (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds ? 1 : 0)
-        + (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && hasGhsaIds ? 1 : 0)
-        + (selectedRefreshTypes.has('euvd') && !euvdInProgress && hasCveIds ? 1 : 0);
-
-    const allSelectedRefreshing = selectedRefreshTypes.size === 0 || actionableRefreshCount === 0;
-
-    function handleRefresh() {
-        hideBanner();
-        const promises: Promise<void>[] = [];
-        if (selectedRefreshTypes.has('nvd') && !nvdInProgress && hasCveIds) {
-            promises.push(
-                BulkNvdRefreshHandler.trigger(selectedCveIds, nvdRefreshMode).then(res => {
-                    if (res) triggerBanner(`NVD refresh started for ${res.total} CVE(s)`, 'success', 'nvd', true);
-                    else triggerBanner('Failed to start NVD refresh', 'error', 'nvd');
-                }).catch(() => triggerBanner('Failed to start NVD refresh', 'error', 'nvd'))
-            );
-        }
-        if (selectedRefreshTypes.has('epss') && !epssInProgress && hasCveIds) {
-            promises.push(
-                BulkEpssRefreshHandler.trigger(selectedCveIds).then(res => {
-                    if (res) triggerBanner(`EPSS refresh started for ${res.total} CVE(s)`, 'success', 'epss', true);
-                    else triggerBanner('Failed to start EPSS refresh', 'error', 'epss');
-                }).catch(() => triggerBanner('Failed to start EPSS refresh', 'error', 'epss'))
-            );
-        }
-        if (selectedRefreshTypes.has('ghsa') && !ghsaInProgress && selectedGhsaIds.length > 0) {
-            promises.push(
-                BulkGhsaRefreshHandler.trigger(selectedGhsaIds).then(res => {
-                    if (res) triggerBanner(`GHSA refresh started for ${res.total} GHSA(s)`, 'success', 'ghsa', true);
-                    else triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa');
-                }).catch(() => triggerBanner('Failed to start GHSA refresh', 'error', 'ghsa'))
-            );
-        }
-        if (selectedRefreshTypes.has('euvd') && !euvdInProgress && hasCveIds) {
-            promises.push(
-                BulkEuvdRefreshHandler.trigger(selectedCveIds).then(res => {
-                    if (res) triggerBanner(`EUVD refresh started for ${res.total} CVE(s)`, 'success', 'euvd', true);
-                    else triggerBanner('Failed to start EUVD refresh', 'error', 'euvd');
-                }).catch(() => triggerBanner('Failed to start EUVD refresh', 'error', 'euvd'))
-            );
-        }
-        if (promises.length > 0) setRefreshMenuOpen(false);
-    }
 
     // Recompute affected variants whenever the status panel opens or the selection changes
     useEffect(() => {
@@ -511,218 +402,6 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                     <FontAwesomeIcon icon={faClock} />
                     Change time estimate
                 </button>
-
-                <div className="w-px h-6 bg-white/15 mx-1"></div>
-
-                {/* Refresh dropdown */}
-                <div className="relative" ref={refreshMenuRef}>
-                    <button
-                        data-testid="refresh-dropdown-toggle"
-                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
-                        disabled={!hasSelection && !(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress)}
-                        onClick={() => setRefreshMenuOpen(o => !o)}
-                        title="Select databases to fetch latest vulnerability data from"
-                    >
-                        <FontAwesomeIcon icon={faArrowsRotate} className={(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress) ? 'animate-spin' : ''} />
-                        Refresh Vulnerability Data
-                        {(nvdInProgress || epssInProgress || ghsaInProgress || euvdInProgress) && (
-                            <span className="inline-block w-2 h-2 rounded-full bg-cyan-300 animate-pulse ml-0.5" title="Refresh in progress" />
-                        )}
-                        <FontAwesomeIcon icon={faChevronDown} className="ml-0.5 text-xs" />
-                    </button>
-
-                    {refreshMenuOpen && (
-                        <div className="absolute left-0 top-full mt-1 z-50 w-64 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
-                            <div className="text-xs font-semibold text-sky-300 mb-2">Fetch latest data from:</div>
-
-                                    {/* NVD row */}
-                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
-                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
-                                            {nvdInProgress ? (
-                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="NVD refresh in progress" />
-                                            ) : (
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label="NVD"
-                                                    checked={selectedRefreshTypes.has('nvd')}
-                                                    onChange={() => toggleRefreshType('nvd')}
-                                                    disabled={!hasCveIds}
-                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                                                />
-                                            )}
-                                            <span className={!hasCveIds && !nvdInProgress ? 'opacity-40' : ''}>
-                                                NVD {!hasCveIds && !nvdInProgress && <span className="text-xs text-neutral-400">(no CVE  selected)</span>}
-                                            </span>
-                                        </div>
-                                        {nvdInProgress && (
-                                            <button
-                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                                disabled={nvdCancelling}
-                                                title="Cancel in-progress NVD refresh"
-                                                data-testid="cancel-nvd-refresh"
-                                                onClick={() => {
-                                                    setNvdCancelling(true);
-                                                    BulkNvdRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('NVD refresh cancellation requested', 'success', 'nvd', true);
-                                                        else { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); }
-                                                    }).catch(() => { setNvdCancelling(false); triggerBanner('Failed to cancel NVD refresh', 'error', 'nvd'); });
-                                                }}
-                                            >{nvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
-                                        )}
-                                    </div>
-
-                                    {/* NVD data source radio (shown when NVD is selected and not in progress) */}
-                                    {selectedRefreshTypes.has('nvd') && !nvdInProgress && (
-                                        <div className="px-1 py-1.5 border-t border-sky-800/40 mt-1">
-                                            <div className="text-xs text-sky-300 mb-1">NVD data source:</div>
-                                            <div className="flex gap-3">
-                                                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-                                                    <input
-                                                        type="radio"
-                                                        name="nvd-refresh-mode"
-                                                        value="local"
-                                                        checked={nvdRefreshMode === "local"}
-                                                        onChange={() => setNvdRefreshMode("local")}
-                                                        className="accent-cyan-500"
-                                                    />
-                                                    <span className="text-neutral-200">Git repository</span>
-                                                </label>
-                                                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
-                                                    <input
-                                                        type="radio"
-                                                        name="nvd-refresh-mode"
-                                                        value="api"
-                                                        checked={nvdRefreshMode === "api"}
-                                                        onChange={() => setNvdRefreshMode("api")}
-                                                        className="accent-cyan-500"
-                                                    />
-                                                    <span className="text-neutral-200">NVD REST API</span>
-                                                </label>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* EPSS row */}
-                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
-                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
-                                            {epssInProgress ? (
-                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="EPSS refresh in progress" />
-                                            ) : (
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label="EPSS"
-                                                    checked={selectedRefreshTypes.has('epss')}
-                                                    onChange={() => toggleRefreshType('epss')}
-                                                    disabled={!hasCveIds}
-                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                                                />
-                                            )}
-                                            <span className={!hasCveIds && !epssInProgress ? 'opacity-40' : ''}>
-                                                EPSS {!hasCveIds && !epssInProgress && <span className="text-xs text-neutral-400">(no CVE selected)</span>}
-                                            </span>
-                                        </div>
-                                        {epssInProgress && (
-                                            <button
-                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                                disabled={epssCancelling}
-                                                title="Cancel in-progress EPSS refresh"
-                                                data-testid="cancel-epss-refresh"
-                                                onClick={() => {
-                                                    setEpssCancelling(true);
-                                                    BulkEpssRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('EPSS refresh cancellation requested', 'success', 'epss', true);
-                                                        else { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); }
-                                                    }).catch(() => { setEpssCancelling(false); triggerBanner('Failed to cancel EPSS refresh', 'error', 'epss'); });
-                                                }}
-                                            >{epssCancelling ? 'Cancelling…' : 'Cancel'}</button>
-                                        )}
-                                    </div>
-
-                                    {/* GHSA row */}
-                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
-                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
-                                            {ghsaInProgress ? (
-                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="GHSA refresh in progress" />
-                                            ) : (
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label="GHSA"
-                                                    checked={selectedRefreshTypes.has('ghsa')}
-                                                    onChange={() => toggleRefreshType('ghsa')}
-                                                    disabled={!hasGhsaIds}
-                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                                                />
-                                            )}
-                                            <span className={!hasGhsaIds && !ghsaInProgress ? 'opacity-40' : ''}>
-                                                GHSA {!hasGhsaIds && !ghsaInProgress && <span className="text-xs text-neutral-400">(none selected)</span>}
-                                            </span>
-                                        </div>
-                                        {ghsaInProgress && (
-                                            <button
-                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                                disabled={ghsaCancelling}
-                                                title="Cancel in-progress GHSA refresh"
-                                                data-testid="cancel-ghsa-refresh"
-                                                onClick={() => {
-                                                    setGhsaCancelling(true);
-                                                    BulkGhsaRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('GHSA refresh cancellation requested', 'success', 'ghsa', true);
-                                                        else { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); }
-                                                    }).catch(() => { setGhsaCancelling(false); triggerBanner('Failed to cancel GHSA refresh', 'error', 'ghsa'); });
-                                                }}
-                                            >{ghsaCancelling ? 'Cancelling…' : 'Cancel'}</button>
-                                        )}
-                                    </div>
-
-                                    {/* EUVD row */}
-                                    <div className="flex items-center justify-between py-1 px-1 rounded hover:bg-sky-900/40">
-                                        <div className="flex items-center gap-2 text-sm text-neutral-200">
-                                            {euvdInProgress ? (
-                                                <span className="inline-block w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin flex-shrink-0" title="EUVD refresh in progress" />
-                                            ) : (
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label="EUVD"
-                                                    checked={selectedRefreshTypes.has('euvd')}
-                                                    onChange={() => toggleRefreshType('euvd')}
-                                                    disabled={!hasCveIds}
-                                                    className="rounded accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                                                />
-                                            )}
-                                            <span className={!hasCveIds && !euvdInProgress ? 'opacity-40' : ''}>
-                                                ENISA EUVD {!hasCveIds && !euvdInProgress && <span className="text-xs text-neutral-400">(no CVE selected)</span>}
-                                            </span>
-                                        </div>
-                                        {euvdInProgress && (
-                                            <button
-                                                className="text-xs bg-red-800 hover:bg-red-700 px-2 py-0.5 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                                                disabled={euvdCancelling}
-                                                title="Cancel in-progress EUVD refresh"
-                                                data-testid="cancel-euvd-refresh"
-                                                onClick={() => {
-                                                    setEuvdCancelling(true);
-                                                    BulkEuvdRefreshCancelHandler.trigger().then(res => {
-                                                        if (res) triggerBanner('EUVD refresh cancellation requested', 'success', 'euvd', true);
-                                                        else { setEuvdCancelling(false); triggerBanner('Failed to cancel EUVD refresh', 'error', 'euvd'); }
-                                                    }).catch(() => { setEuvdCancelling(false); triggerBanner('Failed to cancel EUVD refresh', 'error', 'euvd'); });
-                                                }}
-                                            >{euvdCancelling ? 'Cancelling…' : 'Cancel'}</button>
-                                        )}
-                                    </div>
-
-                                    <div className="mt-2 pt-2 border-t border-sky-800">
-                                        <button
-                                            className="w-full py-1 rounded text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-cyan-700 hover:bg-cyan-600 text-white disabled:bg-neutral-700 disabled:text-neutral-500"
-                                            disabled={allSelectedRefreshing}
-                                            title={allSelectedRefreshing ? 'All selected targets are already refreshing' : 'Start refresh for selected targets'}
-                                            onClick={handleRefresh}
-                                        >
-                                            Start
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
                     </div>
                 </div>
 

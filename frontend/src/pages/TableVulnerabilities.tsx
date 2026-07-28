@@ -11,6 +11,7 @@ import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulner
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
+import RefreshVulnerabilityData from "../components/RefreshVulnerabilityData";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
@@ -1922,6 +1923,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 >
                     Reset Filters
                 </button>
+                <span className="h-6 border-l border-gray-400" aria-hidden="true" />
+                <RefreshVulnerabilityData
+                    vulnerabilities={vulnerabilities}
+                    triggerBanner={triggerBanner}
+                    hideBanner={closeBanner}
+                    nvdProgress={nvdProgress}
+                    epssProgress={epssProgress}
+                    ghsaProgress={ghsaProgress}
+                    euvdProgress={euvdProgress}
+                />
             </div>
         </div>
 
@@ -1936,10 +1947,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
-            nvdProgress={nvdProgress}
-            epssProgress={epssProgress}
-            ghsaProgress={ghsaProgress}
-            euvdProgress={euvdProgress}
         />
 
         <TableGeneric
