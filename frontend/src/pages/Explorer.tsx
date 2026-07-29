@@ -236,6 +236,9 @@ function Explorer() {
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
+        setFilterLabel(undefined);
+        setFilterValue(undefined);
+        setFilterVulnerabilityIds(undefined);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -362,7 +365,7 @@ function Explorer() {
         );
         return Packages.enrich_with_vulns(loaded, vulnsRef.current);
     }, [currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
-    const outdatedPackagesScopeKey = [
+    const tablePreferenceScopeKey = [
         currentProjectId ?? '',
         currentBaseVariantId ?? '',
         currentVariantId ?? '',
@@ -370,6 +373,7 @@ function Explorer() {
         currentMultiOperation,
         ...(currentVariantIds ?? []),
     ].join(':');
+    const outdatedPackagesScopeKey = tablePreferenceScopeKey;
     const hasOutdatedPackagesScope = Boolean(
         currentProjectId || currentVariantId || (currentVariantIds?.length ?? 0) > 0
     );
@@ -448,18 +452,22 @@ function Explorer() {
                     projectId={currentProjectId}
                 />}
                 {tab === 'packages' && <TablePackages
+                    key={tablePreferenceScopeKey}
                     packages={pkgs}
                     vulnerabilities={vulns}
+                    preferenceScopeKey={tablePreferenceScopeKey}
                     onShowVulns={showVulnsForPackage}
                     onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
                     outdatedScopeKey={outdatedPackagesScopeKey}
                 />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
+                    key={tablePreferenceScopeKey}
                     appendAssessment={appendAssessment}
                     appendCVSS={appendCVSS}
                     patchVuln={patchVuln}
                     vulnerabilities={vulns}
+                    preferenceScopeKey={tablePreferenceScopeKey}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
                     filterVulnerabilityIds={filterVulnerabilityIds}

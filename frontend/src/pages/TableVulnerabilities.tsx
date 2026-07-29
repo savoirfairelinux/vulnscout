@@ -86,6 +86,7 @@ type Props = {
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
+    preferenceScopeKey?: string;
     variantId?: string;
     projectId?: string;
     /** Origin variant when compare mode is active */
@@ -368,8 +369,8 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
-    const preferenceKey = 'vulnscout.tables.vulnerabilities';
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+    const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);

@@ -157,14 +157,33 @@ describe('Packages Table', () => {
     })
 
     test('restores the applied search from local storage', async () => {
-        window.localStorage.setItem('vulnscout.tables.packages.search', JSON.stringify('xxxyyyzzz'));
-        window.localStorage.setItem('vulnscout.tables.packages.draftSearch', JSON.stringify('xxxyyyzzz'));
+        window.localStorage.setItem('vulnscout.tables.packages.unscoped.search', JSON.stringify('xxxyyyzzz'));
+        window.localStorage.setItem('vulnscout.tables.packages.unscoped.draftSearch', JSON.stringify('xxxyyyzzz'));
 
         render(<TablePackages packages={packages} />);
 
         expect(await screen.findByText('xxxyyyzzz')).toBeTruthy();
         expect(screen.queryByText('aaabbbccc')).toBeNull();
         expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('xxxyyyzzz');
+    });
+
+    test('keeps search preferences separate for each variant scope', async () => {
+        window.localStorage.setItem('vulnscout.tables.packages.variant-a.search', JSON.stringify('xxxyyyzzz'));
+        window.localStorage.setItem('vulnscout.tables.packages.variant-a.draftSearch', JSON.stringify('xxxyyyzzz'));
+
+        const variantA = render(<TablePackages key="variant-a" preferenceScopeKey="variant-a" packages={packages} />);
+        expect(await screen.findByText('xxxyyyzzz')).toBeTruthy();
+        expect(screen.queryByText('aaabbbccc')).toBeNull();
+        variantA.unmount();
+
+        const variantB = render(<TablePackages key="variant-b" preferenceScopeKey="variant-b" packages={packages} />);
+        expect(await screen.findByText('aaabbbccc')).toBeTruthy();
+        expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('');
+        variantB.unmount();
+
+        render(<TablePackages key="variant-a" preferenceScopeKey="variant-a" packages={packages} />);
+        expect(await screen.findByText('xxxyyyzzz')).toBeTruthy();
+        expect(screen.queryByText('aaabbbccc')).toBeNull();
     });
 
     test('package search applies only with the button or Enter', async () => {

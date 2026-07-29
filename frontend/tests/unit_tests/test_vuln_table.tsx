@@ -336,10 +336,27 @@ describe('Vulnerability Table', () => {
     })
 
     test('restores visible columns from local storage', async () => {
-        window.localStorage.setItem('vulnscout.tables.vulnerabilities.visibleColumns', JSON.stringify(['ID']));
+        window.localStorage.setItem('vulnscout.tables.vulnerabilities.unscoped.visibleColumns', JSON.stringify(['ID']));
 
         render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+    });
+
+    test('keeps column preferences separate for each variant scope', async () => {
+        window.localStorage.setItem('vulnscout.tables.vulnerabilities.variant-a.visibleColumns', JSON.stringify(['ID']));
+
+        const variantA = render(<TableVulnerabilities key="variant-a" preferenceScopeKey="variant-a" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+        variantA.unmount();
+
+        const variantB = render(<TableVulnerabilities key="variant-b" preferenceScopeKey="variant-b" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(await screen.findByRole('columnheader', {name: /severity/i})).toBeTruthy();
+        variantB.unmount();
+
+        render(<TableVulnerabilities key="variant-a" preferenceScopeKey="variant-a" vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
         expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
     });

@@ -21,6 +21,7 @@ type Props = {
     onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
     onLoadOutdatedPackages?: () => Promise<Package[]>;
     outdatedScopeKey?: string;
+    preferenceScopeKey?: string;
 };
 
 const addVulnCounts = (counts: VulnCounts, ignore: string[]) => {
@@ -41,9 +42,9 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey, preferenceScopeKey = 'unscoped' }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
-    const preferenceKey = 'vulnscout.tables.packages';
+    const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
     const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
     const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
     const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
