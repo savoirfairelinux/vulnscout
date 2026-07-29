@@ -267,6 +267,14 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/rename', methods=['PATCH'])
     def rename_project(project_id: str) -> ResponseReturnValue:
+        """Rename a project.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing the new name.
+        response 200 JsonObject Updated project payload.
+        response 404 Error Project not found.
+        response 409 Error Project name already exists.
+        """
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
@@ -300,6 +308,14 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>/rename', methods=['PATCH'])
     def rename_variant(variant_id: str) -> ResponseReturnValue:
+        """Rename a variant.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing the new name.
+        response 200 JsonObject Updated variant payload.
+        response 404 Error Variant not found.
+        response 409 Error Variant name already exists in the project.
+        """
         new_name, err = _validate_name_from_request("Variant")
         if err:
             return err
@@ -333,6 +349,13 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/projects', methods=['POST'])
     def create_project() -> ResponseReturnValue:
+        """Create a new project.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing the project name.
+        response 201 JsonObject Created project payload.
+        response 409 Error Project name already exists.
+        """
         new_name, err = _validate_name_from_request("Project")
         if err:
             return err
@@ -353,6 +376,14 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>/variants', methods=['POST'])
     def create_variant(project_id: str) -> ResponseReturnValue:
+        """Create a new variant inside a project.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing the variant name.
+        response 201 JsonObject Created variant payload.
+        response 404 Error Project not found.
+        response 409 Error Variant name already exists in the project.
+        """
         _, err = parse_uuid_or_400(project_id, "project ID")
         if err:
             return err
@@ -491,9 +522,6 @@ def init_app(app: Flask) -> None:
             return None, err
         target_uuid = cast(uuid.UUID, target_uuid)
 
-        if source_uuid == target_uuid:
-            return None, (jsonify({"error": "Source and target variants must be different."}), 400)
-
         source = VariantController.get(source_id)
         target = VariantController.get(target_id)
         if source is None or target is None:
@@ -521,7 +549,7 @@ def init_app(app: Flask) -> None:
         else:
             target_observed_finding_ids = set()
 
-        source_assessments = DBAssessment.get_handmade([source_uuid])
+        source_assessments = DBAssessment.get_by_origin([source_uuid])
 
         # ---- exact mode: original flat-operations behavior ----
         if match_mode == "exact":
@@ -546,6 +574,8 @@ def init_app(app: Flask) -> None:
                     continue
                 # Exact mode: same package_id → same Finding row shared across variants
                 target_finding = source_finding
+                if source_uuid == target_uuid:
+                    continue
                 # Only propose the copy if this vulnerability is actually part of
                 # the target variant's pool (observed in its active scans).
                 if target_finding.id not in target_observed_finding_ids:
@@ -606,7 +636,7 @@ def init_app(app: Flask) -> None:
             }, None
 
         # Batch-load existing custom assessments for the target variant once
-        target_custom_assessments = DBAssessment.get_handmade([target_uuid])
+        target_custom_assessments = DBAssessment.get_by_origin([target_uuid])
         target_customs_by_finding: dict = {}
         for a in target_custom_assessments:
             if a.finding_id is not None:
@@ -631,6 +661,8 @@ def init_app(app: Flask) -> None:
             candidates = []
 
             for tf in potential_targets:
+                if source_uuid == target_uuid and tf.id == source_finding.id:
+                    continue
                 if source_pkg is None or tf.package is None:
                     continue
                 if source_pkg.name != tf.package.name:
@@ -693,6 +725,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/copy-assessments/preview', methods=['POST'])
     def preview_copy_variant_assessments() -> ResponseReturnValue:
+        """Preview assessment copy operations between two variants.
+
+        OpenAPI:
+        body JsonObject optional Preview payload describing source, target, and copy mode.
+        response 200 JsonObject Assessment copy preview.
+        response 400 Error Invalid preview payload.
+        response 404 Error Variant not found.
+        """
         payload = request.get_json(silent=True) or {}
         source_id = payload.get("source_variant_id")
         target_id = payload.get("target_variant_id")
@@ -804,6 +844,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/copy-assessments', methods=['POST'])
     def copy_variant_assessments() -> ResponseReturnValue:
+        """Copy custom assessments from one variant to another.
+
+        OpenAPI:
+        body JsonObject optional Copy payload describing source, target, mode, and selections.
+        response 200 JsonObject Assessment copy summary.
+        response 400 Error Invalid copy payload.
+        response 404 Error Variant not found.
+        """
         from ..models.assessment import Assessment as DBAssessment
         from ..models.finding import Finding
 
@@ -862,7 +910,7 @@ def init_app(app: Flask) -> None:
             target_pkg_ids = active_package_ids_for_scans(
                 active_sbom_scan_ids_for_variant(target_uuid))
 
-            source_assessments = DBAssessment.get_handmade([source_uuid])
+            source_assessments = DBAssessment.get_by_origin([source_uuid])
             source_assessment_by_id = {str(a.id): a for a in source_assessments}
 
             copied = 0
@@ -893,6 +941,7 @@ def init_app(app: Flask) -> None:
                     src_finding = assessment.finding
                     if (
                         src_finding is None
+                        or (source_uuid == target_uuid and tgt_finding.id == src_finding.id)
                         or tgt_finding.vulnerability_id != src_finding.vulnerability_id
                     ):
                         continue
@@ -1002,6 +1051,12 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/projects/<project_id>', methods=['DELETE'])
     def delete_project(project_id: str) -> ResponseReturnValue:
+        """Delete a project and its related data.
+
+        OpenAPI:
+        response 200 JsonObject Deletion summary.
+        response 404 Error Project not found.
+        """
         return _delete_entity(project_id, ProjectController, "project ID", "Project")
 
     # ------------------------------------------------------------------
@@ -1009,6 +1064,12 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/variants/<variant_id>', methods=['DELETE'])
     def delete_variant(variant_id: str) -> ResponseReturnValue:
+        """Delete a variant and its related scans.
+
+        OpenAPI:
+        response 200 JsonObject Deletion summary.
+        response 404 Error Variant not found.
+        """
         return _delete_entity(variant_id, VariantController, "variant ID", "Variant")
 
     # ------------------------------------------------------------------
@@ -1025,6 +1086,12 @@ def init_app(app: Flask) -> None:
         - files: one or more SBOM files (.json)  (field name ``files``)
         - project_id: UUID of the target project
         - variant_id: UUID of the target variant
+
+        OpenAPI:
+        body multipart optional Multipart request containing files, project_id, variant_id, and optional format.
+        response 202 JsonObject Accepted upload summary.
+        response 400 Error Invalid upload request.
+        response 404 Error Project or variant not found.
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return jsonify({"error": "Expected multipart/form-data with a file upload."}), 400
@@ -1154,6 +1221,12 @@ def init_app(app: Flask) -> None:
     # ------------------------------------------------------------------
     @app.route('/api/sbom/upload/<upload_id>/status')
     def upload_sbom_status(upload_id: str) -> ResponseReturnValue:
+        """Return the processing status of an asynchronous SBOM upload.
+
+        OpenAPI:
+        response 200 JsonObject Upload progress payload.
+        response 404 Error Unknown upload identifier.
+        """
         status = _upload_status.get(upload_id)
         if status is None:
             return jsonify({"error": "Unknown upload ID."}), 404

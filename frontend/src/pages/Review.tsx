@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { createColumnHelper } from "@tanstack/react-table";
+import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
@@ -7,10 +7,10 @@ import { asAssessment } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
-import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
+import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
@@ -19,15 +19,24 @@ import ConfirmationModal from '../components/ConfirmationModal';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
 import Packages from '../handlers/packages';
-import Projects from '../handlers/project';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, extractSupplierName } from '../helpers/pkgId';
+import ReviewTransferModal from '../components/ReviewTransferModal';
+import ExplicitSearchInput from '../components/ExplicitSearchInput';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
     | { type: 'update'; vulnId: string; ids: string[]; data: EditAssessmentData };
 
-type ReviewTab = 'assessments' | 'time-estimates' | 'custom-cvss';
+type ReviewTab = 'assessments' | 'ai-assessments' | 'time-estimates' | 'custom-cvss';
+
+type ReviewTimeEstimateRow = ReviewTimeEstimate & {
+    texts: { title: string; content: string }[];
+};
+
+type ReviewCustomCvssRow = ReviewCustomCvss & {
+    texts: { title: string; content: string }[];
+};
 
 type Props = {
     variantId?: string;
@@ -53,6 +62,39 @@ type ReviewRow = Assessment & {
 const columnHelper = createColumnHelper<ReviewRow>();
 const teColumnHelper = createColumnHelper<ReviewTimeEstimate>();
 const cvssColumnHelper = createColumnHelper<ReviewCustomCvss>();
+
+function createSelectionColumn<DataType>() {
+    return {
+        id: 'select-checkbox',
+        cell: ({ row }: { row: Row<DataType> }) => (
+            <div className="flex items-center justify-center h-full">
+                <input
+                    type="checkbox"
+                    title={row.getIsSelected() ? "Unselect" : "Select"}
+                    checked={row.getIsSelected()}
+                    disabled={!row.getCanSelect()}
+                    onChange={row.getToggleSelectedHandler()}
+                />
+            </div>
+        ),
+        header: ({ table }: { table: Table<DataType> }) => (
+            <div className="flex items-center justify-center h-full">
+                <input
+                    type="checkbox"
+                    ref={element => {
+                        if (element) element.indeterminate = table.getIsSomePageRowsSelected();
+                    }}
+                    title={table.getIsAllPageRowsSelected() ? "Unselect all" : "Select all"}
+                    checked={table.getIsAllPageRowsSelected()}
+                    onChange={table.getToggleAllPageRowsSelectedHandler()}
+                />
+            </div>
+        ),
+        minSize: 10,
+        size: 40,
+        maxSize: 40,
+    };
+}
 
 /**
  * Group assessments that share the same CVE, status, justification, notes,
@@ -114,34 +156,50 @@ function formatDate(iso: string): string {
     });
 }
 
+function hasOutdatedAssessment(assessment: Assessment): boolean {
+    const rawAssessments = (assessment as Partial<ReviewRow>)._assessments ?? [assessment];
+    return rawAssessments.some(current => current.outdated);
+}
+
 function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
     const [assessments, setAssessments] = useState<Assessment[]>([]);
+    const [aiAssessments, setAiAssessments] = useState<Assessment[]>([]);
     const [timeEstimates, setTimeEstimates] = useState<ReviewTimeEstimate[]>([]);
     const [customCvss, setCustomCvss] = useState<ReviewCustomCvss[]>([]);
     const [vulnDescriptions, setVulnDescriptions] = useState<Record<string, { title: string; content: string }[]>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState<string>('');
+    const [draftSearch, setDraftSearch] = useState<string>('');
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
+    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
     const [variantNames, setVariantNames] = useState<Record<string, string>>({});
-    const [projectNames, setProjectNames] = useState<Record<string, string>>({});
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [editingRow, setEditingRow] = useState<ReviewRow | null>(null);
     const [editVariants, setEditVariants] = useState<Variant[]>([]);
     const [editVariantPackageMap, setEditVariantPackageMap] = useState<Record<string, string[]>>({});
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
+    const [selectedAssessments, setSelectedAssessments] = useState<RowSelectionState>({});
+    const [selectedAiAssessments, setSelectedAiAssessments] = useState<RowSelectionState>({});
+    const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<RowSelectionState>({});
+    const [selectedCustomCvss, setSelectedCustomCvss] = useState<RowSelectionState>({});
+    const [bulkDeleteTab, setBulkDeleteTab] = useState<ReviewTab | null>(null);
     const [bannerMessage, setBannerMessage] = useState("");
     const [bannerType, setBannerType] = useState<"error" | "success">("success");
     const [showBanner, setShowBanner] = useState(false);
+    const [transferMode, setTransferMode] = useState<'import' | 'export' | null>(null);
+    const [transferVariantIds, setTransferVariantIds] = useState<string[]>([]);
+    const [transferFormat, setTransferFormat] = useState<'custom' | 'openvex'>('custom');
+    const [importTimestampPolicy, setImportTimestampPolicy] = useState<'original' | 'current'>('original');
 
     const showMessage = useCallback((message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -149,6 +207,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setShowBanner(true);
     }, []);
     const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
+    const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
+    const [modalVulnIds, setModalVulnIds] = useState<string[]>([]);
+    const displayedVulnIdsRef = useRef<string[]>([]);
+    const fetchGenRef = useRef(0);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -176,11 +238,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             for (const v of vs) map[v.id] = v.name;
             setVariantNames(map);
             setAllVariants(vs);
-        }).catch(() => {});
-        Projects.list().then(ps => {
-            const map: Record<string, string> = {};
-            for (const p of ps) map[p.id] = p.name;
-            setProjectNames(map);
         }).catch(() => {});
     }, []);
 
@@ -244,17 +301,19 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setError(null);
         Promise.all([
             Assessments.listReview(variantId, projectId),
+            Assessments.listReviewAi(variantId, projectId),
             Assessments.listReviewTimeEstimates(variantId, projectId),
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
-            .then(([reviewData, teData, cvssData]) => {
+            .then(([reviewData, aiData, teData, cvssData]) => {
                 setAssessments(groupAssessments(reviewData));
+                setAiAssessments(groupAssessments(aiData));
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 // Build tooltip descriptions from vuln_texts included in the response
                 const descMap: Record<string, { title: string; content: string }[]> = {};
-                for (const a of reviewData) {
+                for (const a of [...reviewData, ...aiData]) {
                     if (a.vuln_id && !descMap[a.vuln_id] && a.vuln_texts) {
                         descMap[a.vuln_id] = a.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
@@ -278,12 +337,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             });
     }, [variantId, projectId]);
 
-    const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.value.length < 2) {
-            if (search != '') setSearch('');
-        }
-        setSearch(event.target.value);
-    }, 550, { maxWait: 2500 });
+    const applySearch = () => setSearch(draftSearch.trim());
 
     useEffect(() => {
         const handleKeyPress = (event: KeyboardEvent) => {
@@ -335,36 +389,36 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const statusList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             if (a.simplified_status) set.add(a.simplified_status);
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const justificationList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             if (a.justification) set.add(a.justification.replace(/_/g, " "));
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const supplierList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             for (const pkg of a.packages) {
                 const name = extractSupplierName(splitPkgId(pkg).supplier);
                 if (name) set.add(name);
             }
         }
         return [...set].sort();
-    }, [assessments]);
+    }, [assessments, aiAssessments]);
 
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
     const variantList = useMemo(() => {
         const set = new Set<string>();
-        for (const a of assessments) {
+        for (const a of [...assessments, ...aiAssessments]) {
             const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
             for (const vid of vids) {
                 const name = variantNames[vid];
@@ -372,7 +426,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         }
         return [...set].sort();
-    }, [assessments, variantNames]);
+    }, [assessments, aiAssessments, variantNames]);
 
     // All variants are checked by default; a variant only leaves the selection
     // once the user explicitly unchecks it. Deriving the selection during render
@@ -385,46 +439,114 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setDeselectedVariants(variantList.filter(v => !values.includes(v)));
     }, [variantList]);
 
+    const filteredAssessments = useMemo(() => assessments.filter((a) => {
+        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+            return false;
+        }
+        if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
+            return false;
+        }
+        if (selectedJustifications.length && !(a.justification && selectedJustifications.includes(a.justification.replace(/_/g, " ")))) {
+            return false;
+        }
+        if (selectedSuppliers.length) {
+            const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
+            if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
+        }
+        {
+            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
+            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
+            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
+        }
+        return true;
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames, showOnlyOutdated]);
+
+    // Records the display order (filtered + sorted, deduped by vuln_id) of the
+    // currently visible tab's table so the modal can navigate across it. Only one
+    // tab's TableGeneric is mounted at a time, so a single ref serves all tabs.
+    const handleDisplayedVulnsChange = useCallback((rows: { vuln_id: string }[]) => {
+        const seen = new Set<string>();
+        const ids: string[] = [];
+        for (const r of rows) {
+            if (!seen.has(r.vuln_id)) {
+                seen.add(r.vuln_id);
+                ids.push(r.vuln_id);
+            }
+        }
+        displayedVulnIdsRef.current = ids;
+    }, []);
+
     const resetFilters = () => {
         setSearch('');
+        setDraftSearch('');
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
         setSelectedVariants(variantList);
+        setShowOnlyOutdated(false);
     };
+
+    const transferVariants = useMemo(() => {
+        const scopedProjectId = projectId ?? allVariants.find(v => v.id === variantId)?.project_id;
+        return scopedProjectId ? allVariants.filter(v => v.project_id === scopedProjectId) : allVariants;
+    }, [allVariants, projectId, variantId]);
+
+    const openTransfer = useCallback((mode: 'import' | 'export') => {
+        setTransferFormat('custom');
+        setImportTimestampPolicy('original');
+        setTransferVariantIds(mode === 'export'
+            ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
+            : []);
+        setTransferMode(mode);
+    }, [transferVariants, variantId]);
+
+    const changeTransferFormat = useCallback((format: 'custom' | 'openvex') => {
+        setTransferFormat(format);
+        if (format === 'custom') {
+            setTransferVariantIds(transferMode === 'export'
+                ? variantId ? [variantId] : transferVariants.map(variant => variant.id)
+                : []);
+            return;
+        }
+        const defaultVariantId = variantId && transferVariants.some(v => v.id === variantId)
+            ? variantId
+            : transferVariants[0]?.id;
+        setTransferVariantIds(defaultVariantId ? [defaultVariantId] : []);
+    }, [transferMode, transferVariants, variantId]);
 
     const handleExportReview = useCallback(async () => {
         try {
             const params = new URLSearchParams();
-            if (variantId) params.set('variant_id', variantId);
-            else if (projectId) params.set('project_id', projectId);
+            transferVariantIds.forEach(variantId => params.append('variant_id', variantId));
+            const endpoint = transferFormat === 'openvex' ? 'export' : 'export-custom-data';
             const url = new URL(
-                import.meta.env.VITE_API_URL + "/api/assessments/review/export-custom-data" +
+                import.meta.env.VITE_API_URL + `/api/assessments/review/${endpoint}` +
                 (params.toString() ? `?${params.toString()}` : ''),
                 window.location.href,
             );
             const res = await fetch(url.toString(), { mode: 'cors' });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                showMessage(err.error || 'Failed to export custom data.', 'error');
+                showMessage(err.error || 'Failed to export review data.', 'error');
                 return;
             }
-            const data = await res.json();
             const ts = formatTimestampForFilename();
-            const pName = projectId ? projectNames[projectId]
-                : variantId ? projectNames[allVariants.find(v => v.id === variantId)?.project_id ?? ''] ?? ''
-                : '';
-            const vName = variantId ? variantNames[variantId] ?? '' : '';
-            const label = [pName, vName].filter(Boolean).join('_') || 'all';
-            const filename = `custom_data_${sanitizeFilename(label)}_${ts}.json`;
-            downloadJson(data, filename);
+            if (transferFormat === 'openvex') {
+                const label = variantNames[transferVariantIds[0]] ?? 'variant';
+                downloadJson(await res.json(), `review_openvex_${sanitizeFilename(label)}_${ts}.json`);
+            } else {
+                const label = transferVariantIds.length === 1 ? variantNames[transferVariantIds[0]] ?? 'variant' : 'all';
+                downloadJson(await res.json(), `custom_data_${sanitizeFilename(label)}_${ts}.json`);
+            }
+            setTransferMode(null);
         } catch (err) {
             console.error('Export error:', err);
-            showMessage('Failed to export custom data.', 'error');
+            showMessage('Failed to export review data.', 'error');
         }
-    }, [variantId, projectId, showMessage, projectNames, variantNames, allVariants]);
+    }, [showMessage, variantNames, transferVariantIds, transferFormat]);
 
     const handleImportReview = useCallback(() => {
+        setTransferMode(null);
         fileInputRef.current?.click();
     }, []);
 
@@ -432,61 +554,55 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         const file = event.target.files?.[0];
         if (!file) return;
 
-        // Old OpenVEX format: .tar.gz or .tgz files — use legacy import path
-        if (file.name.endsWith('.tar.gz') || file.name.endsWith('.tgz')) {
+        type ImportResult = {
+            status?: string;
+            error?: string;
+            assessments_imported?: number;
+            assessments_skipped?: number;
+            cvss_imported?: number;
+            time_estimates_imported?: number;
+            errors?: { error?: string }[];
+        };
+
+        if (transferFormat === 'openvex') {
+            setImportStatus("Importing...");
             const formData = new FormData();
             formData.append('file', file);
-            const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-            setImportStatus("Importing...");
-            fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        Assessments.listReview(variantId, projectId).then(data => setAssessments(groupAssessments(data)));
+            formData.append('variant_id', transferVariantIds[0]);
+            formData.append('timestamp_policy', importTimestampPolicy);
+            fetch(new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href).toString(), {
+                method: 'POST',
+                body: formData,
+                mode: 'cors',
+            })
+                .then(response => response.json() as Promise<ImportResult>)
+                .then(result => {
+                    if (result.status === 'success') {
+                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
-                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
+                        showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
                     }
-                    setImportStatus(null);
                 })
                 .catch(err => {
                     console.error(err);
                     showMessage('Import failed', 'error');
-                    setImportStatus(null);
                 })
                 .finally(() => {
+                    setImportStatus(null);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                 });
             return;
         }
 
-        // JSON files: detect format and route to appropriate backend endpoint
+        // VulnScout JSON carries its own variant IDs, so no target selection
+        // or override is sent with the request.
         const reader = new FileReader();
         reader.onload = async () => {
             try {
                 const text = reader.result as string;
                 const parsed = JSON.parse(text);
 
-                // Detect old OpenVEX format: has @context with "openvex"
-                if (parsed?.['@context'] && String(parsed['@context']).includes('openvex')) {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import", window.location.href);
-                    setImportStatus("Importing...");
-                    const res = await fetch(url.toString(), { method: 'POST', body: formData, mode: 'cors' });
-                    const data = await res.json();
-                    if (data.status === 'success') {
-                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
-                        showMessage('Assessments imported successfully!', 'success');
-                    } else {
-                        showMessage(`Import error: ${data.error || 'Unknown error'}`, 'error');
-                    }
-                    setImportStatus(null);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                    return;
-                }
-
-                // New custom data format — send to backend import-custom-data endpoint
                 if (!parsed?.version || !parsed?.assessments) {
                     showMessage('Invalid file format. Expected a VulnScout custom data export.', 'error');
                     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -494,35 +610,33 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 }
 
                 setImportStatus("Importing...");
-                const params = new URLSearchParams();
-                if (variantId) params.set('variant_id', variantId);
-                const url = new URL(
-                    import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data" +
-                    (params.toString() ? `?${params.toString()}` : ''),
-                    window.location.href,
-                );
-                const res = await fetch(url.toString(), {
+                const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/import-custom-data", window.location.href);
+                const result = await fetch(url.toString(), {
                     method: 'POST',
                     mode: 'cors',
                     headers: { 'Content-Type': 'application/json' },
-                    body: text,
+                    body: JSON.stringify({ ...parsed, timestamp_policy: importTimestampPolicy }),
                 });
-                const result = await res.json();
+                const data = await result.json() as ImportResult;
 
-                if (result.status === 'success') {
+                if (data.status === 'success') {
+                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    const assessmentsImported = data.assessments_imported ?? 0;
+                    const assessmentsSkipped = data.assessments_skipped ?? 0;
+                    const cvssImported = data.cvss_imported ?? 0;
+                    const timeEstimatesImported = data.time_estimates_imported ?? 0;
                     const summary: string[] = [];
-                    if (result.assessments_imported > 0) {
-                        let msg = `${result.assessments_imported} assessment(s) imported`;
-                        if (result.assessments_skipped) msg += `, ${result.assessments_skipped} skipped`;
+                    if (assessmentsImported > 0) {
+                        let msg = `${assessmentsImported} assessment(s) imported`;
+                        if (assessmentsSkipped) msg += `, ${assessmentsSkipped} skipped`;
                         summary.push(msg);
                     }
-                    if (result.cvss_imported > 0) summary.push(`${result.cvss_imported} CVSS score(s)`);
-                    if (result.time_estimates_imported > 0) summary.push(`${result.time_estimates_imported} time estimate(s)`);
-                    if (result.errors?.length) summary.push(`${result.errors.length} error(s)`);
-                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    if (cvssImported > 0) summary.push(`${cvssImported} CVSS score(s)`);
+                    if (timeEstimatesImported > 0) summary.push(`${timeEstimatesImported} time estimate(s)`);
+                    if (data.errors?.length) summary.push(`${data.errors.length} error(s)`);
                     showMessage(summary.length > 0 ? `Imported: ${summary.join(', ')}` : 'Import complete (no data changed)', 'success');
                 } else {
-                    showMessage(`Import error: ${result.errors?.[0]?.error || 'Unknown error'}`, 'error');
+                    showMessage(`Import error: ${data.errors?.[0]?.error || data.error || 'Unknown error'}`, 'error');
                 }
                 setImportStatus(null);
             } catch (err) {
@@ -534,7 +648,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -561,6 +675,130 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
         setRowToDelete(null);
     }, [rowToDelete, variantId, projectId, onAssessmentChanged, showMessage]);
+
+    /** Refetch both the handmade and AI-pending assessment lists (used after
+     * approving/rejecting a pending AI assessment from the AI Assessments
+     * table, since approving moves a row from one list to the other). */
+    const refreshAssessmentLists = useCallback(async () => {
+        const [reviewData, aiData] = await Promise.all([
+            Assessments.listReview(variantId, projectId),
+            Assessments.listReviewAi(variantId, projectId),
+        ]);
+        setAssessments(groupAssessments(reviewData));
+        setAiAssessments(groupAssessments(aiData));
+    }, [variantId, projectId]);
+
+    const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
+        try {
+            await Assessments.approveAi(row._allIds[0], row._allIds);
+            await refreshAssessmentLists();
+            showMessage('AI assessment approved!', 'success');
+        } catch (e) {
+            showMessage(`Failed to approve AI assessment: ${String(e)}`, 'error');
+        }
+    }, [refreshAssessmentLists, showMessage]);
+
+    const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
+        try {
+            await Assessments.rejectAi(row._allIds[0], row._allIds);
+            await refreshAssessmentLists();
+            showMessage('AI assessment rejected.', 'success');
+        } catch (e) {
+            showMessage(`Failed to reject AI assessment: ${String(e)}`, 'error');
+        }
+    }, [refreshAssessmentLists, showMessage]);
+
+    const selectedRows = activeTab === 'assessments'
+        ? selectedAssessments
+        : activeTab === 'ai-assessments'
+            ? selectedAiAssessments
+            : activeTab === 'time-estimates'
+                ? selectedTimeEstimates
+                : selectedCustomCvss;
+    const selectedRowCount = Object.keys(selectedRows).length;
+
+    const clearSelectedRows = useCallback((tab: ReviewTab) => {
+        if (tab === 'assessments') setSelectedAssessments({});
+        else if (tab === 'ai-assessments') setSelectedAiAssessments({});
+        else if (tab === 'time-estimates') setSelectedTimeEstimates({});
+        else setSelectedCustomCvss({});
+    }, []);
+
+    const handleBulkDelete = useCallback(async () => {
+        if (!bulkDeleteTab) return;
+
+        try {
+            if (bulkDeleteTab === 'assessments') {
+                const rows = assessments.filter(row => selectedAssessments[row.id]);
+                const ids = rows.flatMap(row => (row as ReviewRow)._allIds ?? [row.id]);
+                const responses = await Promise.all(ids.map(id => fetch(
+                    import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(id)}`,
+                    { method: 'DELETE', mode: 'cors' }
+                )));
+                if (responses.some(response => !response.ok)) throw new Error('Assessment deletion failed');
+                setAssessments(groupAssessments(await Assessments.listReview(variantId, projectId)));
+                for (const row of rows) {
+                    const assessmentRow = row as ReviewRow;
+                    onAssessmentChanged?.({
+                        type: 'delete',
+                        vulnId: row.vuln_id,
+                        ids: assessmentRow._allIds ?? [row.id],
+                    });
+                }
+            } else if (bulkDeleteTab === 'ai-assessments') {
+                const rows = aiAssessments.filter(row => selectedAiAssessments[row.id]);
+                await Promise.all(rows.map(row => {
+                    const assessmentRow = row as ReviewRow;
+                    const ids = assessmentRow._allIds ?? [row.id];
+                    return Assessments.rejectAi(ids[0], ids);
+                }));
+                await refreshAssessmentLists();
+            } else if (bulkDeleteTab === 'time-estimates') {
+                const ids = Object.keys(selectedTimeEstimates);
+                const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/review/time-estimates', {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                if (!response.ok) throw new Error('Time estimate deletion failed');
+                setTimeEstimates(await Assessments.listReviewTimeEstimates(variantId, projectId));
+            } else {
+                const ids = Object.keys(selectedCustomCvss);
+                const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/review/custom-cvss', {
+                    method: 'DELETE',
+                    mode: 'cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids }),
+                });
+                if (!response.ok) throw new Error('Custom CVSS deletion failed');
+                const refreshed = await Assessments.listReviewCustomCvss(variantId, projectId);
+                setCustomCvss(refreshed.filter(item => item.origin === 'custom'));
+            }
+            clearSelectedRows(bulkDeleteTab);
+            showMessage(`${selectedRowCount} item${selectedRowCount === 1 ? '' : 's'} deleted successfully!`, 'success');
+        } catch (error) {
+            console.error(error);
+            showMessage('Failed to delete selected items.', 'error');
+        } finally {
+            setBulkDeleteTab(null);
+        }
+    }, [
+        aiAssessments,
+        assessments,
+        bulkDeleteTab,
+        clearSelectedRows,
+        onAssessmentChanged,
+        projectId,
+        refreshAssessmentLists,
+        selectedAiAssessments,
+        selectedAssessments,
+        selectedCustomCvss,
+        selectedRowCount,
+        selectedTimeEstimates,
+        showMessage,
+        variantId,
+    ]);
 
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
         if (!editingRow) return;
@@ -680,7 +918,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setEditSubmitting(false);
     }, [editingRow, variantId, projectId, onAssessmentChanged, showMessage]);
 
-    const handleVulnClick = useCallback(async (vulnId: string) => {
+    const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
             const [vulnRes, assessRes] = await Promise.all([
                 fetch(`${import.meta.env.VITE_API_URL}/api/vulnerabilities/${encodeURIComponent(vulnId)}`, { mode: 'cors' }),
@@ -689,19 +927,48 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!vulnRes.ok) throw new Error(`HTTP ${vulnRes.status}`);
             const vulnData = await vulnRes.json();
             const vuln = asVulnerability(vulnData);
-            if (Array.isArray(vuln)) return;
+            if (Array.isArray(vuln)) return undefined;
 
             if (assessRes.ok) {
                 const assessData = await assessRes.json();
-                vuln.assessments = (assessData as any[]).flatMap(asAssessment);
+                vuln.assessments = (assessData as any[])
+                    .flatMap(asAssessment)
+                    .filter((a) => a.origin !== 'ai');
             }
-            setModalVuln(vuln);
+            return vuln;
         } catch (err) {
             console.error("Failed to load vulnerability:", err);
+            return undefined;
         }
     }, []);
 
+    // Opens the modal with navigation context so the modal renders Previous/Next
+    // buttons across the vulnerabilities currently displayed in the active tab.
+    const handleVulnClickWithNav = useCallback(async (vulnId: string) => {
+        const gen = ++fetchGenRef.current;
+        const vuln = await fetchVulnForModal(vulnId);
+        if (gen !== fetchGenRef.current) return;
+        if (!vuln) return;
+        const displayedIds = displayedVulnIdsRef.current;
+        const index = displayedIds.indexOf(vulnId);
+        setModalVuln(vuln);
+        setModalVulnIds(displayedIds);
+        setModalVulnIndex(index >= 0 ? index : undefined);
+    }, [fetchVulnForModal]);
+
+    const handleModalNavigation = useCallback(async (newIndex: number) => {
+        if (newIndex < 0 || newIndex >= modalVulnIds.length) return;
+        const gen = ++fetchGenRef.current;
+        const vuln = await fetchVulnForModal(modalVulnIds[newIndex]);
+        if (gen !== fetchGenRef.current) return;
+        if (!vuln) return;
+        setModalVuln(vuln);
+        setModalVulnIndex(newIndex);
+    }, [fetchVulnForModal, modalVulnIds]);
+
+
     const columns = useMemo(() => [
+        createSelectionColumn<ReviewRow>(),
         columnHelper.accessor("vuln_id", {
             id: 'id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -709,7 +976,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -766,9 +1033,19 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     <div className="flex flex-wrap gap-1 items-center justify-center h-full">
                         {vids.map(vid => {
                             const name = variantNames[vid] ?? vid.slice(0, 8);
+                            const variantAssessments = (row._assessments ?? [row]).filter(a => a.variant_id === vid);
+                            const isOutdated = variantAssessments.length > 0 && variantAssessments.every(a =>
+                                a.outdated === true
+                                || (a.packages.length > 0 && a.packages.every(pkg => (a.superseded_map?.[pkg]?.length ?? 0) > 0))
+                            );
                             return (
-                                <span key={vid} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
+                                <span
+                                    key={vid}
+                                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'}`}
+                                    title={isOutdated ? 'Package version is not present in this variant’s current SBOM' : undefined}
+                                >
                                     {name}
+                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">Outdated</span>}
                                 </span>
                             );
                         })}
@@ -779,11 +1056,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         columnHelper.accessor("simplified_status", {
             header: () => <div className="flex items-center justify-center">Status</div>,
             size: 110,
-            cell: info => (
-                <div className="flex items-center justify-center h-full">
-                    <code>{info.getValue()}</code>
-                </div>
-            ),
+            cell: info => {
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <code>{info.getValue()}</code>
+                    </div>
+                );
+            },
         }),
         columnHelper.accessor("justification", {
             header: () => <div className="flex items-center justify-center">Justification</div>,
@@ -873,9 +1152,41 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
+
+    const aiActionsColumn = useMemo(() => columnHelper.display({
+        id: 'ai-actions',
+        header: () => <div className="flex items-center justify-center">Actions</div>,
+        size: 110,
+        cell: info => (
+            <div className="flex flex-wrap items-center justify-center gap-2 h-full">
+                <button
+                    onClick={() => handleApproveAiRow(info.row.original)}
+                    className="px-2 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-xs flex items-center gap-1"
+                    title="Approve AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faCheck} className="w-3 h-3" />
+                    Approve
+                </button>
+                <button
+                    onClick={() => handleRejectAiRow(info.row.original)}
+                    className="px-2 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-xs flex items-center gap-1"
+                    title="Reject AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faXmark} className="w-3 h-3" />
+                    Reject
+                </button>
+            </div>
+        ),
+    }), [handleApproveAiRow, handleRejectAiRow]);
+
+    const aiColumns = useMemo(
+        () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
+        [columns, aiActionsColumn]
+    );
 
     const teColumns = useMemo(() => [
+        createSelectionColumn<ReviewTimeEstimateRow>(),
         teColumnHelper.accessor("vuln_id", {
             id: 'te_vuln_id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -883,7 +1194,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -934,9 +1245,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
 
     const cvssColumns = useMemo(() => [
+        createSelectionColumn<ReviewCustomCvssRow>(),
         cvssColumnHelper.accessor("vuln_id", {
             id: 'cvss_vuln_id',
             header: () => <div className="flex items-center justify-center">Vulnerability</div>,
@@ -944,7 +1256,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             cell: info => (
                 <div
                     className="flex items-center justify-center w-full h-full text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors p-4"
-                    onClick={() => handleVulnClick(info.getValue())}
+                    onClick={() => handleVulnClickWithNav(info.getValue())}
                     title="Click to view details"
                 >
                     <span className="font-mono text-sm">{info.getValue()}</span>
@@ -1012,7 +1324,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClick, variantNames]);
+    ], [handleVulnClickWithNav, variantNames]);
 
     if (loading) {
         return (
@@ -1035,7 +1347,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         );
     }
 
-    const filteredAssessments = assessments.filter((a) => {
+    const filterReviewRows = (list: Assessment[]) => list.filter((a) => {
+        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+            return false;
+        }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -1054,11 +1369,65 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return true;
     });
 
+    const filteredAiAssessments = filterReviewRows(aiAssessments);
+
+    /** Shared renderer for the "assessments" and "ai-assessments" tabs: both
+     * show the same empty-state shape and the same TableGeneric<ReviewRow>
+     * setup, differing only in which rows/columns/copy are passed in. */
+    const renderAssessmentsTable = (
+        rows: Assessment[],
+        cols: any[],
+        emptyTitle: string,
+        emptyBody: string,
+        onFilteredDataChange?: (rows: ReviewRow[]) => void,
+        selected?: RowSelectionState,
+        updateSelected?: OnChangeFn<RowSelectionState>,
+    ) => (
+        rows.length === 0 ? (
+            <div className="text-center py-10 text-gray-400">
+                <p className="text-lg">{emptyTitle}</p>
+                <p className="text-sm mt-2">{emptyBody}</p>
+            </div>
+        ) : (
+            <TableGeneric<ReviewRow>
+                columns={cols}
+                data={rows.map(a => ({
+                    ...a,
+                    texts: vulnDescriptions[a.vuln_id] ?? [],
+                    _allIds: (a as any)._allIds ?? [a.id],
+                    _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
+                    _assessments: (a as any)._assessments ?? [a],
+                    extractedSuppliers: [...new Set(
+                        a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
+                    )],
+                }))}
+                search={search}
+                fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
+                forAllValues={(row) => row.packages}
+                estimateRowHeight={50}
+                hasPagination={true}
+                hoverField="texts"
+                hoverIdField="vuln_id"
+                onFilteredDataChange={onFilteredDataChange}
+                selected={selected}
+                updateSelected={updateSelected}
+            />
+        )
+    );
+
     return (
         <div>
             <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
-                <div>Search</div>
-                <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by vulnerability, package, status, ..." />
+                <ExplicitSearchInput
+                    id="review-search"
+                    ref={searchInputRef}
+                    value={draftSearch}
+                    onChange={setDraftSearch}
+                    onSearch={applySearch}
+                    label="Search"
+                    placeholder="Search by vulnerability, package, status, ..."
+                    ariaLabel="Search reviews"
+                />
 
                 <div className="relative">
                     <button
@@ -1089,7 +1458,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     )}
                 </div>
 
-                {activeTab === 'assessments' && (
+                {(activeTab === 'assessments' || activeTab === 'ai-assessments') && (
                     <>
                         <FilterOption
                             label="Status"
@@ -1122,6 +1491,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 setSelected={setSelectedVariants}
                             />
                         )}
+
+                        <ToggleSwitch
+                            enabled={showOnlyOutdated}
+                            setEnabled={setShowOnlyOutdated}
+                            label="Outdated"
+                        />
+                        <div className="flex items-center mx-3">
+                            <div className="border-l h-8 dark:border-neutral-300"></div>
+                        </div>
                     </>
                 )}
 
@@ -1170,32 +1548,58 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         Reset Filters
                     </button>
 
+                    {selectedRowCount > 0 && (
+                        <button
+                            onClick={() => setBulkDeleteTab(activeTab)}
+                            className="bg-red-700 hover:bg-red-600 px-3 py-1 rounded text-white border border-red-500 flex items-center gap-1.5"
+                            title="Delete selected items"
+                        >
+                            <FontAwesomeIcon icon={faTrash} />
+                            Delete selected ({selectedRowCount})
+                        </button>
+                    )}
+
                     <button
-                        onClick={handleImportReview}
+                        onClick={() => openTransfer('import')}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Import custom data (assessments, CVSS, time estimates)"
+                        title="Import review data"
                     >
                         <FontAwesomeIcon icon={faFileImport} />
-                        Import Custom Data
+                        Import
                     </button>
                     <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".json,.tar.gz,.tgz,application/json,application/gzip"
+                        accept=".json,application/json"
                         className="hidden"
                         onChange={handleFileSelected}
                     />
 
                     <button
-                        onClick={handleExportReview}
+                        onClick={() => openTransfer('export')}
                         className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5"
-                        title="Export custom data (assessments, CVSS, time estimates)"
+                        title="Export review data"
                     >
                         <FontAwesomeIcon icon={faFileExport} />
-                        Export Custom Data
+                        Export
                     </button>
                 </div>
             </div>
+
+            {transferMode && (
+                <ReviewTransferModal
+                    mode={transferMode}
+                    variants={transferVariants}
+                    selectedVariantIds={transferVariantIds}
+                    transferFormat={transferFormat}
+                    timestampPolicy={importTimestampPolicy}
+                    onSelectedVariantIdsChange={setTransferVariantIds}
+                    onTransferFormatChange={changeTransferFormat}
+                    onTimestampPolicyChange={setImportTimestampPolicy}
+                    onConfirm={transferMode === 'export' ? handleExportReview : handleImportReview}
+                    onCancel={() => setTransferMode(null)}
+                />
+            )}
 
             {showBanner && (
                 <div className="sticky top-0 z-10">
@@ -1228,7 +1632,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('assessments')}
                 >
-                    Assessments{assessments.length > 0 ? ` (${assessments.length})` : ''}
+                    Assessments
                 </button>
                 <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
@@ -1238,7 +1642,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('time-estimates')}
                 >
-                    Time Estimates{timeEstimates.length > 0 ? ` (${timeEstimates.length})` : ''}
+                    Time Estimates
                 </button>
                 <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
@@ -1248,40 +1652,38 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     }`}
                     onClick={() => setActiveTab('custom-cvss')}
                 >
-                    Custom CVSS{customCvss.length > 0 ? ` (${customCvss.length})` : ''}
+                    Custom CVSS
+                </button>
+                <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${
+                        activeTab === 'ai-assessments'
+                            ? 'bg-sky-800 text-white border-b-2 border-sky-400'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    }`}
+                    onClick={() => setActiveTab('ai-assessments')}
+                >
+                    AI Assessments
                 </button>
             </div>
 
-            {activeTab === 'assessments' && (
-                assessments.length === 0 ? (
-                    <div className="text-center py-10 text-gray-400">
-                        <p className="text-lg">No handmade assessments found</p>
-                        <p className="text-sm mt-2">
-                            Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.
-                        </p>
-                    </div>
-                ) : (
-                    <TableGeneric<ReviewRow>
-                        columns={columns}
-                        data={filteredAssessments.map(a => ({
-                            ...a,
-                            texts: vulnDescriptions[a.vuln_id] ?? [],
-                            _allIds: (a as any)._allIds ?? [a.id],
-                            _variantIds: (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []),
-                            _assessments: (a as any)._assessments ?? [a],
-                            extractedSuppliers: [...new Set(
-                                a.packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
-                            )],
-                        }))}
-                        search={search}
-                        fuseKeys={["vuln_id", "packages", "simplified_status", "status_notes", "justification", "workaround", "extractedSuppliers"]}
-                        forAllValues={(row) => row.packages}
-                        estimateRowHeight={50}
-                        hasPagination={true}
-                        hoverField="texts"
-                        hoverIdField="vuln_id"
-                    />
-                )
+            {activeTab === 'assessments' && renderAssessmentsTable(
+                filteredAssessments,
+                columns,
+                "No handmade assessments found",
+                "Assessments created directly in VulnScout (not imported from SBOM documents) will appear here.",
+                handleDisplayedVulnsChange,
+                selectedAssessments,
+                setSelectedAssessments,
+            )}
+
+            {activeTab === 'ai-assessments' && renderAssessmentsTable(
+                filteredAiAssessments,
+                aiColumns,
+                "No AI-generated assessments found",
+                "Pending assessments suggested by AI will appear here until approved or rejected.",
+                handleDisplayedVulnsChange,
+                selectedAiAssessments,
+                setSelectedAiAssessments,
             )}
 
             {activeTab === 'time-estimates' && (
@@ -1293,11 +1695,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         </p>
                     </div>
                 ) : (
-                    <TableGeneric<ReviewTimeEstimate & { texts: { title: string; content: string }[] }>
+                    <TableGeneric<ReviewTimeEstimateRow>
                         columns={teColumns as any}
                         data={timeEstimates.map(te => ({
                             ...te,
-                            id: `${te.vuln_id}::${te.variant_id ?? 'none'}`,
                             texts: vulnDescriptions[te.vuln_id] ?? [],
                         }))}
                         search={search}
@@ -1306,6 +1707,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hasPagination={true}
                         hoverField="texts"
                         hoverIdField="vuln_id"
+                        onFilteredDataChange={handleDisplayedVulnsChange}
+                        selected={selectedTimeEstimates}
+                        updateSelected={setSelectedTimeEstimates}
                     />
                 )
             )}
@@ -1319,11 +1723,10 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         </p>
                     </div>
                 ) : (
-                    <TableGeneric<ReviewCustomCvss & { texts: { title: string; content: string }[] }>
+                    <TableGeneric<ReviewCustomCvssRow>
                         columns={cvssColumns as any}
                         data={customCvss.map(c => ({
                             ...c,
-                            id: `${c.vuln_id}::${c.variant_id ?? 'none'}::${c.author}`,
                             texts: vulnDescriptions[c.vuln_id] ?? [],
                         }))}
                         search={search}
@@ -1332,6 +1735,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                         hasPagination={true}
                         hoverField="texts"
                         hoverIdField="vuln_id"
+                        onFilteredDataChange={handleDisplayedVulnsChange}
+                        selected={selectedCustomCvss}
+                        updateSelected={setSelectedCustomCvss}
                     />
                 )
             )}
@@ -1343,7 +1749,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     appendAssessment={() => {}}
                     appendCVSS={() => null}
                     patchVuln={() => {}}
-                    onClose={() => setModalVuln(undefined)}
+                    onClose={() => {
+                        // Invalidate any in-flight fetch so its late completion
+                        // cannot re-open the modal with a stale vulnerability.
+                        fetchGenRef.current++;
+                        setModalVuln(undefined);
+                        setModalVulnIndex(undefined);
+                        setModalVulnIds([]);
+                    }}
+                    vulnerabilities={modalVulnIndex !== undefined ? modalVulnIds.map(id => ({ id } as unknown as Vulnerability)) : undefined}
+                    currentIndex={modalVulnIndex}
+                    onNavigate={handleModalNavigation}
                 />
             )}
 
@@ -1356,6 +1772,17 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 showTitleIcon={true}
                 onConfirm={handleDeleteRow}
                 onCancel={() => setRowToDelete(null)}
+            />
+
+            <ConfirmationModal
+                isOpen={bulkDeleteTab !== null}
+                title={`Delete ${selectedRowCount} selected item${selectedRowCount === 1 ? '' : 's'}`}
+                message="Are you sure you want to delete the selected items? This action cannot be undone."
+                confirmText="Yes, delete"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setBulkDeleteTab(null)}
             />
 
             {editingRow && (

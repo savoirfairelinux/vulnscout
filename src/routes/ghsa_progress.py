@@ -24,6 +24,9 @@ def init_app(app):
                 "last_update": str,
                 "started_at": str
             }
+
+        OpenAPI:
+        response 200 JsonObject GHSA refresh progress payload.
         """
         progress = GHSAProgressTracker.get_progress()
         return jsonify(progress), 200

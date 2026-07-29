@@ -1,9 +1,10 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faTimesCircle, faCheckCircle, faTimes } from "@fortawesome/free-solid-svg-icons";
+import { faTimesCircle, faCheckCircle, faTimes, faCircleInfo } from "@fortawesome/free-solid-svg-icons";
+import type { ReactNode } from "react";
 
 type MessageBannerProps = {
-  type: "error" | "success";
-  message: string;
+  type: "error" | "success" | "info";
+  message: ReactNode;
   isVisible: boolean;
   onClose: () => void;
 };
@@ -25,6 +26,10 @@ function MessageBanner({
     success: {
       styles: "bg-green-600 border-green-700", 
       icon: faCheckCircle
+    },
+    info: {
+      styles: "bg-blue-800 border-blue-900",
+      icon: faCircleInfo
     }
   };
 

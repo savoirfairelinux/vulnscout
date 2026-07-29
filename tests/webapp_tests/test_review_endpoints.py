@@ -11,8 +11,8 @@
 
 import io
 import json
-import tarfile
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -51,7 +51,7 @@ def app(init_files):
             "OPENVEX_FILE": str(init_files["openvex"]),
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db",
         })
-        setup_demo_db(application)
+        setup_demo_db(application, extra_packages=["custompkg@2.0.0", "glibc@2.39", "scannerpkg@1.0.0", "abc@1.2.3"])
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
@@ -70,6 +70,24 @@ def _create_handmade_assessment(client, vuln_id="CVE-2020-35492",
         "packages": packages or ["cairo@1.16.0"],
         "status": status,
         "variant_id": variant_id,
+    }
+    payload.update(extra)
+    resp = client.post(
+        f"/api/vulnerabilities/{vuln_id}/assessments",
+        json=payload,
+    )
+    return resp
+
+
+def _create_ai_assessment(client, vuln_id="CVE-2020-35492",
+                           packages=None, status="affected",
+                           variant_id=VARIANT_UUID, **extra):
+    """Helper – create a pending AI-generated assessment via POST."""
+    payload = {
+        "packages": packages or ["cairo@1.16.0"],
+        "status": status,
+        "variant_id": variant_id,
+        "ai_generated": True,
     }
     payload.update(extra)
     resp = client.post(
@@ -289,6 +307,93 @@ class TestReviewListTexts:
         ]
 
 
+# ── GET /api/assessments/review/ai ────────────────────────────────────────
+
+def test_review_ai_list_empty(client):
+    """No pending AI assessments yet → empty list."""
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    assert json.loads(resp.data) == []
+
+
+def test_review_ai_list_after_create(client):
+    """After creating an AI-generated assessment it appears in the AI review list."""
+    _create_ai_assessment(client)
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    assert all(a["origin"] == "ai" for a in data)
+
+
+def test_review_ai_does_not_leak_into_custom_review(client):
+    """AI-origin assessments must not appear in the custom /review list, and
+    custom assessments must not appear in the AI review list."""
+    ai_create_resp = _create_ai_assessment(client)
+    custom_create_resp = _create_handmade_assessment(client)
+    assert ai_create_resp.status_code == 200
+    assert custom_create_resp.status_code == 200
+
+    custom_resp = client.get("/api/assessments/review")
+    ai_resp = client.get("/api/assessments/review/ai")
+    assert custom_resp.status_code == 200
+    assert ai_resp.status_code == 200
+
+    custom_data = json.loads(custom_resp.data)
+    ai_data = json.loads(ai_resp.data)
+
+    assert all(a["origin"] == "custom" for a in custom_data)
+    assert all(a["origin"] == "ai" for a in ai_data)
+    assert len(custom_data) >= 1
+    assert len(ai_data) >= 1
+
+
+def test_review_ai_list_by_variant(client):
+    _create_ai_assessment(client)
+    resp = client.get(f"/api/assessments/review/ai?variant_id={VARIANT_UUID}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+
+
+def test_review_ai_list_by_variant_invalid(client):
+    resp = client.get("/api/assessments/review/ai?variant_id=not-a-uuid")
+    assert resp.status_code == 400
+
+
+def test_review_ai_list_by_project(client):
+    _create_ai_assessment(client)
+    resp = client.get(f"/api/assessments/review/ai?project_id={PROJECT_UUID}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+
+
+def test_review_ai_list_by_project_invalid(client):
+    resp = client.get("/api/assessments/review/ai?project_id=bad")
+    assert resp.status_code == 400
+
+
+def test_review_ai_list_by_project_no_variants(client):
+    """Project with no variants → empty list."""
+    fake_project = str(uuid.uuid4())
+    resp = client.get(f"/api/assessments/review/ai?project_id={fake_project}")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert data == []
+
+
+def test_review_ai_list_includes_vuln_texts(client):
+    """Each entry is enriched with a vuln_texts key, same as /review."""
+    _create_ai_assessment(client)
+    resp = client.get("/api/assessments/review/ai")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) >= 1
+    assert "vuln_texts" in data[0]
+    assert isinstance(data[0]["vuln_texts"], list)
+
+
 # ── GET /api/assessments (project_id path) ───────────────────────────────
 
 def test_assessments_list_by_project(client):
@@ -303,60 +408,69 @@ def test_assessments_list_by_project_invalid(client):
 
 # ── GET /api/assessments/review/export ───────────────────────────────────
 
-def test_export_empty(client):
-    """No handmade assessments → 404."""
+def test_export_requires_one_variant(client):
+    """OpenVEX export needs an explicit single variant."""
     resp = client.get("/api/assessments/review/export")
-    assert resp.status_code == 404
+    assert resp.status_code == 400
+    assert "variant" in json.loads(resp.data)["error"].lower()
 
 
-def test_export_tar_gz(client):
+def test_export_openvex_json(client):
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
     assert resp.status_code == 200
-    assert resp.content_type == "application/gzip"
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        members = tar.getmembers()
-        assert len(members) >= 1
-        # Each member should be a valid OpenVEX JSON
-        for m in members:
-            assert m.name.endswith(".json")
-            f = tar.extractfile(m)
-            doc = json.load(f)
-            assert "openvex" in doc.get("@context", "")
-            assert isinstance(doc.get("statements"), list)
-            for stmt in doc["statements"]:
-                assert "vulnerability" in stmt
-                assert "products" in stmt
-                assert "status" in stmt
+    assert resp.content_type == "application/json"
+    doc = json.loads(resp.data)
+    assert "openvex" in doc.get("@context", "")
+    assert isinstance(doc.get("statements"), list)
+    for stmt in doc["statements"]:
+        assert "vulnerability" in stmt
+        assert "products" in stmt
+        assert "status" in stmt
 
 
 def test_export_contains_variant_name(client):
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        names = [m.name for m in tar.getmembers()]
-        # The demo variant is named "default"
-        assert "default.json" in names
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
+    assert 'review_openvex_default.json' in resp.headers["Content-Disposition"]
+
+
+def test_export_rejects_multiple_variants(client, app):
+    from src.extensions import db
+    from src.models import Variant
+
+    second_variant_id = uuid.uuid4()
+    with app.app_context():
+        db.session.add(Variant(id=second_variant_id, project_id=PROJECT_UUID, name="second"))
+        db.session.commit()
+
+    resp = client.get(
+        "/api/assessments/review/export"
+        f"?variant_id={VARIANT_UUID}&variant_id={second_variant_id}"
+    )
+
+    assert resp.status_code == 400
+
+
+def test_export_selected_variants_invalid_uuid(client):
+    _create_handmade_assessment(client)
+    resp = client.get("/api/assessments/review/export?variant_id=not-a-uuid")
+    assert resp.status_code == 400
 
 
 def test_export_enriched_fields(client):
     """Exported statements should have enriched vulnerability and product fields."""
     _create_handmade_assessment(client)
-    resp = client.get("/api/assessments/review/export")
-    buf = io.BytesIO(resp.data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        for m in tar.getmembers():
-            doc = json.load(tar.extractfile(m))
-            for stmt in doc["statements"]:
-                vuln = stmt["vulnerability"]
-                assert "name" in vuln
-                assert "description" in vuln
-                assert "aliases" in vuln
-                for prod in stmt["products"]:
-                    assert "identifiers" in prod
-                assert "scanners" in stmt
+    resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
+    doc = json.loads(resp.data)
+    for stmt in doc["statements"]:
+        vuln = stmt["vulnerability"]
+        assert "name" in vuln
+        assert "description" in vuln
+        assert "aliases" in vuln
+        for prod in stmt["products"]:
+            assert "identifiers" in prod
+        assert "scanners" in stmt
 
 
 # ── POST /api/assessments/review/import ──────────────────────────────────
@@ -373,18 +487,6 @@ def _make_openvex_json(variant_name, statements):
     }).encode("utf-8")
 
 
-def _make_tar_gz(files_dict):
-    """Build a tar.gz archive from {filename: bytes} dict."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for name, data in files_dict.items():
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-    buf.seek(0)
-    return buf
-
-
 def test_import_no_file(client):
     resp = client.post("/api/assessments/review/import",
                        content_type="multipart/form-data")
@@ -392,7 +494,7 @@ def test_import_no_file(client):
 
 
 def test_import_json_valid(client):
-    """Import a single .json named after the demo variant."""
+    """Import a single .json document into the selected variant."""
     statements = [{
         "vulnerability": {"name": "CVE-2020-35492"},
         "products": [{"@id": "cairo@1.16.0"}],
@@ -405,7 +507,7 @@ def test_import_json_valid(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -414,7 +516,7 @@ def test_import_json_valid(client):
     assert result["imported"] >= 1
 
 
-def test_import_json_unknown_variant(client):
+def test_import_json_requires_selected_variant(client):
     data = _make_openvex_json("unknown_variant", [])
     resp = client.post(
         "/api/assessments/review/import",
@@ -422,13 +524,43 @@ def test_import_json_unknown_variant(client):
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
+    assert "variant_id" in json.loads(resp.data)["error"]
+
+
+def test_import_json_selected_variant_ignores_filename(client):
+    data = _make_openvex_json("unrelated", [])
+    resp = client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "unrelated.json"),
+            "variant_id": str(VARIANT_UUID),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    assert json.loads(resp.data)["status"] == "success"
+
+
+def test_import_json_selected_variant_not_found(client):
+    data = _make_openvex_json("unrelated", [])
+    resp = client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "unrelated.json"),
+            "variant_id": str(uuid.uuid4()),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 404
     assert "variant" in json.loads(resp.data)["error"].lower()
 
 
 def test_import_json_invalid_json(client):
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(b"not json"), "default.json")},
+        data={"file": (io.BytesIO(b"not json"), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
@@ -438,82 +570,11 @@ def test_import_json_not_openvex(client):
     data = json.dumps({"foo": "bar"}).encode()
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
     assert "openvex" in json.loads(resp.data)["error"].lower()
-
-
-def test_import_tar_gz_valid(client):
-    """Import a tar.gz with one file named after the demo variant."""
-    statements = [{
-        "vulnerability": {"name": "CVE-2020-35492"},
-        "products": [{"@id": "cairo@1.16.0"}],
-        "status": "not_affected",
-        "justification": "component_not_present",
-        "impact_statement": "not present",
-        "status_notes": "",
-        "action_statement": "",
-    }]
-    content = _make_openvex_json("default", statements)
-    tar_buf = _make_tar_gz({"default.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 200
-    result = json.loads(resp.data)
-    assert result["status"] == "success"
-    assert result["imported"] >= 1
-
-
-def test_import_tar_gz_unknown_variant(client):
-    """Archive with a .json not matching any variant → error."""
-    content = _make_openvex_json("nonexistent", [{
-        "vulnerability": {"name": "CVE-2020-35492"},
-        "products": [{"@id": "cairo@1.16.0"}],
-        "status": "affected",
-    }])
-    tar_buf = _make_tar_gz({"nonexistent.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 400
-
-
-def test_import_tar_gz_invalid_archive(client):
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (io.BytesIO(b"notatar"), "bad.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code == 400
-
-
-def test_import_tar_gz_invalid_json_inside(client):
-    tar_buf = _make_tar_gz({"default.json": b"not json"})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    # The bad JSON is reported as error but request succeeds if no valid files
-    assert resp.status_code in (200, 400)
-
-
-def test_import_tar_gz_not_openvex_inside(client):
-    content = json.dumps({"not": "openvex"}).encode()
-    tar_buf = _make_tar_gz({"default.json": content})
-    resp = client.post(
-        "/api/assessments/review/import",
-        data={"file": (tar_buf, "review.tar.gz")},
-        content_type="multipart/form-data",
-    )
-    assert resp.status_code in (200, 400)
 
 
 def test_import_unsupported_file_type(client):
@@ -549,7 +610,7 @@ def test_import_duplicate_skipped(client):
     # First import
     resp1 = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp1.status_code == 200
@@ -559,13 +620,66 @@ def test_import_duplicate_skipped(client):
     # Second import — same data
     resp2 = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp2.status_code == 200
     r2 = json.loads(resp2.data)
     assert r2["skipped"] >= 1
     assert r2["imported"] == 0
+
+
+def _import_openvex_with_timestamp(client, vuln_id, package, timestamp):
+    statements = [{
+        "vulnerability": {"name": vuln_id},
+        "products": [{"@id": package}],
+        "status": "affected",
+        "timestamp": timestamp,
+    }]
+    data = _make_openvex_json("default", statements)
+    return client.post(
+        "/api/assessments/review/import",
+        data={
+            "file": (io.BytesIO(data), "default.json"),
+            "variant_id": str(VARIANT_UUID),
+            "timestamp_policy": "original",
+        },
+        content_type="multipart/form-data",
+    )
+
+
+def test_import_openvex_original_timestamp_keeps_distinct_entries(client):
+    """A later statement timestamp is imported instead of skipped as duplicate."""
+    vuln_id, package = "CVE-2020-35492", "openvex-history@1.0"
+
+    first = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-07T10:00:00+00:00")
+    second = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["imported"] == 1
+    assert json.loads(second.data)["imported"] == 1
+
+    listed = json.loads(client.get("/api/assessments/review").data)
+    timestamps = sorted(
+        a["timestamp"] for a in listed
+        if a["vuln_id"] == vuln_id and package in a["packages"]
+    )
+    assert timestamps == ["2026-07-07T10:00:00+00:00", "2026-07-20T10:00:00+00:00"]
+
+
+def test_import_openvex_original_timestamp_is_idempotent(client):
+    """Re-importing an identical OpenVEX document stays a no-op."""
+    vuln_id, package = "CVE-2020-35492", "openvex-idempotent@1.0"
+
+    first = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+    second = _import_openvex_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["imported"] == 1
+    assert json.loads(second.data)["imported"] == 0
+    assert json.loads(second.data)["skipped"] == 1
 
 
 def test_import_statement_missing_vuln(client):
@@ -578,7 +692,7 @@ def test_import_statement_missing_vuln(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -594,7 +708,7 @@ def test_import_statement_missing_status(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -610,7 +724,7 @@ def test_import_statement_missing_products(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -632,7 +746,7 @@ def test_import_product_string_format(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -654,7 +768,7 @@ def test_import_product_without_version(client):
     data = _make_openvex_json("default", statements)
     resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(data), "default.json")},
+        data={"file": (io.BytesIO(data), "default.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -668,12 +782,12 @@ def test_export_import_round_trip(client):
     """Export Review → Import Review should be a valid round-trip."""
     _create_handmade_assessment(client, status="affected")
     # Export
-    export_resp = client.get("/api/assessments/review/export")
+    export_resp = client.get(f"/api/assessments/review/export?variant_id={VARIANT_UUID}")
     assert export_resp.status_code == 200
     # Import the exported file back
     import_resp = client.post(
         "/api/assessments/review/import",
-        data={"file": (io.BytesIO(export_resp.data), "review.tar.gz")},
+        data={"file": (io.BytesIO(export_resp.data), "review.json"), "variant_id": str(VARIANT_UUID)},
         content_type="multipart/form-data",
     )
     assert import_resp.status_code == 200
@@ -817,8 +931,8 @@ def test_review_time_estimates_matches_export_via_patch_flow(app, client):
     rows_all = [e for e in json.loads(resp_all.data) if e["vuln_id"] == "CVE-2020-35492"]
     assert len({e["variant_id"] for e in rows_all}) == 2
 
-    # Export endpoint (project scope) → two time-estimate entries, matching.
-    exp = client.get(f"/api/assessments/review/export-custom-data?project_id={PROJECT_UUID}")
+    # The all-variant export retains both time-estimate entries.
+    exp = client.get("/api/assessments/review/export-custom-data")
     assert exp.status_code == 200
     exported = json.loads(exp.data)["time_estimates"]
     exp_rows = [e for e in exported if e["vuln_id"] == "CVE-2020-35492"]
@@ -892,14 +1006,13 @@ def test_export_custom_data_basic(client):
 
 
 def test_export_custom_data_by_variant(client):
-    """Filter by variant_id returns only that variant's assessments."""
     _create_handmade_assessment(client)
     resp = client.get(f"/api/assessments/review/export-custom-data?variant_id={VARIANT_UUID}")
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert len(data["assessments"]) >= 1
-    for a in data["assessments"]:
-        assert a["variant_id"] == str(VARIANT_UUID)
+    for assessment in data["assessments"]:
+        assert assessment["variant_id"] == str(VARIANT_UUID)
 
 
 def test_export_custom_data_by_project(client):
@@ -1053,6 +1166,141 @@ def test_import_custom_data_assessments(client):
     result = json.loads(resp.data)
     assert result["status"] == "success"
     assert result["assessments_imported"] >= 1
+
+
+def test_import_custom_data_uses_original_timestamp(app, client):
+    original_timestamp = "2001-02-03T04:05:06+00:00"
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-91001",
+        "status": "affected",
+        "packages": ["timestamp-original@1.0"],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": original_timestamp,
+    }])
+    payload["timestamp_policy"] = "original"
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 200
+    with app.app_context():
+        from src.helpers.datetime_utils import ensure_utc_iso
+        from src.models.assessment import Assessment
+
+        imported = next(
+            assessment for assessment in Assessment.get_by_origin([VARIANT_UUID], origin="custom")
+            if assessment.vuln_id == "CVE-2099-91001"
+        )
+        assert ensure_utc_iso(imported.timestamp) == original_timestamp
+
+
+def test_import_custom_data_uses_current_system_time(app, client):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2099-91002",
+        "status": "affected",
+        "packages": ["timestamp-current@1.0"],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": "2001-02-03T04:05:06+00:00",
+    }])
+    payload["timestamp_policy"] = "current"
+    before_import = datetime.now(timezone.utc)
+
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    after_import = datetime.now(timezone.utc)
+
+    assert resp.status_code == 200
+    with app.app_context():
+        from src.models.assessment import Assessment
+
+        imported = next(
+            assessment for assessment in Assessment.get_by_origin([VARIANT_UUID], origin="custom")
+            if assessment.vuln_id == "CVE-2099-91002"
+        )
+        stored_timestamp = imported.timestamp
+        if stored_timestamp.tzinfo is None:
+            stored_timestamp = stored_timestamp.replace(tzinfo=timezone.utc)
+        assert before_import <= stored_timestamp <= after_import
+
+
+def test_import_custom_data_rejects_invalid_timestamp_policy(client):
+    payload = _custom_data_payload()
+    payload["timestamp_policy"] = "invalid"
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+    assert resp.status_code == 400
+    assert "timestamp_policy" in json.loads(resp.data)["error"]
+
+
+def _import_custom_data_with_timestamp(client, vuln_id, package, timestamp, **extra):
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": vuln_id,
+        "status": "affected",
+        "packages": [package],
+        "variant_id": str(VARIANT_UUID),
+        "timestamp": timestamp,
+        **extra,
+    }])
+    payload["timestamp_policy"] = "original"
+    return client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+
+
+def test_import_custom_data_original_timestamp_keeps_distinct_entries(client):
+    """A later timestamp is a new history entry, not a duplicate to discard."""
+    vuln_id, package = "CVE-2099-91003", "timestamp-history@1.0"
+
+    first = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-07T10:00:00+00:00")
+    second = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["assessments_imported"] == 1
+    assert json.loads(second.data)["assessments_imported"] == 1
+
+    listed = json.loads(client.get("/api/assessments/review").data)
+    timestamps = sorted(a["timestamp"] for a in listed if a["vuln_id"] == vuln_id)
+    assert timestamps == ["2026-07-07T10:00:00+00:00", "2026-07-20T10:00:00+00:00"]
+
+
+def test_import_custom_data_original_timestamp_is_idempotent(client):
+    """Re-importing the same file does not duplicate its assessments."""
+    vuln_id, package = "CVE-2099-91004", "timestamp-idempotent@1.0"
+
+    first = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+    second = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T10:00:00+00:00")
+
+    assert json.loads(first.data)["assessments_imported"] == 1
+    assert json.loads(second.data)["assessments_imported"] == 0
+    assert json.loads(second.data)["assessments_skipped"] == 1
+
+
+def test_import_custom_data_original_timestamp_normalised_to_utc(client):
+    """A non-UTC offset is converted rather than stored as wall-clock time."""
+    vuln_id, package = "CVE-2099-91005", "timestamp-offset@1.0"
+
+    resp = _import_custom_data_with_timestamp(
+        client, vuln_id, package, "2026-07-20T12:00:00+02:00")
+
+    assert json.loads(resp.data)["assessments_imported"] == 1
+    listed = json.loads(client.get("/api/assessments/review").data)
+    imported = next(a for a in listed if a["vuln_id"] == vuln_id)
+    assert imported["timestamp"] == "2026-07-20T10:00:00+00:00"
 
 
 def test_import_custom_data_assessments_without_variant_field(client):
@@ -1545,6 +1793,19 @@ def test_export_import_custom_data_round_trip(client):
     assert import_resp.status_code == 200
     result = json.loads(import_resp.data)
     assert result["status"] == "success"
+
+
+def test_export_custom_data_with_only_pending_ai_assessments(client):
+    """The Review page can export a pending AI assessment without custom data."""
+    _create_ai_assessment(client)
+
+    response = client.get("/api/assessments/review/export-custom-data")
+
+    assert response.status_code == 200
+    exported = json.loads(response.data)
+    assert exported["assessments"] == []
+    assert len(exported["ai_assessments"]) == 1
+    assert exported["ai_assessments"][0]["vuln_id"] == "CVE-2020-35492"
 
 
 # ── review_custom_cvss: variant/project filtering ────────────────────────

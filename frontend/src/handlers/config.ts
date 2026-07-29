@@ -1,3 +1,12 @@
+type FrontendScope = {
+    project_id: string;
+    mode: 'select' | 'compare';
+    variant_ids: string[];
+    compare_base_id: string;
+    compare_operation: 'difference' | 'intersection';
+    compare_variant_id: string;
+};
+
 type AppConfig = {
     project: { id: string; name: string } | null;
     variant: { id: string; name: string } | null;
@@ -8,10 +17,25 @@ type AppConfig = {
     grype_memlimit: string;
 };
 
-export type { AppConfig };
+export type { AppConfig, FrontendScope };
 
 class Config {
-     
+    private static readonly _frontendScopeStorageKey = 'vulnscout.frontendScope';
+
+    private static _normalizeFrontendScope(scope: unknown): FrontendScope | null {
+        return scope
+            && typeof scope === 'object'
+            && typeof (scope as FrontendScope).project_id === 'string'
+            && ((scope as FrontendScope).mode === 'select' || (scope as FrontendScope).mode === 'compare')
+            && Array.isArray((scope as FrontendScope).variant_ids)
+            && (scope as FrontendScope).variant_ids.every(id => typeof id === 'string')
+            && typeof (scope as FrontendScope).compare_base_id === 'string'
+            && ((scope as FrontendScope).compare_operation === 'difference' || (scope as FrontendScope).compare_operation === 'intersection')
+            && typeof (scope as FrontendScope).compare_variant_id === 'string'
+                ? scope as FrontendScope
+                : null;
+    }
+
     private static _normalizeConfig(data: any): AppConfig {
         return {
             project:
@@ -35,6 +59,31 @@ class Config {
             contact_email: typeof data?.contact_email === "string" ? data.contact_email : "",
             grype_memlimit: typeof data?.grype_memlimit === "string" ? data.grype_memlimit : "",
         };
+    }
+
+    static getFrontendScope(): FrontendScope | null {
+        try {
+            const value = window.localStorage.getItem(Config._frontendScopeStorageKey);
+            return value ? Config._normalizeFrontendScope(JSON.parse(value)) : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static setFrontendScope(scope: FrontendScope): void {
+        window.localStorage.setItem(Config._frontendScopeStorageKey, JSON.stringify(scope));
+    }
+
+    static clearFrontendScope(): void {
+        window.localStorage.removeItem(Config._frontendScopeStorageKey);
+    }
+
+    static isFrontendScopeAvailable(scope: FrontendScope, projectIds: string[], variantIds: string[]): boolean {
+        if (!projectIds.includes(scope.project_id)) return false;
+        const referencedVariantIds = scope.mode === 'compare'
+            ? [scope.compare_base_id, scope.compare_variant_id]
+            : scope.variant_ids;
+        return referencedVariantIds.every(variantId => variantIds.includes(variantId));
     }
 
     static async get(): Promise<AppConfig> {

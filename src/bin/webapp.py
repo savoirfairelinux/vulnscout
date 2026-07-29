@@ -9,6 +9,7 @@ from ..helpers.add_middleware import FlaskWithMiddleware as Flask
 from ..helpers.env_vars import get_bool_env
 from ..extensions import db, migrate, setup_write_serialization
 from ..routes import init_app
+from ..routes.documents import MAX_ASSET_UPLOAD_BYTES
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli, post_treatment
 import sys
@@ -16,10 +17,13 @@ import os
 import threading
 from datetime import datetime, timezone
 import signal
+from flask import request
 
 MAX_SCRIPT_STEPS = 8
 SCAN_FILE = "/scan/status.txt"
 DEFAULT_DB_URI = "sqlite:////cache/vulnscout/vulnscout.db"
+MAX_UPLOAD_REQUEST_BYTES = MAX_ASSET_UPLOAD_BYTES + 64 * 1024
+DEFAULT_BACKGROUND_TASK_DELAY = 120.0
 
 
 def _launch_enrichment(app):
@@ -82,9 +86,38 @@ def _warm_scan_list_cache(app):
     threading.Thread(target=_warm, name="cache-warm-scan-list", daemon=True).start()
 
 
+def _schedule_background_tasks(app):
+    """Start post-scan work after the initial Explorer data request burst.
+
+    Starting both jobs from the status-poll response makes them compete with
+    the immediately following packages, vulnerabilities, and assessments
+    requests.  The delay keeps that work asynchronous in practice, not merely
+    in implementation.  It must also cover large Explorer responses, which
+    can take well over 30 seconds on production-sized databases, while
+    retaining automatic enrichment and cache warming when no browser is
+    connected.
+    """
+    try:
+        delay = float(app.config.get("BACKGROUND_TASK_DELAY", DEFAULT_BACKGROUND_TASK_DELAY))
+    except (TypeError, ValueError):
+        delay = DEFAULT_BACKGROUND_TASK_DELAY
+
+    def _start():
+        _launch_enrichment(app)
+        _warm_scan_list_cache(app)
+
+    timer = threading.Timer(max(0.0, delay), _start)
+    timer.name = "post-scan-background-scheduler"
+    timer.daemon = True
+    timer.start()
+
+
 def create_app():
     app = Flask(__name__, static_folder="../static")
     app.config.from_prefixed_env()
+    # Allow multipart headers while ensuring Werkzeug rejects oversized bodies
+    # before parsing and spooling uploaded files.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_REQUEST_BYTES
     app._INT_SCAN_FINISHED = False
     if "SCAN_FILE" not in app.config:
         app.config["SCAN_FILE"] = SCAN_FILE
@@ -147,8 +180,7 @@ def create_app():
                     app.config["SCAN_DATE"] = datetime.now(timezone.utc).strftime("%Y-%m-%d at %H:%M (UTC)")
                 app._INT_SCAN_FINISHED = True
                 if not app.config.get("TESTING"):
-                    _launch_enrichment(app)
-                    _warm_scan_list_cache(app)
+                    _schedule_background_tasks(app)
                 return True
         return False
 
@@ -166,11 +198,24 @@ def create_app():
     # provide version info
     @app.route("/api/version")
     def version():
+        """Return the running VulnScout backend version.
+
+        OpenAPI:
+        response 200 JsonObject Backend version payload.
+        """
         return {"version": os.getenv("VULNSCOUT_VERSION", "unknown")}
 
     # bypass fail_scan middleware because it's before
     @app.route("/api/scan/status")
     def loading():
+        """Return initial import progress status for the web UI loader.
+
+        This endpoint remains available while other API routes are gated by the
+        scan-completion middleware.
+
+        OpenAPI:
+        response 200 JsonObject Scan bootstrap progress payload.
+        """
         with open(app.config["SCAN_FILE"], "r") as f:
             text = f.read()
             if "__END_OF_SCAN_SCRIPT__" in text:
@@ -191,6 +236,8 @@ def create_app():
 
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
+        if request.path in {"/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui"}:
+            return None
         if not is_scan_finished():
             return {"error": "Scan not finished"}, 503
 

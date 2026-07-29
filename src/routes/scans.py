@@ -286,12 +286,23 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans')
     def list_all_scans() -> ResponseReturnValue:
+        """List every scan currently stored in the database.
+
+        OpenAPI:
+        response 200 JsonObject Scan collection.
+        """
         scans = ScanController.get_all()
         result = serialize_list_with_diff_cached("all", scans)
         return jsonify(result)
 
     @app.route('/api/projects/<project_id>/scans')
     def list_scans_by_project(project_id: str) -> ResponseReturnValue:
+        """List scans belonging to a specific project.
+
+        OpenAPI:
+        response 200 JsonObject Scan collection for the selected project.
+        response 404 Error Project not found.
+        """
         project = ProjectController.get(project_id)
         if project is None:
             return jsonify({"error": "Project not found"}), 404
@@ -301,6 +312,12 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/variants/<variant_id>/scans')
     def list_scans_by_variant(variant_id: str) -> ResponseReturnValue:
+        """List scans belonging to a specific variant.
+
+        OpenAPI:
+        response 200 JsonObject Scan collection for the selected variant.
+        response 404 Error Variant not found.
+        """
         variant = VariantController.get(variant_id)
         if variant is None:
             return jsonify({"error": "Variant not found"}), 404
@@ -310,6 +327,14 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans/<scan_id>', methods=['PATCH'])
     def update_scan(scan_id: str) -> ResponseReturnValue:
+        """Update the editable description of a scan.
+
+        OpenAPI:
+        body JsonObject optional JSON object containing a description field.
+        response 200 JsonObject Updated scan payload.
+        response 400 Error Invalid scan identifier or payload.
+        response 404 Error Scan not found.
+        """
         from flask import request as req
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -334,6 +359,11 @@ def init_app(app: Flask) -> None:
         Findings that are no longer referenced by any observation are
         also removed (cascade cleaned).  The response includes the
         number of orphaned findings that were deleted.
+
+        OpenAPI:
+        response 200 JsonObject Deletion summary.
+        response 400 Error Invalid scan identifier.
+        response 404 Error Scan not found.
         """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -375,6 +405,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans/<scan_id>/diff')
     def get_scan_diff(scan_id: str) -> ResponseReturnValue:
+        """Return the computed diff between a scan and its predecessor.
+
+        OpenAPI:
+        response 200 JsonObject Scan diff payload.
+        response 400 Error Invalid scan identifier.
+        response 404 Error Scan not found.
+        """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
         except ValueError:
@@ -444,6 +481,11 @@ def init_app(app: Flask) -> None:
 
         Uses the shared ``_global_result_full`` helper so that the counts
         are consistent with the list view's *Scan Result* badges.
+
+        OpenAPI:
+        response 200 JsonObject Aggregated scan result.
+        response 400 Error Invalid scan identifier.
+        response 404 Error Scan not found.
         """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
@@ -719,7 +761,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans/<scan_id>/export-diff')
     def export_scan_diff(scan_id: str) -> ResponseReturnValue:
-        """Export a single scan's diff as a cleaned JSON download."""
+        """Export a single scan's diff as a cleaned JSON download.
+
+        OpenAPI:
+        response 200 JsonObject JSON download containing the scan diff.
+        response 400 Error Invalid scan identifier.
+        response 404 Error Scan not found.
+        """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
         except ValueError:
@@ -746,7 +794,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/scans/<scan_id>/export-result')
     def export_scan_result(scan_id: str) -> ResponseReturnValue:
-        """Export a single scan's global result as a cleaned JSON download."""
+        """Export a single scan's global result as a cleaned JSON download.
+
+        OpenAPI:
+        response 200 JsonObject JSON download containing the global scan result.
+        response 400 Error Invalid scan identifier.
+        response 404 Error Scan not found.
+        """
         try:
             scan_uuid = uuid_module.UUID(scan_id)
         except ValueError:
@@ -782,6 +836,14 @@ def init_app(app: Flask) -> None:
           - type: 'diff' or 'total' (default: 'diff')
         Returns a JSON array of export objects grouped per variant, with
         Content-Disposition for download.
+
+                OpenAPI:
+                query variant_id uuid optional Restrict export to a single variant.
+                query project_id uuid optional Restrict export to a single project.
+                query type string optional Export type: diff or total.
+                response 200 JsonObject JSON export payload.
+                response 400 Error Invalid filter or export type.
+                response 404 Error Project not found.
         """
         export_type = flask_request.args.get("type", "diff")
         if export_type not in ("diff", "total"):

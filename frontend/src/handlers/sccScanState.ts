@@ -13,6 +13,7 @@ const manager = new ScanStateManager(
     (vid, opts) => ScansHandler.triggerSbomCveCheckScan(vid, opts.excludeKernel ?? true),
     (vid) => ScansHandler.getSbomCveCheckScanStatus(vid),
     "sbom-cve-check",
+    true, // serial: scans share engine and finding state
 );
 
 export const subscribe = manager.subscribe;

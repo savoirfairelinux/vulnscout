@@ -41,6 +41,11 @@ const VARIANTS_PROJ1 = [
     { id: 'var-3', name: 'staging', project_id: 'proj-1' },
 ];
 
+const VARIANTS_PROJ2 = [
+    { id: 'var-4', name: 'production', project_id: 'proj-2' },
+    { id: 'var-5', name: 'candidate', project_id: 'proj-2' },
+];
+
 // -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
@@ -62,7 +67,9 @@ describe('ProjectVariantSelector', () => {
 
     beforeEach(() => {
         mockProjectsList.mockResolvedValue(PROJECTS);
-        mockVariantsList.mockResolvedValue(VARIANTS_PROJ1);
+        mockVariantsList.mockImplementation(projectId => Promise.resolve(
+            projectId === 'proj-2' ? VARIANTS_PROJ2 : VARIANTS_PROJ1,
+        ));
     });
 
     afterEach(() => {
@@ -524,6 +531,79 @@ describe('ProjectVariantSelector', () => {
         expect(screen.getByRole('checkbox', { name: 'staging' })).toBeChecked();
     });
 
+    test('restores a persisted single-variant scope', async () => {
+        render(
+            <ProjectVariantSelector
+                defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
+                defaultScope={{
+                    project_id: 'proj-1',
+                    mode: 'select',
+                    variant_ids: ['var-2'],
+                    compare_base_id: '',
+                    compare_operation: 'difference',
+                    compare_variant_id: '',
+                }}
+                onApply={jest.fn()}
+            />
+        );
+
+        await waitFor(() => expect(screen.getByText('release')).toBeInTheDocument());
+        await openPanel();
+        await waitFor(() => expect(screen.getByRole('checkbox', { name: 'release' })).toBeChecked());
+        expect(screen.getByRole('checkbox', { name: 'default' })).not.toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'staging' })).not.toBeChecked();
+    });
+
+    test('restores a persisted scope for a project different from the server default', async () => {
+        render(
+            <ProjectVariantSelector
+                defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
+                defaultScope={{
+                    project_id: 'proj-2',
+                    mode: 'select',
+                    variant_ids: ['var-4'],
+                    compare_base_id: '',
+                    compare_operation: 'difference',
+                    compare_variant_id: '',
+                }}
+                onApply={jest.fn()}
+            />
+        );
+
+        await waitFor(() => {
+            expect(mockVariantsList).toHaveBeenCalledWith('proj-2');
+            expect(screen.getByText('ProjectBeta')).toBeInTheDocument();
+            expect(screen.getByText('production')).toBeInTheDocument();
+        });
+        await openPanel();
+        await waitFor(() => expect(screen.getByRole('checkbox', { name: 'production' })).toBeChecked());
+        expect(screen.getByRole('checkbox', { name: 'candidate' })).not.toBeChecked();
+    });
+
+    test('restores a persisted compare scope', async () => {
+        render(
+            <ProjectVariantSelector
+                defaultProject={{ id: 'proj-1', name: 'ProjectAlpha' }}
+                defaultScope={{
+                    project_id: 'proj-1',
+                    mode: 'compare',
+                    variant_ids: [],
+                    compare_base_id: 'var-1',
+                    compare_operation: 'intersection',
+                    compare_variant_id: 'var-2',
+                }}
+                onApply={jest.fn()}
+            />
+        );
+
+        await waitFor(() => expect(screen.getByText('default ∩ release')).toBeInTheDocument());
+        await openPanel();
+        await waitFor(() => {
+            expect(screen.getByRole('radio', { name: /compare variants/i })).toBeChecked();
+        });
+        expect(screen.getByRole('radio', { name: /intersection/i })).toBeChecked();
+    });
+
     // -----------------------------------------------------------------------
     // Error handling
     // -----------------------------------------------------------------------
@@ -535,6 +615,23 @@ describe('ProjectVariantSelector', () => {
         await waitFor(() => {
             expect(screen.queryByRole('option', { name: 'ProjectAlpha' })).not.toBeInTheDocument();
         });
+    });
+
+    test('renders gracefully when Variants.list rejects after selecting a project', async () => {
+        mockVariantsList.mockRejectedValue(new Error('Network error'));
+        render(<ProjectVariantSelector onApply={jest.fn()} />);
+        await openPanel();
+        await waitFor(() => {
+            expect(screen.getByRole('option', { name: 'ProjectAlpha' })).toBeInTheDocument();
+        });
+
+        await selectProject('proj-1');
+
+        await waitFor(() => {
+            expect(mockVariantsList).toHaveBeenCalledWith('proj-1');
+            expect(screen.queryByRole('checkbox', { name: 'default' })).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     });
 
     // -----------------------------------------------------------------------

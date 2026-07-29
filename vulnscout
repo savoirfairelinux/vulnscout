@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.18}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.19}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
@@ -74,12 +74,18 @@ Scan & output commands:
   --serve                         Run scan then start web UI (port 7275)
   --report <template>             Generate a report from a template
   --report <path>                 Stage a local report template file and generate a report from it
+  --add-asset <path>              Stage a local image asset for use in report templates
   --export-spdx                   Export project as SPDX 3.0 SBOM
   --export-cdx                    Export project as CycloneDX 1.6 SBOM
   --export-openvex                Export project as OpenVEX document
-  --export-custom-assessments     Export custom (review) assessments as individual OpenVEX files
-  --compress                      Compress export output into a .tar.gz archive
-  --import-custom-assessments <path>  Import custom assessments from .json, .tar.gz, or directory
+    --export-custom-vulnscout-data  Export custom VulnScout JSON data
+        --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+            --use-original-timestamps    Preserve file timestamps instead of using system time
+            --use-current-timestamps     Use current system time instead of file timestamps
+    --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
+    --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
+    --export-context                 Export AI assessment context to /scan/outputs/context-export.json
+    --import-context <path>          Import AI assessment context from a JSON file (overwrites matching project/variant)
   --delete-scan <id>                Delete a past scan by its ID
 
 Data retrieval commands:
@@ -94,7 +100,7 @@ Configuration:
 
 Environment variables:
   VULNSCOUT_CONTAINER   Container name (default: vulnscout)
-  VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:v0.18)
+  VULNSCOUT_IMAGE       Docker image (default: docker.io/sflinux/vulnscout:v0.19)
   VULNSCOUT_BUILD_DIR   Build base dir (default: ./.vulnscout)
   VULNSCOUT_CACHE_DIR   Cache dir (default: VULNSCOUT_BUILD_DIR/cache)
   VULNSCOUT_OUTPUTS_DIR Output directory (default: VULNSCOUT_BUILD_DIR/outputs)
@@ -319,6 +325,8 @@ parse_and_run() {
                 MATCH_CONDITION="$2"; shift 2 ;;
             add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
                 ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
+            add-asset|--add-asset)
+                ensure_running; add_input add-asset "$2"; shift 2 ;;
             perform-grype-scan|--perform-grype-scan)
                 ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
             perform-nvd-scan|--perform-nvd-scan)
@@ -333,19 +341,43 @@ parse_and_run() {
                 ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
             export-openvex|--export-openvex)
                 ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
-            export-custom-assessments|--export-custom-assessments)
-                ensure_running; EXPORT_ARGS+=(--export-custom-assessments); shift ;;
-            compress|--compress)
-                EXPORT_ARGS+=(--compress); shift ;;
-            import-custom-assessments|--import-custom-assessments)
+            export-custom-vulnscout-data|--export-custom-vulnscout-data)
+                ensure_running; EXPORT_ARGS+=(--export-custom-vulnscout-data); shift ;;
+            export-custom-openvex-assessments|--export-custom-openvex-assessments)
+                ensure_running; EXPORT_ARGS+=(--export-custom-openvex-assessments); shift ;;
+            import-custom-vulnscout-data|--import-custom-vulnscout-data)
                 ensure_running
                 local import_file
                 import_file="$(readlink -f "$2")"
                 local import_staged
                 import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
                 call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
-                EXPORT_ARGS+=(--import-custom-assessments "$import_staged")
+                EXPORT_ARGS+=(--import-custom-vulnscout-data "$import_staged")
                 shift 2 ;;
+            import-custom-openvex-assessments|--import-custom-openvex-assessments)
+                ensure_running
+                local import_file
+                import_file="$(readlink -f "$2")"
+                local import_staged
+                import_staged="/tmp/vulnscout_stage_$(basename "$import_file")"
+                call_container_engine cp "$import_file" "$CONTAINER_NAME:$import_staged"
+                EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
+                shift 2 ;;
+            export-context|--export-context)
+                ensure_running; EXPORT_ARGS+=(--export-context); shift ;;
+            import-context|--import-context)
+                ensure_running
+                local import_ctx_file
+                import_ctx_file="$(readlink -f "$2")"
+                local import_ctx_staged
+                import_ctx_staged="/tmp/vulnscout_stage_$(basename "$import_ctx_file")"
+                call_container_engine cp "$import_ctx_file" "$CONTAINER_NAME:$import_ctx_staged"
+                EXPORT_ARGS+=(--import-context "$import_ctx_staged")
+                shift 2 ;;
+            --use-original-timestamps)
+                EXPORT_ARGS+=(--use-original-timestamps); shift ;;
+            --use-current-timestamps)
+                EXPORT_ARGS+=(--use-current-timestamps); shift ;;
             delete-scan|--delete-scan)
                 ensure_running
                 exec_container --delete-scan "$2"

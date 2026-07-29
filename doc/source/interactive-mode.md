@@ -70,10 +70,15 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 ### Filters
 
 - **Source**: restrict the table to packages originating from a specific SBOM source (e.g. a particular SPDX or CycloneDX document).
+- **Outdated**: enable the toggle to show only historical package/variant combinations whose package version is no longer present in that variant's current SBOM. The toggle is off by default.
 
-### Severity Toggle
+### Match Condition
 
-The **Severity** toggle switch in the toolbar adds a colour-coded severity tag next to each package's vulnerability count, showing the highest severity among the package's associated vulnerabilities. This gives an at-a-glance view of which packages carry the most critical exposure.
+The **Match condition** field in the toolbar filters packages using the same condition language as CI fail conditions (e.g. `cvss >= 7 and pending`). Press **Enter** or click **Apply** to evaluate the expression against every vulnerability in the current scope; the table is then reduced to packages that have at least one matching vulnerability. Clearing the field and applying again removes the filter. Whenever vulnerability data is refreshed the filter is cleared so it never shows stale results — apply the condition again to evaluate the fresh data.
+
+While a match condition is active, the **Show Vulnerabilities** button carries the matching set along: the Vulnerability Table opens pre-filtered to that package *and* to the vulnerabilities that satisfied the condition.
+
+See the [Match Conditions](ci_conditions.md) page for the full syntax and token reference.
 
 ### Actions
 
@@ -298,5 +303,5 @@ The toolbar mirrors the vulnerability table's search bar. Filters are available 
 
 Two buttons in the toolbar handle review portability:
 
-- **Import Review**: accepts either an OpenVEX file (JSON or `.tar.gz`) or a VulnScout custom-data JSON file and merges its contents into the current project. OpenVEX files import assessments only; custom-data files additionally restore custom CVSS scores and time estimates. This is useful for receiving triage decisions from another team or migrating data between VulnScout instances.
-- **Export Review**: downloads all handmade assessments, custom CVSS scores, and time estimates as a single JSON file. The export captures the full set of user-created data so it can be shared, archived, or loaded into another VulnScout deployment.
+- **Import Review**: choose either an OpenVEX JSON document or a VulnScout JSON file. OpenVEX imports assessments into one selected variant. VulnScout JSON restores all included assessments, custom CVSS scores, and time estimates using the variants recorded in the file.
+- **Export Review**: choose VulnScout JSON to export assessments, custom CVSS scores, and time estimates for selected variants, or OpenVEX to export assessments for one selected variant as a JSON document.

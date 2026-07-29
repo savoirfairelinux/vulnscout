@@ -1,7 +1,7 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "v0.18",
+  "version": "v0.19",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -75,7 +75,7 @@
     "function-bind": "npm:@socketregistry/function-bind@^1",
     "harmony-reflect": "npm:@socketregistry/harmony-reflect@^1",
     "hasown": "npm:@socketregistry/hasown@^1",
-    "indent-string": "npm:@socketregistry/indent-string@^1",
+    "indent-string": "4.0.0",
     "is-core-module": "npm:@socketregistry/is-core-module@^1",
     "object-assign": "npm:@socketregistry/object-assign@^1",
     "path-parse": "npm:@socketregistry/path-parse@^1",

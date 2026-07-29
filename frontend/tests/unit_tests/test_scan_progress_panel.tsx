@@ -44,6 +44,39 @@ describe('ScanProgressPanel', () => {
         expect(document.body.querySelector('.animate-pulse')).toBeInTheDocument();
     });
 
+    it('shows the position for a multi-variant scan', () => {
+        render(
+            <ScanProgressPanel
+                entry={makeEntry('running', {
+                    variantName: 'hyper-v',
+                    variantPosition: 2,
+                    variantCount: 3,
+                })}
+                label="sbom-cve-check Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        expect(screen.getByText(/sbom-cve-check scan – hyper-v in progress \(variant 2 of 3\)/i)).toBeInTheDocument();
+    });
+
+    it('omits the position for a single-variant scan', () => {
+        render(
+            <ScanProgressPanel
+                entry={makeEntry('running', { variantPosition: 1, variantCount: 1 })}
+                label="NVD Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        expect(screen.getByText(/nvd scan – variant 1 in progress/i)).toBeInTheDocument();
+        expect(screen.queryByText(/variant 1 of 1/i)).not.toBeInTheDocument();
+    });
+
     it('renders running and complete states with the expected log styling', async () => {
         const user = userEvent.setup();
         const onDismiss = jest.fn();

@@ -32,11 +32,17 @@ type Assessment = {
     last_update?: string;
     responses: string[];
     vuln_texts?: VulnText[];
+    outdated?: boolean;
+    superseded_by?: string[];
+    stale_packages?: string[];
+    superseded_map?: Record<string, string[]>;
+    details_loaded?: boolean;
 };
 
 export type { Assessment };
 
 type ReviewTimeEstimate = {
+    id: string;
     vuln_id: string;
     variant_id?: string;
     optimistic: number;
@@ -49,6 +55,7 @@ type ReviewTimeEstimate = {
 };
 
 type ReviewCustomCvss = {
+    id: string;
     vuln_id: string;
     variant_id?: string;
     version: string;
@@ -67,6 +74,22 @@ const asStringArray = (data: any): string[] => {
 }
 
 const asAssessment = (data: any): Assessment | [] => {
+    if (Array.isArray(data)) {
+        const [id, vuln_id, packageId, variant_id, timestamp, status] = data;
+        if (typeof id !== "string" || typeof vuln_id !== "string"
+            || (packageId !== null && typeof packageId !== "string")
+            || (variant_id !== null && typeof variant_id !== "string")
+            || typeof timestamp !== "string" || typeof status !== "string") return [];
+        data = {
+            id,
+            vuln_id,
+            packages: packageId ? [packageId] : [],
+            variant_id,
+            timestamp,
+            status,
+            details_loaded: false,
+        };
+    }
     if (typeof data !== "object") return [];
     if (typeof data?.id !== "string") return [];
     if (typeof data?.vuln_id !== "string") return [];
@@ -99,6 +122,17 @@ const asAssessment = (data: any): Assessment | [] => {
     if (typeof data?.workaround_timestamp === "string") item.workaround_timestamp = data.workaround_timestamp;
     if (typeof data?.last_update === "string") item.last_update = data.last_update;
     if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
+    if (data?.outdated === true) item.outdated = true;
+    if (Array.isArray(data?.superseded_by)) item.superseded_by = data.superseded_by.filter((s: any) => typeof s === "string");
+    if (Array.isArray(data?.stale_packages)) item.stale_packages = data.stale_packages.filter((s: any) => typeof s === "string");
+    if (data?.superseded_map && typeof data.superseded_map === "object" && !Array.isArray(data.superseded_map)) {
+        const map: Record<string, string[]> = {};
+        for (const [key, value] of Object.entries(data.superseded_map)) {
+            if (Array.isArray(value)) map[key] = value.filter((s: any) => typeof s === "string");
+        }
+        item.superseded_map = map;
+    }
+    if (typeof data?.details_loaded === "boolean") item.details_loaded = data.details_loaded;
     return item
 }
 
@@ -134,7 +168,10 @@ class Assessments {
      */
     static async list(variantId?: string, projectId?: string): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments", window.location.href);
-        url.searchParams.set('format', 'list');
+        // Initial Explorer rendering only needs status, timestamp, package and
+        // variant scope. Full notes/responses are fetched for one vulnerability
+        // when its modal opens.
+        url.searchParams.set('format', 'compact');
         if (variantId) url.searchParams.set('variant_id', variantId);
         else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), {
@@ -150,6 +187,18 @@ class Assessments {
      */
     static async listReview(variantId?: string, projectId?: string): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review", window.location.href);
+        if (variantId) url.searchParams.set('variant_id', variantId);
+        else if (projectId) url.searchParams.set('project_id', projectId);
+        const response = await fetch(url.toString(), { mode: "cors" });
+        const data = await response.json();
+        return data.flatMap(asAssessment);
+    }
+
+    /**
+     * Fetch pending AI-generated assessments (``origin == 'ai'``) for the review tab.
+     */
+    static async listReviewAi(variantId?: string, projectId?: string): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments/review/ai", window.location.href);
         if (variantId) url.searchParams.set('variant_id', variantId);
         else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), { mode: "cors" });
@@ -181,6 +230,55 @@ class Assessments {
         const data = await response.json();
         if (!Array.isArray(data)) return [];
         return data;
+    }
+
+    /** Approve a pending AI assessment group and return the promoted assessments.
+     *
+     * A grouped review row can span multiple variants, so pass every assessment
+     * id in the row via ``ids`` to approve them all. When omitted, the backend
+     * falls back to grouping by the addressed assessment's (vuln, variant). */
+    static async approveAi(assessmentId: string, ids?: string[]): Promise<Assessment[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (!Array.isArray(data?.assessments)) return [];
+        return data.assessments.flatMap(asAssessment);
+    }
+
+    /** Reject a pending AI assessment group and return the deleted assessment ids.
+     *
+     * A grouped review row can span multiple variants, so pass every assessment
+     * id in the row via ``ids`` to reject them all. When omitted, the backend
+     * falls back to grouping by the addressed assessment's (vuln, variant). */
+    static async rejectAi(assessmentId: string, ids?: string[]): Promise<string[]> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/reject`,
+            window.location.href
+        );
+        const response = await fetch(url.toString(), {
+            method: "POST",
+            mode: "cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ids && ids.length > 0 ? { ids } : {}),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return asStringArray(data?.deleted);
     }
 }
 

@@ -14,7 +14,6 @@ function App() {
     topline: 'Vulnerability analysis is running...',
     details: 'Starting...'
   });
-  const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
     if (!loading) return;
@@ -48,7 +47,7 @@ function App() {
   }, [loading]);
 
   return (
-    <div className={darkMode ? "dark" : "light"}>
+    <div className="dark">
       {
         loading ? (
           <Loading
@@ -56,10 +55,7 @@ function App() {
             details={loadingText.details}
           />
         ) : (
-          <Explorer
-            darkMode={darkMode}
-            setDarkMode={setDarkMode}
-          />
+          <Explorer />
         )
       }
     </div>

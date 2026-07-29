@@ -46,6 +46,116 @@ def client(app):
     return app.test_client()
 
 
+def test_match_condition_returns_matching_vulnerability_ids(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss >= 7 and pending",
+        "items": [
+            {"id": "CVE-HIGH", "data": {"cvss": 8.1, "pending": True}},
+            {"id": "CVE-LOW", "data": {"cvss": 4.2, "pending": True}},
+            {"id": "CVE-FIXED", "data": {"cvss": 9.0, "pending": False}},
+        ],
+    })
+
+    assert response.status_code == 200
+    assert response.get_json() == {"matching_ids": ["CVE-HIGH"]}
+
+
+def test_match_condition_rejects_invalid_expression(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss >",
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1}}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"].startswith("Invalid match condition:")
+
+
+def test_match_condition_rejects_oversized_condition(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss > 7 " + "or cvss > 7 " * 200,
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1}}],
+    })
+
+    assert response.status_code == 400
+    assert "at most" in response.get_json()["error"]
+
+
+def test_match_condition_rejects_oversized_items_list(client):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": "cvss > 7",
+        "items": [{"id": f"CVE-{i}", "data": {}} for i in range(50_001)],
+    })
+
+    assert response.status_code == 400
+    assert "at most" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("condition", [
+    "id == CVE-TEST-0001",
+    "cvss > 8",
+    "cvss > -1",
+    "cvss >= 9.8",
+    "cvss_min < 8",
+    "cvss_min <= 7.5",
+    "epss == 50%",
+    "epss > .42",
+    "epss != 25%",
+    "effort == 3600",
+    "effort_min <= 1800",
+    "effort_max >= 7200",
+    "fixed",
+    "not ignored",
+    "affected or pending",
+    "fixed AND NOT ignored",
+    "not new",
+    "(cvss >= 9 or epss >= 50%) and affected",
+    "true == true",
+    "false == false",
+])
+def test_match_condition_supports_documented_language(client, condition):
+    item = {
+        "id": "CVE-TEST-0001",
+        "data": {
+            "id": "CVE-TEST-0001",
+            "cvss": 9.8,
+            "cvss_min": 7.5,
+            "epss": 0.5,
+            "effort": 3600,
+            "effort_min": 1800,
+            "effort_max": 7200,
+            "fixed": True,
+            "ignored": False,
+            "affected": True,
+            "pending": False,
+            "new": False,
+        },
+    }
+
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": condition,
+        "items": [item],
+    })
+
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"matching_ids": ["CVE-TEST-0001"]}
+
+
+@pytest.mark.parametrize("condition", [
+    "unknown == 2",
+    "true == true == true",
+    "true == true and",
+    "cvss > CVE-TEST-0001",
+])
+def test_match_condition_rejects_invalid_language(client, condition):
+    response = client.post("/api/vulnerabilities/match-condition", json={
+        "condition": condition,
+        "items": [{"id": "CVE-1", "data": {"cvss": 8.1, "fixed": False}}],
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()["error"].startswith("Invalid match condition:")
+
+
 # Test PATCH vulnerability with CVSS data
 def test_patch_vulnerability_with_cvss(client, init_files):
     """Test updating a vulnerability with new CVSS data"""
@@ -863,8 +973,7 @@ def test_apply_variant_scoped_overrides_skips_missing_vuln():
 
 
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
-    """In the legacy fallback, non-string doc formats are skipped and tool
-    scan sources are mapped."""
+    """Fallback skips non-string document formats and maps scan sources."""
     from src.routes.vulnerabilities import _populate_found_by
 
     class _Record:
@@ -882,20 +991,19 @@ def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
         def all(self):
             return self._rows
 
-    # The function runs two queries: (1) provenance markers, (2) legacy
-    # fallback. Return no provenance markers so both vulns fall through to the
-    # fallback, then return fallback rows shaped (vuln_id, scan_source,
-    # doc_format).
+    # The function runs separate queries for provenance, fallback observations,
+    # and document formats to avoid multiplying observations by documents.
     fallback_rows = [
-        ("v1", "nvd", None),      # non-string doc format -> use scan_source
-        ("v2", None, 12345),      # both non-string -> nothing added
+        ("v1", "scan-1", "nvd"),
+        ("v2", "scan-2", None),
     ]
+    format_rows = [("scan-1", None), ("scan-2", 12345)]
     calls = {"n": 0}
 
     def _fake_execute(*args, **kwargs):
         calls["n"] += 1
-        # 1st call: provenance query (empty), 2nd call: fallback query
-        return _Result([] if calls["n"] == 1 else fallback_rows)
+        rows = {1: [], 2: fallback_rows, 3: format_rows}[calls["n"]]
+        return _Result(rows)
 
     monkeypatch.setattr(
         "src.routes.vulnerabilities.db.session.execute",

@@ -9,6 +9,24 @@ from src.bin.webapp import create_app
 from . import write_demo_files, setup_demo_db
 
 
+def _make_png_bytes() -> bytes:
+    """Return the raw bytes of a genuine, tiny, valid 1x1 PNG image."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), color=(255, 0, 0)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_jpeg_bytes() -> bytes:
+    """Return the raw bytes of a genuine, tiny, valid 1x1 JPEG image."""
+    from io import BytesIO
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (1, 1), color=(0, 255, 0)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 @pytest.fixture()
 def init_files(tmp_path):
     files = {
@@ -109,6 +127,48 @@ def test_get_vulnerabilities_list(client):
     ]
 
 
+def test_get_vulnerabilities_compact_defers_modal_details(client):
+    response = client.get("/api/vulnerabilities?format=compact")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 1
+
+    vuln = data[0]
+    assert vuln["id"] == "CVE-2020-35492"
+    assert vuln["details_loaded"] is False
+    assert "texts" not in vuln
+    assert "urls" not in vuln
+    assert vuln["severity"]["severity"] == "high"
+    for cvss in vuln["severity"]["cvss"]:
+        assert set(cvss) == {"version", "base_score", "attack_vector"}
+
+
+def test_search_vulnerability_descriptions(client):
+    response = client.post(
+        "/api/vulnerabilities/search-descriptions",
+        json={
+            "vulnerability_ids": ["CVE-2020-35492"],
+            "terms": ["IMAGE-COMPOSITOR", "yocto", "missing"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "matches": {
+            "image-compositor": ["CVE-2020-35492"],
+            "yocto": ["CVE-2020-35492"],
+            "missing": [],
+        }
+    }
+
+
+def test_search_vulnerability_descriptions_validates_payload(client):
+    response = client.post(
+        "/api/vulnerabilities/search-descriptions",
+        json={"vulnerability_ids": "CVE-2020-35492", "terms": ["cairo"]},
+    )
+    assert response.status_code == 400
+
+
 def test_get_vulnerabilities_dict(client):
     response = client.get("/api/vulnerabilities?format=dict")
     assert response.status_code == 200
@@ -126,6 +186,10 @@ def test_get_vulnerability_by_id(client):
     assert data["id"] == "CVE-2020-35492"
     assert data["severity"]["severity"] == "high"
     assert "cairo@1.16.0" in data["packages"]
+    assert "urls" in data
+    for cvss in data["severity"]["cvss"]:
+        assert "vector_string" in cvss
+        assert "author" in cvss
     assert data["texts"] == [
         {
             "title": "description",
@@ -152,6 +216,21 @@ def test_get_assessments_dict(client):
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["status"] == "fixed"
     assert "cairo@1.16.0" in data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["packages"]
     assert data["da4d18f0-d89e-4d54-819d-86fc884cc737"]["impact_statement"] == "Yocto reported vulnerability as Patched"
+
+
+def test_get_assessments_compact(client):
+    response = client.get("/api/assessments?format=compact")
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert len(data) == 1
+    assessment = data[0]
+    assert assessment[0] == "da4d18f0-d89e-4d54-819d-86fc884cc737"
+    assert assessment[1] == "CVE-2020-35492"
+    assert assessment[2] == "cairo@1.16.0"
+    assert assessment[3] is None
+    assert isinstance(assessment[4], str)
+    assert assessment[5] == "fixed"
+    assert len(assessment) == 6
 
 
 def test_get_assessment_by_id(client):
@@ -253,6 +332,7 @@ def test_render_document_pdf(client):
     else:
         assert response.status_code == 200
 
+
 def test_render_document_html(client):
     import shutil
     response = client.get("/api/documents/summary.adoc?ext=html")
@@ -284,6 +364,7 @@ def test_render_document_invalid_ext(client):
     data = json.loads(response.data)
     assert data["error"] is not None
 
+
 def test_render_spdx_json(client):
     response = client.get("/api/documents/SPDX 2.3?ext=json")
     assert response.status_code == 200
@@ -297,6 +378,7 @@ def test_render_spdx_json(client):
     assert data["spdxVersion"] == "SPDX-2.3"
     assert data["dataLicense"] == "CC0-1.0"
     assert "packages" in data
+
 
 def test_render_spdx_xml(monkeypatch, client):
     # Ensure expected_mime is 'text/xml' for '?ext=xml'
@@ -316,6 +398,7 @@ def test_render_spdx_xml(monkeypatch, client):
     cd = response.headers.get("Content-Disposition", "")
     assert "attachment" in cd and "filename=spdx_v2_3.xml" in cd
     assert response.data.decode("utf-8").lstrip().startswith("<")
+
 
 def test_render_openvex_json(client):
     response = client.get("/api/documents/OpenVex?ext=json")
@@ -494,3 +577,171 @@ def test_upload_template_missing_file(client):
     )
     assert response.status_code == 400
     assert json.loads(response.data)["error"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/documents/assets
+# ---------------------------------------------------------------------------
+
+def test_upload_asset_success(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets saves a valid image and returns 201."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    monkeypatch.setattr("src.views.templates._ASSET_SEARCH_DIRS", [str(tmp_path / "assets")])
+
+    png_bytes = _make_png_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(png_bytes), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["name"] == "logo.png"
+    saved = tmp_path / "assets" / "logo.png"
+    assert saved.exists()
+    assert saved.read_bytes() == png_bytes
+
+    documents = client.get("/api/documents")
+    assert documents.status_code == 200
+    assets = [item for item in json.loads(documents.data) if item["id"] == "logo.png"]
+    assert assets == [{"id": "logo.png", "extension": "png", "is_template": False, "category": ["assets"]}]
+
+    download = client.get("/api/documents/logo.png?ext=png")
+    assert download.status_code == 200
+    assert download.data == png_bytes
+    assert download.headers["Content-Type"] == "image/png"
+    assert "attachment; filename=logo.png" in download.headers["Content-Disposition"]
+
+
+def test_upload_asset_rejects_bad_extension(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects non-image extensions with 400."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(b"script"), "evil.js")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    error = json.loads(response.data)["error"]
+    assert error
+    assert not (tmp_path / "assets" / "evil.js").exists()
+
+
+def test_upload_asset_rejects_svg(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects SVG uploads (excluded to avoid active content)."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    svg_bytes = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(svg_bytes), "logo.svg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.svg").exists()
+
+
+def test_upload_asset_rejects_content_extension_mismatch(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file whose decoded format doesn't match its extension."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    # A genuine JPEG renamed with a .png extension must be rejected: the
+    # declared extension is trusted only after the decoded content confirms it.
+    jpeg_bytes = _make_jpeg_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(jpeg_bytes), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.png").exists()
+
+
+def test_upload_asset_rejects_non_image_content(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file with an image extension but non-image bytes."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(b"not actually an image"), "fake.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "fake.png").exists()
+
+
+def test_upload_asset_rejects_oversized_upload(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets rejects a file bigger than the configured size cap."""
+    from io import BytesIO
+    import src.routes.documents as documents_module
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(documents_module, "MAX_ASSET_UPLOAD_BYTES", 16)
+
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(_make_png_bytes()), "logo.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+    assert json.loads(response.data)["error"]
+    assert not (tmp_path / "assets" / "logo.png").exists()
+
+
+def test_upload_asset_rejects_request_larger_than_content_limit(app, client):
+    """Werkzeug rejects oversized multipart bodies before the route parses files."""
+    request_limit = app.config["MAX_CONTENT_LENGTH"]
+    response = client.post(
+        "/api/documents/assets",
+        data=b"x" * (request_limit + 1),
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 413
+
+
+def test_upload_asset_rejects_path_traversal(tmp_path, monkeypatch, client):
+    """POST /api/documents/assets strips directory components from the filename."""
+    from io import BytesIO
+    monkeypatch.setattr("src.routes.documents.TEMPLATE_UPLOAD_DIRS", [str(tmp_path)])
+
+    png_bytes = _make_png_bytes()
+    response = client.post(
+        "/api/documents/assets",
+        data={"file": (BytesIO(png_bytes), "../../escape.png")},
+        content_type="multipart/form-data",
+    )
+    # basename keeps "escape.png" and it must not leave the assets directory.
+    assert response.status_code == 201
+    data = json.loads(response.data)
+    assert data["name"] == "escape.png"
+    assert (tmp_path / "assets" / "escape.png").exists()
+    assert not (tmp_path.parent.parent / "escape.png").exists()
+
+
+def test_upload_asset_missing_file(client):
+    """POST /api/documents/assets without a file returns 400."""
+    response = client.post(
+        "/api/documents/assets",
+        data={},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert json.loads(response.data)["error"]
+
+
+def test_upload_asset_no_multipart(client):
+    """POST /api/documents/assets without multipart content type returns 400."""
+    response = client.post(
+        "/api/documents/assets",
+        data=b"\x89PNG",
+        content_type="application/octet-stream",
+    )
+    assert response.status_code == 400

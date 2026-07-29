@@ -19,7 +19,7 @@ When the container starts with no arguments, it enters **daemon mode** — it st
 
 ```bash
 # The container starts in daemon mode by default
-docker run -d --name vulnscout sflinux/vulnscout:v0.18
+docker run -d --name vulnscout sflinux/vulnscout:v0.19
 
 # Then send commands to it
 docker exec vulnscout /scan/src/entrypoint.sh --serve
@@ -60,8 +60,12 @@ docker exec vulnscout /scan/src/entrypoint.sh --serve
 | `--export-spdx` | Export project as SPDX 3.0 SBOM to `/scan/outputs/` |
 | `--export-cdx` | Export project as CycloneDX 1.6 SBOM to `/scan/outputs/` |
 | `--export-openvex` | Export project as OpenVEX document to `/scan/outputs/` |
-| `--export-custom-assessments` | Export custom (review) assessments of the project as `.tar.gz` (or `.json` if `--variant` is specified) to `/scan/outputs/` |
-| `--import-custom-assessments <path>` | Import custom assessments from `.json` or `.tar.gz` |
+| `--export-custom-vulnscout-data` | Export custom VulnScout JSON data for all project variants, or the selected `--variant`, to `/scan/outputs/` |
+| `--import-custom-vulnscout-data <path>` | Import custom VulnScout JSON data using the variant metadata in the file |
+| `--use-original-timestamps` | With either custom import, preserve file timestamps |
+| `--export-custom-openvex-assessments` | Export custom assessments for the selected `--variant` as an OpenVEX `.json` file |
+| `--import-custom-openvex-assessments <path>` | Import an OpenVEX `.json` file into the selected `--variant` |
+| `--use-current-timestamps` | With either custom import, use the current system time |
 | `--match-condition <expr>` | Exit with code 2 if expression matches any vulnerability. Incompatible with `--serve` |
 | `--delete-scan <id>` | Delete a past scan by its ID |
 

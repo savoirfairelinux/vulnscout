@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Assessments from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
 
@@ -182,6 +183,45 @@ describe('Vulnerability Modal', () => {
         expect(screen.queryByText('Scc')).not.toBeInTheDocument();
     })
 
+    test('keeps independent same-day assessments with identical content separate', async () => {
+        const first = {
+            ...vulnerability.assessments[0],
+            id: 'same-day-first',
+            packages: ['first@1.0.0'],
+            timestamp: '2026-07-28T09:00:00Z',
+        };
+        const second = {
+            ...vulnerability.assessments[0],
+            id: 'same-day-second',
+            packages: ['second@1.0.0'],
+            timestamp: '2026-07-28T15:00:00Z',
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([first, second]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{...vulnerability, assessments: [first, second]}}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getAllByRole('listitem')).toHaveLength(2);
+        });
+        expect(within(history).getAllByText('first@1.0.0')).toHaveLength(1);
+        expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
+    });
+
 
     test('closing button', async () => {
         // ARRANGE
@@ -294,6 +334,32 @@ describe('Vulnerability Modal', () => {
         expect(await screen.findByText('Successfully added assessment to 1 package across 1 variant.')).toBeInTheDocument();
         alertSpy.mockRestore();
     })
+
+    test('an invalid batch adds nothing and displays only the API error', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
+        fetchMock.mockResponseOnce(JSON.stringify({
+            status: 'error',
+            assessments: [],
+            count: 0,
+            errors: [{error: 'Invalid package version for vulnerability and variant: pkgB@1.0'}],
+        }), {status: 400});
+
+        const appendAssessment = jest.fn();
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} isEditing={true} onClose={() => {}} appendAssessment={appendAssessment} appendCVSS={() => null} patchVuln={patchVuln} />);
+        const user = userEvent.setup();
+        const selectStatus = screen.getAllByRole('combobox').find((el) =>
+            el.getAttribute('name')?.includes('new_assessment_status')) as HTMLElement;
+        await user.selectOptions(selectStatus, 'fixed');
+        await user.click(screen.getByText(/add assessment/i));
+
+        expect(await screen.findByText(/Assessment not added:.*pkgB@1\.0/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Successfully added assessment/i)).not.toBeInTheDocument();
+        expect(appendAssessment).not.toHaveBeenCalled();
+        expect(patchVuln).not.toHaveBeenCalled();
+    });
 
     test('success message falls back to package-only when no variant touched', async () => {
         const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
@@ -629,6 +695,50 @@ describe('Vulnerability Modal', () => {
         expect(closeCb).not.toHaveBeenCalled();
     });
 
+    test('clicking the padding area around the modal box closes it without unsaved changes', async () => {
+        // The padding wrapper (between the outer backdrop and the modal content
+        // box) also closes the modal when clicked directly, matching the outer
+        // backdrop's behavior.
+        const closeCb = jest.fn();
+        const { container } = render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
+        expect(paddingWrapper).not.toBeNull();
+
+        const user = userEvent.setup();
+        await user.click(paddingWrapper as HTMLElement);
+
+        expect(closeCb).toHaveBeenCalledTimes(1);
+    });
+
+    test('clicking the padding area around the modal box shows confirmation when unsaved changes exist', async () => {
+        const closeCb = jest.fn();
+        const { container } = render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const optimistic = screen.getByPlaceholderText(/shortest estimate/i);
+        await user.type(optimistic, '5h');
+
+        const paddingWrapper = container.querySelector('.relative.p-16.h-full');
+        await user.click(paddingWrapper as HTMLElement);
+
+        expect(await screen.findByText(/are you sure you want to close without saving/i)).toBeInTheDocument();
+        expect(closeCb).not.toHaveBeenCalled();
+    });
+
+    test('clicking inside the modal content does not close the modal', async () => {
+        // Guards the event.target === event.currentTarget check on both the
+        // backdrop and the padding wrapper: clicking the title (inside the
+        // modal box) must not bubble into a close.
+        const closeCb = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        await user.click(screen.getByText(vulnerability.id));
+
+        expect(closeCb).not.toHaveBeenCalled();
+    });
+
     test('ESC key shows confirmation modal with unsaved changes', async () => {
         const closeCb = jest.fn();
         render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeCb} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -676,7 +786,7 @@ describe('Vulnerability Modal', () => {
         expect(updateCb).not.toHaveBeenCalled();
         expect(patchVuln).not.toHaveBeenCalled();
 
-        const errorBanner = await screen.findByText(/failed to add assessment/i);
+        const errorBanner = await screen.findByText(/assessment not added/i);
         expect(errorBanner).toBeInTheDocument();
     });
 
@@ -1467,7 +1577,8 @@ describe('Vulnerability Modal', () => {
 
         await user.click(editBtn);
 
-        // Should show EditAssessment component, simulate save
+        // The default keeps the current history position and timestamp.
+        expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toBeChecked();
         const saveBtn = screen.getByText(/save changes/i);
         await user.click(saveBtn);
 
@@ -1475,6 +1586,12 @@ describe('Vulnerability Modal', () => {
             expect.stringContaining('/api/assessments/assessment-1'),
             expect.objectContaining({ method: 'PUT' })
         );
+        const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+        const putBody = JSON.parse(String(putCall?.[1]?.body));
+        expect(putBody).toEqual(expect.objectContaining({
+            update_timestamp: false,
+            timestamp: '2021-01-01T00:00:00Z',
+        }));
         expect(patchVuln).toHaveBeenCalled();
 
         // Check for success banner
@@ -2125,35 +2242,170 @@ describe('Vulnerability Modal', () => {
             }
         ]));
         fetchMock.mockResponseOnce(JSON.stringify([])); // variant-snapshots
-        // Only pkgA is still active in the variant; pkgOld is deprecated.
+        // Finding rows carry their own package/variant outdated state.
         fetchMock.mockResponseOnce(JSON.stringify([
-            { variant_id: 'var-1', active_packages: ['pkgA@1.0.0'] }
+            {
+                variant_id: 'var-1',
+                active_packages: ['pkgA@1.0.0'],
+                findings: [
+                    {finding_id: 'finding-current', package: 'pkgA@1.0.0', outdated: false},
+                    {finding_id: 'finding-old', package: 'pkgOld@0.9.0', outdated: true},
+                ],
+            }
         ]));
 
         const multiPkgVuln: Vulnerability = {
             ...vulnerability,
             packages: ['pkgA@1.0.0'],
             packages_current: [],
-            assessments: [],
+            assessments: [
+                {
+                    id: 'assess-current', vuln_id: 'CVE-2010-1234', packages: ['pkgA@1.0.0'],
+                    status: 'affected', simplified_status: 'Exploitable', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '',
+                    timestamp: '2025-06-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+                },
+                {
+                    id: 'assess-old', vuln_id: 'CVE-2010-1234', packages: ['pkgOld@0.9.0'],
+                    status: 'fixed', simplified_status: 'Fixed', justification: '',
+                    impact_statement: '', status_notes: '', workaround: '',
+                    timestamp: '2025-01-01T00:00:00Z', origin: 'custom', responses: [], variant_id: 'var-1'
+                },
+            ],
         };
 
         render(<VulnModal vuln={multiPkgVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
-        // Wait for the deprecated split to appear once variant-active-packages loads.
-        const deprecatedHeading = await screen.findByText('Assessments on old packages (not present in current SBOMs)');
+        const deprecatedHeading = await screen.findByText('Assessments on old packages and variants (not present in current SBOMs)');
         const deprecated = deprecatedHeading.parentElement as HTMLElement;
-        // The stale package version is broken out into the deprecated table.
         expect(within(deprecated).getByText('pkgOld@0.9.0')).toBeInTheDocument();
         expect(within(deprecated).getByText('Fixed')).toBeInTheDocument();
         expect(within(deprecated).queryByText('pkgA@1.0.0')).not.toBeInTheDocument();
 
-        // The active (variant, package) pair stays in the current table.
-        const current = screen.getByText('Assessments on current SBOMs packages').parentElement as HTMLElement;
+        const current = screen.getByText('Assessments on current SBOM packages and variants').parentElement as HTMLElement;
         expect(within(current).getByText('pkgA@1.0.0')).toBeInTheDocument();
         expect(within(current).getByText('Exploitable')).toBeInTheDocument();
         expect(within(current).queryByText('pkgOld@0.9.0')).not.toBeInTheDocument();
-        // Production appears as the variant tag in the current table.
-        expect(within(current).getByText('Production')).toBeInTheDocument();
+
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        const outdatedHistoryTag = within(history).getByText('pkgOld@0.9.0').closest('span');
+        expect(outdatedHistoryTag).toHaveTextContent(/pkgOld@0\.9\.0.*Production.*Outdated/);
+        const currentHistoryTag = within(history).getByText('pkgA@1.0.0').closest('span');
+        expect(currentHistoryTag).toHaveTextContent(/pkgA@1\.0\.0.*Production/);
+        expect(currentHistoryTag).not.toHaveTextContent('Outdated');
+    });
+
+    const pendingAiAssessment = {
+        id: 'assessment-ai-1',
+        vuln_id: 'CVE-2010-1234',
+        variant_id: 'variant-1',
+        packages: ['aaabbbccc@1.0.0'],
+        status: 'affected',
+        simplified_status: 'active',
+        justification: 'generated by model',
+        impact_statement: 'ai impact statement',
+        status_notes: 'ai notes',
+        workaround: 'ai workaround',
+        timestamp: '2024-01-01T00:00:00Z',
+        origin: 'ai',
+        responses: []
+    };
+
+    const renderWithPendingAiAssessment = (options?: { readOnly?: boolean; isEditing?: boolean; patchVuln?: jest.Mock }) => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/variants')) {
+                return Promise.resolve(JSON.stringify([
+                    { id: 'variant-1', name: 'Variant Alpha', project_id: 'proj-1' }
+                ]));
+            }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/variant-snapshots`)) {
+                return Promise.resolve(JSON.stringify([
+                    {
+                        variant_id: 'variant-1',
+                        effort: {
+                            optimistic: 'PT1H'
+                        },
+                        custom_cvss: []
+                    }
+                ]));
+            }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([pendingAiAssessment]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...vulnerability, assessments: [] }}
+                readOnly={options?.readOnly}
+                isEditing={options?.isEditing}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={options?.patchVuln ?? (() => {})}
+            />
+        );
+    };
+
+    test('renders pending AI review panel at all times, with approve and reject actions only in edit mode', async () => {
+        renderWithPendingAiAssessment();
+
+        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        expect(screen.getByText(/Pending review/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
+    });
+
+    test('approving a pending AI review calls approveAi and removes the panel', async () => {
+        const patchVuln = jest.fn();
+        const approveSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
+            { ...pendingAiAssessment, origin: 'custom' }
+        ]);
+
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(screen.getByRole('button', { name: /Approve/i }));
+
+        await waitFor(() => {
+            expect(approveSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+        });
+        await waitFor(() => {
+            expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+        });
+        expect(patchVuln).toHaveBeenCalled();
+
+        approveSpy.mockRestore();
+    });
+
+    test('rejecting a pending AI review calls rejectAi and removes the panel', async () => {
+        const rejectSpy = jest.spyOn(Assessments, 'rejectAi').mockResolvedValue(['assessment-ai-1']);
+
+        renderWithPendingAiAssessment({ isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(screen.getByRole('button', { name: /Reject/i }));
+
+        await waitFor(() => {
+            expect(rejectSpy).toHaveBeenCalledWith('assessment-ai-1', ['assessment-ai-1']);
+        });
+        await waitFor(() => {
+            expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+        });
+
+        rejectSpy.mockRestore();
+    });
+
+    test('readOnly mode still shows the pending AI review panel but without approve/reject actions', async () => {
+        renderWithPendingAiAssessment({ readOnly: true });
+
+        expect(await screen.findByText(/AI-generated/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Approve/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Reject/i })).not.toBeInTheDocument();
     });
 
     test('adding assessment to multiple variants shows multi-variant success message', async () => {
@@ -2342,7 +2594,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recapHeading = await screen.findByText('Assessments on current SBOM packages and variants');
         const recap = recapHeading.parentElement as HTMLElement;
         // Production reflects its most recent assessment (Not affected), not the older Exploitable
         expect(within(recap).getByText('Production')).toBeInTheDocument();
@@ -2377,7 +2629,7 @@ describe('Vulnerability Modal', () => {
 
         render(<VulnModal vuln={{ ...vulnerability, assessments: [] }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
-        const recapHeading = await screen.findByText('Assessments on current SBOMs packages');
+        const recapHeading = await screen.findByText('Assessments on current SBOM packages and variants');
         const recap = recapHeading.parentElement as HTMLElement;
         // Staging has no assessment yet, so it is flagged as "No status"
         expect(within(recap).getByText('Staging')).toBeInTheDocument();

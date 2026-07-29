@@ -26,6 +26,9 @@ def init_app(app):
                 "last_update": str,      # ISO timestamp of last update
                 "started_at": str        # ISO timestamp when update started
             }
+
+        OpenAPI:
+        response 200 JsonObject NVD refresh progress payload.
         """
         tracker = NVDProgressTracker
         progress = tracker.get_progress()

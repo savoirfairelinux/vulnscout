@@ -10,6 +10,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.19.0] - 2026-07-29
+
+### Added
+- Vulnerabilities: refresh all selected projects or variants at once; add ENISA EU KEV and publication-date data, filtering, column hints, and sync-status banners.
+- Outdated packages: load outdated packages on demand, show their variant state, and allow selecting them for assessments.
+- Review: bulk-delete assessments, filter outdated rows, support timestamp policies, and import or export JSON and OpenVEX data per variant.
+- Transfers: copy assessments within a variant and import or export context, including AI assessments, with variants nested under their projects.
+- AI assessments: add project and variant context, codebase paths, pending-assessment review, filtering, editing, and approval or rejection workflows.
+- API: publish OpenAPI JSON and Swagger UI documentation for all registered routes.
+- Templates: support image assets in report templates.
+- Frontend: add persistent project/variant selection, unified search interactions, and loading feedback for outdated packages.
+
+### Changed
+- Explorer: defer detail loading and reduce assessment, package, and vulnerability payloads for faster page loads.
+- Review: reorganize project and variant selectors; improve modal navigation; use compact table and navigation styling.
+- Navigation: move settings and version controls into the navigation bar and remove the theme toggle.
+- CLI: split custom-data format commands and remove custom assessment archives.
+- Assessments: exclude pending AI assessments from reports, exports, and current-assessment views.
+
+### Fixed
+- Assessments: preserve edit timestamps, enforce package and variant scope compatibility, validate findings by variant, and make batch updates atomic.
+- Scans: serialize concurrent vulnerability scans and improve engine-lock error handling.
+- SBOM: scope outdated-package handling correctly.
+- Transfers: exclude the copy source variant from the destination selection.
+- API: generate unique OpenAPI operation IDs and surface vulnerability-detail errors.
+- Frontend: preserve assessment entry boundaries and refine historical assessment selection.
+
+---
+
 ## [0.18.0] - 2026-07-14
 
 ### Added

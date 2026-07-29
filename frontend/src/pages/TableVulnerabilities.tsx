@@ -1,6 +1,7 @@
-import type { Vulnerability } from "../handlers/vulnerabilities";
+import Vulnerabilities, { type Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
+import Assessments from "../handlers/assessments";
 import type { NVDProgress } from "../handlers/nvd_progress";
 import type { EPSSProgress } from "../handlers/epss_progress";
 import { createColumnHelper, SortingFn, RowSelectionState, Row, Table } from '@tanstack/react-table'
@@ -10,6 +11,7 @@ import { SEVERITY_ORDER, getStatusSortIndex, getTopStatusSummaryLabel, getVulner
 import TableGeneric from "../components/TableGeneric";
 import VulnModal from "../components/VulnModal";
 import MultiEditBar from "../components/MultiEditBar";
+import RefreshVulnerabilityData from "../components/RefreshVulnerabilityData";
 import debounce from 'lodash-es/debounce';
 import FilterOption from "../components/FilterOption";
 import { formatSourceName, getOriginalSourceName } from "../helpers/sourceNames";
@@ -71,7 +73,8 @@ function useRefreshProgressEffect(
     }, [progress, onRefreshComplete]);
 }
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
+import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -81,6 +84,7 @@ type Props = {
     patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package";
     filterValue?: string;
+    filterVulnerabilityIds?: string[];
     variantId?: string;
     projectId?: string;
     /** Origin variant when compare mode is active */
@@ -89,6 +93,10 @@ type Props = {
     compareOperation?: string;
     /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
+    missingEuvdDataBannerDismissed?: boolean;
+    onMissingEuvdDataBannerDismissedChange?: (dismissed: boolean) => void;
+    missingPublishedDateDataBannerDismissed?: boolean;
+    onMissingPublishedDateDataBannerDismissedChange?: (dismissed: boolean) => void;
 };
 
 const dt_options: Intl.DateTimeFormatOptions = {
@@ -145,8 +153,20 @@ const sortAttackVectorFn: SortingFn<Vulnerability> = (rowA, rowB) => {
 const fuseKeys = [
     'id',
     'packages',
-    'texts.content'
+    'texts.content',
+    'description_search_terms'
 ]
+
+const descriptionSearchTerms = (rawSearch: string): string[] => {
+    const terms = rawSearch
+        .split('|')
+        .flatMap(group => group.trim().split(/\s+/))
+        .filter(token => token && !/^only:/i.test(token))
+        .map(token => token.startsWith('-') ? token.slice(1) : token)
+        .filter(Boolean)
+        .map(token => token.toLocaleLowerCase());
+    return [...new Set(terms)];
+};
 
 type PublishedDateFilterProps = {
     filterType: string;
@@ -343,14 +363,81 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
     const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
     const [modalVulnSnapshot, setModalVulnSnapshot] = useState<Vulnerability[]>([]);
+    const [modalDetailsLoading, setModalDetailsLoading] = useState(false);
+    const [modalDetailsError, setModalDetailsError] = useState(false);
+    const hoverDetailsCache = useRef(new Map<string, Vulnerability>());
+
+    const loadHoverDetails = useCallback(async (summary: Vulnerability): Promise<Vulnerability> => {
+        if (summary.details_loaded !== false) return summary;
+        const cacheKey = `${summary.id}:${variantId ?? ''}:${projectId ?? ''}`;
+        const cached = hoverDetailsCache.current.get(cacheKey);
+        if (cached) return cached;
+        const details = await Vulnerabilities.getDetails(summary.id, variantId, projectId);
+        const resolved = details ? {
+            ...summary,
+            texts: details.texts,
+            urls: details.urls,
+            severity: { ...summary.severity, cvss: details.severity.cvss },
+            details_loaded: true,
+        } : { ...summary, details_loaded: true };
+        hoverDetailsCache.current.set(cacheKey, resolved);
+        return resolved;
+    }, [variantId, projectId]);
+
+    useEffect(() => {
+        if (!modalVuln || modalVuln.details_loaded !== false) {
+            setModalDetailsLoading(false);
+            setModalDetailsError(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        const vulnId = modalVuln.id;
+        setModalDetailsLoading(true);
+        setModalDetailsError(false);
+        Vulnerabilities.getDetails(vulnId, variantId, projectId, controller.signal)
+            .then((details) => {
+                if (!details || controller.signal.aborted) return;
+                const mergeDetails = (summary: Vulnerability): Vulnerability => ({
+                    ...summary,
+                    texts: details.texts,
+                    urls: details.urls,
+                    severity: {
+                        ...summary.severity,
+                        cvss: details.severity.cvss,
+                    },
+                    details_loaded: true,
+                });
+                setModalVuln((current) => (
+                    current?.id === vulnId ? mergeDetails(current) : current
+                ));
+                setModalVulnSnapshot((current) => current.map((vuln) => (
+                    vuln.id === vulnId ? mergeDetails(vuln) : vuln
+                )));
+            })
+            .catch((error) => {
+                if (error?.name !== 'AbortError' && !controller.signal.aborted) {
+                    setModalDetailsError(true);
+                }
+            })
+            .finally(() => {
+                if (!controller.signal.aborted) setModalDetailsLoading(false);
+            });
+
+        return () => controller.abort();
+    }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
     const [search, setSearch] = useState<string>('');
+    const [draftSearch, setDraftSearch] = useState<string>('');
+    const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
+    const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
+    const [descriptionSearchError, setDescriptionSearchError] = useState(false);
     const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -374,9 +461,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [ghsaBanner, setGhsaBanner] = useState<SourceBanner>(null);
     const [euvdBanner, setEuvdBanner] = useState<SourceBanner>(null);
     const [generalBanner, setGeneralBanner] = useState<SourceBanner>(null);
+    const [localMissingEuvdDataBannerDismissed, setLocalMissingEuvdDataBannerDismissed] = useState(false);
+    const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useState<string[]>([
-        'ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
+        'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -388,16 +477,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
-    const [showStatusHelper, setShowStatusHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useState<'any' | 'has' | 'no'>('any');
+    const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const descriptionSearchController = useRef<AbortController | null>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
     const searchHelperButtonRef = useRef<HTMLButtonElement>(null);
     const searchHelperDropdownRef = useRef<HTMLDivElement>(null);
-    const statusHelperButtonRef = useRef<HTMLButtonElement>(null);
-    const statusHelperDropdownRef = useRef<HTMLDivElement>(null);
     const moreFiltersRef = useRef<HTMLDivElement>(null);
     const prevNvdInProgress = useRef<boolean | null>(null);
     const prevNvdPhase = useRef<string | null>(null);
@@ -442,6 +531,69 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         [vulnerabilities]
     );
 
+    const isMissingEuvdDataBannerDismissed = missingEuvdDataBannerDismissed ?? localMissingEuvdDataBannerDismissed;
+    const isMissingPublishedDateDataBannerDismissed = missingPublishedDateDataBannerDismissed ?? localMissingPublishedDateDataBannerDismissed;
+
+    const setMissingEuvdDataBannerDismissed = useCallback((dismissed: boolean) => {
+        onMissingEuvdDataBannerDismissedChange?.(dismissed);
+        if (missingEuvdDataBannerDismissed === undefined) setLocalMissingEuvdDataBannerDismissed(dismissed);
+    }, [missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange]);
+
+    const setMissingPublishedDateDataBannerDismissed = useCallback((dismissed: boolean) => {
+        onMissingPublishedDateDataBannerDismissedChange?.(dismissed);
+        if (missingPublishedDateDataBannerDismissed === undefined) setLocalMissingPublishedDateDataBannerDismissed(dismissed);
+    }, [missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange]);
+
+    // The EU KEV column renders a badge only when a vulnerability is flagged
+    // known_exploited; every other row shows an empty placeholder. The backend
+    // also always serialises an `euvd` object (often with just an alias id and
+    // known_exploited=false), so object presence does not indicate KEV data.
+    // Mirror the column: KEV data "exists" only when at least one vulnerability
+    // is actually known-exploited.
+    const hasAnyEuvdData = useMemo(
+        () => vulnerabilities.some(v => v.euvd?.known_exploited === true),
+        [vulnerabilities]
+    );
+    const previousHasAnyEuvdData = useRef(hasAnyEuvdData);
+    const previousHasAnyPublishedDate = useRef(hasAnyPublishedDate);
+
+    const shouldShowMissingEuvdDataBanner = vulnerabilities.length > 0 &&
+        !hasAnyEuvdData &&
+        !euvdProgress?.in_progress &&
+        !isMissingEuvdDataBannerDismissed;
+
+    const shouldShowMissingPublishedDateDataBanner = vulnerabilities.length > 0 &&
+        !hasAnyPublishedDate &&
+        !nvdProgress?.in_progress &&
+        !isMissingPublishedDateDataBannerDismissed;
+
+    const shouldShowMissingDataBanner = shouldShowMissingEuvdDataBanner || shouldShowMissingPublishedDateDataBanner;
+
+    const missingDataBannerMessage = shouldShowMissingEuvdDataBanner && shouldShowMissingPublishedDateDataBanner
+        ? <><strong className="font-bold">EU KEV data</strong> and <strong className="font-bold">published date data</strong> need updating. Use the "Refresh vulnerability data" button to update them.</>
+        : shouldShowMissingEuvdDataBanner
+            ? <><strong className="font-bold">EU KEV data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>
+            : <><strong className="font-bold">Published date data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>;
+
+    const dismissMissingDataBanner = () => {
+        if (shouldShowMissingEuvdDataBanner) setMissingEuvdDataBannerDismissed(true);
+        if (shouldShowMissingPublishedDateDataBanner) setMissingPublishedDateDataBannerDismissed(true);
+    };
+
+    useEffect(() => {
+        if (previousHasAnyEuvdData.current !== hasAnyEuvdData) {
+            setMissingEuvdDataBannerDismissed(false);
+        }
+        previousHasAnyEuvdData.current = hasAnyEuvdData;
+    }, [hasAnyEuvdData, setMissingEuvdDataBannerDismissed]);
+
+    useEffect(() => {
+        if (previousHasAnyPublishedDate.current !== hasAnyPublishedDate) {
+            setMissingPublishedDateDataBannerDismissed(false);
+        }
+        previousHasAnyPublishedDate.current = hasAnyPublishedDate;
+    }, [hasAnyPublishedDate, setMissingPublishedDateDataBannerDismissed]);
+
 
     useEffect(() => {
         if (!filterLabel || !filterValue) return;
@@ -450,6 +602,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
     }, [filterLabel, filterValue]);
+
+    // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
+    // excluded from the vulnerabilities' assessments array by the backend, so they must
+    // be fetched separately. Scope to the selected variant, else the project.
+    useEffect(() => {
+        let cancelled = false;
+        if (!variantId && !projectId) {
+            setAiSuggestionVulnIds(new Set());
+            return;
+        }
+        Assessments.listReviewAi(variantId, projectId)
+            .then(assessments => {
+                if (cancelled) return;
+                setAiSuggestionVulnIds(new Set(assessments.map(a => a.vuln_id)));
+            })
+            .catch(() => {
+                if (!cancelled) setAiSuggestionVulnIds(new Set());
+            });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
 
     // Update per-source banners with live progress; reload data when each refresh completes
     useRefreshProgressEffect(nvdProgress, 'NVD', prevNvdInProgress, prevNvdPhase, prevNvdStartedAt, setNvdBanner, onRefreshComplete, 'CVEs');
@@ -505,6 +677,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     const bannerVisible = activeBanners.length > 0;
     const bannerMessage = activeBanners.map(b => b.message).join(' · ');
     const bannerType: 'error' | 'success' = activeBanners.some(b => b.type === 'error') ? 'error' : 'success';
+    const visibleBannerCount = activeBanners.length +
+        Number(shouldShowMissingDataBanner);
 
     const triggerBanner = (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => {
         if (source === 'nvd') setNvdBanner({ message, type });
@@ -529,13 +703,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setEuvdBanner(null);
         setGeneralBanner(null);
     };
-
-    const updateSearch = debounce((event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.value.length < 2) {
-            if (search != '') setSearch('');
-        }
-        setSearch(event.target.value);
-    }, 750, { maxWait: 5000 });
 
     const updateCustomSeverityFilter = debounce((value: { min: number; max: number }) => {
         setSeverityRange(value);
@@ -614,6 +781,22 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
     }, [variants_list]);
 
+    // Distinct raw package ids across all vulnerabilities, sorted by display label.
+    // Currently selected packages are always included so a stale or absent
+    // preselection (e.g. from filterValue) can still be unchecked by the user.
+    const packages_list = useMemo(() => {
+        const pkgSet = new Set<string>();
+        vulnerabilities.forEach(vuln => {
+            vuln.packages_current.forEach(pkg => {
+                if (pkg !== '') pkgSet.add(pkg);
+            });
+        });
+        selectedPackages.forEach(pkg => {
+            if (pkg !== '') pkgSet.add(pkg);
+        });
+        return Array.from(pkgSet).sort((a, b) => formatPkgId(a).localeCompare(formatPkgId(b)));
+    }, [vulnerabilities, selectedPackages]);
+
     const handleEditClick = useCallback((vuln: Vulnerability) => {
         const index = searchFilteredData.findIndex(v => v.id === vuln.id);
         setModalVuln(vuln);
@@ -667,9 +850,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     <div className="flex items-center justify-center h-full">
                     <input
                         type="checkbox"
-                        title={table.getIsAllRowsSelected() ? "Unselect all" : "Select all"}
-                        checked={table.getIsAllRowsSelected()}
-                        onChange={table.getToggleAllRowsSelectedHandler()}
+                        ref={el => {
+                            if (el) el.indeterminate = table.getIsSomePageRowsSelected();
+                        }}
+                        title={table.getIsAllPageRowsSelected() ? "Unselect all" : "Select all"}
+                        checked={table.getIsAllPageRowsSelected()}
+                        onChange={table.getToggleAllPageRowsSelectedHandler()}
                     />
                     </div>
                 ),
@@ -780,39 +966,17 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             }),
             columnHelper.accessor('simplified_status', {
             id: 'simplified_status',
-            header: () => (
-                <div className="relative flex items-center justify-center gap-1">
-                    <span>Status</span>
-                    <button
-                        ref={statusHelperButtonRef}
-                        type="button"
-                        aria-label="status summary helper"
-                        className="text-sky-300 hover:text-sky-100 transition-colors"
-                        onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setShowStatusHelper(!showStatusHelper);
-                        }}
-                    >
-                        <FontAwesomeIcon icon={faCircleQuestion} />
-                    </button>
-                    {showStatusHelper && (
-                        <div
-                            ref={statusHelperDropdownRef}
-                            className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
-                            onClick={(event) => event.stopPropagation()}
-                        >
-                            <h3 className="font-bold text-white mb-2">Status Summary</h3>
-                            <div className="space-y-1 text-gray-100">
-                                <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
-                                <p>Scope follows your active project, variant, and compare selection.</p>
-                                <p>Display lists every distinct outcome, for example: Exploitable, Pending Assessment.</p>
-                                <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
-                            </div>
-                        </div>
-                    )}
+            header: () => <div className="flex items-center justify-center">Status</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Status Summary</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Status aggregates all assessment outcomes for the vulnerability in the current scope.</p>
+                    <p>Scope follows your active project, variant, and compare selection.</p>
+                    <p>Display lists every distinct outcome, for example: Exploitable, Pending Assessment.</p>
+                    <p>Filtering matches vulnerabilities when any selected status is present in the summary.</p>
                 </div>
-            ),
+            </>,
+            HintAriaLabel: 'Status summary helper',
             cell: info => {
                 const summary = getVulnerabilityStatusSummary(info.row.original);
                 const label = getTopStatusSummaryLabel(summary);
@@ -891,6 +1055,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                     </div>
                 );
             },
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">Published Date</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Shows when the vulnerability was first published.</p>
+                    <p>The NVD refresh provides this date for CVEs, and the GitHub Security Advisory refresh provides it for GHSA identifiers.</p>
+                    <p>Select vulnerabilities and refresh their data when a date is unavailable.</p>
+                </div>
+            </>,
             cell: info => {
                 const published = info.getValue();
                 const fetching = nvdProgress?.in_progress && !published;
@@ -1036,6 +1208,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             columnHelper.accessor('euvd', {
             id: 'euvd',
             header: () => <div className="flex items-center justify-center">EU KEV</div>,
+            HintText: <>
+                <h3 className="font-bold text-white mb-2">EU KEV</h3>
+                <div className="space-y-1 text-gray-100">
+                    <p>Marks vulnerabilities in the consolidated EU Known Exploited Vulnerabilities list.</p>
+                    <p>The list combines the CISA KEV and ENISA EU KEV catalogues.</p>
+                    <p>Refresh ENISA EUVD data to populate this priority-triage signal.</p>
+                </div>
+            </>,
             cell: info => {
                 const euvd = info.getValue();
                 if (!euvd?.known_exploited) {
@@ -1079,19 +1259,35 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, showStatusHelper]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
 
     const columns = useMemo(() => {
-        return allColumns.filter(col => {
-            const colId = col.id as string;
-            if (colId === 'select-checkbox' || colId === 'actions') return true;
-            const displayName = columnDisplayNames[colId as keyof typeof columnDisplayNames];
-            return displayName && visibleColumns.includes(displayName);
+        const columnByDisplayName = new Map(
+            allColumns.map(column => [
+                columnDisplayNames[column.id as keyof typeof columnDisplayNames],
+                column,
+            ])
+        );
+        const selectedColumns = visibleColumns.flatMap(displayName => {
+            const column = columnByDisplayName.get(displayName);
+            return column ? [column] : [];
         });
+        const selectColumn = allColumns.find(column => column.id === 'select-checkbox');
+        const actionsColumn = allColumns.find(column => column.id === 'actions');
+
+        return [
+            ...(selectColumn ? [selectColumn] : []),
+            ...selectedColumns,
+            ...(actionsColumn ? [actionsColumn] : []),
+        ];
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const dataToDisplay = useMemo(() => {
+        const allowedVulnerabilityIds = filterVulnerabilityIds ? new Set(filterVulnerabilityIds) : null;
         return vulnerabilities.filter((el) => {
+            if (allowedVulnerabilityIds && !allowedVulnerabilityIds.has(el.id)) return false;
+            if (aiSuggestionFilter === 'has' && !aiSuggestionVulnIds.has(el.id)) return false;
+            if (aiSuggestionFilter === 'no' && aiSuggestionVulnIds.has(el.id)) return false;
             if (selectedSeverities.length && !selectedSeverities.includes(el.severity.severity)) return false;
             if (selectedStatuses.length) {
                 const summary = getVulnerabilityStatusSummary(el);
@@ -1192,7 +1388,57 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
 
             return true;
         });
-    }, [vulnerabilities, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates]);
+    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+
+    const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
+        ...vuln,
+        description_search_terms: Object.entries(descriptionMatches)
+            .filter(([, ids]) => ids.has(vuln.id))
+            .map(([term]) => term)
+            .join(' ') || '\0',
+    })), [dataToDisplay, descriptionMatches]);
+
+    const applySearch = useCallback(async () => {
+        const nextSearch = draftSearch.trim();
+        const terms = descriptionSearchTerms(nextSearch);
+        descriptionSearchController.current?.abort();
+        setDescriptionSearchError(false);
+
+        if (nextSearch.length <= 2 || terms.length === 0 ||
+            vulnerabilities.every(vuln => vuln.details_loaded !== false)) {
+            if (!nextSearch) setDescriptionMatches({});
+            setSearch(nextSearch);
+            setDescriptionSearchLoading(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        descriptionSearchController.current = controller;
+        setDescriptionSearchLoading(true);
+        try {
+            const matches = await Vulnerabilities.searchDescriptionTerms(
+                vulnerabilities.map(vuln => vuln.id),
+                terms,
+                variantId,
+                projectId,
+                controller.signal,
+            );
+            if (controller.signal.aborted) return;
+            setDescriptionMatches(Object.fromEntries(
+                Object.entries(matches).map(([term, ids]) => [term, new Set(ids)])
+            ));
+            setSearch(nextSearch);
+        } catch (error: any) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) return;
+            setDescriptionMatches({});
+            setDescriptionSearchError(true);
+            setSearch(nextSearch);
+        } finally {
+            if (!controller.signal.aborted) setDescriptionSearchLoading(false);
+        }
+    }, [draftSearch, vulnerabilities, variantId, projectId]);
+
+    useEffect(() => () => descriptionSearchController.current?.abort(), []);
 
     const selectedVulns = useMemo(() => {
         return Object.entries(selectedRows).flatMap(([id, selected]) => selected ? [id] : [])
@@ -1215,7 +1461,12 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
     };
 
     function resetFilters() {
+        descriptionSearchController.current?.abort();
         setSearch('');
+        setDraftSearch('');
+        setDescriptionMatches({});
+        setDescriptionSearchError(false);
+        setDescriptionSearchLoading(false);
         setSelectedSources([]);
         setSelectedSeverities([]);
         setSelectedStatuses([]);
@@ -1227,13 +1478,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
+        setVisibleColumns(['ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
         setEpssRange({ min: 0, max: 100 });
         setSelectedAttackVectors([]);
         setSelectedFirstScanDates([]);
+        setAiSuggestionFilter('any');
     }
 
     useEffect(() => {
@@ -1296,24 +1548,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             ) {
                 setShowSearchHelper(false);
             }
-            if (
-                statusHelperDropdownRef.current &&
-                statusHelperButtonRef.current &&
-                !statusHelperDropdownRef.current.contains(event.target as Node) &&
-                !statusHelperButtonRef.current.contains(event.target as Node)
-            ) {
-                setShowStatusHelper(false);
-            }
         };
 
-        if (showShortcutHelper || showSearchHelper || showStatusHelper) {
+        if (showShortcutHelper || showSearchHelper) {
             document.addEventListener('mousedown', handleClickOutside);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showShortcutHelper, showSearchHelper, showStatusHelper]);
+    }, [showShortcutHelper, showSearchHelper]);
 
     // Close "More Filters" on click outside
     useEffect(() => {
@@ -1341,10 +1585,34 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 onClose={closeBanner}
             />
         )}
+        {shouldShowMissingDataBanner && (
+            <MessageBanner
+                type="info"
+                message={missingDataBannerMessage}
+                isVisible={true}
+                onClose={dismissMissingDataBanner}
+            />
+        )}
 
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
-            <div>Search</div>
-            <input ref={searchInputRef} onInput={updateSearch} type="search" className="py-1 px-2 bg-sky-900 focus:bg-sky-950 min-w-[250px] grow max-w-[800px]" placeholder="Search by ID, packages, description, ..." />
+            <div className="contents">
+                <ExplicitSearchInput
+                    id="vulnerability-search"
+                    ref={searchInputRef}
+                    value={draftSearch}
+                    onChange={setDraftSearch}
+                    onSearch={applySearch}
+                    label="Search"
+                    placeholder="Search by ID, packages, description, ..."
+                    ariaLabel="Search vulnerabilities"
+                    loading={descriptionSearchLoading}
+                />
+            </div>
+            {descriptionSearchError && (
+                <span role="alert" className="text-sm text-red-200">
+                    Description search failed; ID and package matches are still available.
+                </span>
+            )}
 
             <div className="relative">
                 <button
@@ -1434,6 +1702,15 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 setSelected={setSelectedStatuses}
             />
 
+            <FilterOption
+                label="Packages"
+                options={packages_list}
+                selected={selectedPackages}
+                setSelected={setSelectedPackages}
+                searchable
+                formatLabel={formatPkgId}
+            />
+
             {variants_list.length > 0 && (
                 <FilterOption
                     label="Variants"
@@ -1470,7 +1747,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     <FontAwesomeIcon icon={faFilter} />
                     More
-                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0) && (
+                    {(showCustomEpssFilter || selectedAttackVectors.length > 0 || selectedFirstScanDates.length > 0 || aiSuggestionFilter !== 'any') && (
                         <span className="ml-1 bg-sky-700 px-1 rounded text-xs">✓</span>
                     )}
                     <FontAwesomeIcon icon={faCaretDown} />
@@ -1567,25 +1844,40 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                                     )}
                                 </div>
                             </div>
+
+                            <hr className="border-sky-700" />
+
+                            {/* AI Suggestion Filter */}
+                            <div>
+                                <div className="text-sm font-semibold mb-2">AI Suggestion</div>
+                                <div className="space-y-1 ml-2">
+                                    {([
+                                        { value: 'any', label: 'Any' },
+                                        { value: 'has', label: 'Has AI suggestion' },
+                                        { value: 'no', label: 'No AI suggestion' },
+                                    ] as const).map(opt => (
+                                        <label key={opt.value} className="flex items-center space-x-2">
+                                            <input
+                                                type="radio"
+                                                name="ai-suggestion-filter"
+                                                checked={aiSuggestionFilter === opt.value}
+                                                onChange={() => setAiSuggestionFilter(opt.value)}
+                                                className="form-radio text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
+                                            />
+                                            <span>{opt.label}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1 ml-2">
+                                    Filter by pending AI suggestion in the current scope.
+                                </p>
+                            </div>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Package indicator (no dropdown, just display) */}
-            {selectedPackages.length > 0 && (
-                <div className="flex items-center gap-1 bg-sky-900 px-2 py-1 rounded text-white border border-sky-700">
-                    <span className="font-semibold">Package:</span>
-                    <span>{selectedPackages.join(', ')}</span>
-                    <button
-                        className="ml-1 text-white hover:text-red-400"
-                        title="Clear package filter"
-                        onClick={() => setSelectedPackages([])}
-                    >
-                        <FontAwesomeIcon icon={faTimes} />
-                    </button>
-                </div>
-            )}
+            {/* Package selection is handled by the Packages filter dropdown above */}
 
             <div className="ml-auto flex items-center gap-2 relative">
                 <button
@@ -1631,6 +1923,16 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
                 >
                     Reset Filters
                 </button>
+                <span className="h-6 border-l border-gray-400" aria-hidden="true" />
+                <RefreshVulnerabilityData
+                    vulnerabilities={vulnerabilities}
+                    triggerBanner={triggerBanner}
+                    hideBanner={closeBanner}
+                    nvdProgress={nvdProgress}
+                    epssProgress={epssProgress}
+                    ghsaProgress={ghsaProgress}
+                    euvdProgress={euvdProgress}
+                />
             </div>
         </div>
 
@@ -1645,10 +1947,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             variantId={variantId}
             baseVariantId={baseVariantId}
             compareOperation={compareOperation}
-            nvdProgress={nvdProgress}
-            epssProgress={epssProgress}
-            ghsaProgress={ghsaProgress}
-            euvdProgress={euvdProgress}
         />
 
         <TableGeneric
@@ -1658,20 +1956,23 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, appe
             search={search}
             columns={columns}
             tableHeight={
-                bannerVisible ?
-                    'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - 64px)' :
+                visibleBannerCount > 0 ?
+                    `calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px - ${visibleBannerCount * 64}px)` :
                     'calc(100vh - 44px - 64px - 48px - 16px - 48px - 16px - 8px)'
             }
-            data={dataToDisplay}
+            data={searchableData}
             estimateRowHeight={66}
             selected={selectedRows}
             updateSelected={setSelectedRows}
             onFilteredDataChange={setSearchFilteredData}
             onFocusedRowChange={setFocusedRowIndex}
+            onHoverData={loadHoverDetails}
         />
 
         {modalVuln != undefined && <VulnModal
             vuln={modalVuln}
+            detailsLoading={modalDetailsLoading}
+            detailsError={modalDetailsError}
             isEditing={isEditing}
             onClose={() => {
                 setModalVuln(undefined);

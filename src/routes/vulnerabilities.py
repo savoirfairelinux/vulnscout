@@ -12,7 +12,7 @@ import uuid
 from flask import jsonify, request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select, ColumnElement
-from sqlalchemy.orm import selectinload, aliased, attributes as orm_attrs
+from sqlalchemy.orm import joinedload, selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
     Finding,
@@ -34,6 +34,7 @@ from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.vulnerabilities import VulnerabilitiesController
+from ..controllers.conditions_parser import ConditionParser
 from ..helpers.active_scans import (
     active_scan_ids_for_variant,
     active_scan_ids_for_project,
@@ -49,7 +50,22 @@ from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 
 TIME_ESTIMATES_PATH = "/scan/outputs/time_estimates.json"
+MATCH_CONDITION_MAX_LENGTH = 1_000
+MATCH_CONDITION_MAX_ITEMS = 50_000
 _GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
+
+
+def _attack_vector_from_vector(vector: str) -> str | None:
+    """Return the normalized CVSS attack vector used by Explorer filters."""
+    for token, label in (
+        ("AV:N", "NETWORK"),
+        ("AV:A", "ADJACENT"),
+        ("AV:L", "LOCAL"),
+        ("AV:P", "PHYSICAL"),
+    ):
+        if token in vector:
+            return label
+    return None
 
 
 def _sbom_pkg_filter(pkg_ids: set[uuid.UUID]) -> "ColumnElement[bool] | None":
@@ -254,34 +270,47 @@ def _populate_found_by(
 
     unresolved_vuln_ids = [vid for vid in vuln_ids if vid not in found_by_map]
 
-    # 2) Fallback: derive from observing scans/documents in scope.
+    # 2) Fallback: derive from observing scans/documents in scope. Fetch the
+    # observation-to-scan rows separately from document metadata: joining
+    # every finding observation to every document in its scan creates a very
+    # large intermediate result on scans with many findings and documents.
     if unresolved_vuln_ids:
         fallback_q = (
             db.select(
                 Finding.vulnerability_id,
+                Scan.id.label("scan_id"),
                 Scan.scan_source,
-                SBOMDocument.format.label("doc_format"),
             )
             .select_from(Finding)
             .join(Observation, Observation.finding_id == Finding.id)
             .join(Scan, Scan.id == Observation.scan_id)
-            .outerjoin(
-                SBOMDocument,
-                db.and_(
-                    SBOMDocument.scan_id == Scan.id,
-                    SBOMDocument.format.isnot(None),
-                ),
-            )
             .where(Finding.vulnerability_id.in_(unresolved_vuln_ids))
         )
         if active_scan_ids:
             fallback_q = fallback_q.where(Observation.scan_id.in_(active_scan_ids))
         fallback_rows = db.session.execute(fallback_q.distinct()).all()
 
-        for vuln_id, scan_source, doc_format in fallback_rows:
-            if isinstance(doc_format, str):
-                mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
-                found_by_map.setdefault(vuln_id, set()).add(mapped)
+        fallback_scan_ids = {scan_id for _, scan_id, _ in fallback_rows}
+        formats_by_scan: dict[uuid.UUID, set[str]] = {}
+        if fallback_scan_ids:
+            format_rows = db.session.execute(
+                db.select(SBOMDocument.scan_id, SBOMDocument.format)
+                .where(
+                    SBOMDocument.scan_id.in_(fallback_scan_ids),
+                    SBOMDocument.format.isnot(None),
+                )
+                .distinct()
+            ).all()
+            for scan_id, doc_format in format_rows:
+                if isinstance(doc_format, str):
+                    formats_by_scan.setdefault(scan_id, set()).add(doc_format)
+
+        for vuln_id, scan_id, scan_source in fallback_rows:
+            doc_formats = formats_by_scan.get(scan_id, set())
+            if doc_formats:
+                for doc_format in doc_formats:
+                    mapped = _FORMAT_TO_FOUND_BY.get(doc_format, doc_format)
+                    found_by_map.setdefault(vuln_id, set()).add(mapped)
             elif isinstance(scan_source, str):
                 mapped = _TOOL_SOURCE_TO_FOUND_BY.get(scan_source, scan_source)
                 found_by_map.setdefault(vuln_id, set()).add(mapped)
@@ -296,8 +325,64 @@ def init_app(app: Flask) -> None:
     if "TIME_ESTIMATES_PATH" not in app.config:
         app.config["TIME_ESTIMATES_PATH"] = TIME_ESTIMATES_PATH
 
+    @app.post('/api/vulnerabilities/match-condition')
+    def match_condition() -> ResponseReturnValue:
+        """Evaluate a condition against supplied data objects.
+
+        OpenAPI:
+        body JsonObject required Condition string and items containing id and data fields.
+        response 200 JsonObject IDs of items matching the condition.
+        response 400 Error Invalid request or condition.
+        """
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return {"error": "Request body must be a JSON object"}, 400
+
+        condition = payload.get("condition")
+        items = payload.get("items")
+        if not isinstance(condition, str) or not condition.strip():
+            return {"error": "condition must be a non-empty string"}, 400
+        if len(condition) > MATCH_CONDITION_MAX_LENGTH:
+            return {"error": f"condition must be at most {MATCH_CONDITION_MAX_LENGTH} characters"}, 400
+        if not isinstance(items, list):
+            return {"error": "items must be a list"}, 400
+        if len(items) > MATCH_CONDITION_MAX_ITEMS:
+            return {"error": f"items must contain at most {MATCH_CONDITION_MAX_ITEMS} entries"}, 400
+
+        parser = ConditionParser()
+        matching_ids: list[str] = []
+        try:
+            for item in items:
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or not isinstance(item.get("data"), dict)
+                ):
+                    return {"error": "Each item must contain a string id and an object data field"}, 400
+                if parser.evaluate(condition, item["data"]):
+                    matching_ids.append(item["id"])
+        except Exception as exc:
+            return {"error": f"Invalid match condition: {exc}"}, 400
+
+        return jsonify({"matching_ids": matching_ids})
+
     @app.route('/api/vulnerabilities')
     def index_vulns() -> ResponseReturnValue:
+        """List vulnerabilities with optional variant and project filters.
+
+        Supports single-variant, project-wide, pairwise comparison, and
+        multi-variant union or intersection modes.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict to a single variant.
+        query project_id uuid optional Restrict to a single project.
+        query compare_variant_id uuid optional Compare against a second variant.
+        query variant_ids string optional Comma-separated list of variant IDs.
+        query operation string optional Comparison mode such as difference, intersection, or union.
+        query format string optional Response format such as list or dict.
+        response 200 JsonObject Vulnerability collection.
+        """
+        response_format = request.args.get('format', 'list')
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
         compare_variant_id = request.args.get('compare_variant_id')
@@ -327,6 +412,7 @@ def init_app(app: Flask) -> None:
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
+                joinedload(Vulnerability.refresh),
             )
 
             base_ids = _vuln_ids_for_scans(base_latest_ids)
@@ -383,6 +469,7 @@ def init_app(app: Flask) -> None:
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                 selectinload(Vulnerability.metrics),
+                joinedload(Vulnerability.refresh),
             )
             per_variant_scan_ids = {u: active_scan_ids_for_variant(u) for u in parsed_uuids}
             current_scan_ids = []
@@ -424,6 +511,7 @@ def init_app(app: Flask) -> None:
                         selectinload(Vulnerability.findings).selectinload(Finding.package),
                         selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
                         selectinload(Vulnerability.metrics),
+                        joinedload(Vulnerability.refresh),
                     )
                     .join(Finding, Vulnerability.id == Finding.vulnerability_id)
                     .join(Observation, Finding.id == Observation.finding_id)
@@ -502,6 +590,7 @@ def init_app(app: Flask) -> None:
 
                 records = list(db.session.execute(
                     select(Vulnerability)
+                    .options(joinedload(Vulnerability.refresh))
                     .where(Vulnerability.id.in_(vuln_ids_subq))
                     .order_by(Vulnerability.id)
                 ).scalars().all())
@@ -638,6 +727,12 @@ def init_app(app: Flask) -> None:
         _populate_found_by(records, _scope_variant, _scope_project,
                            active_scan_ids=current_scan_ids or None)
         vulns = {r.id: r.to_dict() for r in records}
+        # The frontend consumes the richer ``texts`` field and never reads the
+        # legacy top-level description.  Omitting this duplicate from the list
+        # response saves substantial transfer and JSON parsing on large scans;
+        # the single-vulnerability endpoint still returns the complete record.
+        for vuln in vulns.values():
+            vuln.pop("description", None)
         _apply_variant_scoped_overrides_to_vuln_dicts(vulns, variant_scoped_overrides)
         vuln_ids = vulns.keys()
 
@@ -727,28 +822,149 @@ def init_app(app: Flask) -> None:
             for vuln_id, vuln in vulns.items():
                 vuln["first_scan_date"] = first_scan_by_vuln.get(vuln_id)
 
-            # Enrich with observation statuses
-            all_vuln_texts = fetch_vulnerabilities_texts(vuln_ids, include_packages=True, scan_ids=active_scan_ids)
-            for vuln_id, vuln_texts in all_vuln_texts.items():
-                vuln = vulns[vuln_id]
-                vuln["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts))
+            # Descriptions are only needed by the detail modal.  The compact
+            # Explorer response deliberately skips this relatively expensive
+            # query and lets the single-vulnerability endpoint load them when
+            # a row is opened.
+            if response_format != "compact":
+                all_vuln_texts = fetch_vulnerabilities_texts(
+                    vuln_ids,
+                    include_packages=True,
+                    scan_ids=active_scan_ids,
+                )
+                for vuln_id, vuln_texts in all_vuln_texts.items():
+                    vuln = vulns[vuln_id]
+                    vuln["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts))
 
-        match request.args.get('format', 'list'):
+        match response_format:
             case "list":
+                return list(vulns.values())
+            case "compact":
+                for vuln in vulns.values():
+                    vuln.pop("texts", None)
+                    vuln.pop("urls", None)
+                    vuln["details_loaded"] = False
+                    cvss_entries = vuln.get("severity", {}).get("cvss", [])
+                    vuln["severity"]["cvss"] = [
+                        {
+                            "version": cvss.get("version", ""),
+                            "base_score": cvss.get("base_score", 0.0),
+                            "attack_vector": _attack_vector_from_vector(
+                                cvss.get("vector_string", "")
+                            ),
+                        }
+                        for cvss in cvss_entries
+                    ]
                 return list(vulns.values())
             case "dict":
                 return vulns
             case _ as fmt:
                 raise ValueError("Unknown format", fmt)
 
+    @app.post('/api/vulnerabilities/search-descriptions')
+    def search_vulnerability_descriptions() -> ResponseReturnValue:
+        """Return vulnerability IDs whose scoped descriptions contain each term.
+
+        OpenAPI:
+        query variant_id uuid optional Restrict descriptions to a variant's active scans.
+        query project_id uuid optional Restrict descriptions to a project's active scans.
+        body JsonObject required Vulnerability ID and search-term arrays.
+        response 200 JsonObject Matching vulnerability IDs grouped by normalized term.
+        response 400 Error Invalid identifiers, arrays, or size limits.
+        """
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return {"error": "Expected a JSON object"}, 400
+
+        raw_vuln_ids = payload.get("vulnerability_ids")
+        raw_terms = payload.get("terms")
+        if not isinstance(raw_vuln_ids, list) or not all(
+            isinstance(vuln_id, str) for vuln_id in raw_vuln_ids
+        ):
+            return {"error": "vulnerability_ids must be a list of strings"}, 400
+        if not isinstance(raw_terms, list) or not all(
+            isinstance(term, str) for term in raw_terms
+        ):
+            return {"error": "terms must be a list of strings"}, 400
+        if len(raw_vuln_ids) > 100_000:
+            return {"error": "Too many vulnerability IDs"}, 400
+        if len(raw_terms) > 50 or any(len(term) > 256 for term in raw_terms):
+            return {"error": "Too many or excessively long search terms"}, 400
+
+        vuln_ids = list(dict.fromkeys(raw_vuln_ids))
+        terms = list(dict.fromkeys(term.casefold() for term in raw_terms if term))
+        matches: dict[str, set[str]] = {term: set() for term in terms}
+        if not vuln_ids or not terms:
+            return {"matches": {term: [] for term in terms}}
+
+        scan_ids: list[uuid.UUID] | None = None
+        variant_id = request.args.get("variant_id")
+        project_id = request.args.get("project_id")
+        if variant_id:
+            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
+            if err:
+                return err
+            if variant_uuid is None:
+                return {"error": "Internal error"}, 500
+            scan_ids = active_scan_ids_for_variant(variant_uuid)
+        elif project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
+            scan_ids = active_scan_ids_for_project(project_uuid)
+
+        description_rows = db.session.execute(
+            db.select(Vulnerability.id, Vulnerability.description)
+            .where(Vulnerability.id.in_(vuln_ids))
+            .where(Vulnerability.description.is_not(None))
+        ).all()
+
+        observation_query = (
+            db.select(SBOMObservation.vulnerability_id, SBOMObservation.description)
+            .where(SBOMObservation.vulnerability_id.in_(vuln_ids))
+        )
+        if scan_ids is not None:
+            observation_query = (
+                observation_query
+                .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id)
+                .where(SBOMDocument.scan_id.in_(scan_ids))
+            )
+        observation_rows = db.session.execute(observation_query).all()
+
+        for vuln_id, content in (*description_rows, *observation_rows):
+            if not isinstance(content, str):
+                continue
+            folded_content = content.casefold()
+            for term in terms:
+                if term in folded_content:
+                    matches[term].add(str(vuln_id))
+
+        return {
+            "matches": {
+                term: sorted(matched_ids)
+                for term, matched_ids in matches.items()
+            }
+        }
+
     @app.get('/api/vulnerabilities/<id>')
     def get_vuln(id: str) -> ResponseReturnValue:
+        """Return a single vulnerability.
+
+        OpenAPI:
+        query variant_id uuid optional Apply variant-scoped CVSS and effort overrides.
+        response 200 JsonObject Vulnerability payload.
+        response 404 Error Vulnerability not found.
+        """
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
 
         variant_id = request.args.get("variant_id")
+        project_id = request.args.get("project_id")
         response = record.to_dict()
+        text_variant_ids: list[uuid.UUID] | None = None
         if variant_id:
             variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -757,12 +973,35 @@ def init_app(app: Flask) -> None:
                 return {"error": "Internal error"}, 500
             overrides = _variant_scoped_metrics_and_effort_overrides([record], variant_uuid)
             _apply_variant_scoped_overrides_to_vuln_dicts({response["id"]: response}, overrides)
+            text_variant_ids = [variant_uuid]
+        elif project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+            if project_uuid is None:
+                return {"error": "Internal error"}, 500
+            text_variant_ids = [v.id for v in Variant.get_by_project(project_uuid)]
+            metric_filter = Metrics.variant_id.is_(None)
+            if text_variant_ids:
+                metric_filter = db.or_(
+                    Metrics.variant_id.in_(text_variant_ids),
+                    Metrics.variant_id.is_(None),
+                )
+            scoped_metrics = db.session.execute(
+                db.select(Metrics).where(
+                    Metrics.vulnerability_id == record.id,
+                    metric_filter,
+                )
+            ).scalars().all()
+            response.setdefault("severity", {})["cvss"] = [
+                metric.to_dict() for metric in scoped_metrics
+            ]
         else:
             variant_uuid = None
 
         vuln_texts = fetch_vulnerabilities_texts(
             [id],
-            variant_ids=[variant_uuid] if variant_uuid else None,
+            variant_ids=text_variant_ids,
             include_packages=True,
         )
         response["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[id]))
@@ -775,6 +1014,11 @@ def init_app(app: Flask) -> None:
         observes this vulnerability, in a single response.
 
         Replaces the previous per-variant N+1 fetch performed by the modal.
+
+        OpenAPI:
+        query project_id uuid optional Restrict snapshots to variants from one project.
+        response 200 JsonObject Variant-scoped vulnerability snapshots.
+        response 404 Error Vulnerability not found.
         """
         record = Vulnerability.get_by_id(id)
         if not record:
@@ -814,6 +1058,14 @@ def init_app(app: Flask) -> None:
 
     @app.patch('/api/vulnerabilities/<id>')
     def patch_vuln(id: str) -> ResponseReturnValue:
+        """Update variant-scoped effort or custom CVSS data for a vulnerability.
+
+        OpenAPI:
+        body JsonObject optional Vulnerability update payload.
+        response 200 JsonObject Updated vulnerability payload.
+        response 400 Error Invalid update payload.
+        response 404 Error Vulnerability not found.
+        """
         record = Vulnerability.get_by_id(id)
         if not record:
             return "Not found", 404
@@ -894,6 +1146,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/batch', methods=['PATCH'])
     def update_vulns_batch() -> ResponseReturnValue:
+        """Update multiple vulnerabilities in a single request.
+
+        OpenAPI:
+        body JsonObject optional Batch vulnerability update payload.
+        response 200 JsonObject Batch update summary.
+        response 400 Error Invalid batch payload.
+        """
         payload_data = request.get_json()
         if (not payload_data
                 or "vulnerabilities" not in payload_data
@@ -1007,6 +1266,15 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
     def refresh_single_cve(cve_id: str) -> ResponseReturnValue:
+        """Refresh NVD data for a single CVE.
+
+        OpenAPI:
+        body JsonObject optional Request body containing mode: local or api.
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 404 Error CVE not found.
+        response 429 Error NVD API rate limit exceeded.
+        response 503 Error NVD data source unavailable.
+        """
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1113,6 +1381,13 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<cve_id>/epss-refresh', methods=['POST'])
     def refresh_single_cve_epss(cve_id: str) -> ResponseReturnValue:
+        """Refresh EPSS data for a single CVE.
+
+        OpenAPI:
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 404 Error CVE not found.
+        response 503 Error EPSS data source unavailable.
+        """
         cve_id_upper = cve_id.upper()
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
@@ -1148,6 +1423,15 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<ghsa_id>/ghsa-refresh', methods=['POST'])
     def refresh_single_ghsa(ghsa_id: str) -> ResponseReturnValue:
+        """Refresh GitHub advisory metadata for a single GHSA identifier.
+
+        OpenAPI:
+        response 200 JsonObject Refreshed vulnerability payload.
+        response 400 Error Invalid GHSA identifier.
+        response 404 Error GHSA advisory not found.
+        response 502 Error Upstream GitHub advisory error.
+        response 503 Error GitHub advisory data source unavailable.
+        """
         ghsa_id_upper = ghsa_id.upper()
         if not _GHSA_RE.match(ghsa_id_upper):
             return jsonify({"error": "Only valid GHSA identifiers (GHSA-xxxx-xxxx-xxxx) are supported"}), 400

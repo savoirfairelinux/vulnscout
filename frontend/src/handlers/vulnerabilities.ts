@@ -72,6 +72,10 @@ type Vulnerability = {
     simplified_status: string;
     status_summary?: StatusSummary;
     assessments: Assessment[];
+    /** False only for compact list records whose modal-only data is deferred. */
+    details_loaded?: boolean;
+    /** Atomic terms confirmed in deferred descriptions by server-side search. */
+    description_search_terms?: string;
 };
 
 export type { Vulnerability, CVSS };
@@ -212,6 +216,7 @@ const asCVSS = (data: any): CVSS | [] => {
         if (score.vector_string.includes("AV:L")) score.attack_vector = "LOCAL"
         if (score.vector_string.includes("AV:P")) score.attack_vector = "PHYSICAL"
     }
+    if (typeof data?.attack_vector === "string") score.attack_vector = data.attack_vector
     if (typeof data?.exploitability_score === "number") score.exploitability_score = Number(data.exploitability_score)
     if (typeof data?.impact_score === "number") score.impact_score = Number(data.impact_score)
     return score
@@ -252,6 +257,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         },
         simplified_status: 'unknown',
         assessments: [],
+        details_loaded: data?.details_loaded !== false,
     };
     if (typeof data?.namespace === "string") vuln.namespace = data.namespace
     if (typeof data?.datasource === "string") vuln.datasource = data.datasource
@@ -283,9 +289,51 @@ const asVulnerability = (data: any): Vulnerability | [] => {
 }
 
 class Vulnerabilities {
+    static async matchCondition(condition: string, vulnerabilities: Vulnerability[]): Promise<string[]> {
+        // Facts must stay aligned with the CI fail-condition evaluation in
+        // src/bin/cmd_process.py (evaluate_condition) so a given condition
+        // matches identically in the UI and in CI pipelines.
+        const items = vulnerabilities.map(vulnerability => {
+            const lastAssessment = vulnerability.assessments.reduce<Assessment | undefined>((latest, assessment) => {
+                if (!latest || new Date(assessment.timestamp).getTime() > new Date(latest.timestamp).getTime()) {
+                    return assessment;
+                }
+                return latest;
+            }, undefined);
+
+            return {
+                id: vulnerability.id,
+                data: {
+                    id: vulnerability.id,
+                    cvss: vulnerability.severity.max_score || vulnerability.severity.min_score || false,
+                    cvss_min: vulnerability.severity.min_score || vulnerability.severity.max_score || false,
+                    epss: vulnerability.epss.score || false,
+                    effort: vulnerability.effort.likely.total_seconds || false,
+                    effort_min: vulnerability.effort.optimistic.total_seconds || false,
+                    effort_max: vulnerability.effort.pessimistic.total_seconds || false,
+                    fixed: lastAssessment ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(lastAssessment.status) : false,
+                    ignored: lastAssessment ? ['not_affected', 'false_positive'].includes(lastAssessment.status) : false,
+                    affected: lastAssessment ? ['affected', 'exploitable'].includes(lastAssessment.status) : false,
+                    pending: lastAssessment ? ['under_investigation', 'in_triage'].includes(lastAssessment.status) : true,
+                    new: !lastAssessment,
+                },
+            };
+        });
+        const response = await fetch(import.meta.env.VITE_API_URL + '/api/vulnerabilities/match-condition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ condition, items }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Match condition failed (${response.status})`);
+        return Array.isArray(data.matching_ids)
+            ? data.matching_ids.filter((id: unknown): id is string => typeof id === 'string')
+            : [];
+    }
+
     static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
-        url.searchParams.set('format', 'list');
+        url.searchParams.set('format', 'compact');
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
             url.searchParams.set('compare_variant_id', compareVariantId);
@@ -304,6 +352,66 @@ class Vulnerabilities {
         });
         const data = await response.json();
         return data.flatMap(asVulnerability);
+    }
+
+    static async getDetails(
+        vulnId: string,
+        variantId?: string,
+        projectId?: string,
+        signal?: AbortSignal,
+    ): Promise<Vulnerability | null> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}`,
+            window.location.href,
+        );
+        if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), { mode: 'cors', signal });
+        if (!response.ok) {
+            throw new Error(`Failed to load vulnerability details (${response.status})`);
+        }
+        const parsed = asVulnerability(await response.json());
+        return Array.isArray(parsed) ? null : parsed;
+    }
+
+    static async searchDescriptionTerms(
+        vulnerabilityIds: string[],
+        terms: string[],
+        variantId?: string,
+        projectId?: string,
+        signal?: AbortSignal,
+    ): Promise<Record<string, string[]>> {
+        const url = new URL(
+            import.meta.env.VITE_API_URL + '/api/vulnerabilities/search-descriptions',
+            window.location.href,
+        );
+        if (variantId) {
+            url.searchParams.set('variant_id', variantId);
+        } else if (projectId) {
+            url.searchParams.set('project_id', projectId);
+        }
+        const response = await fetch(url.toString(), {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vulnerability_ids: vulnerabilityIds, terms }),
+            signal,
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to search vulnerability descriptions (${response.status})`);
+        }
+        const data: unknown = await response.json();
+        if (!data || typeof data !== 'object' || !('matches' in data)) return {};
+        const matches = (data as { matches?: unknown }).matches;
+        if (!matches || typeof matches !== 'object' || Array.isArray(matches)) return {};
+        return Object.fromEntries(
+            Object.entries(matches).flatMap(([term, ids]) =>
+                Array.isArray(ids) ? [[term, asStringArray(ids)]] : []
+            )
+        );
     }
 
     // Re-fetch a single vulnerability in the given (project) scope and return

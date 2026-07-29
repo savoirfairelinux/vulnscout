@@ -559,7 +559,7 @@ describe('StatusEditor', () => {
         expect(checkboxes[2].disabled).toBe(false);
     });
 
-    test('should deselect an incompatible variant when a conflicting package is checked', async () => {
+    test('should disable a package that is not available in every selected variant', async () => {
         const user = userEvent.setup();
         const variants = [
             { id: 'v1', name: 'default', project_id: 'p1' },
@@ -590,11 +590,9 @@ describe('StatusEditor', () => {
         expect(checkboxes[0].checked).toBe(true);
         expect(checkboxes[1].checked).toBe(true);
 
-        // Check pkgB, which only exists in v2.
-        await user.click(checkboxes[3]);
-
-        // v1 is no longer compatible with the selected package → auto-deselected
-        expect(checkboxes[0].checked).toBe(false);
+        // pkgB only exists in v2, so it cannot be applied while v1 is selected.
+        expect(checkboxes[3].disabled).toBe(true);
+        expect(checkboxes[0].checked).toBe(true);
         expect(checkboxes[1].checked).toBe(true);
     });
 
@@ -692,5 +690,143 @@ describe('StatusEditor', () => {
         expect(checkboxes[1].checked).toBe(true);
         await user.click(checkboxes[1]);
         expect(checkboxes[1].checked).toBe(false);
+    });
+
+    test('includes an outdated package only after enabling the option', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                availablePackages={['pkg@2.0.0']}
+                defaultSelectedPackages={['pkg@2.0.0']}
+                variantPackageMap={{v1: ['pkg@2.0.0']}}
+                variantFindingsMap={{v1: [
+                    {pkg: 'pkg@2.0.0', outdated: false},
+                    {pkg: 'pkg@1.0.0', outdated: true},
+                ]}}
+            />
+        );
+
+        expect(screen.queryByText('pkg@1.0.0')).not.toBeInTheDocument();
+        const includeOutdated = screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'});
+        await user.click(includeOutdated);
+        expect(screen.getByText('default').closest('label')!.querySelector('input')).not.toBeChecked();
+        expect(screen.getByText('pkg@2.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+        const outdatedPackage = screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')!;
+        await user.click(outdatedPackage);
+        expect(screen.queryByText('Outdated')).not.toBeInTheDocument();
+        await user.click(includeOutdated);
+        await user.click(includeOutdated);
+        expect(screen.getByText('pkg@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+    });
+
+    test('offers outdated findings when a package is current in another variant', () => {
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[
+                    {id: 'v1', name: 'current', project_id: 'p1'},
+                    {id: 'v2', name: 'historical', project_id: 'p1'},
+                ]}
+                availablePackages={['pkg@1.0.0']}
+                variantPackageMap={{v1: ['pkg@1.0.0'], v2: []}}
+                variantFindingsMap={{
+                    v1: [{pkg: 'pkg@1.0.0', outdated: false}],
+                    v2: [{pkg: 'pkg@1.0.0', outdated: true}],
+                }}
+            />
+        );
+
+        expect(screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'})).toBeInTheDocument();
+    });
+
+    test('requires every enabled variant to support every selected package', async () => {
+        const user = userEvent.setup();
+        render(
+            <StatusEditor
+                {...defaultProps}
+                variants={[
+                    {id: 'a', name: 'variant a', project_id: 'p'},
+                    {id: 'b', name: 'variant b', project_id: 'p'},
+                    {id: 'c', name: 'variant c', project_id: 'p'},
+                    {id: 'd', name: 'variant d', project_id: 'p'},
+                ]}
+                availablePackages={['p1@1.0.0', 'p2@1.0.0']}
+                variantPackageMap={{
+                    a: ['p2@1.0.0'],
+                    b: ['p1@1.0.0', 'p2@1.0.0'],
+                    c: ['p2@1.0.0'],
+                    d: ['p2@1.0.0'],
+                }}
+                variantFindingsMap={{
+                    a: [
+                        {pkg: 'p1@1.0.0', outdated: true},
+                        {pkg: 'p2@1.0.0', outdated: false},
+                    ],
+                    b: [
+                        {pkg: 'p1@1.0.0', outdated: false},
+                        {pkg: 'p2@1.0.0', outdated: false},
+                    ],
+                    c: [{pkg: 'p2@1.0.0', outdated: false}],
+                    d: [{pkg: 'p2@1.0.0', outdated: false}],
+                }}
+            />
+        );
+
+        await user.click(screen.getByRole('checkbox', {name: 'Allow new assessments on outdated packages/variant'}));
+        await user.click(screen.getByText('variant a').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('p1@1.0.0').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('p2@1.0.0').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('variant a').closest('label')!.querySelector('input')).not.toBeDisabled();
+        expect(screen.getByText('variant b').closest('label')!.querySelector('input')).not.toBeDisabled();
+        expect(screen.getByText('variant c').closest('label')!.querySelector('input')).toBeDisabled();
+        expect(screen.getByText('variant d').closest('label')!.querySelector('input')).toBeDisabled();
+    });
+
+    test('shows historical finding discovery while scope data loads', () => {
+        render(<StatusEditor {...defaultProps} availablePackages={['pkg@2.0.0']} findingsLoading={true} />);
+        expect(screen.getByText('Checking for previous package versions…')).toBeInTheDocument();
+    });
+
+    test('prunes selected packages by the intersection after scope data changes', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            {id: 'v1', name: 'first', project_id: 'p1'},
+            {id: 'v2', name: 'second', project_id: 'p1'},
+            {id: 'v3', name: 'third', project_id: 'p1'},
+        ];
+        const view = render(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={['package@1.0.0']}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: ['package@1.0.0'],
+                }}
+            />
+        );
+        for (const name of ['first', 'second', 'third']) {
+            await user.click(screen.getByText(name).closest('label')!.querySelector('input')!);
+        }
+
+        view.rerender(
+            <StatusEditor
+                {...defaultProps}
+                variants={variants}
+                availablePackages={['package@1.0.0']}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: [],
+                }}
+            />
+        );
+        await user.click(screen.getByText('first').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('package@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
     });
 });

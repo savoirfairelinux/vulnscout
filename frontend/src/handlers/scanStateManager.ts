@@ -15,6 +15,8 @@
 export type ScanEntryState = {
     variantId: string;
     variantName: string;
+    variantPosition?: number;
+    variantCount?: number;
     status: "idle" | "queued" | "running" | "done" | "error";
     error: string | null;
     progress: string | null;
@@ -187,6 +189,8 @@ export class ScanStateManager {
                 this.states.set(v.id, {
                     variantId: v.id,
                     variantName: v.name,
+                    variantPosition: i + 1,
+                    variantCount: variants.length,
                     status: i === 0 ? "running" : "queued",
                     error: null,
                     progress: i === 0 ? "starting" : "Queued",
@@ -219,10 +223,13 @@ export class ScanStateManager {
 
         // ---- parallel mode (default) ----
         // Create "running" entries
-        for (const v of variants) {
+        for (let i = 0; i < variants.length; i++) {
+            const v = variants[i];
             this.states.set(v.id, {
                 variantId: v.id,
                 variantName: v.name,
+                variantPosition: i + 1,
+                variantCount: variants.length,
                 status: "running",
                 error: null,
                 progress: "starting",

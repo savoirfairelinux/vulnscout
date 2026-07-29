@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Vulnerability scanning commands: ``flask nvd-scan`` and ``flask osv-scan``."""
 
-from ..controllers.scc_engine import get_engine
+from ..controllers.scc_engine import get_engine, serialized_engine_operation
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_persist import persist_nvd_cve
 from ..controllers.osv_client import OSVClient
@@ -103,6 +103,7 @@ def _persist_finding(pkg_id, vuln_id, scan_id, variant_uuid, origin: str,
 @click.option("--mode", "-m", default="local", type=click.Choice(["local", "api"]),
               help="NVD backend: 'local' (default, uses local NVD-FKIE DB) or 'api' (NVD REST API).")
 @with_appcontext
+@serialized_engine_operation
 def nvd_scan_command(project: str, variant: str | None, mode: str) -> None:
     """Run an NVD-based vulnerability scan for the given project/variant.
 
@@ -649,6 +650,7 @@ class _SccBulkWriter:
 @click.option("--variant", "-v", default=None,
               help=f"Variant name (defaults to '{DEFAULT_VARIANT_NAME}').")
 @with_appcontext
+@serialized_engine_operation
 def sbom_cve_check_scan_command(project: str, variant: str | None) -> None:
     """Run a local CVE-database scan (NVD-FKIE + CVEList V5) with version-range evaluation.
 

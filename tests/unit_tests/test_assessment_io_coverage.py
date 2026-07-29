@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Coverage tests for assessment_io.py targeting the lines missed by CI.
 
-Lines covered: 321-322, 387, 447-449, 452-456, 547-548, 579,
+Lines covered: 321-322, 387, 547-548, 579,
                684, 698, 706, 710-714, 717-721, 734, 740,
                772-773, 784, 787, 810-814, 822,
                833-835, 844, 847, 850-854, 862-863, 871-875, 882.
 """
 
-import io
 import json
 import os
-import tarfile
 import uuid as _uuid
 from unittest import mock
 
@@ -20,7 +18,6 @@ import pytest
 
 from src.helpers.assessment_io import (
     build_variant_by_name_map,
-    import_archive_bytes,
     import_custom_data,
     import_statements,
     build_custom_data_export,
@@ -54,22 +51,6 @@ def variant_and_project(app):
     proj = Project.create("io-cov-proj")
     var = Variant.create("io-cov-var", proj.id)
     return proj, var
-
-
-def _make_openvex_tar(entries: "dict[str, bytes]") -> bytes:
-    """Build a .tar.gz with {filename: bytes} entries."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for name, data in entries.items():
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
-
-
-def _openvex_bytes(statements=None) -> bytes:
-    doc = {"@context": "https://openvex.dev/ns/v0.2.0", "statements": statements or []}
-    return json.dumps(doc).encode()
 
 
 # ===========================================================================
@@ -113,53 +94,6 @@ class TestBuildVariantByNameMapWithProjectId:
 
 
 # ===========================================================================
-# import_archive_bytes — lines 447-456
-# ===========================================================================
-
-class TestImportArchiveBytesEdgeCases:
-    """Lines 447-449 (f is None), 452-456 (invalid JSON / not OpenVEX)."""
-
-    def test_extractfile_none_is_skipped(self, app, variant_and_project):
-        """Line 448-449: tar.extractfile returns None → member silently skipped."""
-        _, var = variant_and_project
-        variant_by_name = {"io-cov-var": var}
-
-        tar_bytes = _make_openvex_tar({"io-cov-var.json": _openvex_bytes()})
-
-        with mock.patch.object(tarfile.TarFile, "extractfile", return_value=None):
-            with app.app_context():
-                created, errors, skipped, found = import_archive_bytes(tar_bytes, variant_by_name)
-
-        # member was skipped silently — no error, no files found
-        assert found == 0
-        assert errors == []
-
-    def test_invalid_json_in_archive_appends_error(self, app, variant_and_project):
-        """Lines 452-453: JSON decode error → error entry appended."""
-        _, var = variant_and_project
-        variant_by_name = {"io-cov-var": var}
-        tar_bytes = _make_openvex_tar({"io-cov-var.json": b"{ not valid json !!"})
-
-        with app.app_context():
-            created, errors, skipped, found = import_archive_bytes(tar_bytes, variant_by_name)
-
-        assert found == 0
-        assert any("Invalid JSON" in e.get("error", "") for e in errors)
-
-    def test_non_openvex_json_in_archive_appends_error(self, app, variant_and_project):
-        """Lines 452-456: valid JSON but not OpenVEX → error entry appended."""
-        _, var = variant_and_project
-        variant_by_name = {"io-cov-var": var}
-        tar_bytes = _make_openvex_tar({"io-cov-var.json": b'{"key": "value"}'})
-
-        with app.app_context():
-            created, errors, skipped, found = import_archive_bytes(tar_bytes, variant_by_name)
-
-        assert found == 0
-        assert any("Not a valid OpenVEX" in e.get("error", "") for e in errors)
-
-
-# ===========================================================================
 # build_custom_data_export — lines 547-548, 579
 # ===========================================================================
 
@@ -195,6 +129,43 @@ class TestBuildCustomDataExport:
         assert len(result["assessments"]) == 1
         # variant name should be resolved on the exported assessment
         assert result["assessments"][0]["variant"] == "io-cov-var"
+
+    def test_pending_ai_assessments_are_exported(self, app, variant_and_project):
+        """Pending AI rows are emitted separately for the Review page AI tab."""
+        from src.models.package import Package
+        from src.models.vulnerability import Vulnerability
+        from src.models.finding import Finding
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+
+        with app.app_context():
+            pkg = Package.create("ai-pkg", "1.0.0")
+            vuln = Vulnerability.create_record("CVE-2099-AI01")
+            finding = Finding.create(pkg.id, vuln.id)
+            Assessment.create(
+                status="under_investigation",
+                finding_id=finding.id,
+                variant_id=var.id,
+                origin="ai",
+            )
+
+            result = build_custom_data_export(variant_ids=[var.id])
+
+        assert result["assessments"] == []
+        assert result["ai_assessments"] == [{
+            "vuln_id": "CVE-2099-AI01",
+            "status": "under_investigation",
+            "simplified_status": "",
+            "justification": None,
+            "impact_statement": None,
+            "status_notes": None,
+            "workaround": None,
+            "timestamp": result["ai_assessments"][0]["timestamp"],
+            "packages": ["ai-pkg@1.0.0"],
+            "variant_id": str(var.id),
+            "variant": "io-cov-var",
+        }]
 
 
 # ===========================================================================
@@ -301,6 +272,30 @@ class TestImportCustomDataAssessments:
         with app.app_context():
             result = import_custom_data(data, variant_by_name)
         assert result["assessments_imported"] == 1
+
+    def test_import_ai_assessment_preserves_pending_origin(self, app, variant_and_project):
+        """AI JSON rows return to the Review page as pending AI assessments."""
+        from src.models.assessment import Assessment
+
+        _, var = variant_and_project
+        data = {
+            "ai_assessments": [{
+                "vuln_id": "CVE-2099-AI02",
+                "status": "affected",
+                "packages": ["ai-import@1.0"],
+                "variant_id": str(var.id),
+            }]
+        }
+        with app.app_context():
+            result = import_custom_data(data, {})
+            imported = Assessment.get_by_origin([var.id], origin="ai")
+            duplicate_result = import_custom_data(data, {})
+
+        assert result["ai_assessments_imported"] == 1
+        assert result["assessments_imported"] == 0
+        assert len(imported) == 1
+        assert imported[0].vuln_id == "CVE-2099-AI02"
+        assert duplicate_result["ai_assessments_skipped"] == 1
 
 
 # ===========================================================================

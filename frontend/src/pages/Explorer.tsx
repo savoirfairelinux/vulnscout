@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import NavigationBar from "../components/NavigationBar";
 import MessageBanner from "../components/MessageBanner";
-import VersionDisplay from "../components/VersionDisplay";
 import type { Package } from "../handlers/packages";
 import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
@@ -16,9 +15,13 @@ import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
 import Transfer from './Transfer';
+import AIContext from './AIContext';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
+import type { FrontendScope } from "../handlers/config";
+import Projects from '../handlers/project';
+import Variants from '../handlers/variant';
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -29,23 +32,22 @@ const tabLabels: Record<string, string> = {
         transfer: 'Transfer',
         exports: 'Export',
         settings: 'Settings',
+        ai: 'AI Context',
 };
 
-type Props = {
-  darkMode: boolean;
-  setDarkMode: (mode: boolean) => void;
-}
-
-function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
+function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
     const [pkgs, setPkgs] = useState<Package[]>([]);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
     const vulnsRef = useRef<Vulnerability[]>([]);
     const [filterLabel, setFilterLabel] = useState<"Source" | "Severity" | "Status" | "Package" | undefined>(undefined);
     const [filterValue, setFilterValue] = useState<string | undefined>(undefined);
+    const [filterVulnerabilityIds, setFilterVulnerabilityIds] = useState<string[] | undefined>(undefined);
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [missingEuvdDataBannerDismissed, setMissingEuvdDataBannerDismissed] = useState(false);
+    const [missingPublishedDateDataBannerDismissed, setMissingPublishedDateDataBannerDismissed] = useState(false);
     const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
     const [loadingMessage, setLoadingMessage] = useState<string>("Loading data...");
     const [defaultConfig, setDefaultConfig] = useState<AppConfig>({
@@ -57,6 +59,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         contact_email: "",
         grype_memlimit: "",
     });
+    const [frontendScope, setFrontendScope] = useState<FrontendScope | null>(null);
     const [currentVariantId, setCurrentVariantId] = useState<string | undefined>(undefined);
     const [currentProjectId, setCurrentProjectId] = useState<string | undefined>(undefined);
     const [currentBaseVariantId, setCurrentBaseVariantId] = useState<string | undefined>(undefined);
@@ -78,51 +81,112 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setIsLoadingData(true);
 
         const multiActive = !!(variantIds && variantIds.length >= 2);
-        let assessPromise: Promise<Assessment[]>;
-        if (multiActive) {
-            assessPromise = Promise.all(
-                variantIds!.map(id => Assessments.list(id, projectId)),
-            ).then(lists => removeDuplicateAssessments(lists.flat()));
-        } else if (compareVariantId && variantId) {
-            assessPromise = Promise.all([
-                Assessments.list(variantId, projectId),
-                Assessments.list(compareVariantId, projectId),
-              ]).then(([a1, a2]) => removeDuplicateAssessments([...a1, ...a2]));
-        } else {
-            assessPromise = Assessments.list(variantId, projectId);
-        }
-
         Promise.allSettled([
             Packages.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
             Vulnerabilities.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
-            assessPromise,
-        ]).then(([pkgsResult, vulnsResult, assessResult]) => {
+        ]).then(async ([pkgsResult, vulnsResult]) => {
+            if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected') {
+                throw new Error("Failed to load packages or vulnerabilities");
+            }
+            let assessments: Assessment[];
+            if (multiActive) {
+                const lists = await Promise.all(
+                    variantIds!.map(id => Assessments.list(id, projectId)),
+                );
+                assessments = removeDuplicateAssessments(lists.flat());
+            } else if (compareVariantId && variantId) {
+                const [a1, a2] = await Promise.all([
+                    Assessments.list(variantId, projectId),
+                    Assessments.list(compareVariantId, projectId),
+                ]);
+                assessments = removeDuplicateAssessments([...a1, ...a2]);
+            } else {
+                assessments = await Assessments.list(variantId, projectId);
+            }
+
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
-            if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected' || assessResult.status === 'rejected') {
-                console.error(pkgsResult, vulnsResult);
-                triggerBanner("Failed to load data", "error");
-                return;
-            }
-            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessResult.value);
+            const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
             setVulns(enriched_vulns);
             const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
             setPkgs(enrichedPkgs);
+        }).catch(error => {
+            console.error(error);
+            setIsLoadingData(false);
+            setLoadingMessage("Loading data...");
+            triggerBanner("Failed to load data", "error");
         });
     }, []);
 
     // On mount: fetch default project/variant from config, then load data
     useEffect(() => {
+        let cancelled = false;
+
         Config.get()
-            .then(config => {
+            .then(async config => {
+                let scope = Config.getFrontendScope();
+                let discardedScope = false;
+                // Validate the saved scope against the live project/variant
+                // lists. A transient fetch failure here must not discard the
+                // successfully-loaded config: fall back to the server default
+                // scope while keeping the config and loading default data.
+                try {
+                    if (scope) {
+                        const projects = await Projects.list();
+                        const projectExists = projects.some(project => project.id === scope?.project_id);
+                        const canConfirmProjectAbsence = projects.length > 0 || !config.project;
+                        if (!projectExists && canConfirmProjectAbsence) {
+                            Config.clearFrontendScope();
+                            scope = null;
+                            discardedScope = true;
+                        } else if (projectExists) {
+                            const variants = await Variants.list(scope.project_id);
+                            if (!Config.isFrontendScopeAvailable(scope, projects.map(project => project.id), variants.map(variant => variant.id))) {
+                                Config.clearFrontendScope();
+                                scope = null;
+                                discardedScope = true;
+                            }
+                        }
+                    }
+                } catch {
+                    // Validation could not complete (e.g. network hiccup);
+                    // keep the loaded config and use the server default scope.
+                    scope = null;
+                }
+                if (cancelled) return;
                 setDefaultConfig(config);
-                const variantId = config.variant?.id || undefined;
-                const projectId = variantId ? undefined : (config.project?.id || undefined);
-                setCurrentVariantId(variantId);
-                setCurrentProjectId(config.project?.id || undefined);
-                loadData(variantId, projectId);
+                setFrontendScope(scope);
+                if (discardedScope) {
+                    triggerBanner("Saved selection is no longer available; using the default scope", "error");
+                }
+                const multiActive = scope?.mode === 'select' && scope.variant_ids.length >= 2;
+                const compareActive = scope?.mode === 'compare';
+                const variantId = compareActive
+                    ? scope?.compare_base_id
+                    : scope?.mode === 'select' && scope.variant_ids.length === 1
+                        ? scope.variant_ids[0]
+                        : config.variant?.id || undefined;
+                const projectId = scope?.project_id || config.project?.id || undefined;
+                const compareVariantId = compareActive ? scope?.compare_variant_id : undefined;
+                setCurrentVariantId(compareVariantId || variantId);
+                setCurrentProjectId(projectId);
+                setCurrentBaseVariantId(compareActive ? variantId : undefined);
+                setCurrentOperation(compareActive ? scope?.compare_operation : undefined);
+                setCurrentVariantIds(multiActive ? scope?.variant_ids : undefined);
+                setCurrentMultiOperation(multiActive ? 'union' : undefined);
+                loadData(
+                    multiActive ? undefined : variantId,
+                    (multiActive || !variantId) ? projectId : undefined,
+                    compareVariantId,
+                    compareActive ? scope?.compare_operation : undefined,
+                    multiActive ? scope?.variant_ids : undefined,
+                    multiActive ? 'union' : undefined,
+                );
             })
-            .catch(() => loadData(undefined));
+            .catch(() => {
+                if (!cancelled) loadData(undefined);
+            });
+        return () => { cancelled = true; };
     }, [loadData]);
 
     const handleApply = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
@@ -135,6 +199,20 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setCurrentOperation((!multiActive && compareVariantId) ? (operation || undefined) : undefined);
         setCurrentVariantIds(multiActive ? variantIds : undefined);
         setCurrentMultiOperation(multiActive ? (multiOperation || undefined) : undefined);
+        const frontendScope: FrontendScope = {
+            project_id: projectId,
+            mode: compareVariantId ? 'compare' : 'select',
+            variant_ids: compareVariantId ? [] : (variantIds.length ? variantIds : (variantId ? [variantId] : [])),
+            compare_base_id: compareVariantId ? variantId : '',
+            compare_operation: operation === 'intersection' ? 'intersection' : 'difference',
+            compare_variant_id: compareVariantId,
+        };
+        try {
+            Config.setFrontendScope(frontendScope);
+            setFrontendScope(frontendScope);
+        } catch {
+            triggerBanner("Selection applied, but it could not be saved for restart", "error");
+        }
         loadData(
             multiActive ? undefined : (variantId || undefined),
             (multiActive || !variantId) ? (projectId || undefined) : undefined,
@@ -226,7 +304,34 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         setTab('vulnerabilities');
     }
 
-    function showVulnsForPackage(packageId: string) {
+    const loadOutdatedPackages = useCallback(async () => {
+        const baseVariantId = currentBaseVariantId ?? currentVariantId;
+        const compareVariantId = currentBaseVariantId ? currentVariantId : undefined;
+        const loaded = await Packages.list(
+            baseVariantId,
+            baseVariantId ? undefined : currentProjectId,
+            compareVariantId,
+            currentOperation,
+            currentVariantIds,
+            currentMultiOperation,
+            true,
+        );
+        return Packages.enrich_with_vulns(loaded, vulnsRef.current);
+    }, [currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
+    const outdatedPackagesScopeKey = [
+        currentProjectId ?? '',
+        currentBaseVariantId ?? '',
+        currentVariantId ?? '',
+        currentOperation,
+        currentMultiOperation,
+        ...(currentVariantIds ?? []),
+    ].join(':');
+    const hasOutdatedPackagesScope = Boolean(
+        currentProjectId || currentVariantId || (currentVariantIds?.length ?? 0) > 0
+    );
+
+    function showVulnsForPackage(packageId: string, matchingVulnerabilityIds?: string[]) {
+        setFilterVulnerabilityIds(matchingVulnerabilityIds);
         goToVulnsTabWithFilter("Package", packageId);
     }
 
@@ -237,6 +342,7 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
         if (newTab === 'vulnerabilities' && tab !== 'vulnerabilities') {
             setFilterLabel(undefined);
             setFilterValue(undefined);
+            setFilterVulnerabilityIds(undefined);
         }
         setTab(newTab);
     }
@@ -254,10 +360,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     key={selectorKey}
                     tab={tab}
                     changeTab={handleTabChange}
-                    darkMode={darkMode}
-                    setDarkMode={setDarkMode}
                     defaultProject={defaultConfig.project}
                     defaultVariant={defaultConfig.variant}
+                    defaultScope={frontendScope}
                     onApply={handleApply}
                 />
             </header>
@@ -293,7 +398,13 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     appendCVSS={appendCVSS}
                     projectId={currentProjectId}
                 />}
-                {tab === 'packages' && <TablePackages packages={pkgs} onShowVulns={showVulnsForPackage} />}
+                {tab === 'packages' && <TablePackages
+                    packages={pkgs}
+                    vulnerabilities={vulns}
+                    onShowVulns={showVulnsForPackage}
+                    onLoadOutdatedPackages={hasOutdatedPackagesScope ? loadOutdatedPackages : undefined}
+                    outdatedScopeKey={outdatedPackagesScopeKey}
+                />}
                 {tab === 'vulnerabilities' &&
                 <TableVulnerabilities
                     appendAssessment={appendAssessment}
@@ -302,15 +413,20 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                     vulnerabilities={vulns}
                     filterLabel={filterLabel}
                     filterValue={filterValue}
+                    filterVulnerabilityIds={filterVulnerabilityIds}
                     variantId={currentVariantId}
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
                     onRefreshComplete={handleRefreshComplete}
+                    missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
+                    onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
+                    missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
+                    onMissingPublishedDateDataBannerDismissedChange={setMissingPublishedDateDataBannerDismissed}
                 />}
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
-                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} />}
+                {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
                 {tab === 'transfer' && <Transfer projectId={currentProjectId} onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
@@ -329,11 +445,9 @@ function Explorer({ darkMode, setDarkMode }: Readonly<Props>) {
                         setLoadingMessage("Loading data...");
                     }
                 }} />}
+                {tab === 'ai' && <AIContext />}
             </div>
             </main>
-            <footer>
-                <VersionDisplay />
-            </footer>
         </div>
     )
 }

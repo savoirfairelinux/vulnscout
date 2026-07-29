@@ -59,7 +59,19 @@ class ConditionParser:
         """
         return self.conditions.parse_string(conditions, parse_all=parse_all)
 
-    def _eval_internal(self, condition: list) -> bool | int | float | str:
+    @staticmethod
+    def _compare_ordered(operator: str, left: typing.Any, right: typing.Any) -> bool:
+        if operator == "<":
+            return left < right
+        if operator == ">":
+            return left > right
+        if operator == "<=":
+            return left <= right
+        if operator == ">=":
+            return left >= right
+        raise ValueError(f"Invalid ordering operator: {operator}")
+
+    def _eval_internal(self, condition: list, unknown_as_literal: bool = False) -> bool | int | float | str:
         """
         Evaluate a part of a condition
         Not intended for public use, use evaluate() instead
@@ -71,7 +83,7 @@ class ConditionParser:
 
         if len(condition) == 1:
             if type(condition[0]) is list:
-                return self._eval_internal(condition[0])
+                return self._eval_internal(condition[0], unknown_as_literal)
             if type(condition[0]) is int or type(condition[0]) is float or type(condition[0]) is bool:
                 return condition[0]
             if type(condition[0]) is str:
@@ -81,6 +93,8 @@ class ConditionParser:
                     return True
                 elif condition[0] == "false":
                     return False
+                elif unknown_as_literal:
+                    return condition[0]
                 else:
                     raise Exception(f"Invalid identifier: {condition[0]}")
             raise Exception(f"Invalid element: {condition}")
@@ -97,19 +111,17 @@ class ConditionParser:
 
         if len(condition) == 3:
             if condition[1] == "==":
-                return self._eval_internal(condition[0]) == self._eval_internal(condition[2])
+                return self._eval_internal(condition[0]) == self._eval_internal(condition[2], unknown_as_literal=True)
             if condition[1] == "!=":
-                return self._eval_internal(condition[0]) != self._eval_internal(condition[2])
-            if condition[1] == "<":
+                return self._eval_internal(condition[0]) != self._eval_internal(condition[2], unknown_as_literal=True)
+            if condition[1] in ("<", ">", "<=", ">="):
                 # Cross-type ordering is intentional: invalid combinations raise
                 # TypeError at runtime, which marks the condition as invalid.
-                return self._eval_internal(condition[0]) < self._eval_internal(condition[2])  # type: ignore[operator]
-            if condition[1] == ">":
-                return self._eval_internal(condition[0]) > self._eval_internal(condition[2])  # type: ignore[operator]
-            if condition[1] == "<=":
-                return self._eval_internal(condition[0]) <= self._eval_internal(condition[2])  # type: ignore[operator]
-            if condition[1] == ">=":
-                return self._eval_internal(condition[0]) >= self._eval_internal(condition[2])  # type: ignore[operator]
+                return self._compare_ordered(
+                    condition[1],
+                    self._eval_internal(condition[0]),
+                    self._eval_internal(condition[2], unknown_as_literal=True),
+                )
 
             if condition[1] == "and":
                 return self._eval_internal(condition[0]) and self._eval_internal(condition[2])

@@ -26,6 +26,9 @@ def init_app(app):
                 "last_update": str,
                 "started_at": str
             }
+
+        OpenAPI:
+        response 200 JsonObject EPSS refresh progress payload.
         """
         tracker = EPSSProgressTracker
         progress = tracker.get_progress()

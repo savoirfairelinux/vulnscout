@@ -80,6 +80,58 @@ describe('EditAssessment Component', () => {
         expect(mockOnSave).toHaveBeenCalled();
     });
 
+    test('keeps the current assessment timestamp by default', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        expect(screen.getByRole('switch', {name: 'Keep the current timestamp'})).toHaveAttribute(
+            'aria-checked', 'true'
+        );
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({update_timestamp: false}));
+    });
+
+    test('can move the edited assessment to the top with a new timestamp', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+            />
+        );
+
+        const timestampSwitch = screen.getByRole('switch', {name: 'Keep the current timestamp'});
+        await user.click(timestampSwitch);
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(timestampSwitch).toHaveAttribute('aria-checked', 'false');
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({update_timestamp: true}));
+    });
+
+    test('shows the timestamp choice below package selection', () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availablePackages={['first@1.0.0', 'second@1.0.0']}
+                defaultSelectedPackages={['first@1.0.0']}
+            />
+        );
+
+        const packagesHeading = screen.getByText('Apply to packages:');
+        const timestampLabel = screen.getByText('Keep the current timestamp');
+        expect(packagesHeading.compareDocumentPosition(timestampLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     test('shows internal banner when validation fails', async () => {
         const minimalAssessment: Assessment = {
             ...mockAssessment,
@@ -258,7 +310,8 @@ describe('EditAssessment Component', () => {
             // not wiped, since the impact textarea is shown and editable for it.
             impact_statement: 'test impact',
             packages: [],
-            variant_ids: undefined
+            variant_ids: undefined,
+            update_timestamp: false,
         });
     });
 
@@ -491,7 +544,8 @@ describe('EditAssessment Component', () => {
             workaround: 'test workaround',
             impact_statement: 'test impact',
             packages: [],
-            variant_ids: undefined
+            variant_ids: undefined,
+            update_timestamp: false,
         });
     });
 
@@ -846,5 +900,142 @@ describe('EditAssessment Component', () => {
         expect(mockOnSave).toHaveBeenCalledWith(
             expect.objectContaining({ packages: expect.arrayContaining(['pkg1@1.0.0', 'pkg2@2.0.0']) })
         );
+    });
+
+    test('allows adding an outdated package only after enabling the option', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@2.0.0']}
+                defaultSelectedPackages={['package@2.0.0']}
+                variantPackageMap={{v1: ['package@2.0.0']}}
+                variantFindingsMap={{v1: [
+                    {pkg: 'package@2.0.0', outdated: false},
+                    {pkg: 'package@1.0.0', outdated: true},
+                ]}}
+            />
+        );
+
+        expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
+        const allowOutdated = screen.getByRole('checkbox', {name: 'Allow edit assessments on outdated packages/variant'});
+        await user.click(allowOutdated);
+        expect(screen.getByText('default').closest('label')!.querySelector('input')).not.toBeChecked();
+        expect(screen.getByText('package@2.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
+        const outdatedPackage = screen.getByText('package@1.0.0');
+        await user.click(outdatedPackage.closest('label')!.querySelector('input')!);
+        await user.click(allowOutdated);
+        await user.click(allowOutdated);
+        const restoredOutdatedPackage = screen.getByText('package@1.0.0').closest('label')!.querySelector('input')!;
+        expect(restoredOutdatedPackage).not.toBeChecked();
+        await user.click(screen.getByText('default').closest('label')!.querySelector('input')!);
+        await user.click(screen.getByText('package@2.0.0').closest('label')!.querySelector('input')!);
+        await user.click(restoredOutdatedPackage);
+        await user.click(screen.getByText('Save Changes'));
+
+        expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+            packages: expect.arrayContaining(['package@2.0.0', 'package@1.0.0']),
+        }));
+    });
+
+    test('enables outdated package editing when an original finding is outdated', () => {
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@1.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                variantPackageMap={{v1: []}}
+                variantFindingsMap={{v1: [{pkg: 'package@1.0.0', outdated: true}]}}
+            />
+        );
+
+        expect(screen.getByRole('checkbox', {
+            name: 'Allow edit assessments on outdated packages/variant',
+        })).toBeChecked();
+    });
+
+    test('hides an originally selected outdated package after opting out', async () => {
+        const user = userEvent.setup();
+        render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={[{id: 'v1', name: 'default', project_id: 'p1'}]}
+                defaultSelectedVariantIds={['v1']}
+                availablePackages={['package@2.0.0']}
+                defaultSelectedPackages={['package@1.0.0']}
+                variantPackageMap={{v1: ['package@2.0.0']}}
+                variantFindingsMap={{v1: [{pkg: 'package@1.0.0', outdated: true}]}}
+            />
+        );
+
+        const allowOutdated = screen.getByRole('checkbox', {
+            name: 'Allow edit assessments on outdated packages/variant',
+        });
+        expect(allowOutdated).toBeChecked();
+        expect(screen.getByText('package@1.0.0')).toBeInTheDocument();
+
+        await user.click(allowOutdated);
+
+        expect(allowOutdated).not.toBeChecked();
+        expect(screen.queryByText('package@1.0.0')).not.toBeInTheDocument();
+        expect(screen.getByText('package@2.0.0')).toBeInTheDocument();
+    });
+
+    test('prunes selected packages by the intersection of remaining variants', async () => {
+        const user = userEvent.setup();
+        const variants = [
+            {id: 'v1', name: 'first', project_id: 'p1'},
+            {id: 'v2', name: 'second', project_id: 'p1'},
+            {id: 'v3', name: 'third', project_id: 'p1'},
+        ];
+        const selectedVariantIds = ['v1', 'v2', 'v3'];
+        const availablePackages = ['package@1.0.0', 'other@1.0.0'];
+        const selectedPackages = ['package@1.0.0'];
+        const view = render(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={selectedVariantIds}
+                availablePackages={availablePackages}
+                defaultSelectedPackages={selectedPackages}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: ['package@1.0.0'],
+                }}
+            />
+        );
+        view.rerender(
+            <EditAssessment
+                assessment={mockAssessment}
+                onSaveAssessment={mockOnSave}
+                onCancel={mockOnCancel}
+                availableVariants={variants}
+                defaultSelectedVariantIds={selectedVariantIds}
+                availablePackages={availablePackages}
+                defaultSelectedPackages={selectedPackages}
+                variantPackageMap={{
+                    v1: ['package@1.0.0'],
+                    v2: ['package@1.0.0'],
+                    v3: [],
+                }}
+            />
+        );
+
+        await user.click(screen.getByText('first').closest('label')!.querySelector('input')!);
+
+        expect(screen.getByText('package@1.0.0').closest('label')!.querySelector('input')).not.toBeChecked();
     });
 });

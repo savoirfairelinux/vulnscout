@@ -111,6 +111,7 @@ Input commands:
   --perform-nvd-scan        Run an NVD CPE-based vulnerability scan
   --perform-osv-scan        Run an OSV PURL-based vulnerability scan
   --perform-sbom-cve-check-scan  Run a sbom-cve-check vulnerability scan
+  --add-asset <path>        Stage an image asset for use in report templates
 
 Scan & output commands:
   --serve                   Run scan then start interactive web UI (port 7275)
@@ -119,9 +120,14 @@ Scan & output commands:
   --export-spdx             Export project as SPDX 3.0 SBOM to /scan/outputs/
   --export-cdx              Export project as CycloneDX 1.6 SBOM to /scan/outputs/
   --export-openvex          Export project as OpenVEX document to /scan/outputs/
-  --export-custom-assessments  Export custom (review) assessments as individual OpenVEX files to /scan/outputs/
-  --compress                  Compress export output into a .tar.gz archive
-  --import-custom-assessments <path>  Import custom assessments from .json, .tar.gz, or directory
+    --export-custom-vulnscout-data  Export custom VulnScout JSON data to /scan/outputs/
+        --import-custom-vulnscout-data <path>  Import custom VulnScout JSON data
+            --use-original-timestamps    Preserve file timestamps instead of using system time
+            --use-current-timestamps     Use current system time instead of file timestamps
+    --export-custom-openvex-assessments  Export custom OpenVEX assessments for --variant
+    --import-custom-openvex-assessments <path>  Import custom OpenVEX assessments into --variant
+    --export-context          Export AI assessment context (project/variant description, threat model, etc.) to /scan/outputs/context-export.json
+    --import-context <path>   Import AI assessment context from a JSON file (overwrites matching project/variant)
   --match-condition <expr>  Exit code 2 if condition met (e.g. "cvss >= 9.0")
   --delete-scan <id>        Delete a past scan by its ID
 
@@ -209,6 +215,21 @@ cmd_add_file() {
         cp "$src" "$dest"
         echo "Added $type input: $dest"
     fi
+}
+
+cmd_add_asset() {
+    local src="$1"
+    local dest_name
+    dest_name="$(basename "$src")"
+    dest_name="${dest_name#vulnscout_stage_}"  # strip staging prefix added by the wrapper
+    local ext="${dest_name##*.}"
+    case "$ext" in
+        png|jpg|jpeg|gif|svg|webp) ;;
+        *) echo "Warning: '$dest_name' has an unsupported image extension, skipping." >&2; return 0 ;;
+    esac
+    mkdir -p "/cache/vulnscout/templates/assets"
+    cp "$src" "/cache/vulnscout/templates/assets/$dest_name"
+    echo "Added report asset: /cache/vulnscout/templates/assets/$dest_name" >&2
 }
 
 cmd_add_report_template() {
@@ -511,13 +532,10 @@ cmd_export() {
     setup_user
 }
 
-cmd_export_custom_assessments() {
+cmd_export_custom_vulnscout_data() {
     export_args=(--project "$PROJECT_NAME")
     if [[ -n "$VARIANT_NAME" ]]; then
         export_args+=(--variant "$VARIANT_NAME")
-    fi
-    if [[ "${COMPRESS:-false}" == "true" ]]; then
-        export_args+=(--compress)
     fi
 
     cd "$BASE_DIR"
@@ -525,16 +543,16 @@ cmd_export_custom_assessments() {
     export_args+=(--output-dir "$output_dir")
 
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp export-custom-assessments "${export_args[@]}"
+    flask --app src.bin.webapp export-custom-vulnscout-data "${export_args[@]}"
     setup_user
 }
 
-cmd_import_custom_assessments() {
+cmd_import_custom_vulnscout_data() {
     local file="$1"
 
     import_args=(--project "$PROJECT_NAME")
-    if [[ -n "$VARIANT_NAME" ]]; then
-        import_args+=(--variant "$VARIANT_NAME")
+    if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-current}" == "original" ]]; then
+        import_args+=(--use-original-timestamps)
     fi
 
     cd "$BASE_DIR"
@@ -550,7 +568,83 @@ cmd_import_custom_assessments() {
     import_args+=("$file")
 
     flask --app src.bin.webapp db upgrade
-    flask --app src.bin.webapp import-custom-assessments "${import_args[@]}"
+    flask --app src.bin.webapp import-custom-vulnscout-data "${import_args[@]}"
+    setup_user
+}
+
+cmd_export_custom_openvex_assessments() {
+    if [[ -z "$VARIANT_NAME" ]]; then
+        echo "Error: --variant is required to export custom OpenVEX assessments." >&2
+        exit 1
+    fi
+
+    cd "$BASE_DIR"
+    local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp export-custom-openvex-assessments \
+        --project "$PROJECT_NAME" --variant "$VARIANT_NAME" --output-dir "$output_dir"
+    setup_user
+}
+
+cmd_import_custom_openvex_assessments() {
+    local file="$1"
+    if [[ -z "$VARIANT_NAME" ]]; then
+        echo "Error: --variant is required to import custom OpenVEX assessments." >&2
+        exit 1
+    fi
+
+    cd "$BASE_DIR"
+    local raw_basename dest_name dest_file
+    raw_basename="$(basename "$file")"
+    dest_name="${raw_basename#vulnscout_stage_}"
+    if [[ "$dest_name" != "$raw_basename" ]]; then
+        # Strip the staging prefix added by the wrapper before importing.
+        dest_file="$(dirname "$file")/$dest_name"
+        mv "$file" "$dest_file"
+        file="$dest_file"
+    fi
+
+    flask --app src.bin.webapp db upgrade
+    local -a import_args=(--project "$PROJECT_NAME" --variant "$VARIANT_NAME")
+    if [[ "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-original}" == "current" ]]; then
+        import_args+=(--use-current-timestamps)
+    fi
+    import_args+=("$file")
+    flask --app src.bin.webapp import-custom-openvex-assessments "${import_args[@]}"
+    setup_user
+}
+
+cmd_export_context() {
+    local -a export_args=(--project "$PROJECT_NAME")
+    if [[ -n "$VARIANT_NAME" ]]; then
+        export_args+=(--variant "$VARIANT_NAME")
+    fi
+
+    cd "$BASE_DIR"
+    local output_dir="${OUTPUTS_DIR:-/scan/outputs}"
+    export_args+=(--output "$output_dir/context-export.json")
+
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp export-context "${export_args[@]}"
+    setup_user
+}
+
+cmd_import_context() {
+    local file="$1"
+
+    cd "$BASE_DIR"
+    local raw_basename dest_name dest_file
+    raw_basename="$(basename "$file")"
+    dest_name="${raw_basename#vulnscout_stage_}"
+    if [[ "$dest_name" != "$raw_basename" ]]; then
+        # Strip the staging prefix added by the wrapper before importing.
+        dest_file="$(dirname "$file")/$dest_name"
+        mv "$file" "$dest_file"
+        file="$dest_file"
+    fi
+
+    flask --app src.bin.webapp db upgrade
+    flask --app src.bin.webapp import-context "$file"
     setup_user
 }
 
@@ -671,6 +765,7 @@ EXPORT_FORMATS=()
 SCAN_REQUIRED=false
 JSON_OUTPUT=false
 DATA_REQUESTED=""
+IMPORT_CUSTOM_TIMESTAMP_POLICY=""
 
 if [[ $# -eq 0 ]]; then
     cmd_daemon
@@ -706,6 +801,8 @@ while [[ $# -gt 0 ]]; do
             cmd_add_file yocto_vex "$2"; SCAN_REQUIRED=true; shift 2 ;;
         --add-grype)
             cmd_add_file grype "$2"; SCAN_REQUIRED=true; shift 2 ;;
+        --add-asset)
+            cmd_add_asset "$2"; shift 2 ;;
         --perform-grype-scan)
             GRYPE_SCAN_REQUESTED=true; SCAN_REQUIRED=true; shift ;;
         --perform-nvd-scan)
@@ -733,12 +830,22 @@ while [[ $# -gt 0 ]]; do
             EXPORT_FORMATS+=("cdx16"); shift ;;
         --export-openvex)
             EXPORT_FORMATS+=("openvex"); shift ;;
-        --export-custom-assessments)
-            EXPORT_CUSTOM_ASSESSMENTS=true; shift ;;
-        --compress)
-            COMPRESS=true; shift ;;
-        --import-custom-assessments)
-            IMPORT_CUSTOM_ASSESSMENTS_FILE="$2"; shift 2 ;;
+        --export-custom-vulnscout-data)
+            EXPORT_CUSTOM_VULNSCOUT_DATA=true; shift ;;
+        --import-custom-vulnscout-data)
+            IMPORT_CUSTOM_VULNSCOUT_DATA_FILE="$2"; shift 2 ;;
+        --export-custom-openvex-assessments)
+            EXPORT_CUSTOM_OPENVEX_ASSESSMENTS=true; shift ;;
+        --import-custom-openvex-assessments)
+            IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE="$2"; shift 2 ;;
+        --export-context)
+            EXPORT_CONTEXT=true; shift ;;
+        --import-context)
+            IMPORT_CONTEXT_FILE="$2"; shift 2 ;;
+        --use-original-timestamps)
+            IMPORT_CUSTOM_TIMESTAMP_POLICY=original; shift ;;
+        --use-current-timestamps)
+            IMPORT_CUSTOM_TIMESTAMP_POLICY=current; shift ;;
         --list-projects|--list-scans)
             cmd_get_data "$1"; shift ;;
         --config)
@@ -751,6 +858,11 @@ while [[ $# -gt 0 ]]; do
             echo "Unknown command: $1"; echo "Run --help for usage."; exit 1 ;;
     esac
 done
+
+if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
+    echo "Error: timestamp options require a custom VulnScout or OpenVEX import." >&2
+    exit 1
+fi
 
 # Step 1: Scan the new inputs/match condition if any
 match_exit=0
@@ -775,12 +887,26 @@ for _fmt in "${EXPORT_FORMATS[@]:-}"; do
     [[ -n "$_fmt" ]] && cmd_export "$_fmt"
 done
 
-# Step 4: Export/import custom assessments
-if [[ "${EXPORT_CUSTOM_ASSESSMENTS:-false}" == "true" ]]; then
-    cmd_export_custom_assessments
+# Step 4: Export/import custom assessment data
+if [[ "${EXPORT_CUSTOM_VULNSCOUT_DATA:-false}" == "true" ]]; then
+    cmd_export_custom_vulnscout_data
 fi
-if [[ -n "${IMPORT_CUSTOM_ASSESSMENTS_FILE:-}" ]]; then
-    cmd_import_custom_assessments "$IMPORT_CUSTOM_ASSESSMENTS_FILE"
+if [[ -n "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" ]]; then
+    cmd_import_custom_vulnscout_data "$IMPORT_CUSTOM_VULNSCOUT_DATA_FILE"
+fi
+if [[ "${EXPORT_CUSTOM_OPENVEX_ASSESSMENTS:-false}" == "true" ]]; then
+    cmd_export_custom_openvex_assessments
+fi
+if [[ -n "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
+    cmd_import_custom_openvex_assessments "$IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE"
+fi
+
+# Step 4b: Export/import AI assessment context
+if [[ "${EXPORT_CONTEXT:-false}" == "true" ]]; then
+    cmd_export_context
+fi
+if [[ -n "${IMPORT_CONTEXT_FILE:-}" ]]; then
+    cmd_import_context "$IMPORT_CONTEXT_FILE"
 fi
 
 # Step 5: Get data

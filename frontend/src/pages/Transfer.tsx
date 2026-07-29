@@ -26,6 +26,8 @@ type Props = {
     onDataChanged?: (message?: string) => void;
 };
 
+type CopyRoute = "within" | "between";
+
 function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
     // ---- Unmount guard for async operations ----
     const unmountedRef = useRef(false);
@@ -39,9 +41,10 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
 
     // ---- Copy Custom Assessments state ----
     const [customProjectVariants, setCustomProjectVariants] = useState<Variant[]>([]);
+    const [copyRoute, setCopyRoute] = useState<CopyRoute>("within");
     const [copySourceId, setCopySourceId] = useState<string>("");
     const [copyTargetId, setCopyTargetId] = useState<string>("");
-    const [copyMatchMode, setCopyMatchMode] = useState<CopyMatchMode>("exact");
+    const [copyMatchMode, setCopyMatchMode] = useState<CopyMatchMode>("ignore_version");
     const [copyVersionPrecision, setCopyVersionPrecision] = useState<number>(1);
     const [copyCondition, setCopyCondition] = useState<CopyCondition>("no_custom");
     const [copyBusy, setCopyBusy] = useState(false);
@@ -53,11 +56,15 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
     const [copyReviewOpen, setCopyReviewOpen] = useState(false);
     const [copyReviewGroups, setCopyReviewGroups] = useState<CopyAssessmentsPreviewGroup[]>([]);
     const [reviewKey, setReviewKey] = useState(0);
+    const copyWithinVariant = copyRoute === "within";
+    const copySelectionReady = Boolean(
+        copySourceId && copyTargetId && (copyWithinVariant || copySourceId !== copyTargetId)
+    );
 
     // ---- Handlers ----
     const handleCopyFromReview = async (selections: CopyAssessmentsSelection[]) => {
         setCopyReviewOpen(false);
-        if (!copySourceId || !copyTargetId || copyBusy) return;
+        if (!copySelectionReady || copyBusy) return;
         setCopyBusy(true);
         setCopyMsg(null);
         try {
@@ -126,7 +133,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
     }, [customProjectId]);
 
     useEffect(() => {
-        if (!customProjectId || !copySourceId || !copyTargetId || copySourceId === copyTargetId) {
+        if (!customProjectId || !copySelectionReady) {
             setCopyPreview(null);
             setCopyPreviewError(null);
             setCopyPreviewUnavailableMsg(null);
@@ -161,7 +168,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
             });
 
         return () => { cancelled = true; };
-    }, [customProjectId, copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision, copyCondition]);
+    }, [customProjectId, copySelectionReady, copySourceId, copyTargetId, copyMatchMode, copyVersionPrecision, copyCondition]);
 
     // ---- Styles ----
     const inputClass =
@@ -191,7 +198,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                     </div>
                     <div className={cardBody + " space-y-4"}>
                         <p className="text-sm text-zinc-400">
-                            Copy custom assessments from a source variant to a target variant in the selected project.
+                            Copy custom assessments between matching packages within a variant or across two variants.
                         </p>
 
                         {!customProjectId && (
@@ -200,36 +207,59 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                             </p>
                         )}
 
-                        {/* ---- Source / Target selectors ---- */}
-                        <div className="relative space-y-3">
+                        <div className="space-y-2">
+                            <p className="text-sm font-semibold text-zinc-300">I want to copy…</p>
+                            <div className="grid grid-cols-1 gap-2">
+                                {([
+                                    { value: "within", label: "Within the same variant", desc: "Copy assessments from previous package versions within a variant." },
+                                    { value: "between", label: "Between two variants", desc: "Copy assessments from a source variant to a target variant." },
+                                ] as { value: CopyRoute; label: string; desc: string }[]).map(({ value, label, desc }) => (
+                                    <label
+                                        key={value}
+                                        className={[
+                                            "flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors",
+                                            copyRoute === value
+                                                ? "border-cyan-500 bg-cyan-950/40 text-white"
+                                                : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
+                                            (!customProjectId || copyBusy) ? "opacity-50 cursor-not-allowed" : "",
+                                        ].join(" ")}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="copy-route"
+                                            value={value}
+                                            checked={copyRoute === value}
+                                            disabled={!customProjectId || copyBusy}
+                                            onChange={() => {
+                                                setCopyRoute(value);
+                                                setCopySourceId("");
+                                                setCopyTargetId("");
+                                                setCopyMatchMode(value === "within" ? "ignore_version" : "exact");
+                                                setCopyVersionPrecision(1);
+                                                setCopyMsg(null);
+                                                setCopyPreview(null);
+                                                setCopyPreviewError(null);
+                                                setCopyPreviewUnavailableMsg(null);
+                                            }}
+                                            className="mt-0.5 accent-cyan-500"
+                                        />
+                                        <span className="flex flex-col">
+                                            <span className="text-sm font-medium">{label}</span>
+                                            <span className="text-xs text-zinc-400">{desc}</span>
+                                        </span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+
+                        {copyWithinVariant ? (
                             <div className="space-y-2">
-                                <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
+                                <label htmlFor="copy-variant-select" className="block text-sm text-zinc-300 font-semibold">Variant</label>
                                 <select
-                                    id="copy-source-select"
+                                    id="copy-variant-select"
                                     value={copySourceId}
                                     onChange={(e) => {
                                         setCopySourceId(e.target.value);
-                                        setCopyMsg(null);
-                                        setCopyPreviewError(null);
-                                        setCopyPreviewUnavailableMsg(null);
-                                    }}
-                                    className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
-                                    disabled={!customProjectId}
-                                >
-                                    <option value="">— select a variant —</option>
-                                    {customProjectVariants.map((v) => (
-                                        <option key={v.id} value={v.id}>{v.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            {/* Spacer that reserves room for the absolutely-centered Swap button */}
-                            <div className="h-9" aria-hidden="true" />
-                            <div className="space-y-2">
-                                <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Target</label>
-                                <select
-                                    id="copy-target-select"
-                                    value={copyTargetId}
-                                    onChange={(e) => {
                                         setCopyTargetId(e.target.value);
                                         setCopyMsg(null);
                                         setCopyPreviewError(null);
@@ -244,25 +274,69 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     ))}
                                 </select>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    if (!customProjectId || copyBusy) return;
-                                    setCopySourceId(copyTargetId);
-                                    setCopyTargetId(copySourceId);
-                                    setCopyMsg(null);
-                                    setCopyPreviewError(null);
-                                    setCopyPreviewUnavailableMsg(null);
-                                }}
-                                disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
-                                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
-                                title="Swap source and target variants"
-                                aria-label="Swap source and target variants"
-                            >
-                                <FontAwesomeIcon icon={faArrowsUpDown} className="mr-2" aria-hidden="true" />
-                                Swap
-                            </button>
-                        </div>
+                        ) : (
+                            <div className="relative space-y-3">
+                                <div className="space-y-2">
+                                    <label htmlFor="copy-source-select" className="block text-sm text-zinc-300 font-semibold">Source</label>
+                                    <select
+                                        id="copy-source-select"
+                                        value={copySourceId}
+                                        onChange={(e) => {
+                                            setCopySourceId(e.target.value);
+                                            setCopyMsg(null);
+                                            setCopyPreviewError(null);
+                                            setCopyPreviewUnavailableMsg(null);
+                                        }}
+                                        className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                                        disabled={!customProjectId}
+                                    >
+                                        <option value="">— select a variant —</option>
+                                        {customProjectVariants.filter((v) => v.id !== copyTargetId).map((v) => (
+                                            <option key={v.id} value={v.id}>{v.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="h-9" aria-hidden="true" />
+                                <div className="space-y-2">
+                                    <label htmlFor="copy-target-select" className="block text-sm text-zinc-300 font-semibold">Target</label>
+                                    <select
+                                        id="copy-target-select"
+                                        value={copyTargetId}
+                                        onChange={(e) => {
+                                            setCopyTargetId(e.target.value);
+                                            setCopyMsg(null);
+                                            setCopyPreviewError(null);
+                                            setCopyPreviewUnavailableMsg(null);
+                                        }}
+                                        className={selectClass + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                                        disabled={!customProjectId}
+                                    >
+                                        <option value="">— select a variant —</option>
+                                        {customProjectVariants.filter((v) => v.id !== copySourceId).map((v) => (
+                                            <option key={v.id} value={v.id}>{v.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (!customProjectId || copyBusy) return;
+                                        setCopySourceId(copyTargetId);
+                                        setCopyTargetId(copySourceId);
+                                        setCopyMsg(null);
+                                        setCopyPreviewError(null);
+                                        setCopyPreviewUnavailableMsg(null);
+                                    }}
+                                    disabled={!customProjectId || copyBusy || !copySourceId || !copyTargetId}
+                                    className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150"
+                                    title="Swap source and target variants"
+                                    aria-label="Swap source and target variants"
+                                >
+                                    <FontAwesomeIcon icon={faArrowsUpDown} className="mr-2" aria-hidden="true" />
+                                    Swap
+                                </button>
+                            </div>
+                        )}
 
                         {/* ---- Copy condition ---- */}
                         <div className="space-y-2">
@@ -315,7 +389,9 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                                     { value: "ignore_minor_version", precision: 2, label: "Same Major and Minor Versions", desc: "Major and minor must match; patch may differ (e.g. 6.5.1 \u2192 6.5.9)" },
                                     { value: "ignore_minor_version", precision: 1, label: "Same Major Versions",           desc: "Major must match; minor and patch may differ (e.g. 6.5.1 \u2192 6.9.0)" },
                                     { value: "ignore_version",       precision: 1, label: "Any Versions",                  desc: "Same name; version is ignored (e.g. 6.5.1 \u2192 7.0.0)" },
-                                ] as { value: CopyMatchMode; precision: number; label: string; desc: string }[]).map(({ value, precision, label, desc }) => {
+                                ] as { value: CopyMatchMode; precision: number; label: string; desc: string }[])
+                                    .filter(({ value }) => !copyWithinVariant || value !== "exact")
+                                    .map(({ value, precision, label, desc }) => {
                                     const selected = copyMatchMode === value && (value === "ignore_minor_version" ? copyVersionPrecision === precision : true);
                                     return (
                                     <label
@@ -380,8 +456,7 @@ function Transfer({ projectId, onDataChanged }: Readonly<Props>) {
                         <button
                                 onClick={handleOpenReview}
                                 disabled={
-                                    !customProjectId || !copySourceId || !copyTargetId ||
-                                    copySourceId === copyTargetId || copyBusy ||
+                                    !customProjectId || !copySelectionReady || copyBusy ||
                                     copyPreviewBusy || !!copyPreviewError || !!copyPreviewUnavailableMsg || !copyPreview
                                 }
                                 className={btnPrimary}

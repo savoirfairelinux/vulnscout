@@ -312,43 +312,54 @@ VulnScout lets you export and re-import the assessments you have manually create
 - Sharing assessment decisions across different VulnScout instances.
 - Restoring triage state in CI pipelines after a database reset.
 
-### Exporting Custom Assessments
+### VulnScout JSON
 
-The `--export-custom-assessments` flag produces one OpenVEX JSON file per variant, written directly to the outputs directory:
-
-```bash
-./vulnscout --project demo --export-custom-assessments
-```
-
-To bundle the exported files into a `.tar.gz` archive instead, add the `--compress` flag:
+The `--export-custom-vulnscout-data` flag exports custom assessments, pending AI
+assessments, CVSS scores, and time estimates as one VulnScout JSON file. It
+includes every variant in the selected project unless `--variant` is provided.
+After import, pending AI assessments are available from the Review page's **AI
+Assessments** tab for approval or rejection.
 
 ```bash
-./vulnscout --project demo --export-custom-assessments --compress
+./vulnscout --project demo --export-custom-vulnscout-data
 ```
 
-You can also use the `--variant` flag to export only a single variant:
+Export one variant:
 
 ```bash
-./vulnscout --project demo --variant x86 --export-custom-assessments
+./vulnscout --project demo --variant x86 --export-custom-vulnscout-data
 ```
 
-### Importing Custom Assessments
-
-The `--import-custom-assessments` flag reads a `.json` file, `.tar.gz` archive, or a directory of OpenVEX JSON files and replays the assessment statements into the database. If `--variant` is not specified, the variant is inferred from the file name.
+The `--import-custom-vulnscout-data` command restores entries according to the
+variant metadata stored in the file. Imported assessments use the current
+system time by default. Add `--use-original-timestamps` to preserve assessment
+timestamps from the file. `--use-current-timestamps` is also accepted to select
+the default explicitly.
 
 ```bash
-# Import from a single OpenVEX JSON file
-./vulnscout --project demo --variant x86 --import-custom-assessments /path/to/assessments.json
+./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json
 
-# Import from a single OpenVEX JSON file without specifying the variant
-./vulnscout --project demo --import-custom-assessments /path/to/assessments/x86.json
-
-# Import from a tar.gz archive
-./vulnscout --project demo --import-custom-assessments /path/to/custom_assessments.tar.gz
-
-# Import from a directory of OpenVEX JSON files (one per variant)
-./vulnscout --project demo --import-custom-assessments /path/to/assessments/
+./vulnscout --project demo --import-custom-vulnscout-data /path/to/custom_vulnscout_data_all.json --use-original-timestamps
 ```
+
+### OpenVEX
+
+OpenVEX custom-assessment transfers operate on one JSON document and require `--variant` for both import and export.
+
+```bash
+# Export a variant
+./vulnscout --project demo --variant x86 --export-custom-openvex-assessments
+
+# Import into a variant
+./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json
+
+# Ignore OpenVEX statement timestamps and use the current system time
+./vulnscout --project demo --variant x86 --import-custom-openvex-assessments /path/to/custom_openvex_x86.json --use-current-timestamps
+```
+
+OpenVEX imports preserve statement timestamps by default. Add
+`--use-current-timestamps` to use the current system time, or use
+`--use-original-timestamps` to select the default explicitly.
 
 ---
 
@@ -390,7 +401,7 @@ Example:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `VULNSCOUT_CONTAINER` | Name of the container | `vulnscout` |
-| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.18` |
+| `VULNSCOUT_IMAGE` | Container image to use | `docker.io/sflinux/vulnscout:v0.19` |
 | `VULNSCOUT_BUILD_DIR` | Root build directory on the host | `./.vulnscout` |
 | `VULNSCOUT_OUTPUTS_DIR` | Directory for output files on the host | `$VULNSCOUT_BUILD_DIR/outputs` |
 | `VULNSCOUT_CACHE_DIR` | Cache directory (SQLite database and config) | `$VULNSCOUT_BUILD_DIR/cache` |

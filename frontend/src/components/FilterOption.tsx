@@ -12,13 +12,27 @@ type Props = {
     customFilterName?: string;
     showCustomFilterComponent?: boolean;
     setShowCustomFilterComponent?: (show: boolean) => void;
+    /** Render a search input at the top of the dropdown to narrow the option list */
+    searchable?: boolean;
+    /** Format an option value for display; checkbox values stay raw */
+    formatLabel?: (value: string) => string;
 };
 
-function FilterOption({ label, options, selected, setSelected, parentRef, CustomFilterComponent, customFilterName = 'custom', showCustomFilterComponent, setShowCustomFilterComponent }: Readonly<Props>) {
+function FilterOption({ label, options, selected, setSelected, parentRef, CustomFilterComponent, customFilterName = 'custom', showCustomFilterComponent, setShowCustomFilterComponent, searchable = false, formatLabel }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
     const [maxHeight, setMaxHeight] = useState<string>('500px'); 
+    const [optionSearch, setOptionSearch] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const isActive = selected.length > 0 || showCustomFilterComponent;
+
+    const displayLabel = (value: string) => formatLabel ? formatLabel(value) : value;
+
+    const visibleOptions = searchable && optionSearch.trim() !== ''
+        ? options.filter(option => {
+            const needle = optionSearch.trim().toLowerCase();
+            return option.toLowerCase().includes(needle) || displayLabel(option).toLowerCase().includes(needle);
+        })
+        : options;
 
     const toggleOption = (value: string) => {
         if (selected.includes(value)) {
@@ -53,6 +67,11 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
         }
     }, [parentRef, isOpen]);
 
+    // Reset the option search whenever the dropdown closes
+    useEffect(() => {
+        if (!isOpen) setOptionSearch('');
+    }, [isOpen]);
+
     return (
         <div ref={dropdownRef} className="ml-4 relative inline-block text-left">
             <button
@@ -69,11 +88,21 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
 
             {isOpen && (
                 <div 
-                    className="absolute mt-1 w-48 bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50"
+                    className={`absolute mt-1 ${searchable ? 'w-72' : 'w-48'} bg-sky-900 text-white border border-sky-800 rounded-md shadow-lg z-50`}
                     style={{ maxHeight, overflowY: 'auto' }} // <-- dynamic max-height
                 >
                     <div className="p-2 space-y-1">
-                        {options.map(option => (
+                        {searchable && (
+                            <input
+                                type="search"
+                                value={optionSearch}
+                                onChange={(event) => setOptionSearch(event.target.value)}
+                                placeholder={`Search ${label.toLowerCase()}...`}
+                                aria-label={`Search ${label.toLowerCase()}`}
+                                className="w-full mb-1 py-1 px-2 rounded bg-sky-800 focus:bg-sky-950 placeholder-gray-400 text-sm"
+                            />
+                        )}
+                        {visibleOptions.map(option => (
                             <label key={option} className="flex items-center space-x-2">
                                 <input
                                     type="checkbox"
@@ -84,9 +113,12 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
                                     }}
                                     className="form-checkbox text-sky-500 bg-sky-800 border-sky-600 focus:ring-0"
                                 />
-                                <span>{option}</span>
+                                <span>{displayLabel(option)}</span>
                             </label>
                         ))}
+                        {searchable && visibleOptions.length === 0 && (
+                            <span className="text-xs text-gray-400 italic">No match found</span>
+                        )}
                         {CustomFilterComponent && 
                             <label key={`custom-filter-${customFilterName}`} className="flex items-center space-x-2">
                                 <input

@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 import matchers from '@testing-library/jest-dom/matchers';
 expect.extend(matchers);
 
 import type { Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
+import Vulnerabilities from '../../src/handlers/vulnerabilities';
 
 
 const getDOMRect = (width: number, height: number) => ({
@@ -155,24 +156,119 @@ describe('Packages Table', () => {
         expect(source_col).toBeTruthy();
     })
 
-    test('render severity when toggle activated', async () => {
-        // ARRANGE
+    test('package search applies only with the button or Enter', async () => {
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+        const input = screen.getByPlaceholderText('Search by package name, version, ...');
+
+        await user.type(input, 'aaabbbccc');
+        expect(screen.getByText('xxxyyyzzz')).toBeTruthy();
+
+        await user.click(screen.getByRole('button', {name: 'Search packages'}));
+        await waitFor(() => expect(screen.queryByText('xxxyyyzzz')).toBeNull());
+
+        await user.clear(input);
+        await user.type(input, 'dddeeefff');
+        expect(screen.getByText('aaabbbccc')).toBeTruthy();
+
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(screen.queryByText('aaabbbccc')).toBeNull());
+        expect(screen.getByText('dddeeefff')).toBeTruthy();
+    })
+
+    test('match condition applies with the button or Enter', async () => {
+        const matchSpy = jest.spyOn(Vulnerabilities, 'matchCondition').mockResolvedValue([]);
+        render(<TablePackages packages={packages} />);
+        const user = userEvent.setup();
+        const input = screen.getByLabelText('Match condition');
+
+        await user.type(input, 'cvss >= 7');
+        expect(matchSpy).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', {name: 'Search match condition'}));
+        await waitFor(() => expect(matchSpy).toHaveBeenCalledTimes(1));
+
+        await user.clear(input);
+        await user.type(input, 'pending');
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(matchSpy).toHaveBeenCalledTimes(2));
+        matchSpy.mockRestore();
+    })
+
+    test('does not render the obsolete severity toggle', () => {
         render(<TablePackages packages={packages} />);
 
-        // ACT
+        expect(screen.queryByRole('button', {name: /severity/i})).toBeNull();
+    })
+
+    test('outdated toggle is off by default and loads historical finding rows', async () => {
+        const activePackages = packages.map(pkg => pkg.id === 'aaabbbccc@1.0.0'
+            ? {...pkg, variants: ['Variant A']}
+            : pkg);
+        const outdatedPackage: Package = {
+            ...packages[0],
+            id: 'aaabbbccc@0.9.0',
+            version: '0.9.0',
+            variants: ['Variant A'],
+            outdated: true,
+            findingIds: ['finding-old'],
+            findingVulnerabilityIds: ['CVE-2026-0001'],
+        };
+        let finishLoading: (packages: Package[]) => void = () => undefined;
+        const loadOutdatedPackages = jest.fn<() => Promise<Package[]>>().mockImplementation(() =>
+            new Promise(resolve => { finishLoading = resolve; })
+        );
+        render(<TablePackages packages={activePackages} onLoadOutdatedPackages={loadOutdatedPackages} />);
+
         const user = userEvent.setup();
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
+        const outdatedToggle = screen.getByRole('button', {name: 'Show Outdated'});
+        expect(outdatedToggle.getAttribute('aria-pressed')).toBe('false');
+        expect(screen.queryByRole('cell', {name: /^0\.9\.0$/})).toBeNull();
 
-        await user.click(severity_toggle); // switch to enabled mode
+        await user.click(outdatedToggle);
 
-        const btn_enabled = await screen.getByRole('button', {name: /hide severity/i});
-        const severity_high = await screen.getByText('high');
-        const severity_mediums = await screen.getAllByText('medium');
+        expect((await screen.findByRole('status')).textContent).toContain('Loading outdated packages…');
+        finishLoading([...activePackages, outdatedPackage]);
 
-        // ASSERT
-        expect(btn_enabled).toBeTruthy();
-        expect(severity_high).toBeTruthy();
-        expect(severity_mediums.length).toBeGreaterThan(0);
+        await waitFor(() => {
+            expect(loadOutdatedPackages).toHaveBeenCalledTimes(1);
+            expect(screen.queryByRole('status')).toBeNull();
+            expect(screen.getByRole('cell', {name: /^0\.9\.0$/})).toBeTruthy();
+            expect(screen.getAllByText('Outdated').length).toBeGreaterThanOrEqual(2);
+            expect(screen.queryByRole('cell', {name: /^1\.0\.0$/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /^2\.0\.0$/})).toBeNull();
+        });
+    })
+
+    test('reloads outdated rows when the project or variant scope changes', async () => {
+        const user = userEvent.setup();
+        const firstOutdated = {...packages[0], id: 'old-a@1', name: 'old-a', outdated: true};
+        const secondOutdated = {...packages[0], id: 'old-b@1', name: 'old-b', outdated: true};
+        const firstLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([firstOutdated]);
+        const secondLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([secondOutdated]);
+        const view = render(
+            <TablePackages
+                packages={packages}
+                onLoadOutdatedPackages={firstLoader}
+                outdatedScopeKey="variant-a"
+            />
+        );
+
+        await user.click(screen.getByRole('button', {name: 'Show Outdated'}));
+        expect(await screen.findByText('old-a')).toBeTruthy();
+
+        view.rerender(
+            <TablePackages
+                packages={packages}
+                onLoadOutdatedPackages={secondLoader}
+                outdatedScopeKey="variant-b"
+            />
+        );
+
+        expect(await screen.findByText('old-b')).toBeTruthy();
+        await waitFor(() => expect(screen.queryByText('old-a')).toBeNull());
+        expect(firstLoader).toHaveBeenCalledTimes(1);
+        expect(secondLoader).toHaveBeenCalledTimes(1);
     })
 
     test('sorting by name', async () => {
@@ -247,6 +343,7 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, 'yyy');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
             const html = document.body.innerHTML;
@@ -263,12 +360,12 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-aaabbbccc');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html).not.toContain('aaabbbccc');
-            expect(html).toContain('xxxyyyzzz');
-            expect(html).toContain('dddeeefff');
+            expect(screen.queryByRole('cell', {name: 'aaabbbccc'})).toBeNull();
+            expect(screen.getByRole('cell', {name: 'xxxyyyzzz'})).toBeTruthy();
+            expect(screen.getByRole('cell', {name: 'dddeeefff'})).toBeTruthy();
         }, { timeout: 2000 });
     })
 
@@ -280,12 +377,12 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-aaabbbccc xxxyyyzzz');
+        await user.keyboard('{Enter}');
 
         await waitFor(() => {
-            const html = document.body.innerHTML;
-            expect(html).not.toContain('aaabbbccc');
-            expect(html).not.toContain('dddeeefff');
-            expect(html).toContain('xxxyyyzzz');
+            expect(screen.queryByRole('cell', {name: 'aaabbbccc'})).toBeNull();
+            expect(screen.queryByRole('cell', {name: 'dddeeefff'})).toBeNull();
+            expect(screen.getByRole('cell', {name: 'xxxyyyzzz'})).toBeTruthy();
         }, { timeout: 2000 });
     })
 
@@ -375,13 +472,12 @@ describe('Packages Table', () => {
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, 'xyz');
 
-        const severity_toggle = await screen.getByRole('button', {name: /show severity/i});
-        await user.click(severity_toggle);
-
         const source_btn = await screen.getByRole('button', { name: /^source$/i });
         await user.click(source_btn);
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
         await user.click(cveFinderCheckbox);
+
+        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
 
         // ACT: Click reset filters
         const resetBtn = await screen.getByRole('button', { name: /reset filters/i });
@@ -390,6 +486,7 @@ describe('Packages Table', () => {
         // ASSERT: All packages should be visible again
         await waitFor(() => {
             expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
+            expect(screen.getByRole('button', { name: 'Show Outdated' }).getAttribute('aria-pressed')).toBe('false');
         });
     })
 
@@ -635,70 +732,6 @@ describe('Packages Table', () => {
 
         expect(await screen.findByText('variant-A')).toBeTruthy();
         expect(screen.getByText('variant-B')).toBeTruthy();
-    });
-
-    test('sorting by remaining pending vulnerabilities', async () => {
-        const packagesWithPending: Package[] = [
-            {
-                id: 'pkg-a@1.0.0',
-                name: 'pkg-a',
-                version: '1.0.0',
-                cpe: [],
-                purl: [],
-                vulnerabilities: {"Pending Assessment": 5, "active": 1},
-                maxSeverity: {"active": {label: 'low', index: 2}},
-                source: ['test'],
-                variants: [],
-                sbom_documents: [],
-                supplier: '',
-            },
-            {
-                id: 'pkg-b@1.0.0',
-                name: 'pkg-b',
-                version: '1.0.0',
-                cpe: [],
-                purl: [],
-                vulnerabilities: {"Pending Assessment": 1, "active": 2},
-                maxSeverity: {"active": {label: 'medium', index: 3}},
-                source: ['test'],
-                variants: [],
-                sbom_documents: [],
-                supplier: '',
-            }
-        ];
-
-        render(<TablePackages packages={packagesWithPending} />);
-
-        const user = userEvent.setup();
-
-        // Enable "Remaining Pending Vulnerabilities" column via the Columns filter
-        const columnsBtn = await screen.getByRole('button', { name: /columns/i });
-        await user.click(columnsBtn);
-        const pendingCheckbox = await screen.getByRole('checkbox', { name: /remaining pending/i });
-        await user.click(pendingCheckbox);
-
-        // Verify both pending values are rendered
-        await waitFor(() => {
-            const cells = screen.getAllByRole('cell');
-            const pendingValues = cells.filter(c => c.textContent === '5' || c.textContent === '1');
-            expect(pendingValues.length).toBeGreaterThanOrEqual(2);
-        });
-
-        const pendingHeader = await screen.getByRole('columnheader', {name: /remaining pending/i});
-
-        // Click to sort
-        await user.click(pendingHeader);
-
-        // Click again to sort in other direction
-        await user.click(pendingHeader);
-
-        // Verify sorting by checking the sort icon changed (sort was applied)
-        await waitFor(() => {
-            const html = document.body.innerHTML;
-            // Both names should still be present
-            expect(html).toContain('pkg-a');
-            expect(html).toContain('pkg-b');
-        });
     });
 
     test('CPE values have title attribute for hover tooltip', async () => {

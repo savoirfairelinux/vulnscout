@@ -1,10 +1,17 @@
 import { createPortal } from 'react-dom'
-import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, useReactTable, flexRender, Row, RowSelectionState, OnChangeFn, SortingState, PaginationState } from '@tanstack/react-table'
+import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, useReactTable, flexRender, Row, RowData, RowSelectionState, OnChangeFn, SortingState, PaginationState } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowUpShortWide, faArrowDownWideShort, faSort } from "@fortawesome/free-solid-svg-icons";
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { faArrowUpShortWide, faArrowDownWideShort, faSort, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { ReactNode, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import Fuse from 'fuse.js';
+
+declare module '@tanstack/react-table' {
+    interface ColumnDefBase<TData extends RowData, TValue = unknown> {
+        HintText?: ReactNode | ((data: TData, value: TValue) => ReactNode);
+        HintAriaLabel?: string;
+    }
+}
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
@@ -22,6 +29,7 @@ type Props<DataType> = {
     hasPagination?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
+    onHoverData?: (item: DataType) => Promise<DataType | null | undefined>;
     /**
      * Values checked by the `only:<term>` search operator. When provided, a row
      * is kept only if EVERY string returned here satisfies the (optionally
@@ -31,6 +39,14 @@ type Props<DataType> = {
     forAllValues?: (item: DataType) => string[];
 };
 /* tslint:enable:no-explicit-any */
+
+function getColumnHint(columnDef: unknown): ReactNode | undefined {
+    return (columnDef as { HintText?: ReactNode }).HintText;
+}
+
+function getColumnHintAriaLabel(columnDef: unknown, columnId: string): string {
+    return (columnDef as { HintAriaLabel?: string }).HintAriaLabel ?? `Show hint for ${columnId}`;
+}
 
 function TableGeneric<DataType> ({
     columns,
@@ -46,6 +62,7 @@ function TableGeneric<DataType> ({
     hasPagination = true,
     onFilteredDataChange,
     onFocusedRowChange,
+    onHoverData,
     forAllValues
 }: Readonly<Props<DataType>>) {
     const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 })
@@ -53,9 +70,11 @@ function TableGeneric<DataType> ({
     const itemsPerPage = pagination.pageSize
     const [sorting, setSorting] = useState<SortingState>([])
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null)
+    const [hintColumnId, setHintColumnId] = useState<string | null>(null)
     const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map())
     const [tooltipInfo, setTooltipInfo] = useState<{ original: DataType; id: string; rect: DOMRect } | null>(null)
     const hideTooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const tooltipRequestId = useRef(0)
 
     const fuse = useMemo(() => {
         return new Fuse(data as readonly DataType[], {
@@ -250,13 +269,41 @@ function TableGeneric<DataType> ({
         return () => { if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current) }
     }, [])
 
-    function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
+    useEffect(() => {
+        const closeHintOnOutsideClick = (event: MouseEvent) => {
+            const target = event.target as Element;
+            if (!target.closest('[data-column-hint]')) {
+                setHintColumnId(null);
+            }
+        };
+
+        if (hintColumnId !== null) {
+            document.addEventListener('mousedown', closeHintOnOutsideClick);
+        }
+
+        return () => document.removeEventListener('mousedown', closeHintOnOutsideClick);
+    }, [hintColumnId])
+
+    async function showTooltip(e: React.MouseEvent<HTMLTableRowElement>, rowOriginal: DataType, rowId: string) {
         if (hoverField === undefined) return
         if (hideTooltipTimer.current) clearTimeout(hideTooltipTimer.current)
-        setTooltipInfo({ original: rowOriginal, id: rowId, rect: e.currentTarget.getBoundingClientRect() })
+        const rect = e.currentTarget.getBoundingClientRect()
+        const requestId = ++tooltipRequestId.current
+        setTooltipInfo({ original: rowOriginal, id: rowId, rect })
+        if (onHoverData) {
+            try {
+                const resolved = await onHoverData(rowOriginal)
+                if (resolved && tooltipRequestId.current === requestId) {
+                    setTooltipInfo({ original: resolved, id: rowId, rect })
+                }
+            } catch {
+                // Keep the tooltip open with its fallback when details cannot load.
+            }
+        }
     }
 
     function hideTooltip() {
+        tooltipRequestId.current++
         hideTooltipTimer.current = setTimeout(() => setTooltipInfo(null), 100)
     }
 
@@ -341,24 +388,61 @@ function TableGeneric<DataType> ({
                     <thead className="grid sticky top-0 z-20">
                         {table.getHeaderGroups().map(headerGroup => (
                             <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
-                            {headerGroup.headers.map(header => (
+                            {headerGroup.headers.map(header => {
+                                const hintText = getColumnHint(header.column.columnDef);
+                                const hintAriaLabel = getColumnHintAriaLabel(header.column.columnDef, header.column.id);
+                                return (
                                 <th
                                     key={header.id}
                                     className={[
-                                        `p-4 border border-slate-600 flex-auto`,
+                                        `relative p-4 border border-slate-600 flex-auto`,
                                         header.column.getCanSort() ? 'cursor-pointer select-none' : ''
                                     ].join(' ')}
                                     style={{width: header.getSize()}}
                                     onClick={header.column.getToggleSortingHandler()}
                                 >
-                                    <span className="mr-2">
-                                        {header.isPlaceholder
-                                        ? null
-                                        : flexRender(
-                                            header.column.columnDef.header,
-                                            header.getContext()
-                                        )}
-                                    </span>
+                                    {hintText ? (
+                                        <div className="relative flex items-center justify-center gap-1">
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                    header.column.columnDef.header,
+                                                    header.getContext()
+                                                )}
+                                            <button
+                                                type="button"
+                                                aria-label={hintAriaLabel}
+                                                title="Show column hint"
+                                                data-column-hint
+                                                className="text-sky-300 hover:text-sky-100 transition-colors"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    setHintColumnId(current => current === header.column.id ? null : header.column.id);
+                                                }}
+                                            >
+                                                <FontAwesomeIcon icon={faCircleQuestion} />
+                                            </button>
+                                            {hintColumnId === header.column.id && (
+                                                <div
+                                                    role="tooltip"
+                                                    data-column-hint
+                                                    className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                                                    onClick={(event) => event.stopPropagation()}
+                                                >
+                                                    {hintText}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <span className="mr-2">
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                    header.column.columnDef.header,
+                                                    header.getContext()
+                                                )}
+                                        </span>
+                                    )}
                                     {header.column.getCanSort()
                                         ? (header.column.getIsSorted() === false
                                             ? <FontAwesomeIcon icon={faSort} />
@@ -369,7 +453,8 @@ function TableGeneric<DataType> ({
                                         )
                                         : ''}
                                 </th>
-                            ))}
+                                );
+                            })}
                             </tr>
                         ))}
                     </thead>
@@ -497,7 +582,7 @@ function TableGeneric<DataType> ({
             <div className="rounded-b-md flex justify-between items-center py-4 px-4 text-white bg-slate-800 border-t border-slate-600 text-sm">
             <div className="flex items-center gap-2">
                 <span>
-                {pageIndex * itemsPerPage + 1}-
+                {filteredData.length === 0 ? 0 : pageIndex * itemsPerPage + 1}-
                 {Math.min((pageIndex + 1) * itemsPerPage, filteredData.length)} / {filteredData.length}
                 </span>
                 <span>- Results per page:</span>
@@ -505,6 +590,7 @@ function TableGeneric<DataType> ({
                 value={itemsPerPage}
                 onChange={(e) => {
                     setPagination({ pageIndex: 0, pageSize: Number(e.target.value) })
+                    updateSelected({})
                 }}
                 className="bg-slate-700 text-white border border-slate-500 rounded px-2 py-1"
                 >
@@ -591,7 +677,9 @@ function TableGeneric<DataType> ({
                                 {index < (tooltipInfo.original as any)?.[hoverField]?.length - 1 ? '\n---\n' : ''}
                             </span>
                         ))
-                        : "No description was provided"
+                        : (tooltipInfo.original as any)?.details_loaded === false
+                            ? "Loading description..."
+                            : "No description was provided"
                     }
                 </div>
                 <p className="text-xs text-gray-400 mt-1 italic">Click the CVE to see more</p>

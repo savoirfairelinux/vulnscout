@@ -13,6 +13,7 @@ const manager = new ScanStateManager(
     (vid, opts) => ScansHandler.triggerNvdScan(vid, opts.excludeKernel ?? true, opts.nvdMode ?? "local"),
     (vid) => ScansHandler.getNvdScanStatus(vid),
     "NVD",
+    true, // serial: scans can share engine and finding state
 );
 
 export const subscribe = manager.subscribe;

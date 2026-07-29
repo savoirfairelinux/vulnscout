@@ -12,11 +12,15 @@ type Package = {
     variants: string[];
     sbom_documents: string[];
     supplier: string;
+    outdated?: boolean;
+    findingIds?: string[];
+    findingVulnerabilityIds?: string[];
 };
 
 export type { Package, VulnCounts, Severities };
 import type { Vulnerability } from "./vulnerabilities";
 import { SEVERITY_ORDER, buildStatusSummary, getVulnerabilityStatusSummary } from "./vulnerabilities";
+import { asStringArray } from "./assessments";
 
 const asPackage = (data: any): Package | [] => {
     if (typeof data !== "object") return [];
@@ -34,6 +38,9 @@ const asPackage = (data: any): Package | [] => {
         variants: [],
         sbom_documents: [],
         supplier: "",
+        outdated: data?.outdated === true,
+        findingIds: asStringArray(data?.finding_ids),
+        findingVulnerabilityIds: asStringArray(data?.vulnerability_ids),
     };
     if (typeof data?.id === "string" && data?.id != "") pkg.id = data.id;
     if (Array.isArray(data?.cpe)) {
@@ -60,9 +67,13 @@ class Packages {
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Package[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, includeOutdated = false): Promise<Package[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/packages", window.location.href);
         url.searchParams.set('format', 'list');
+        if (includeOutdated) {
+            url.searchParams.set('include_outdated', 'true');
+            url.searchParams.set('outdated_only', 'true');
+        }
         if (variantId && compareVariantId) {
             url.searchParams.set('variant_id', variantId);
             url.searchParams.set('compare_variant_id', compareVariantId);
@@ -84,18 +95,27 @@ class Packages {
     }
 
     static enrich_with_vulns(pkgs: Package[], vulns: Vulnerability[]): Package[] {
-        const vulns_per_pkg = vulns.reduce((acc, vuln) => {
-            vuln.packages.forEach((pkg_id) => {
-                if (!acc[pkg_id]) {
-                    acc[pkg_id] = [];
-                }
-                acc[pkg_id].push(vuln);
-            });
-            return acc;
-        }, {} as {[key: string]: Vulnerability[]});
+        const needsPackageIndex = pkgs.some(pkg => !pkg.outdated);
+        const vulns_per_pkg = needsPackageIndex
+            ? vulns.reduce((acc, vuln) => {
+                vuln.packages.forEach((pkg_id) => {
+                    if (!acc[pkg_id]) {
+                        acc[pkg_id] = [];
+                    }
+                    acc[pkg_id].push(vuln);
+                });
+                return acc;
+            }, {} as {[key: string]: Vulnerability[]})
+            : {};
+        const vulnsById = new Map(vulns.map(vulnerability => [vulnerability.id, vulnerability]));
 
         return pkgs.map((pkg) => {
-            const vulnerabilities = vulns_per_pkg[pkg.id] || [];
+            const vulnerabilities = pkg.outdated
+                ? (pkg.findingVulnerabilityIds ?? []).flatMap(id => {
+                    const vulnerability = vulnsById.get(id);
+                    return vulnerability ? [vulnerability] : [];
+                })
+                : (vulns_per_pkg[pkg.id] || []);
             let severities: Severities = {};
             const counts: VulnCounts = vulnerabilities.reduce((acc, vuln) => {
                 const severity = {label: vuln.severity.severity, index: SEVERITY_ORDER.indexOf(vuln.severity.severity.toUpperCase())};
@@ -124,6 +144,10 @@ class Packages {
                 acc[status] = (acc[status] || 0) + 1;
                 return acc;
             }, {} as VulnCounts);
+            const knownVulnerabilityIds = new Set(vulnerabilities.map(vulnerability => vulnerability.id));
+            const missingFindingCount = (pkg.findingVulnerabilityIds ?? [])
+                .filter(vulnerabilityId => !knownVulnerabilityIds.has(vulnerabilityId)).length;
+            if (missingFindingCount > 0) counts.unknown = (counts.unknown ?? 0) + missingFindingCount;
             return {
                 ...pkg,
                 vulnerabilities: counts,

@@ -386,6 +386,83 @@ class TestCopyCustomAssessments:
         assert len(group["candidates"]) == 1
         assert group["candidates"][0]["target_package"] == "openssl@3.0.0"
 
+    def test_copy_assessments_preview_within_variant_excludes_source_finding(self, app, client):
+        from src.extensions import db
+        from src.models.assessment import Assessment
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.project import Project
+        from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.variant import Variant
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            project = Project.create("WithinVariantProject")
+            variant = Variant.create("WithinVariant", project.id)
+            scan = Scan.create("within variant sbom", variant.id, scan_type="sbom")
+            source_pkg = Package.find_or_create("openssl", "1.1.1")
+            target_pkg = Package.find_or_create("openssl", "3.0.0")
+            vuln = Vulnerability.create_record(id="CVE-WITHIN-0001", description="Copy within")
+            db.session.commit()
+
+            source_finding = Finding.get_or_create(source_pkg.id, vuln.id)
+            target_finding = Finding.get_or_create(target_pkg.id, vuln.id)
+            document = SBOMDocument.create("/tmp/within.spdx.json", "spdx", scan.id)
+            SBOMPackage.create(document.id, source_pkg.id)
+            SBOMPackage.create(document.id, target_pkg.id)
+            Observation.create(source_finding.id, scan.id)
+            Observation.create(target_finding.id, scan.id)
+            Assessment.create(
+                status="affected",
+                origin="custom",
+                finding_id=source_finding.id,
+                variant_id=variant.id,
+                source="manual",
+            )
+            db.session.commit()
+            variant_id = str(variant.id)
+            source_finding_id = str(source_finding.id)
+            target_finding_id = str(target_finding.id)
+
+        resp = client.post(
+            "/api/variants/copy-assessments/preview",
+            json={
+                "source_variant_id": variant_id,
+                "target_variant_id": variant_id,
+                "match_mode": "ignore_version",
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 1
+        assert len(data["groups"]) == 1
+        candidates = data["groups"][0]["candidates"]
+        assert [candidate["target_finding_id"] for candidate in candidates] == [target_finding_id]
+        assert source_finding_id not in [candidate["target_finding_id"] for candidate in candidates]
+
+        copy_resp = client.post(
+            "/api/variants/copy-assessments",
+            json={
+                "source_variant_id": variant_id,
+                "target_variant_id": variant_id,
+                "match_mode": "ignore_version",
+                "selections": [{
+                    "source_assessment_id": data["groups"][0]["source_assessment_id"],
+                    "target_finding_id": target_finding_id,
+                }],
+            },
+        )
+
+        assert copy_resp.status_code == 200
+        assert copy_resp.get_json()["copied"] == 1
+        with app.app_context():
+            copied = Assessment.get_by_finding_and_variant(target_finding_id, variant_id)
+            assert any(assessment.origin == "custom" for assessment in copied)
+
     def test_copy_assessments_skips_vuln_not_in_target_pool(self, app, client):
         """A vuln whose target finding is not observed in the target's scans
         (not in the target's vulnerability pool) must not be offered for copy."""
@@ -1377,15 +1454,6 @@ class TestCopyAssessmentsValidation:
             json={"source_variant_id": str(uuid.uuid4()), "target_variant_id": "not-a-uuid"},
         )
         assert resp.status_code == 400
-
-    def test_same_source_and_target_variant(self, client):
-        vid = str(uuid.uuid4())
-        resp = client.post(
-            "/api/variants/copy-assessments",
-            json={"source_variant_id": vid, "target_variant_id": vid},
-        )
-        assert resp.status_code == 400
-        assert "different" in resp.get_json()["error"].lower()
 
     def test_variant_not_found(self, client):
         resp = client.post(

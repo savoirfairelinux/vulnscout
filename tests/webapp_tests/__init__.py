@@ -8,8 +8,13 @@ import uuid
 from datetime import datetime, timezone
 
 
-def setup_demo_db(app):
-    """Create all DB tables and insert demo data into the test in-memory DB."""
+def setup_demo_db(app, extra_packages=None):
+    """Create all DB tables and insert demo data into the test in-memory DB.
+
+    *extra_packages* is an optional list of ``"name@version"`` strings to seed as
+    standalone packages. Assessment-write endpoints refuse to create packages,
+    so tests that post assessments for arbitrary package names must seed them.
+    """
     from src.extensions import db
     from src.models.package import Package
     from src.models.vulnerability import Vulnerability
@@ -26,6 +31,11 @@ def setup_demo_db(app):
     with app.app_context():
         db.drop_all()
         db.create_all()
+
+        for pkg_str in (extra_packages or []):
+            _name, _sep, _version = pkg_str.partition("@")
+            Package.find_or_create(_name, _version if _sep else "")
+        db.session.commit()
 
         # Demo package: cairo 1.16.0
         pkg = Package.find_or_create(

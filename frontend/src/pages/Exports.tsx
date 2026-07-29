@@ -1,11 +1,16 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-    faThumbTack, faFolderOpen, faFileShield, faBoxes, faCloudArrowUp, faSpinner, faXmark,
+    faThumbTack, faFolderOpen, faFileShield, faBoxes, faCloudArrowUp, faSpinner, faXmark, faImage,
 } from "@fortawesome/free-solid-svg-icons";
 import FileTag from "../components/FileTag";
 import PopupExportOptions from "../components/PopupExportOptions";
 import type { Options as PopupOptions } from "../components/PopupExportOptions";
+import ConfirmationModal from "../components/ConfirmationModal";
+import Projects from "../handlers/project";
+import type { Project } from "../handlers/project";
+import Variants from "../handlers/variant";
+import type { Variant } from "../handlers/variant";
 
 
 type ExportDoc = {
@@ -13,6 +18,10 @@ type ExportDoc = {
     category: string[];
     extension: string;
 }
+
+const assetExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+const templateAccept = ".adoc,.asciidoc,.html,.htm,.md,.markdown,.csv,.txt,.json,.xml,.tex,.j2,.jinja,.jinja2";
+const assetAccept = ".png,.jpg,.jpeg,.gif,.webp";
 
 const asExportDoc = (data: any): ExportDoc | [] => {
     if (typeof data !== "object") return [];
@@ -32,10 +41,24 @@ const asExportDoc = (data: any): ExportDoc | [] => {
 }
 
 
-function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; projectId?: string }>) {
+type PendingDownload = {
+  exportType: string;
+  url: string;
+};
+
+type Props = {
+  variantId?: string;
+  projectId?: string;
+  variantIds?: string[];
+};
+
+function Exports ({ variantId, projectId, variantIds }: Readonly<Props>) {
     const [tab, setTab] = useState<string>("all");
     const [docs, setDocs] = useState<ExportDoc[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [variants, setVariants] = useState<Variant[]>([]);
     const [openDl, setOpenDl] = useState<string | null>(null);
+  const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
     const [popupOptions, setPopupOptions] = useState<PopupOptions|undefined>(undefined);
     const [dragActive, setDragActive] = useState<boolean>(false);
     const [uploading, setUploading] = useState<boolean>(false);
@@ -61,6 +84,18 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
     useEffect(() => {
         loadDocs();
     }, [loadDocs]);
+
+    useEffect(() => {
+      Projects.list().then(setProjects).catch(() => setProjects([]));
+    }, []);
+
+    useEffect(() => {
+      if (!projectId) {
+        setVariants([]);
+        return;
+      }
+      Variants.list(projectId).then(setVariants).catch(() => setVariants([]));
+    }, [projectId]);
 
     const uploadTemplate = useCallback((file: File) => {
         setUploadError(null);
@@ -90,11 +125,44 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         });
     }, [loadDocs]);
 
+    const uploadAsset = useCallback((file: File) => {
+        setUploadError(null);
+        setUploadSuccess(null);
+        setUploading(true);
+        const body = new FormData();
+        body.append("file", file);
+        fetch(import.meta.env.VITE_API_URL + "/api/documents/assets", {
+            mode: 'cors',
+            method: 'POST',
+            body,
+        })
+        .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(data?.error || `Upload failed (${res.status})`);
+            }
+            setUploadSuccess(`Uploaded "${data?.name ?? file.name}".`);
+            setTab("assets");
+            loadDocs();
+        })
+        .catch((error) => {
+            setUploadError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+            setUploading(false);
+        });
+    }, [loadDocs]);
+
     const onFilesSelected = useCallback((files: FileList | null) => {
         if (files && files.length > 0) {
-            uploadTemplate(files[0]);
+        const extension = files[0].name.split(".").pop()?.toLowerCase() ?? "";
+        if (tab === "assets" || (tab === "all" && assetExtensions.has(extension))) {
+                uploadAsset(files[0]);
+            } else {
+                uploadTemplate(files[0]);
+            }
         }
-    }, [uploadTemplate]);
+    }, [tab, uploadAsset, uploadTemplate]);
 
     const onDrop = useCallback((e: React.DragEvent<HTMLElement>) => {
         e.preventDefault();
@@ -102,6 +170,22 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         setDragActive(false);
         onFilesSelected(e.dataTransfer.files);
     }, [onFilesSelected]);
+
+    const visibleDocs = docs.filter((doc) =>
+      (doc.category.includes(tab) || tab === "all")
+      && (tab !== "custom" || !assetExtensions.has(doc.extension.toLowerCase()))
+    );
+    const selectedVariantIds = variantIds?.length ? variantIds : (variantId ? [variantId] : []);
+    const scopedVariants = selectedVariantIds.length
+      ? variants.filter(variant => selectedVariantIds.includes(variant.id))
+      : variants;
+    const projectName = projects.find(project => project.id === projectId)?.name ?? 'the selected project';
+
+    const handleContinueDownload = () => {
+      if (!pendingDownload) return;
+      window.open(pendingDownload.url, '_blank', 'noopener,noreferrer');
+      setPendingDownload(null);
+    };
 
 
     return (<>
@@ -117,6 +201,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
 
                 { key: "built-in", icon: faThumbTack, label: "Built-in reports" },
                 { key: "custom", icon: faFolderOpen, label: "Custom reports" },
+                { key: "assets", icon: faImage, label: "Custom assets" },
                 { key: "sbom", icon: faFileShield, label: "SBOM files" },
             ].map(({ key, icon, label }) => (
                 <button
@@ -143,7 +228,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
 
 <div className="w-full pt-4 flex justify-center">
   <div className="w-[70%] bg-gray-700 from-zinc-800 to-zinc-900 rounded-3xl p-6 grid grid-cols-3 gap-6 justify-center shadow-xl border border-white/10 backdrop-blur-sm">
-    {docs.filter((doc) => doc.category.includes(tab) || tab === 'all').map((doc) => (
+    {visibleDocs.map((doc) => (
       <FileTag
         name={doc.id}
         key={encodeURIComponent(doc.id)}
@@ -152,10 +237,11 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         projectId={projectId}
         opened={openDl === doc.id}
         onOpen={() => openDl === doc.id ? setOpenDl(null) : setOpenDl(doc.id)}
+        onRequestDownload={(exportType, url) => setPendingDownload({ exportType, url })}
       />
     ))}
 
-    {docs.filter((doc) => doc.category.includes(tab) || tab === 'all').length === 0 && (
+    {visibleDocs.length === 0 && (
       <div className="col-span-2 flex flex-col items-center justify-center text-white/70 w-full py-10">
         <div className="text-lg font-medium">No documents found</div>
         {tab === 'custom' && (
@@ -169,14 +255,14 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
   </div>
 </div>
 
-{(tab === 'custom' || tab === 'all') && (
+{(tab === 'custom' || tab === 'assets' || tab === 'all') && (
 <div className="w-full pt-4 flex justify-center">
   <div className="w-[70%]">
     <input
       ref={fileInputRef}
       type="file"
       className="hidden"
-      accept=".adoc,.asciidoc,.html,.htm,.md,.markdown,.csv,.txt,.json,.xml,.tex,.j2,.jinja,.jinja2"
+      accept={tab === "assets" ? assetAccept : tab === "all" ? `${templateAccept},${assetAccept}` : templateAccept}
       onChange={(e) => { onFilesSelected(e.target.files); e.target.value = ""; }}
     />
     <button
@@ -186,7 +272,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
       onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragActive(true); }}
       onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragActive(false); }}
       onDrop={onDrop}
-      aria-label="Import a custom report template"
+      aria-label="Upload a custom report or asset"
       className={[
         "w-full flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed",
         "px-6 py-8 text-center transition-colors duration-150 cursor-pointer",
@@ -203,10 +289,14 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         aria-hidden="true"
       />
       <div className="text-base font-medium">
-        {uploading ? "Importing template…" : "Drag & drop a custom template here, or click to browse"}
+        {uploading ? "Uploading file…" : "Drag & drop a custom report or asset here, or click to browse"}
       </div>
       <div className="text-xs text-white/60">
-        Accepted: .adoc, .html, .md, .csv, .txt, .json, .xml, .tex, .j2
+        {tab === "assets"
+          ? "Assets: .png, .jpg, .webp, .gif (SVG is not accepted for upload)"
+          : tab === "custom"
+            ? "Reports: .adoc, .html, .md, .csv, .txt, .json, .xml, .tex, .j2"
+            : "Reports: .adoc, .html, .md, .csv, .txt, .json, .xml, .tex, .j2 · Assets: .png, .jpg, .webp, .gif"}
       </div>
     </button>
     {uploadError && (
@@ -227,6 +317,7 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
         </button>
       </div>
     )}
+
   </div>
 </div>
 )}
@@ -238,6 +329,22 @@ function Exports ({ variantId, projectId }: Readonly<{ variantId?: string; proje
             extension={popupOptions.extension}
             onClose={() => {setPopupOptions(undefined)}}
         ></PopupExportOptions>}
+        <ConfirmationModal
+          isOpen={pendingDownload !== null}
+          title="Confirm export"
+          message=""
+          confirmText="Continue"
+          cancelText="Cancel"
+          onConfirm={handleContinueDownload}
+          onCancel={() => setPendingDownload(null)}
+        >
+          <p>This will export {pendingDownload?.exportType} for the project {projectName}.</p>
+          <p className="mt-4">It covers the following variants:</p>
+          <ul className="mt-2 list-disc list-inside text-left">
+            {scopedVariants.map(variant => <li key={variant.id}>{variant.name}</li>)}
+          </ul>
+          <p className="mt-4">You can change the export scope using the selector in the upper-right corner of the page.</p>
+        </ConfirmationModal>
     </>);
 }
 

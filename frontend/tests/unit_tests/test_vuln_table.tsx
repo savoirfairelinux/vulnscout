@@ -7,7 +7,6 @@ jest.setTimeout(15000);
 import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-// @ts-expect-error TS6133
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
@@ -62,6 +61,21 @@ const getDOMRect = (width: number, height: number) => ({
     y: 0,
     toJSON: () => {},
 })
+
+const formatAssessmentDate = (value: string) => new Date(value).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    timeZoneName: 'shortOffset',
+});
+
+const formatPublishedDate = (value: string) => new Date(value).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+});
 
 
 describe('Vulnerability Table', () => {
@@ -510,13 +524,13 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        // Capture the row that should disappear before triggering the search.
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, '2018-5678');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
-        // Allow for debounce + filter render (debounce is 750ms in component)
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        // Allow the applied filter to render.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -529,11 +543,12 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, 'yyy');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -546,11 +561,12 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2010-1234/});
-
         await user.type(search_bar, '-2010');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_xyz = await screen.getByRole('cell', {name: /CVE-2018-5678/});
         expect(vuln_xyz).toBeInTheDocument();
@@ -564,6 +580,7 @@ describe('Vulnerability Table', () => {
         const search_bar = await screen.getByRole('searchbox');
 
         await user.type(search_bar, '-2010 2024');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         // Better use waitFor for a combined check instead of using waitForElementToBeRemoved in sequence, because the items are filtered out after the user.type() is completed, which may lead to the success of the first check and failure of the rest.
         await waitFor(() => {
@@ -582,14 +599,44 @@ describe('Vulnerability Table', () => {
         const user = userEvent.setup();
         const search_bar = await screen.getByRole('searchbox');
 
-        const rowToRemove = await screen.findByRole('cell', {name: /CVE-2018-5678/});
-
         await user.type(search_bar, 'authentification process');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
-        await waitForElementToBeRemoved(rowToRemove, { timeout: 2000 });
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        }, { timeout: 2000 });
 
         const vuln_abc = await screen.getByRole('cell', {name: /CVE-2010-1234/});
         expect(vuln_abc).toBeInTheDocument();
+    })
+
+    test('applies server-side description matches for compact vulnerabilities', async () => {
+        const compactVulnerabilities = vulnerabilities.map(vuln => ({
+            ...vuln,
+            texts: [],
+            details_loaded: false,
+        }));
+        fetchMock.mockResponseOnce(JSON.stringify({
+            matches: {
+                authentification: ['CVE-2010-1234'],
+                process: ['CVE-2010-1234'],
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={compactVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const searchBar = await screen.getByRole('searchbox');
+        await user.type(searchBar, 'authentification process');
+        expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        await user.keyboard('{Enter}');
+
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+        expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+            terms: ['authentification', 'process'],
+        });
     })
 
     test('filter by source', async () => {
@@ -869,6 +916,33 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('loads a compact vulnerability description when hovering', async () => {
+        const compactVuln: Vulnerability = {
+            ...vulnerabilities[0],
+            texts: [],
+            urls: [],
+            details_loaded: false,
+        };
+        fetchMock.mockResponse((request) => {
+            if (new URL(request.url).pathname !== '/api/vulnerabilities/CVE-2010-1234') {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            return Promise.resolve(JSON.stringify({
+                id: compactVuln.id,
+                texts: [{ title: 'description', content: 'Lazily loaded hover description' }],
+                urls: [],
+                severity: compactVuln.severity,
+            }));
+        });
+        const { container } = render(<TableVulnerabilities vulnerabilities={[compactVuln]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        fireEvent.mouseEnter(container.querySelector('tr.row-with-hover-effect')!);
+
+        await waitFor(() => {
+            expect(screen.getByRole('tooltip').textContent).toContain('Lazily loaded hover description');
+        });
+    });
+
     test('filter by severity', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
@@ -971,6 +1045,7 @@ describe('Vulnerability Table', () => {
         // Set search
         const search_bar = await screen.getByRole('searchbox');
         await user.type(search_bar, '2018-5678');
+        await user.click(screen.getByRole('button', { name: 'Search vulnerabilities' }));
 
         // Wait for filters to take effect
         await waitFor(() => {
@@ -989,8 +1064,7 @@ describe('Vulnerability Table', () => {
             expect(vuln2).toBeInTheDocument();
         });
 
-        // Search bar should be cleared (it doesn't have a value attribute when cleared)
-        expect(search_bar.getAttribute('value')).toBeNull();
+        expect(search_bar).toHaveValue('');
     })
 
     test('initial filter props set correct filters', async () => {
@@ -1011,6 +1085,91 @@ describe('Vulnerability Table', () => {
             const vuln_abc = screen.getByRole('cell', {name: /CVE-2010-1234/});
             expect(vuln_abc).toBeInTheDocument();
             expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+    })
+
+    test('filter by packages dropdown', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        expect(packagesBtn).toBeInTheDocument();
+        await user.click(packagesBtn);
+
+        // All packages from the vulnerabilities are listed as options
+        const pkgCheckbox = await screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
+        expect(await screen.getByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' })).toBeInTheDocument();
+        expect(await screen.getByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeInTheDocument();
+
+        // ACT - Select one package
+        await user.click(pkgCheckbox);
+
+        // ASSERT - Only the vulnerability affecting that package remains
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).toBeNull();
+            expect(screen.queryByRole('cell', {name: /CVE-2024-56730/})).toBeNull();
+        }, { timeout: 5000 });
+
+        expect(await screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+    })
+
+    test('search inside packages filter narrows options', async () => {
+        // ARRANGE
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+
+        // ACT - Search inside the dropdown
+        const pkgSearch = await screen.getByRole('searchbox', { name: /search packages/i });
+        await user.type(pkgSearch, 'linux');
+
+        // ASSERT - Only matching package options are shown
+        expect(await screen.getByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).toBeNull();
+        expect(screen.queryByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' })).toBeNull();
+
+        // No-match search shows an empty-state message
+        await user.clear(pkgSearch);
+        await user.type(pkgSearch, 'does-not-exist');
+        expect(await screen.findByText(/no match found/i)).toBeInTheDocument();
+        expect(screen.queryByRole('checkbox', { name: 'linux-yocto@6.6.21' })).toBeNull();
+    })
+
+    test('package from SBOM table show vulnerabilities is pre-checked', async () => {
+        // ARRANGE - Same props the SBOM table handoff produces (raw package id)
+        render(
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="xxxyyyzzz@2.0.0"
+            />
+        );
+
+        const user = userEvent.setup();
+
+        // ASSERT - Table is filtered to the vulnerability of that package
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).not.toBeInTheDocument();
+        });
+
+        // ASSERT - The package is checked inside the Packages filter dropdown
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        const pkgCheckbox = await screen.getByRole('checkbox', { name: 'xxxyyyzzz@2.0.0' });
+        expect(pkgCheckbox).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).not.toBeChecked();
+
+        // Unchecking it restores the full table
+        await user.click(pkgCheckbox);
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
         });
     })
 
@@ -1036,7 +1195,7 @@ describe('Vulnerability Table', () => {
         expect(vuln2).toBeInTheDocument();
     })
 
-    test('search debounce functionality', async () => {
+    test('search remains unapplied while typing', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
@@ -1120,7 +1279,7 @@ describe('Vulnerability Table', () => {
 
         // ACT & ASSERT
         // First vulnerability should show formatted date
-        const formattedDate = await screen.getByText(/january 15, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-01-15T10:30:00Z'));
         expect(formattedDate).toBeInTheDocument();
 
         // Second vulnerability should still show "No assessment"
@@ -1152,7 +1311,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithUpdatedAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT & ASSERT - Should show the more recent last_update date
-        const formattedDate = await screen.getByText(/february 20, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-02-20T14:45:00Z'));
         expect(formattedDate).toBeInTheDocument();
     })
 
@@ -1199,7 +1358,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnWithMultipleAssessments} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         // ACT & ASSERT - Should show the most recent assessment date (March 10)
-        const formattedDate = await screen.getByText(/march 10, 2024/i);
+        const formattedDate = await screen.getByText(formatAssessmentDate('2024-03-10T16:20:00Z'));
         expect(formattedDate).toBeInTheDocument();
     })
 
@@ -1371,9 +1530,111 @@ describe('Vulnerability Table', () => {
         });
     });
 
+    test('opening a compact vulnerability loads its deferred description', async () => {
+        const compactVuln: Vulnerability = {
+            ...vulnerabilities[0],
+            texts: [],
+            urls: [],
+            details_loaded: false,
+        };
+        fetchMock.mockResponse((request) => {
+            if (new URL(request.url).pathname !== '/api/vulnerabilities/CVE-2010-1234') {
+                return Promise.resolve(JSON.stringify([]));
+            }
+            return Promise.resolve(JSON.stringify({
+                id: compactVuln.id,
+                texts: [{ title: 'description', content: 'Deferred vulnerability description' }],
+                urls: ['https://example.com/deferred'],
+                severity: compactVuln.severity,
+            }));
+        });
+
+        render(<TableVulnerabilities vulnerabilities={[compactVuln]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await userEvent.click(await screen.findByText('CVE-2010-1234'));
+
+        expect((await screen.findAllByText('Deferred vulnerability description')).length).toBeGreaterThan(0);
+        expect(fetchMock.mock.calls.some(([request]) => request != null && (
+            new URL(typeof request === 'string' ? request : request.url).pathname ===
+            '/api/vulnerabilities/CVE-2010-1234'
+        ))).toBe(true);
+    });
+
     // =========================================================================
     // Published Date Feature Tests
     // =========================================================================
+
+    test('shows an EU KEV sync information banner when EU KEV data is absent', async () => {
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'EU KEV data needs updating. Use the "Refresh vulnerability data" button to update it.'
+        );
+        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
+    });
+
+    test('shows a published date sync information banner when published date data is absent', async () => {
+        const withEuvdData = vulnerabilities.map(v => ({
+            ...v,
+            published: undefined,
+            euvd: {
+                id: 'EUVD-2024-0001',
+                known_exploited: true,
+                sources: ['enisa'],
+                date_added: '2024-01-01',
+                url: 'https://euvd.enisa.europa.eu/vulnerability/EUVD-2024-0001',
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'Published date data needs updating. Use the "Refresh vulnerability data" button to update it.'
+        );
+        expect(screen.getByText('Published date data').classList.contains('font-bold')).toBe(true);
+    });
+
+    test('combines missing EU KEV and published date data into one banner', async () => {
+        const withoutPublishedDates = vulnerabilities.map(v => ({ ...v, published: undefined }));
+        render(<TableVulnerabilities vulnerabilities={withoutPublishedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const alerts = await screen.findAllByRole('alert');
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]).toHaveTextContent(
+            'EU KEV data and published date data need updating. Use the "Refresh vulnerability data" button to update them.'
+        );
+        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
+        expect(screen.getByText('published date data').classList.contains('font-bold')).toBe(true);
+    });
+
+    test('keeps a dismissed EU KEV banner hidden after the table remounts', async () => {
+        function VulnerabilityTab() {
+            const [isTableVisible, setIsTableVisible] = React.useState(true);
+            const [isBannerDismissed, setIsBannerDismissed] = React.useState(false);
+
+            return <>
+                <button onClick={() => setIsTableVisible(visible => !visible)}>Switch tab</button>
+                {isTableVisible && <TableVulnerabilities
+                    vulnerabilities={vulnerabilities}
+                    appendAssessment={() => {}}
+                    appendCVSS={() => null}
+                    patchVuln={() => {}}
+                    missingEuvdDataBannerDismissed={isBannerDismissed}
+                    onMissingEuvdDataBannerDismissedChange={setIsBannerDismissed}
+                />}
+            </>;
+        }
+
+        render(<VulnerabilityTab />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('EU KEV data needs updating');
+        fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Switch tab' }));
+
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
 
     test('published date filter button is disabled when NVD sync is not completed and no published dates exist', async () => {
         // NVD progress mock defaults to phase: 'idle' (not completed). With no
@@ -1898,8 +2159,8 @@ describe('Vulnerability Table', () => {
 
         // Check that dates are rendered (formatted as short month)
         await waitFor(() => {
-            [/May 15, 2010/, /Jul 22, 2018/].forEach(date => {
-            expect(screen.queryByText(date)).toBeInTheDocument();
+            ['2010-05-15T08:00:00Z', '2018-07-22T14:30:00Z'].forEach(date => {
+                expect(screen.queryByText(formatPublishedDate(date))).toBeInTheDocument();
             });
         });
     });
@@ -2931,7 +3192,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         }
     });
 
-    test('package filter indicator shown when filterLabel is Package', async () => {
+    test('packages filter dropdown reflects active Package filter prop', async () => {
         render(
             <TableVulnerabilities
                 vulnerabilities={vulnerabilities}
@@ -2943,15 +3204,20 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             />
         );
 
-        // Package indicator label should be visible
-        const packageLabel = await screen.findByText('Package:');
-        expect(packageLabel).toBeInTheDocument();
+        // Table is filtered down to the package's vulnerability
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
 
-        // The filter value appears in the indicator badge (may also appear in table cells)
-        expect(screen.getAllByText('aaabbbccc@1.0.0').length).toBeGreaterThan(0);
+        // The Packages dropdown shows the package as checked
+        const user = userEvent.setup();
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        expect(screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' })).toBeChecked();
     });
 
-    test('package filter indicator clear button removes the filter', async () => {
+    test('unchecking package in dropdown removes the filter', async () => {
         render(
             <TableVulnerabilities
                 vulnerabilities={vulnerabilities}
@@ -2964,14 +3230,18 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         );
 
         const user = userEvent.setup();
-        await screen.findByText('Package:');
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
 
-        // Click the times/clear button next to the package filter
-        const clearBtn = screen.getByTitle(/clear package filter/i);
-        await user.click(clearBtn);
+        // Uncheck the package inside the Packages dropdown
+        const packagesBtn = await screen.getByRole('button', { name: /^packages$/i });
+        await user.click(packagesBtn);
+        const pkgCheckbox = screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
+        await user.click(pkgCheckbox);
 
         await waitFor(() => {
-            expect(screen.queryByText('Package:')).not.toBeInTheDocument();
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
         });
     });
 
@@ -3362,6 +3632,67 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
         await waitFor(() => {
             expect(screen.queryByText('Search Syntax')).toBeNull();
+        });
+    });
+
+    // AI Suggestion radio filter (Any / Has / No). CVE-2010-1234 has a pending
+    // AI suggestion; CVE-2018-5678 does not.
+    const mockAiSuggestionsFor = (...vulnIds: string[]) => {
+        fetchMock.mockResponse(async (req) => {
+            if (req.url.includes('/api/assessments/review/ai')) {
+                return JSON.stringify(vulnIds.map((vuln_id, i) => ({
+                    id: `ai-${i}`,
+                    vuln_id,
+                    status: 'not_affected',
+                    origin: 'ai',
+                    timestamp: '2025-01-01T00:00:00Z',
+                })));
+            }
+            return JSON.stringify([]);
+        });
+    };
+
+    test('AI Suggestion filter defaults to "Any" and shows all vulnerabilities', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+
+        const anyRadio = await screen.findByRole('radio', { name: /^any$/i });
+        expect(anyRadio).toBeChecked();
+
+        expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(0);
+    });
+
+    test('AI Suggestion filter "Has AI suggestion" shows only vulns with a suggestion', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        const hasRadio = await screen.findByRole('radio', { name: /has ai suggestion/i });
+        await user.click(hasRadio);
+
+        await waitFor(() => {
+            expect(screen.getAllByText('CVE-2010-1234').length).toBeGreaterThan(0);
+            expect(screen.queryByText('CVE-2018-5678')).toBeNull();
+        });
+    });
+
+    test('AI Suggestion filter "No AI suggestion" shows only vulns without a suggestion', async () => {
+        mockAiSuggestionsFor('CVE-2010-1234');
+        render(<TableVulnerabilities vulnerabilities={vulnerabilities} projectId="proj1" appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        await user.click(screen.getByText('More'));
+        const noRadio = await screen.findByRole('radio', { name: /no ai suggestion/i });
+        await user.click(noRadio);
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2010-1234')).toBeNull();
+            expect(screen.getAllByText('CVE-2018-5678').length).toBeGreaterThan(0);
         });
     });
 });

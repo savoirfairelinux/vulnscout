@@ -43,6 +43,33 @@ const columns = [
 
 describe('TableGeneric component (direct tests to raise coverage)', () => {
 
+  test('shows a column hint without sorting when HintText is provided', async () => {
+    const user = userEvent.setup();
+    const columnsWithHint = [
+      {
+        accessorKey: 'value',
+        header: 'Value',
+        HintText: 'The numeric value reported for this row.',
+        cell: (info: any) => info.getValue(),
+        size: 80,
+      },
+    ];
+
+    render(
+      <TableGeneric
+        columns={columnsWithHint}
+        data={DATA.slice(0, 2)}
+        tableHeight="auto"
+        hasPagination={false}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show hint for value' }));
+
+    expect(screen.getByRole('tooltip')).toHaveTextContent('The numeric value reported for this row.');
+    expect(screen.getAllByRole('cell')[0]).toHaveTextContent('0');
+  });
+
   test('renders non-virtualized rows and hover panel (lines 247-279)', async () => {
     render(
       <TableGeneric

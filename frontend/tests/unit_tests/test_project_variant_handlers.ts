@@ -254,11 +254,11 @@ describe('Variants', () => {
         );
     });
 
-    test('Variants.listAll returns empty array when response is not ok', async () => {
+    test('Variants.listAll throws when response is not ok', async () => {
         fetchMock.mockImplementationOnce(() =>
-            Promise.resolve({ ok: false, json: () => Promise.resolve([]) } as Response)
+            Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve([]) } as Response)
         );
-        expect(await Variants.listAll()).toEqual([]);
+        await expect(Variants.listAll()).rejects.toThrow('Failed to load variants (500)');
     });
 
     test('Variants.listAll returns empty array when server returns non-array', async () => {
@@ -455,7 +455,7 @@ describe('Vulnerabilities.list with filtering params', () => {
 
         const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
         expect(calledUrl).toContain('/api/vulnerabilities');
-        expect(calledUrl).toContain('format=list');
+        expect(calledUrl).toContain('format=compact');
         expect(calledUrl).not.toContain('variant_id');
         expect(calledUrl).not.toContain('project_id');
     });
@@ -570,7 +570,7 @@ describe('Assessments.list with filtering params', () => {
 
         const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
         expect(calledUrl).toContain('/api/assessments');
-        expect(calledUrl).toContain('format=list');
+        expect(calledUrl).toContain('format=compact');
         expect(calledUrl).not.toContain('variant_id');
         expect(calledUrl).not.toContain('project_id');
     });

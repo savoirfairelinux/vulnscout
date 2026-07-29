@@ -9,7 +9,7 @@
 project = 'VulnScout'
 copyright = '2026, Savoir-Faire Linux Inc.'
 author = 'Savoir-Faire Linux Inc.'
-release = 'v0.18'
+release = 'v0.19'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Shared helpers for importing and exporting assessments as OpenVEX archives.
+"""Shared helpers for importing and exporting assessments as OpenVEX JSON.
 
 Both the CLI (``cmd_assessments.py``) and the web API (``routes/assessments.py``)
 perform the same build/parse logic.  This module contains the common core so
@@ -10,12 +10,7 @@ neither caller needs to re-implement it.
 
 from __future__ import annotations
 
-import io
-import json
-import os
-import tarfile
 import uuid as _uuid
-from collections import defaultdict
 from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
@@ -157,62 +152,6 @@ def build_openvex_doc(
     }
 
 
-def build_openvex_archive(
-    handmade_assessments: "list[_Assessment]",
-    variant_names: dict[str, str],
-    author: str,
-    now_iso: str | None = None,
-) -> bytes:
-    """Build an in-memory tar.gz archive of OpenVEX JSON files.
-
-    One ``.json`` file is created per variant (named
-    ``<variant_name>.json``).  Assessments without a variant go into
-    ``unassigned.json``.
-
-    Parameters
-    ----------
-    handmade_assessments:
-        List of DB ``Assessment`` objects (usually from
-        ``Assessment.get_handmade()``).
-    variant_names:
-        Mapping ``str(variant_id) → variant_name`` used to name the files.
-    author:
-        Author string written into every OpenVEX document header.
-    now_iso:
-        ISO-8601 timestamp written into every document.  Defaults to *now*.
-
-    Returns
-    -------
-    bytes
-        Raw tar.gz content.
-    """
-    if now_iso is None:
-        now_iso = _dt.now(_tz.utc).isoformat()
-
-    vuln_cache: "dict[str, _Vulnerability | None]" = {}
-
-    by_variant: "dict[str | None, list[_Assessment]]" = defaultdict(list)
-    for assess in handmade_assessments:
-        vid = str(assess.variant_id) if assess.variant_id else None
-        by_variant[vid].append(assess)
-
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-        for vid, assessments in by_variant.items():
-            filename = sanitize_variant_name(
-                variant_names.get(vid, "unassigned") if vid else "unassigned"
-            ) + ".json"
-
-            doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
-
-            json_bytes = json.dumps(doc, indent=2).encode("utf-8")
-            info = tarfile.TarInfo(name=filename)
-            info.size = len(json_bytes)
-            tar.addfile(info, io.BytesIO(json_bytes))
-
-    return buf.getvalue()
-
-
 # ---------------------------------------------------------------------------
 # Import helpers
 # ---------------------------------------------------------------------------
@@ -225,9 +164,59 @@ def is_openvex_doc(doc: object) -> bool:
     return "openvex" in str(ctx) and isinstance(doc.get("statements"), list)
 
 
+def parse_imported_timestamp(raw_ts: object, use_original_timestamps: bool) -> "_dt | None":
+    """Return the timestamp to persist for an imported assessment.
+
+    Returns ``None`` when *use_original_timestamps* is false or when *raw_ts*
+    is missing/unparseable, in which case the caller lets the model apply the
+    current time.  Parsed values are always converted to UTC: SQLite drops the
+    offset when storing, so a non-UTC timestamp would otherwise be read back as
+    if its local wall-clock time had been UTC.
+    """
+    if not use_original_timestamps or not isinstance(raw_ts, str) or not raw_ts:
+        return None
+    try:
+        parsed = _dt.fromisoformat(raw_ts.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_tz.utc)
+    return parsed.astimezone(_tz.utc)
+
+
+def duplicate_assessment_query(
+    finding_id: "_uuid.UUID",
+    variant_id: "_uuid.UUID | None",
+    status: str,
+    origin: str,
+    timestamp: "_dt | None" = None,
+) -> Any:
+    """Build the SELECT used to detect an already-imported assessment.
+
+    When *timestamp* is given (i.e. the caller preserves the timestamps stored
+    in the file) it is part of the identity: an assessment recorded at another
+    date is a distinct entry in the vulnerability's history and must be
+    imported instead of being silently dropped as a duplicate.  Without it,
+    re-importing the same file stays idempotent.
+    """
+    from ..extensions import db
+    from ..models.assessment import Assessment as DBAssessment
+
+    query = db.select(DBAssessment).where(
+        DBAssessment.finding_id == finding_id,
+        DBAssessment.variant_id == variant_id,
+        DBAssessment.status == status,
+        DBAssessment.origin == origin,
+    )
+    if timestamp is not None:
+        query = query.where(DBAssessment.timestamp == timestamp)
+    return query
+
+
 def import_statements(
     statements: list[dict[str, Any]],
     variant_id: "_uuid.UUID",
+    use_original_timestamps: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     """Persist a list of OpenVEX statement dicts as DB assessments.
 
@@ -238,6 +227,9 @@ def import_statements(
         OpenVEX JSON document).
     variant_id:
         UUID of the target variant to attach the assessments to.
+    use_original_timestamps:
+        Preserve valid statement timestamps when true.  When false, newly
+        created assessments use the database server's current time.
 
     Returns
     -------
@@ -298,13 +290,9 @@ def import_statements(
         # Preserve the original assessment date so exports remain ordered by
         # the date of the custom assessment and stay reproducible when two
         # developers import each other's assessments.
-        imported_ts: "_dt | None" = None
-        raw_ts = stmt.get("timestamp")
-        if isinstance(raw_ts, str) and raw_ts:
-            try:
-                imported_ts = _dt.fromisoformat(raw_ts)
-            except (ValueError, TypeError):
-                imported_ts = None
+        imported_ts = parse_imported_timestamp(
+            stmt.get("timestamp"), use_original_timestamps
+        )
 
         for pkg_string_id in pkg_ids:
             try:
@@ -317,11 +305,12 @@ def import_statements(
                 finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
                 existing = db.session.execute(
-                    db.select(DBAssessment).where(
-                        DBAssessment.finding_id == finding.id,
-                        DBAssessment.variant_id == variant_id,
-                        DBAssessment.status == status,
-                        DBAssessment.origin == "custom",
+                    duplicate_assessment_query(
+                        finding_id=finding.id,
+                        variant_id=variant_id,
+                        status=status,
+                        origin="custom",
+                        timestamp=imported_ts,
                     )
                 ).scalars().first()
                 if existing is not None:
@@ -376,121 +365,6 @@ def build_variant_by_name_map(project_id: "_uuid.UUID | None" = None) -> "dict[s
     return variant_by_name
 
 
-def import_archive_bytes(
-    file_bytes: bytes,
-    variant_by_name: "dict[str, _Variant]",
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
-    """Import OpenVEX assessments from a tar.gz archive (as raw bytes).
-
-    Returns
-    -------
-    (created, errors, skipped, variant_files_found)
-    """
-    total_created: list[dict[str, Any]] = []
-    total_errors: list[dict[str, Any]] = []
-    total_skipped = 0
-    variant_files_found = 0
-
-    try:
-        tar = tarfile.open(fileobj=io.BytesIO(file_bytes), mode='r:gz')
-    except Exception:
-        raise ValueError("Unable to open tar.gz archive")
-
-    for member in tar.getmembers():
-        if not member.isfile() or not member.name.endswith(".json"):
-            continue
-        base = os.path.basename(member.name)
-        variant_name = base[: -len(".json")]
-        variant = variant_by_name.get(variant_name)
-        if variant is None:
-            total_errors.append({
-                "file": member.name,
-                "error": f"No variant found matching name '{variant_name}'",
-            })
-            continue
-
-        f = tar.extractfile(member)
-        if f is None:
-            continue
-        try:
-            doc = json.load(f)
-        except Exception:
-            total_errors.append({"file": member.name, "error": "Invalid JSON"})
-            continue
-
-        if not is_openvex_doc(doc):
-            total_errors.append({
-                "file": member.name,
-                "error": "Not a valid OpenVEX document",
-            })
-            continue
-
-        variant_files_found += 1
-        c, e, s = import_statements(doc["statements"], variant.id)
-        total_created.extend(c)
-        total_errors.extend(e)
-        total_skipped += s
-
-    tar.close()
-    return total_created, total_errors, total_skipped, variant_files_found
-
-
-def import_directory(
-    dir_path: str,
-    variant_by_name: "dict[str, _Variant]",
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
-    """Import OpenVEX assessments from a directory of JSON files.
-
-    Each ``.json`` file is matched to a variant by its filename (sans
-    extension).
-
-    Returns
-    -------
-    (created, errors, skipped, variant_files_found)
-    """
-    total_created: list[dict[str, Any]] = []
-    total_errors: list[dict[str, Any]] = []
-    total_skipped = 0
-    variant_files_found = 0
-
-    json_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".json"))
-    if not json_files:
-        raise ValueError("No .json files found in directory")
-
-    for json_name in json_files:
-        variant_name = json_name[: -len(".json")]
-        variant = variant_by_name.get(variant_name)
-        if variant is None:
-            total_errors.append({
-                "file": json_name,
-                "error": f"No variant found matching name '{variant_name}'",
-            })
-            continue
-
-        json_path = os.path.join(dir_path, json_name)
-        try:
-            with open(json_path) as fh:
-                doc = json.load(fh)
-        except Exception:
-            total_errors.append({"file": json_name, "error": "Invalid JSON"})
-            continue
-
-        if not is_openvex_doc(doc):
-            total_errors.append({
-                "file": json_name,
-                "error": "Not a valid OpenVEX document",
-            })
-            continue
-
-        variant_files_found += 1
-        c, e, s = import_statements(doc["statements"], variant.id)
-        total_created.extend(c)
-        total_errors.extend(e)
-        total_skipped += s
-
-    return total_created, total_errors, total_skipped, variant_files_found
-
-
 # ---------------------------------------------------------------------------
 # Custom-data export (assessments + CVSS + time estimates)
 # ---------------------------------------------------------------------------
@@ -509,8 +383,8 @@ def build_custom_data_export(
 
     Returns
     -------
-    dict with keys ``version``, ``exported_at``, ``assessments``, ``cvss``,
-    ``time_estimates``.
+    dict with keys ``version``, ``exported_at``, ``assessments``,
+    ``ai_assessments``, ``cvss``, ``time_estimates``.
     """
     from ..extensions import db
     from ..models.assessment import Assessment as DBAssessment
@@ -519,27 +393,37 @@ def build_custom_data_export(
     from ..models.iso8601_duration import Iso8601Duration
     from ..models.variant import Variant as DBVariant
 
-    handmade = DBAssessment.get_handmade(variant_ids)
+    handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
+    pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
 
     variant_name_by_id: dict[str, str] = {}
     variant_uuid_set: set[_uuid.UUID] = {
-        a.variant_id for a in handmade if a.variant_id is not None
+        a.variant_id for a in [*handmade, *pending_ai]
+        if a.variant_id is not None
     }
 
-    exported_assessments = []
-    for a in handmade:
-        d = a.to_dict()
-        exported_assessments.append({
-            "vuln_id": d["vuln_id"],
-            "status": d["status"],
-            "simplified_status": d.get("simplified_status", ""),
-            "justification": d.get("justification") or None,
-            "impact_statement": d.get("impact_statement") or None,
-            "status_notes": d.get("status_notes") or None,
-            "workaround": d.get("workaround") or None,
-            "packages": d["packages"],
-            "variant_id": d.get("variant_id"),
-        })
+    def _export_assessments(
+        assessments: "list[DBAssessment]",
+    ) -> list[dict[str, Any]]:
+        exported = []
+        for assessment in assessments:
+            assessment_dict = assessment.to_dict()
+            exported.append({
+                "vuln_id": assessment_dict["vuln_id"],
+                "status": assessment_dict["status"],
+                "simplified_status": assessment_dict.get("simplified_status", ""),
+                "justification": assessment_dict.get("justification") or None,
+                "impact_statement": assessment_dict.get("impact_statement") or None,
+                "status_notes": assessment_dict.get("status_notes") or None,
+                "workaround": assessment_dict.get("workaround") or None,
+                "timestamp": assessment_dict["timestamp"],
+                "packages": assessment_dict["packages"],
+                "variant_id": assessment_dict.get("variant_id"),
+            })
+        return exported
+
+    exported_assessments = _export_assessments(handmade)
+    exported_ai_assessments = _export_assessments(pending_ai)
 
     # Gather ALL custom CVSS entries, not just those linked to handmade
     # assessments.
@@ -628,6 +512,10 @@ def build_custom_data_export(
         vid = item.get("variant_id")
         item["variant"] = variant_name_by_id.get(vid) if vid else None
 
+    for item in exported_ai_assessments:
+        vid = item.get("variant_id")
+        item["variant"] = variant_name_by_id.get(vid) if vid else None
+
     for item in cvss_entries:
         vid = item.get("variant_id")
         item["variant"] = variant_name_by_id.get(vid) if vid else None
@@ -640,6 +528,7 @@ def build_custom_data_export(
         "version": 1,
         "exported_at": _dt.now(_tz.utc).isoformat(),
         "assessments": exported_assessments,
+        "ai_assessments": exported_ai_assessments,
         "cvss": cvss_entries,
         "time_estimates": time_estimates,
     }
@@ -653,6 +542,7 @@ def import_custom_data(
     data: dict[str, Any],
     variant_by_name: "dict[str, _Variant]",
     variant_id: "_uuid.UUID | None" = None,
+    use_original_timestamps: bool = False,
 ) -> dict[str, Any]:
     """Import a custom-data JSON document containing assessments, CVSS and
     time estimates.
@@ -661,17 +551,20 @@ def import_custom_data(
     ----------
     data:
         Parsed JSON matching the custom-data export format
-        (``{version, assessments, cvss, time_estimates}``).
+        (``{version, assessments, ai_assessments, cvss, time_estimates}``).
     variant_by_name:
         Mapping ``{name: Variant, sanitised_name: Variant}`` for variant
         resolution.
     variant_id:
         When provided, all assessments are attached to this variant.
         When *None*, each assessment's ``variant_id`` field is used.
+    use_original_timestamps:
+        Preserve valid assessment timestamps when true.  When false, newly
+        created assessments use the database server's current time.
 
     Returns
     -------
-    dict with ``status``, ``assessments_imported``, ``assessments_skipped``,
+    dict with ``status``, assessment import counts for custom and AI rows,
     ``cvss_imported``, ``time_estimates_imported``, ``errors``.
     """
     from ..extensions import db
@@ -691,6 +584,8 @@ def import_custom_data(
         "status": "success",
         "assessments_imported": 0,
         "assessments_skipped": 0,
+        "ai_assessments_imported": 0,
+        "ai_assessments_skipped": 0,
         "cvss_imported": 0,
         "time_estimates_imported": 0,
         "errors": [],
@@ -725,10 +620,16 @@ def import_custom_data(
                 return None
             return mapped_variant.id
 
-    # -- Import assessments --
-    assessments_list = data.get("assessments", [])
-    if isinstance(assessments_list, list):
-        for a in assessments_list:
+    def _import_assessments(
+        key: str,
+        origin: str,
+        imported_key: str,
+        skipped_key: str,
+    ) -> None:
+        assessment_list = data.get(key, [])
+        if not isinstance(assessment_list, list):
+            return
+        for a in assessment_list:
             if not isinstance(a, dict):
                 continue
             vuln_name = a.get("vuln_id")
@@ -754,6 +655,9 @@ def import_custom_data(
             impact_statement = a.get("impact_statement", "")
             status_notes = a.get("status_notes", "")
             workaround = a.get("workaround", "")
+            imported_ts = parse_imported_timestamp(
+                a.get("timestamp"), use_original_timestamps
+            )
 
             for pkg_string_id in pkg_ids:
                 try:
@@ -770,15 +674,16 @@ def import_custom_data(
                     finding = Finding.get_or_create(db_pkg.id, vuln_name)
 
                     existing = db.session.execute(
-                        db.select(DBAssessment).where(
-                            DBAssessment.finding_id == finding.id,
-                            DBAssessment.variant_id == target_variant_id,
-                            DBAssessment.status == status,
-                            DBAssessment.origin == "custom",
+                        duplicate_assessment_query(
+                            finding_id=finding.id,
+                            variant_id=target_variant_id,
+                            status=status,
+                            origin=origin,
+                            timestamp=imported_ts,
                         )
                     ).scalars().first()
                     if existing is not None:
-                        result["assessments_skipped"] += 1
+                        result[skipped_key] += 1
                         continue
 
                     DBAssessment.create(
@@ -788,21 +693,31 @@ def import_custom_data(
                         ),
                         finding_id=finding.id,
                         variant_id=target_variant_id,
-                        origin="custom",
+                        origin=origin,
                         status_notes=status_notes,
                         justification=justification,
                         impact_statement=impact_statement,
                         workaround=workaround,
                         responses=[],
+                        timestamp=imported_ts,
                         commit=True,
                     )
-                    result["assessments_imported"] += 1
+                    result[imported_key] += 1
                 except Exception as e:
                     result["errors"].append({
                         "vuln_id": vuln_name,
                         "package": pkg_string_id,
                         "error": str(e),
                     })
+
+    # Import pending AI assessments separately so the Review page continues to
+    # surface them in its AI Assessments tab for approval or rejection.
+    _import_assessments(
+        "assessments", "custom", "assessments_imported", "assessments_skipped"
+    )
+    _import_assessments(
+        "ai_assessments", "ai", "ai_assessments_imported", "ai_assessments_skipped"
+    )
 
     # -- Import CVSS --
     cvss_list = data.get("cvss", [])
@@ -914,7 +829,12 @@ def import_custom_data(
                 apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
             result["time_estimates_imported"] += 1
 
-    if not result["assessments_imported"] and not result["cvss_imported"] and not result["time_estimates_imported"]:
+    if (
+        not result["assessments_imported"]
+        and not result["ai_assessments_imported"]
+        and not result["cvss_imported"]
+        and not result["time_estimates_imported"]
+    ):
         if result["errors"]:
             result["status"] = "error"
 

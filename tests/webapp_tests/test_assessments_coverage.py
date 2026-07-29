@@ -6,6 +6,10 @@
 import pytest
 import json
 from src.bin.webapp import create_app
+from src.extensions import db
+from src.models.finding import Finding
+from src.models.metrics import Metrics
+from src.models.time_estimate import TimeEstimate
 from . import write_demo_files, setup_demo_db
 
 
@@ -35,7 +39,22 @@ def app(init_files):
             "OPENVEX_FILE": init_files["openvex"],
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
         })
-        setup_demo_db(application)
+        setup_demo_db(application, extra_packages=["test@1.0.0", "pkg@1.0.0", "pkg1@1.0.0", "pkg2@2.0.0", "pkg3@3.0.0"])
+        with application.app_context():
+            from src.extensions import db
+            from src.models.finding import Finding
+            from src.models.observation import Observation
+            from src.models.package import Package
+            from src.models.vulnerability import Vulnerability
+
+            for vuln_id in ("CVE-2021-99999", "CVE-2021-11111", "CVE-2021-22222"):
+                Vulnerability.get_or_create(vuln_id)
+                for package_id in ("test@1.0.0", "pkg@1.0.0", "pkg1@1.0.0", "pkg2@2.0.0", "pkg3@3.0.0"):
+                    package = Package.get_by_string_id(package_id)
+                    assert package is not None
+                    finding = Finding.get_or_create(package.id, vuln_id)
+                    Observation.create(finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+            db.session.commit()
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
@@ -60,6 +79,64 @@ def test_post_assessment_without_vuln_id_in_payload(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["assessment"]["vuln_id"] == "CVE-2021-99999"
+
+
+def test_bulk_delete_review_time_estimates(client, app):
+    with app.app_context():
+        finding = Finding.get_by_vulnerability("CVE-2020-35492")[0]
+        estimate = TimeEstimate(
+            finding_id=finding.id,
+            optimistic=1,
+            likely=2,
+            pessimistic=3,
+        )
+        db.session.add(estimate)
+        db.session.commit()
+        estimate_id = str(estimate.id)
+
+    listed = client.get("/api/assessments/review/time-estimates")
+    assert listed.status_code == 200
+    assert any(item["id"] == estimate_id for item in listed.get_json())
+
+    deleted = client.delete("/api/assessments/review/time-estimates", json={"ids": [estimate_id]})
+    assert deleted.status_code == 200
+    assert deleted.get_json()["deleted"] == [estimate_id]
+    assert all(item["id"] != estimate_id for item in client.get("/api/assessments/review/time-estimates").get_json())
+
+
+def test_bulk_delete_review_custom_cvss_preserves_scanner_data(client, app):
+    with app.app_context():
+        custom = Metrics.create(
+            vulnerability_id="CVE-2020-35492",
+            version="3.1",
+            score=7.5,
+            vector="CVSS:3.1/AV:N",
+            author="reviewer",
+            origin="custom",
+        )
+        scanner = Metrics.create(
+            vulnerability_id="CVE-2020-35492",
+            version="3.1",
+            score=7.5,
+            vector="CVSS:3.1/AV:N",
+            author="nvd@nist.gov",
+            origin="scanner",
+        )
+        custom_id = str(custom.id)
+        scanner_id = str(scanner.id)
+
+    listed = client.get("/api/assessments/review/custom-cvss")
+    assert listed.status_code == 200
+    assert any(item["id"] == custom_id for item in listed.get_json())
+
+    deleted = client.delete("/api/assessments/review/custom-cvss", json={"ids": [custom_id]})
+    assert deleted.status_code == 200
+    assert deleted.get_json()["deleted"] == [custom_id]
+
+    scanner_delete = client.delete("/api/assessments/review/custom-cvss", json={"ids": [scanner_id]})
+    assert scanner_delete.status_code == 404
+    with app.app_context():
+        assert Metrics.get_by_id(scanner_id) is not None
 
 
 # Test POST assessment with non-string vuln_id
@@ -193,7 +270,7 @@ def test_post_assessments_batch_all_valid(client):
 
 # Test POST assessment batch - mixed valid and invalid
 def test_post_assessments_batch_mixed_validity(client):
-    """Test batch creation with mix of valid and invalid assessments"""
+    """A mix of valid and invalid assessments cancels the whole batch."""
     response = client.post("/api/assessments/batch", json={
         'assessments': [
             {
@@ -213,10 +290,11 @@ def test_post_assessments_batch_mixed_validity(client):
             }
         ]
     })
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["count"] == 1
-    assert data["vuln_count"] == 1
+    assert data["count"] == 0
+    assert data["vuln_count"] == 0
+    assert data["assessments"] == []
     assert data["error_count"] == 2
     assert len(data["errors"]) == 2
 
@@ -270,7 +348,7 @@ def test_post_assessments_batch_not_a_list(client):
 
 # Test POST assessment batch - invalid item structure
 def test_post_assessments_batch_invalid_item_structure(client):
-    """Test batch creation with invalid item structure"""
+    """An invalid item structure cancels valid entries in the same batch."""
     response = client.post("/api/assessments/batch", json={
         'assessments': [
             'not_a_dict',
@@ -278,9 +356,10 @@ def test_post_assessments_batch_invalid_item_structure(client):
              'variant_id': DEMO_VARIANT_ID}
         ]
     })
-    assert response.status_code == 200
+    assert response.status_code == 400
     data = json.loads(response.data)
-    assert data["count"] == 1
+    assert data["count"] == 0
+    assert data["assessments"] == []
     assert data["error_count"] == 1
 
 
@@ -304,6 +383,43 @@ def test_update_assessment_status_only(client):
     data = json.loads(response.data)
     assert data["assessment"]["status"] == "affected"
     assert data["assessment"]["status_notes"] == 'Initial notes'  # Should remain unchanged
+
+
+def test_update_assessment_can_preserve_timestamp(client):
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        'packages': ['test@1.0.0'],
+        'status': 'under_investigation',
+        'variant_id': DEMO_VARIANT_ID,
+        'timestamp': '2024-01-15T12:00:00Z',
+    })
+    assessment = json.loads(response.data)["assessment"]
+
+    response = client.put(f"/api/assessments/{assessment['id']}", json={
+        'status': 'affected',
+        'update_timestamp': False,
+    })
+
+    assert response.status_code == 200
+    updated = json.loads(response.data)["assessment"]
+    assert updated["timestamp"] == assessment["timestamp"]
+
+
+def test_update_assessment_accepts_shared_timestamp(client):
+    response = client.post("/api/vulnerabilities/CVE-2021-99999/assessments", json={
+        'packages': ['test@1.0.0'],
+        'status': 'under_investigation',
+        'variant_id': DEMO_VARIANT_ID,
+    })
+    assessment_id = json.loads(response.data)["assessment"]["id"]
+
+    response = client.put(f"/api/assessments/{assessment_id}", json={
+        'status': 'affected',
+        'update_timestamp': True,
+        'timestamp': '2026-07-28T12:34:56Z',
+    })
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessment"]["timestamp"] == '2026-07-28T12:34:56+00:00'
 
 
 # Test PUT assessment - update status_notes
@@ -616,6 +732,40 @@ def test_post_assessments_batch_invalid_variant_id(client):
     assert data["error_count"] >= 1
     assert any("variant_id" in str(e).lower() or "invalid" in str(e).lower()
                for e in data["errors"])
+
+
+def test_post_assessments_batch_is_atomic_when_one_variant_is_invalid(client, app):
+    """One invalid package/variant pair cancels every item in the batch."""
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        before = len(Assessment.get_by_vulnerability("CVE-2021-11111"))
+
+    response = client.post("/api/assessments/batch", json={
+        "assessments": [
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                "variant_id": DEMO_VARIANT_ID,
+            },
+            {
+                "vuln_id": "CVE-2021-11111",
+                "packages": ["pkg1@1.0.0"],
+                "status": "affected",
+                "variant_id": "22222222-2222-2222-2222-222222222223",
+            },
+        ]
+    })
+
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert data["status"] == "error"
+    assert data["count"] == 0
+    assert data["assessments"] == []
+    assert data["error_count"] == 1
+    with app.app_context():
+        assert len(Assessment.get_by_vulnerability("CVE-2021-11111")) == before
 
 
 # ---------------------------------------------------------------------------

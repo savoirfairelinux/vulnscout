@@ -431,3 +431,93 @@ Project
   {{ variant.name }}: last scanned {{ latest.timestamp | print_iso8601 }}
 {% endfor %}
 ```
+
+---
+
+## Using Images and Logos in Reports
+
+VulnScout provides a first-class image embedding mechanism that produces self-contained output in every format (raw AsciiDoc, HTML, and PDF) without any `imagesdir` or safe-mode configuration on the template author's side.
+
+### `embed_image(name, width=None, alt="")`
+
+Inlines a named asset as a base64 data-URI AsciiDoc block image macro.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | string | Filename of the image (e.g. `"logo.png"`). Plain basename only — no directory separators. |
+| `width` | integer | Optional rendered width in pixels. |
+| `alt` | string | Optional alt text / caption. |
+
+Returns an `image::data:…[…]` AsciiDoc macro, or an **empty string** if the file cannot be found, so `{% if embed_image(…) %}` guards work.
+
+**Example — optional logo at the top of a report:**
+
+```jinja
+{% set _logo = embed_image("logo.png") or embed_image("logo.svg") %}
+{% if _logo %}
+[.right]
+{{ _logo }}
+
+{% endif %}
+= My Report
+```
+
+**Example — sized, captioned logo:**
+
+```jinja
+{{ embed_image("logo.png", width=150, alt="Company Logo") }}
+```
+
+### `find_asset(name)`
+
+Returns the absolute path to a named asset, or `None` if not found.  Useful when you need to pass the path elsewhere (e.g. to an external tool invoked from a template).
+
+### Asset Search Order
+
+Assets are resolved from the following directories in order; the first match wins:
+
+| Priority | Path |
+|----------|------|
+| 1 (highest) | `/cache/vulnscout/templates/assets` |
+| 2 | `.vulnscout/templates/assets` |
+| 3 | `templates/assets` |
+| 4 | `/scan/templates/assets` |
+| 5 (lowest) | Built-in `src/views/templates/assets` (inside the container image) |
+
+Only the extensions `png`, `jpg`, `jpeg`, `gif`, `svg`, and `webp` are accepted; all others are silently ignored to guard against path injection.
+
+### Adding Assets
+
+**Via the web UI (Export tab):**
+Drag and drop an image onto the *"Drag & drop a logo or image"* area in the Export tab. It is saved to the first writable `assets` sub-directory.
+
+**Via the CLI:**
+```bash
+./vulnscout --add-asset /path/to/logo.png --report my_report.adoc
+```
+The image is staged to `/cache/vulnscout/templates/assets/logo.png` before the report runs.
+
+**Via the API:**
+```http
+POST /api/documents/assets
+Content-Type: multipart/form-data
+
+file=<image file>
+```
+Returns `{"name": "logo.png", "message": "Asset uploaded."}` on success (HTTP 201).
+
+**Manually (host-side):**
+Drop the image into `.vulnscout/templates/assets/` — the directory is picked up automatically on the next report generation without a container restart.
+
+### Native `image::` Macros (secondary mechanism)
+
+Template authors who prefer the standard AsciiDoc `image::filename[]` syntax are also supported.  At conversion time VulnScout automatically passes:
+
+* `-S safe` with `-B <temp-dir>` — restricts asciidoctor to reading files from
+  a sandboxed temporary directory populated only with the referenced,
+  resolved assets (no arbitrary filesystem access, unlike `unsafe` mode).
+* `-a imagesdir=<copied-assets-dir>` — resolves relative image paths.
+* `-a data-uri` (HTML output only) — inlines resolved images as base64 in the HTML file.
+
+`allow-uri-read` remains **disabled** — remote image fetching is never enabled.
+

@@ -1,13 +1,9 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
-"""Custom assessment import/export commands:
-``flask export-custom-assessments`` and ``flask import-custom-assessments``."""
+"""VulnScout JSON and OpenVEX custom-assessment import/export commands."""
 
-import io
-import uuid
 import click
 import json as _json
-import tarfile
 import os
 from flask.cli import with_appcontext
 from ..helpers.assessment_io import (
@@ -16,239 +12,165 @@ from ..helpers.assessment_io import (
     build_openvex_doc,
     sanitize_variant_name,
     import_statements,
-    import_archive_bytes,
-    import_directory,
+    build_custom_data_export,
     import_custom_data,
 )
 from ..models.assessment import Assessment as DBAssessment
 from ..models.variant import Variant as DBVariant
 from datetime import datetime as _dt, timezone as _tz
-from collections import defaultdict
 from ._common import get_default_author, resolve_project, resolve_project_variant
 
+_JSON_SUFFIX = ".json"
 
-@click.command("export-custom-assessments")
+
+def _load_json_file(file_path: str) -> dict:
+    if not os.path.isfile(file_path):
+        raise click.ClickException(f"File not found: {file_path}")
+    if not file_path.endswith(_JSON_SUFFIX):
+        raise click.ClickException("Unsupported file type. Please provide a .json file.")
+    try:
+        with open(file_path) as file:
+            data = _json.load(file)
+    except Exception as error:
+        raise click.ClickException("Invalid JSON file.") from error
+    if not isinstance(data, dict):
+        raise click.ClickException("Invalid JSON file.")
+    return data
+
+
+def _print_custom_data_import_result(result: dict) -> None:
+    if result.get("status") != "success":
+        for error in result.get("errors", []):
+            click.echo(f"  {error}", err=True)
+        raise click.ClickException("Failed to import VulnScout JSON data.")
+    for error in result.get("errors", []):
+        click.echo(f"  Warning: {error}", err=True)
+    click.echo(
+        f"Imported {result['assessments_imported']} assessments"
+        f" ({result['assessments_skipped']} skipped as duplicates),"
+        f" {result['ai_assessments_imported']} AI assessments"
+        f" ({result['ai_assessments_skipped']} skipped as duplicates),"
+        f" {result['cvss_imported']} CVSS,"
+        f" {result['time_estimates_imported']} time estimates"
+    )
+
+
+@click.command("export-custom-vulnscout-data")
 @click.option("--output-dir", default="/scan/outputs", show_default=True,
               help="Directory where the exported file is written.")
 @click.option("--project", "-p", required=True, help="Project name.")
 @click.option("--variant", "-v", default=None,
-              help="Variant name. If empty, all variants will be exported.")
-@click.option("--compress", is_flag=True, default=False,
-              help="Write a .tar.gz archive instead of individual files.")
+              help="Variant name. If empty, all project variants are exported.")
 @with_appcontext
-def export_custom_assessments_command(output_dir: str, project: str, variant: str | None, compress: bool) -> None:
-    """Export handmade (custom) assessments as OpenVEX file(s)."""
-
-    author = get_default_author()
-    now_iso = _dt.now(_tz.utc).isoformat()
-
+def export_custom_vulnscout_data_command(output_dir: str, project: str, variant: str | None) -> None:
+    """Export custom VulnScout JSON data for one or all project variants."""
     project_obj = resolve_project(project)
-
-    variants: list[DBVariant]
     if variant:
         _, variant_obj = resolve_project_variant(project, variant, create=False)
-        variants = [variant_obj]
+        variant_ids = [variant_obj.id]
+        filename_label = sanitize_variant_name(variant_obj.name)
     else:
-        variants = DBVariant.get_by_project(project_obj.id)
+        variant_ids = [project_variant.id for project_variant in DBVariant.get_by_project(project_obj.id)]
+        filename_label = "all"
 
-    handmade = DBAssessment.get_handmade([v.id for v in variants])
-    if not handmade:
-        click.echo("No custom assessments to export.", err=True)
-        raise SystemExit(1)
-
+    data = build_custom_data_export(variant_ids)
+    if (
+        not data["assessments"]
+        and not data["ai_assessments"]
+        and not data["cvss"]
+        and not data["time_estimates"]
+    ):
+        raise click.ClickException("No custom VulnScout data to export.")
     os.makedirs(output_dir, exist_ok=True)
-    vuln_cache: dict = {}
-
-    def _write_doc(assessments, filename):
-        doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
-        out_path = os.path.join(output_dir, filename)
-        with open(out_path, "w") as fh:
-            _json.dump(doc, fh, indent=2)
-        return out_path
-
-    def _write_tar(docs: dict[str, list]):
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-            for filename, assessments in docs.items():
-                doc = build_openvex_doc(assessments, author, now_iso, vuln_cache)
-                json_bytes = _json.dumps(doc, indent=2).encode("utf-8")
-                info = tarfile.TarInfo(name=filename)
-                info.size = len(json_bytes)
-                tar.addfile(info, io.BytesIO(json_bytes))
-        out_path = os.path.join(output_dir, "custom_assessments.tar.gz")
-        with open(out_path, "wb") as fh:
-            fh.write(buf.getvalue())
-        return out_path
-
-    if variant is None:
-        by_variant: dict[uuid.UUID, list[DBAssessment]] = defaultdict(list)
-        for assess in handmade:
-            if assess.variant_id is not None:
-                by_variant[assess.variant_id].append(assess)
-
-        named_groups: dict[str, list] = {}
-        for vid, assessments in by_variant.items():
-            vobj = DBVariant.get_by_id(vid)
-            assert vobj
-            filename = sanitize_variant_name(vobj.name) + ".json"
-            named_groups[filename] = assessments
-
-        if compress:
-            out_path = _write_tar(named_groups)
-            click.echo(f"Custom assessments exported: {out_path}")
-        else:
-            for filename, assessments in named_groups.items():
-                out_path = _write_doc(assessments, filename)
-                click.echo(f"Custom assessments exported: {out_path}")
-    else:
-        assert variant_obj
-        filename = sanitize_variant_name(variant_obj.name) + ".json"
-
-        if compress:
-            out_path = _write_tar({filename: handmade})
-        else:
-            out_path = _write_doc(handmade, filename)
-        click.echo(f"Custom assessments exported: {out_path}")
+    output_path = os.path.join(output_dir, f"custom_vulnscout_data_{filename_label}{_JSON_SUFFIX}")
+    with open(output_path, "w") as file:
+        _json.dump(data, file, indent=2)
+    click.echo(f"Custom VulnScout data exported: {output_path}")
 
 
-@click.command("import-custom-assessments")
+@click.command("import-custom-vulnscout-data")
 @click.argument("file_path")
 @click.option("--project", "-p", required=True, help="Project name.")
-@click.option("--variant", "-v", default=None, help="Variant name. Defaults to the file name.")
+@click.option(
+    "--use-original-timestamps/--use-current-timestamps",
+    default=False,
+    help="Choose whether to preserve assessment timestamps from the file.",
+)
 @with_appcontext
-def import_custom_assessments_command(file_path: str, project: str, variant: str | None) -> None:
-    """Import custom assessments from a .json, .tar.gz, or directory of OpenVEX files."""
-    if not os.path.isfile(file_path) and not os.path.isdir(file_path):
-        click.echo(f"Error: file not found: {file_path}", err=True)
-        raise SystemExit(1)
-
+def import_custom_vulnscout_data_command(
+    file_path: str,
+    project: str,
+    use_original_timestamps: bool,
+) -> None:
+    """Import custom VulnScout JSON data using its embedded variant metadata."""
     project_obj = resolve_project(project)
-
-    variant_obj: DBVariant | None = None
-    if variant:
-        _, variant_obj = resolve_project_variant(project, variant, create=False)
+    data = _load_json_file(file_path)
+    if "version" not in data or is_openvex_doc(data):
+        raise click.ClickException("Not a valid VulnScout JSON data file.")
 
     variant_by_name = build_variant_by_name_map(project_obj.id)
-    basename = os.path.basename(file_path)
-    total_created: list[dict]
-    total_errors: list[dict]
-    total_skipped: int
-    variant_files_found: int = 0
+    _print_custom_data_import_result(import_custom_data(
+        data,
+        variant_by_name,
+        use_original_timestamps=use_original_timestamps,
+    ))
 
-    if file_path.endswith(".tar.gz") or file_path.endswith(".tgz"):
-        if variant:
-            click.echo("Error: cannot use the --variant argument with an archive of custom assessments.")
-            raise SystemExit(1)
 
-        try:
-            with open(file_path, "rb") as fh:
-                file_bytes = fh.read()
-            total_created, total_errors, total_skipped, variant_files_found = (
-                import_archive_bytes(file_bytes, variant_by_name)
-            )
-        except ValueError as exc:
-            click.echo(f"Error: {exc}", err=True)
-            raise SystemExit(1)
+@click.command("export-custom-openvex-assessments")
+@click.option("--output-dir", default="/scan/outputs", show_default=True,
+              help="Directory where the exported file is written.")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", required=True, help="Variant name to export.")
+@with_appcontext
+def export_custom_openvex_assessments_command(output_dir: str, project: str, variant: str) -> None:
+    """Export custom assessments for one variant as an OpenVEX JSON file."""
+    _, variant_obj = resolve_project_variant(project, variant, create=False)
+    handmade = DBAssessment.get_by_origin([variant_obj.id])
+    if not handmade:
+        raise click.ClickException("No custom assessments to export.")
 
-        if variant_files_found == 0 and not total_created:
-            click.echo(
-                "Error: no valid OpenVEX files matching known "
-                "variants found in archive.", err=True
-            )
-            for err in total_errors:
-                click.echo(f"  {err}", err=True)
-            raise SystemExit(1)
+    author = get_default_author()
+    document = build_openvex_doc(handmade, author, _dt.now(_tz.utc).isoformat())
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(
+        output_dir,
+        f"custom_openvex_{sanitize_variant_name(variant_obj.name)}{_JSON_SUFFIX}",
+    )
+    with open(output_path, "w") as file:
+        _json.dump(document, file, indent=2)
+    click.echo(f"Custom OpenVEX assessments exported: {output_path}")
 
-    elif os.path.isdir(file_path):
-        if variant:
-            click.echo("Error: cannot use the --variant argument with a directory of custom assessments.")
-            raise SystemExit(1)
 
-        try:
-            total_created, total_errors, total_skipped, variant_files_found = (
-                import_directory(file_path, variant_by_name)
-            )
-        except ValueError as exc:
-            click.echo(f"Error: {exc}", err=True)
-            raise SystemExit(1)
+@click.command("import-custom-openvex-assessments")
+@click.argument("file_path")
+@click.option("--project", "-p", required=True, help="Project name.")
+@click.option("--variant", "-v", required=True, help="Variant name to import into.")
+@click.option(
+    "--use-original-timestamps/--use-current-timestamps",
+    default=True,
+    help="Choose whether to preserve assessment timestamps from the file.",
+)
+@with_appcontext
+def import_custom_openvex_assessments_command(
+    file_path: str,
+    project: str,
+    variant: str,
+    use_original_timestamps: bool,
+) -> None:
+    """Import one OpenVEX JSON document into the specified variant."""
+    _, variant_obj = resolve_project_variant(project, variant, create=False)
+    data = _load_json_file(file_path)
+    if not is_openvex_doc(data):
+        raise click.ClickException("Not a valid OpenVEX document.")
 
-        if variant_files_found == 0 and not total_created:
-            click.echo(
-                "Error: no valid OpenVEX files matching known "
-                "variants found in directory.", err=True
-            )
-            for err in total_errors:
-                click.echo(f"  {err}", err=True)
-            raise SystemExit(1)
-
-    elif file_path.endswith(".json"):
-        try:
-            with open(file_path) as fh:
-                data = _json.load(fh)
-        except Exception:
-            click.echo("Error: invalid JSON file.", err=True)
-            raise SystemExit(1)
-
-        # Custom-data export format (web "export custom data" button):
-        # {version, assessments, cvss, time_estimates}. Routed to the
-        # dedicated importer; the embedded per-item variant is used unless
-        # --variant forces a target.
-        if isinstance(data, dict) and "version" in data and not is_openvex_doc(data):
-            result = import_custom_data(
-                data, variant_by_name,
-                variant_obj.id if variant_obj is not None else None,
-            )
-            if result.get("status") != "success":
-                click.echo("Error: failed to import custom-data file.", err=True)
-                for err in result.get("errors", []):
-                    click.echo(f"  {err}", err=True)
-                raise SystemExit(1)
-            for err in result.get("errors", []):
-                click.echo(f"  Warning: {err}", err=True)
-            click.echo(
-                f"Imported {result['assessments_imported']} assessments"
-                f" ({result['assessments_skipped']} skipped as duplicates),"
-                f" {result['cvss_imported']} CVSS,"
-                f" {result['time_estimates_imported']} time estimates"
-            )
-            return
-
-        # OpenVEX single-document format: requires a variant (from --variant
-        # or the filename matching an existing variant name).
-        if variant:
-            assert variant_obj
-        else:
-            variant_name = basename[:-len(".json")]
-            variant_obj = variant_by_name.get(variant_name)
-            if variant_obj is None:
-                click.echo(
-                    f"Error: no variant found matching filename "
-                    f"'{variant_name}'. The JSON filename must "
-                    f"correspond to an existing variant name. "
-                    "Hint: use --variant to specify another name.",
-                    err=True,
-                )
-                raise SystemExit(1)
-
-        if not is_openvex_doc(data):
-            click.echo("Error: not a valid OpenVEX document.", err=True)
-            raise SystemExit(1)
-
-        total_created, total_errors, total_skipped = import_statements(
-            data["statements"], variant_obj.id
-        )
-    else:
-        click.echo(
-            "Error: unsupported file type. "
-            "Please provide a .json, .tar.gz file, or directory.",
-            err=True,
-        )
-        raise SystemExit(1)
-
-    for err in total_errors:
-        click.echo(f"  Warning: {err}", err=True)
-
+    total_created, total_errors, total_skipped = import_statements(
+        data["statements"],
+        variant_obj.id,
+        use_original_timestamps=use_original_timestamps,
+    )
+    for error in total_errors:
+        click.echo(f"  Warning: {error}", err=True)
     click.echo(
-        f"Imported {len(total_created)} assessments"
+        f"Imported {len(total_created)} OpenVEX assessments"
         f" ({total_skipped} skipped as duplicates)"
     )

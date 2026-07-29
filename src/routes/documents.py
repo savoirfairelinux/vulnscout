@@ -1,15 +1,17 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
-from flask import Flask, request, make_response
+from flask import Flask, request, make_response, send_file
 from flask.typing import ResponseReturnValue
+import io
 import json
 import os
 import mimetypes
 import traceback
 from datetime import date
+from PIL import Image
 from ..controllers import ControllersCache
-from ..views.templates import Templates
+from ..views.templates import Templates, find_asset
 from ..views.cyclonedx import CycloneDx
 from ..views.spdx import SPDX
 from ..views.spdx3 import SPDX3
@@ -68,6 +70,108 @@ def writable_templates_dir() -> Optional[str]:
     return None
 
 
+def writable_assets_dir() -> Optional[str]:
+    """Return the first ``<templates>/assets`` directory that is writable."""
+    for candidate in TEMPLATE_UPLOAD_DIRS:
+        assets_candidate = os.path.join(candidate, "assets")
+        try:
+            os.makedirs(assets_candidate, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(assets_candidate, os.W_OK):
+            return assets_candidate
+    return None
+
+
+def list_assets() -> List[Dict[str, object]]:
+    """Return the image assets found in template asset directories.
+
+    Directories follow the same preference order as template loading. An asset
+    with the same name in a higher-priority directory is listed only once.
+    """
+    assets: List[Dict[str, object]] = []
+    seen_names = set()
+    for candidate in TEMPLATE_UPLOAD_DIRS:
+        assets_dir = os.path.join(candidate, "assets")
+        try:
+            names = os.listdir(assets_dir)
+        except OSError:
+            continue
+        for name in sorted(names):
+            path = os.path.join(assets_dir, name)
+            extension = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if (
+                name in seen_names
+                or extension not in UPLOADABLE_ASSET_EXTENSIONS
+                or not os.path.isfile(path)
+            ):
+                continue
+            seen_names.add(name)
+            assets.append({"id": name, "extension": extension, "is_template": False, "category": ["assets"]})
+    return assets
+
+
+# Maximum size accepted for an uploaded report image asset. Flask's
+# MAX_CONTENT_LENGTH rejects oversized multipart bodies before parsing; the
+# bounded stream read below is a secondary guard for this per-file limit.
+MAX_ASSET_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+# Raster formats accepted for *uploads*, mapped to the format name Pillow
+# reports back after decoding. SVG is deliberately excluded here: as XML it
+# can carry <script>, external entity references and other active content
+# that a filename-extension or even a well-formedness check would not catch.
+# (Manually placed SVG assets outside this upload endpoint are unaffected —
+# see ALLOWED_ASSET_EXTENSIONS in views.templates.)
+_UPLOAD_RASTER_FORMATS: Dict[str, str] = {
+    "png": "PNG",
+    "jpg": "JPEG",
+    "jpeg": "JPEG",
+    "gif": "GIF",
+    "webp": "WEBP",
+}
+UPLOADABLE_ASSET_EXTENSIONS = frozenset(_UPLOAD_RASTER_FORMATS)
+
+
+def sanitize_asset_filename(filename: Optional[str]) -> Optional[str]:
+    """Return a safe basename for an uploaded asset, or ``None`` if invalid.
+
+    Only a plain filename with an allowed raster-image extension is accepted.
+    Any directory component or path-traversal sequence is rejected.
+    """
+    name = os.path.basename((filename or "").strip())
+    if not name or name.startswith(".") or ".." in name:
+        return None
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in UPLOADABLE_ASSET_EXTENSIONS:
+        return None
+    return name
+
+
+def validate_raster_image(data: bytes, ext: str) -> bool:
+    """Decode *data* and confirm it is a genuine raster image matching *ext*.
+
+    Trusting a file's declared extension alone lets an attacker persist
+    arbitrary content (or an oversized decompression-bomb-style payload) that
+    is then handed to downstream image/PDF converters. Decoding the pixel
+    data with Pillow's ``verify()`` and cross-checking the detected format
+    against the declared extension ensures only well-formed images of the
+    expected type are accepted.
+    """
+    expected_format = _UPLOAD_RASTER_FORMATS.get(ext)
+    if expected_format is None:
+        return False
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            probe.verify()
+        # verify() leaves the file object unusable for further access, so a
+        # fresh handle is needed to read back the detected format safely.
+        with Image.open(io.BytesIO(data)) as probe:
+            probe.load()
+            return probe.format == expected_format
+    except Exception:
+        return False
+
+
 def guess_mime_type(doc_name: Optional[str]) -> Optional[str]:
     if doc_name is None:
         return None
@@ -85,6 +189,12 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/documents', methods=['GET'])
     def index_docs() -> ResponseReturnValue:
+        """List available report templates and SBOM export formats.
+
+        OpenAPI:
+        response 200 JsonObject Available document descriptors.
+        response 500 Error Document discovery failed.
+        """
         controllers = ControllersCache()
         controllers.vulnerabilities = None  # type: ignore
         # to avoid pre-loading cache, TODO change that, maybe by moving list_documents somewhere else
@@ -98,6 +208,7 @@ def init_app(app: Flask) -> None:
             docs.append({"id": "CycloneDX 1.5", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "CycloneDX 1.6", "extension": "json", "is_template": False, "category": ["sbom"]})
             docs.append({"id": "OpenVex", "extension": "json", "is_template": False, "category": ["sbom"]})
+            docs.extend(list_assets())
 
             for doc in docs:
                 if "extension" not in doc:
@@ -125,6 +236,12 @@ def init_app(app: Flask) -> None:
         Expects a ``multipart/form-data`` request with a single ``file`` field.
         The template is saved under the first writable templates directory so it
         becomes available as a "custom" report.
+
+        OpenAPI:
+        body multipart optional Multipart request containing a template file.
+        response 201 JsonObject Imported template descriptor.
+        response 400 Error Invalid upload request.
+        response 500 Error Template storage failed.
         """
         if not (request.content_type and 'multipart/form-data' in request.content_type):
             return {"error": "Expected multipart/form-data with a file upload."}, 400
@@ -150,13 +267,90 @@ def init_app(app: Flask) -> None:
 
         return {"id": safe_name, "category": ["custom"], "message": "Template imported."}, 201
 
+    @app.route('/api/documents/assets', methods=['POST'])
+    def upload_asset() -> ResponseReturnValue:
+        """Upload an image asset for use in report templates.
+
+        Expects a ``multipart/form-data`` request with a single ``file`` field.
+        Accepted extensions: png, jpg, jpeg, gif, webp (SVG is not accepted
+        through this endpoint, see :data:`UPLOADABLE_ASSET_EXTENSIONS`).
+
+        The upload is capped at :data:`MAX_ASSET_UPLOAD_BYTES` and the decoded
+        content must be a genuine raster image matching the declared
+        extension (see :func:`validate_raster_image`) before it is persisted.
+
+        The file is saved into the first writable
+        ``<templates_dir>/assets/`` directory so :func:`~src.views.templates.find_asset`
+        and :func:`~src.views.templates.embed_image` can locate it at render time.
+        """
+        if not (request.content_type and 'multipart/form-data' in request.content_type):
+            return {"error": "Expected multipart/form-data with a file upload."}, 400
+
+        uploaded = request.files.get('file')
+        if uploaded is None or not uploaded.filename:
+            return {"error": "No file uploaded."}, 400
+
+        safe_name = sanitize_asset_filename(uploaded.filename)
+        if safe_name is None:
+            allowed = ", ".join(sorted(UPLOADABLE_ASSET_EXTENSIONS))
+            return {"error": f"Unsupported image file. Allowed extensions: {allowed}."}, 400
+
+        # MAX_CONTENT_LENGTH bounds multipart parsing and temporary storage.
+        # Keep a per-file bound as a secondary guard for this endpoint.
+        data = uploaded.stream.read(MAX_ASSET_UPLOAD_BYTES + 1)
+        if len(data) > MAX_ASSET_UPLOAD_BYTES:
+            max_mib = MAX_ASSET_UPLOAD_BYTES // (1024 * 1024)
+            return {"error": f"Image exceeds the maximum allowed size of {max_mib} MiB."}, 413
+
+        ext = safe_name.rsplit(".", 1)[-1].lower()
+        if not validate_raster_image(data, ext):
+            return {"error": "Uploaded file is not a valid image matching its extension."}, 400
+
+        target_dir = writable_assets_dir()
+        if target_dir is None:
+            return {"error": "No writable assets directory available on the server."}, 500
+
+        try:
+            with open(os.path.join(target_dir, safe_name), "wb") as f:
+                f.write(data)
+        except OSError as e:
+            print(e, flush=True)
+            return {"error": f"Failed to save asset: {e}"}, 500
+
+        return {"name": safe_name, "message": "Asset uploaded."}, 201
+
     @app.route('/api/documents/<doc_name>', methods=['GET'])
     def doc_by_name(doc_name: str) -> ResponseReturnValue:
+        """Render or export a document template or SBOM format.
+
+        OpenAPI:
+        query ext string optional Output extension or conversion target.
+        query author string optional Author metadata injected into the document.
+        query client_name string optional Client metadata injected into the document.
+        query export_date string optional Export date override.
+        query ignore_before string optional Lower bound for historical data inclusion.
+        query only_epss_greater number optional Minimum EPSS threshold to include.
+        query variant_id uuid optional Restrict export to a single variant.
+        query project_id uuid optional Restrict export to a single project.
+        response 200 JsonObject Exported document payload or download response.
+        response 400 Error Invalid export request.
+        response 503 Error Required conversion tool not available.
+        """
         try:
             base_mime = guess_mime_type(doc_name)
             if base_mime is None:
                 return {"error": "Unsupported document type"}, 400
             expected_mime = guess_mime_type(request.args.get("ext")) or base_mime
+
+            asset_path = find_asset(doc_name)
+            if asset_path is not None:
+                return send_file(
+                    asset_path,
+                    mimetype=base_mime,
+                    as_attachment=True,
+                    download_name=doc_name,
+                )
+
             metadata: Dict[str, str | float] = {
                 "author": request.args.get("author") or os.getenv('AUTHOR_NAME', 'Savoir-faire Linux') or '',
                 "client_name": request.args.get("client_name") or os.getenv('CLIENT_NAME', "") or '',

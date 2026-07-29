@@ -36,6 +36,19 @@ def app(init_files):
             "NVD_DB_PATH": "webapp_tests/mini_nvd.db"
         })
         setup_demo_db(application)
+        with application.app_context():
+            from src.extensions import db
+            from src.models.finding import Finding
+            from src.models.observation import Observation
+            from src.models.package import Package
+            from src.models.vulnerability import Vulnerability
+
+            package = Package.get_by_string_id("cairo@1.16.0")
+            assert package is not None
+            Vulnerability.get_or_create("CVE-1999-12345")
+            finding = Finding.get_or_create(package.id, "CVE-1999-12345")
+            Observation.create(finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+            db.session.commit()
         yield application
     finally:
         os.environ.pop("FLASK_SQLALCHEMY_DATABASE_URI", None)
@@ -56,7 +69,7 @@ def runner(app):
 
 def test_post_minimal_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
-        'packages': ['abc@1.2.3', 'cairo@1.16.0'],
+        'packages': ['cairo@1.16.0'],
         'status': 'exploitable',
         'workaround': 'Disable option X in configuration',
         'variant_id': '22222222-2222-2222-2222-222222222222',
@@ -67,7 +80,7 @@ def test_post_minimal_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 3
+    assert len(data) == 2
     assert "CVE-1999-12345" in data_str
     assert "Disable option X in configuration" in data_str
 
@@ -75,7 +88,7 @@ def test_post_minimal_assessment(client):
 def test_post_detailled_assessment(client):
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
         'vuln_id': 'CVE-1999-12345',
-        'packages': ['abc@1.2.3', 'cairo@1.16.0'],
+        'packages': ['cairo@1.16.0'],
         'status': 'exploitable',
         'status_notes': 'Demonstration assessment',
         'responses': ['can_not_fix'],
@@ -92,7 +105,7 @@ def test_post_detailled_assessment(client):
     assert response.status_code == 200
     data = json.loads(response.data)
     data_str = response.get_data(as_text=True)
-    assert len(data) == 3
+    assert len(data) == 2
     assert "CVE-1999-12345" in data_str
     assert "Demonstration assessment" in data_str
 
@@ -148,6 +161,125 @@ def test_post_assessment_invalid_payloads(client):
     assert response.status_code == 400
 
 
+def test_post_assessment_missing_package_blocked(client):
+    # A package that does not exist in the DB must not be auto-created; the
+    # whole write is blocked with a 400 and no assessment is recorded.
+    from src.models.package import Package
+
+    before = client.get("/api/assessments?format=list")
+    before_count = len(json.loads(before.data))
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['does-not-exist@9.9.9'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 400
+    assert "does-not-exist@9.9.9" in response.get_data(as_text=True)
+
+    # No package was created and no assessment was written.
+    with client.application.app_context():
+        assert Package.get_by_string_id("does-not-exist@9.9.9") is None
+    after = client.get("/api/assessments?format=list")
+    assert len(json.loads(after.data)) == before_count
+
+
+def test_post_assessment_any_missing_package_blocks_all(client):
+    # If ANY referenced package is missing, the whole request is rejected even
+    # when other packages exist.
+    from src.models.package import Package
+
+    before = client.get("/api/assessments?format=list")
+    before_count = len(json.loads(before.data))
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['cairo@1.16.0', 'missing@1.0.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 400
+    assert "missing@1.0.0" in response.get_data(as_text=True)
+
+    with client.application.app_context():
+        assert Package.get_by_string_id("missing@1.0.0") is None
+    after = client.get("/api/assessments?format=list")
+    assert len(json.loads(after.data)) == before_count
+
+
+def test_post_assessment_accepts_outdated_observed_finding(client):
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+
+    with client.application.app_context():
+        old_package = Package.find_or_create("cairo", "1.15.0")
+        old_finding = Finding.get_or_create(old_package.id, "CVE-1999-12345")
+        Observation.create(old_finding.id, "33333333-3333-3333-3333-333333333333", commit=False)
+        db.session.commit()
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['cairo@1.15.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 200
+    assert json.loads(response.data)["assessment"]["packages"] == ["cairo@1.15.0"]
+
+
+def test_post_assessment_rejects_unobserved_finding(client):
+    from src.models.package import Package
+
+    with client.application.app_context():
+        Package.find_or_create("cairo", "1.14.0")
+        from src.extensions import db
+        db.session.commit()
+
+    response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
+        'packages': ['cairo@1.14.0'],
+        'status': 'exploitable',
+        'variant_id': '22222222-2222-2222-2222-222222222222',
+    })
+    assert response.status_code == 400
+    assert "Invalid package version" in response.get_data(as_text=True)
+
+
+def test_batch_missing_package_cancels_whole_batch(client):
+    # A missing package cancels the complete user action, including valid items.
+    from src.models.assessment import Assessment
+    from src.models.package import Package
+
+    with client.application.app_context():
+        before = len(Assessment.get_by_vulnerability("CVE-1999-12345"))
+
+    response = client.post("/api/assessments/batch", json={
+        'assessments': [
+            {
+                'vuln_id': 'CVE-1999-12345',
+                'packages': ['cairo@1.16.0'],
+                'status': 'exploitable',
+                'variant_id': '22222222-2222-2222-2222-222222222222',
+            },
+            {
+                'vuln_id': 'CVE-1999-12345',
+                'packages': ['ghost@0.0.1'],
+                'status': 'exploitable',
+                'variant_id': '22222222-2222-2222-2222-222222222222',
+            },
+        ]
+    })
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert data["count"] == 0
+    assert data["assessments"] == []
+    assert data.get("error_count") == 1
+    assert any("ghost@0.0.1" in e.get("error", "") for e in data["errors"])
+
+    with client.application.app_context():
+        assert Package.get_by_string_id("ghost@0.0.1") is None
+        assert len(Assessment.get_by_vulnerability("CVE-1999-12345")) == before
+
+
 def test_patch_vulnerability_empty(client):
     response = client.patch("/api/vulnerabilities/CVE-2020-35492", json={})
     assert response.status_code == 200
@@ -201,7 +333,7 @@ def test_patch_vulnerability_invalids(client):
 def test_update_assessment(client):
     # First create an assessment
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
-        'packages': ['abc@1.2.3'],
+        'packages': ['cairo@1.16.0'],
         'status': 'exploitable',
         'status_notes': 'Initial assessment',
         'workaround': 'No workaround available',
@@ -243,7 +375,7 @@ def test_update_assessment_not_found(client):
 def test_update_assessment_invalid_status(client):
     # First create an assessment
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
-        'packages': ['abc@1.2.3'],
+        'packages': ['cairo@1.16.0'],
         'status': 'exploitable',
         'variant_id': '22222222-2222-2222-2222-222222222222',
     })
@@ -265,7 +397,7 @@ def test_update_assessment_invalid_status(client):
 def test_delete_assessment(client):
     # First create an assessment
     response = client.post("/api/vulnerabilities/CVE-1999-12345/assessments", json={
-        'packages': ['abc@1.2.3'],
+        'packages': ['cairo@1.16.0'],
         'status': 'exploitable',
         'status_notes': 'Assessment to be deleted',
         'variant_id': '22222222-2222-2222-2222-222222222222',

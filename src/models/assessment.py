@@ -717,11 +717,14 @@ class Assessment(Base):
         ).scalars().all())
 
     @staticmethod
-    def get_handmade(variant_ids: list[uuid.UUID] | None = None) -> list["Assessment"]:
-        """Return assessments created/edited via the web UI (``origin='custom'``)."""
+    def get_by_origin(variant_ids: list[uuid.UUID] | None = None, origin: str = "custom") -> list["Assessment"]:
+        """Return assessments matching ``origin`` (``'custom'`` = created/edited
+        via the web UI, ``'ai'`` = pending AI-generated suggestions), optionally
+        restricted to the given ``variant_ids``.
+        """
         query = (
             db.select(Assessment)
-            .where(Assessment.origin == "custom")
+            .where(Assessment.origin == origin)
             .options(joinedload(Assessment.finding).joinedload(Finding.package))
             .order_by(Assessment.timestamp.desc())
         )
@@ -740,6 +743,8 @@ class Assessment(Base):
         impact_statement: Optional[str] = None,
         workaround: Optional[str] = None,
         responses: Optional[list[str]] = None,
+        timestamp: Optional[datetime] = None,
+        update_timestamp: bool = True,
     ) -> "Assessment":
         """Update fields in place, persist the change and return ``self``."""
         if status is not None:
@@ -760,7 +765,8 @@ class Assessment(Base):
             self.workaround = workaround
         if responses is not None:
             self.responses = responses
-        self.timestamp = datetime.now(timezone.utc)
+        if update_timestamp:
+            self.timestamp = timestamp or datetime.now(timezone.utc)
         db.session.commit()
         return self
 
