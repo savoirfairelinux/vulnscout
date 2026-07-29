@@ -335,6 +335,15 @@ describe('Vulnerability Table', () => {
         expect(source_header).toBeInTheDocument();
     })
 
+    test('restores visible columns from local storage', async () => {
+        window.localStorage.setItem('vulnscout.tables.vulnerabilities.visibleColumns', JSON.stringify(['ID']));
+
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByRole('columnheader', {name: /id/i})).toBeTruthy();
+        expect(screen.queryByRole('columnheader', {name: /severity/i})).toBeNull();
+    });
+
     test('render with vulnerabilities', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);

@@ -14,3 +14,7 @@ global.fetch = jest.fn(() =>
 jest.mock('./src/helpers/useDocUrl', () => ({
   useDocUrl: (path: string) => `https://vulnscout.readthedocs.io/en/test/${path}`,
 }));
+
+beforeEach(() => {
+  window.localStorage.clear();
+});

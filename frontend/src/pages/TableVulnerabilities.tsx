@@ -75,6 +75,7 @@ function useRefreshProgressEffect(
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFilter, faCaretDown, faCircleQuestion, faSync, faCircleInfo, faBook } from '@fortawesome/free-solid-svg-icons';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
+import { useLocalStorageState } from '../handlers/localStorage';
 import RangeSlider from "../components/RangeSlider";
 
 type Props = {
@@ -368,6 +369,7 @@ const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+    const preferenceKey = 'vulnscout.tables.vulnerabilities';
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -437,20 +439,20 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         return () => controller.abort();
     }, [modalVuln, variantId, projectId]);
     const [isEditing, setIsEditing] = useState<boolean>(false);
-    const [search, setSearch] = useState<string>('');
-    const [draftSearch, setDraftSearch] = useState<string>('');
+    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
+    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
     const [descriptionMatches, setDescriptionMatches] = useState<Record<string, Set<string>>>({});
     const [descriptionSearchLoading, setDescriptionSearchLoading] = useState(false);
     const [descriptionSearchError, setDescriptionSearchError] = useState(false);
-    const [selectedSeverities, setSelectedSeverities] = useState<string[]>([]);
-    const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
-    const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
-    const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
-    const [publishedDateValue, setPublishedDateValue] = useState<string>('');
-    const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
-    const [publishedDateFrom, setPublishedDateFrom] = useState<string>('');
-    const [publishedDateTo, setPublishedDateTo] = useState<string>('');
+    const [selectedSeverities, setSelectedSeverities] = useLocalStorageState<string[]>(`${preferenceKey}.severities`, []);
+    const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, []);
+    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
+    const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, []);
+    const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '');
+    const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '');
+    const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '');
+    const [publishedDateFrom, setPublishedDateFrom] = useLocalStorageState(`${preferenceKey}.publishedDate.from`, '');
+    const [publishedDateTo, setPublishedDateTo] = useLocalStorageState(`${preferenceKey}.publishedDate.to`, '');
     const [nvdProgress, setNvdProgress] = useState<NVDProgress | null>(null);
     const [epssProgress, setEpssProgress] = useState<EPSSProgress | null>(null);
     const [ghsaProgress, setGhsaProgress] = useState<GHSAProgress | null>(null);
@@ -464,24 +466,25 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [localMissingEuvdDataBannerDismissed, setLocalMissingEuvdDataBannerDismissed] = useState(false);
     const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
-    const [visibleColumns, setVisibleColumns] = useState<string[]>([
+    const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, [
         'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useState<boolean>(false);
-    const [severityRange, setSeverityRange] = useState<{ min: number; max: number }>({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
-    const [showCustomEpssFilter, setShowCustomEpssFilter] = useState<boolean>(false);
-    const [epssRange, setEpssRange] = useState<{ min: number; max: number }>({ min: 0, max: 100 });
-    const [selectedAttackVectors, setSelectedAttackVectors] = useState<string[]>([]);
-    const [selectedFirstScanDates, setSelectedFirstScanDates] = useState<string[]>([]);
+    const [showCustomSeverityFilter, setShowCustomSeverityFilter] = useLocalStorageState(`${preferenceKey}.customSeverity.enabled`, false);
+    const [severityRange, setSeverityRange] = useLocalStorageState(`${preferenceKey}.customSeverity.range`, { min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
+    const [showCustomEpssFilter, setShowCustomEpssFilter] = useLocalStorageState(`${preferenceKey}.customEpss.enabled`, false);
+    const [epssRange, setEpssRange] = useLocalStorageState(`${preferenceKey}.customEpss.range`, { min: 0, max: 100 });
+    const [selectedAttackVectors, setSelectedAttackVectors] = useLocalStorageState<string[]>(`${preferenceKey}.attackVectors`, []);
+    const [selectedFirstScanDates, setSelectedFirstScanDates] = useLocalStorageState<string[]>(`${preferenceKey}.firstScanDates`, []);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMoreFilters, setShowMoreFilters] = useState(false);
-    const [aiSuggestionFilter, setAiSuggestionFilter] = useState<'any' | 'has' | 'no'>('any');
+    const [aiSuggestionFilter, setAiSuggestionFilter] = useLocalStorageState<'any' | 'has' | 'no'>(`${preferenceKey}.aiSuggestion`, 'any');
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const hasRestoredSearch = useRef(false);
     const descriptionSearchController = useRef<AbortController | null>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -601,7 +604,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         if (filterLabel === "Severity") setSelectedSeverities([filterValue]);
         if (filterLabel === "Status") setSelectedStatuses([filterValue]);
         if (filterLabel === "Package") setSelectedPackages([filterValue]);
-    }, [filterLabel, filterValue]);
+    }, [filterLabel, filterValue, setSelectedPackages, setSelectedSeverities, setSelectedSources, setSelectedStatuses]);
 
     // Fetch pending AI suggestions (origin == 'ai') for the current scope. These are
     // excluded from the vulnerabilities' assessments array by the backend, so they must
@@ -1416,7 +1419,13 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         } finally {
             if (!controller.signal.aborted) setDescriptionSearchLoading(false);
         }
-    }, [draftSearch, vulnerabilities, variantId, projectId]);
+    }, [draftSearch, vulnerabilities, variantId, projectId, setSearch]);
+
+    useEffect(() => {
+        if (hasRestoredSearch.current) return;
+        hasRestoredSearch.current = true;
+        if (draftSearch.trim()) void applySearch();
+    }, [applySearch, draftSearch]);
 
     useEffect(() => () => descriptionSearchController.current?.abort(), []);
 
@@ -1921,6 +1930,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         />
 
         <TableGeneric
+            persistenceKey={preferenceKey}
             fuseKeys={fuseKeys}
             forAllValues={(vuln) => (vuln.packages_current?.length ? vuln.packages_current : vuln.packages)}
             hoverField="texts"

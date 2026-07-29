@@ -156,6 +156,17 @@ describe('Packages Table', () => {
         expect(source_col).toBeTruthy();
     })
 
+    test('restores the applied search from local storage', async () => {
+        window.localStorage.setItem('vulnscout.tables.packages.search', JSON.stringify('xxxyyyzzz'));
+        window.localStorage.setItem('vulnscout.tables.packages.draftSearch', JSON.stringify('xxxyyyzzz'));
+
+        render(<TablePackages packages={packages} />);
+
+        expect(await screen.findByText('xxxyyyzzz')).toBeTruthy();
+        expect(screen.queryByText('aaabbbccc')).toBeNull();
+        expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe('xxxyyyzzz');
+    });
+
     test('package search applies only with the button or Enter', async () => {
         render(<TablePackages packages={packages} />);
         const user = userEvent.setup();

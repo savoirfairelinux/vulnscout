@@ -13,6 +13,7 @@ import type { Vulnerability } from '../handlers/vulnerabilities';
 import Vulnerabilities from '../handlers/vulnerabilities';
 import MessageBanner from '../components/MessageBanner';
 import ExplicitSearchInput from '../components/ExplicitSearchInput';
+import { useLocalStorageState } from '../handlers/localStorage';
 
 type Props = {
     packages: Package[];
@@ -38,19 +39,22 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 }
 
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl']
+const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutdatedPackages, outdatedScopeKey }: Readonly<Props>) {
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages, outdatedScopeKey }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
-    const [search, setSearch] = useState<string>('');
-    const [draftSearch, setDraftSearch] = useState<string>('');
-    const [selectedSources, setSelectedSources] = useState<string[]>([]);
-    const [selectedSbomDocs, setSelectedSbomDocs] = useState<string[]>([]);
-    const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
-    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const preferenceKey = 'vulnscout.tables.packages';
+    const [search, setSearch] = useLocalStorageState(`${preferenceKey}.search`, '');
+    const [draftSearch, setDraftSearch] = useLocalStorageState(`${preferenceKey}.draftSearch`, '');
+    const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
+    const [selectedSbomDocs, setSelectedSbomDocs] = useLocalStorageState<string[]>(`${preferenceKey}.sbomDocuments`, []);
+    const [selectedSuppliers, setSelectedSuppliers] = useLocalStorageState<string[]>(`${preferenceKey}.suppliers`, []);
+    const [showOnlyOutdated, setShowOnlyOutdated] = useLocalStorageState(`${preferenceKey}.outdatedOnly`, false);
     const [packagesWithOutdated, setPackagesWithOutdated] = useState<Package[] | null>(null);
     const [outdatedLoading, setOutdatedLoading] = useState(false);
     const [outdatedLoadError, setOutdatedLoadError] = useState('');
-    const [matchCondition, setMatchCondition] = useState('');
+    const [matchCondition, setMatchCondition] = useLocalStorageState(`${preferenceKey}.matchCondition`, '');
+    const [appliedMatchCondition, setAppliedMatchCondition] = useLocalStorageState(`${preferenceKey}.appliedMatchCondition`, '');
     const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
     const [matchConditionError, setMatchConditionError] = useState('');
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
@@ -158,7 +162,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         return cols;
     }, [hasSupplierInfo]);
 
-    const [visibleColumns, setVisibleColumns] = useState<string[]>(defaultVisibleColumns);
+    const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, defaultVisibleColumns);
 
     const matchingVulnerabilityCounts = useMemo(() => {
         const counts = new Map<string, number>();
@@ -193,9 +197,21 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
     // Matched IDs are a snapshot of a server-side evaluation; drop them whenever
     // the vulnerability data changes so the filter never shows stale results.
     useEffect(() => {
-        setMatchingVulnerabilityIds(null);
+        let cancelled = false;
         setMatchConditionError('');
-    }, [vulnerabilities]);
+        if (!appliedMatchCondition) {
+            setMatchingVulnerabilityIds(null);
+            return;
+        }
+        Vulnerabilities.matchCondition(appliedMatchCondition, vulnerabilities)
+            .then(ids => { if (!cancelled) setMatchingVulnerabilityIds(ids); })
+            .catch(error => {
+                if (cancelled) return;
+                setMatchingVulnerabilityIds(null);
+                setMatchConditionError(error instanceof Error ? error.message : 'Unable to evaluate match condition');
+            });
+        return () => { cancelled = true; };
+    }, [appliedMatchCondition, vulnerabilities]);
 
     // Discard historical rows from the previous project/variant scope so an
     // enabled outdated filter immediately fetches the new scope.
@@ -222,20 +238,10 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         return () => { cancelled = true; };
     }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages, outdatedScopeKey]);
 
-    const applyMatchCondition = async () => {
+    const applyMatchCondition = () => {
         const condition = matchCondition.trim();
-        if (!condition) {
-            setMatchingVulnerabilityIds(null);
-            setMatchConditionError('');
-            return;
-        }
         setMatchConditionError('');
-        try {
-            setMatchingVulnerabilityIds(await Vulnerabilities.matchCondition(condition, vulnerabilities));
-        } catch (error) {
-            setMatchingVulnerabilityIds(null);
-            setMatchConditionError(error instanceof Error ? error.message : 'Unable to evaluate match condition');
-        }
+        setAppliedMatchCondition(condition);
     };
 
     const resetFilters = () => {
@@ -245,6 +251,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
         setMatchCondition('');
+        setAppliedMatchCondition('');
         setMatchingVulnerabilityIds(null);
         setMatchConditionError('');
         setShowOnlyOutdated(false);
@@ -683,7 +690,7 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         </div>
 
         <div ref={tableRef}>
-            <TableGeneric fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
+            <TableGeneric persistenceKey={preferenceKey} fuseKeys={fuseKeys} forAllValues={(pkg) => [pkg.name]} search={search} columns={columns} data={filteredPackages} estimateRowHeight={57} />
         </div>
     </>);
 }
