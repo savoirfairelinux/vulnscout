@@ -297,6 +297,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             columnHelper.accessor('cpe', {
                 id: 'cpe',
                 header: () => <div className="flex items-center justify-center">CPE</div>,
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">CPE</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>Lists the Common Platform Enumeration identifiers associated with this package.</p>
+                        <p>CPE identifiers are used to match packages with vulnerability records.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package CPE helper',
                 cell: info => {
                     const cpeList = info.getValue();
                     if (!cpeList || cpeList.length === 0) return <div className="flex items-center justify-center h-full text-neutral-500">—</div>;
@@ -316,6 +324,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             columnHelper.accessor('purl', {
                 id: 'purl',
                 header: () => <div className="flex items-center justify-center">PURL</div>,
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">PURL</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>Lists the Package URL identifiers associated with this package.</p>
+                        <p>PURLs identify packages across package managers and ecosystems.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package PURL helper',
                 cell: info => {
                     const purls = info.getValue();
                     if (!purls || purls.length === 0) return <div className="flex items-center justify-center h-full text-neutral-500">—</div>;
@@ -335,6 +351,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             columnHelper.accessor('supplier', {
                 id: 'supplier',
                 header: () => <div className="flex items-center justify-center">Supplier</div>,
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">Supplier</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>Shows the organization or person that supplied this package.</p>
+                        <p>Supplier information comes from the SBOM package metadata.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package Supplier helper',
                 cell: info => {
                     const supplier = info.getValue();
                     if (!supplier) return (
@@ -434,6 +458,14 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             columnHelper.accessor(row => row, {
                 id: 'actions',
                 header: 'Actions',
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">Actions</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>Show Vulnerabilities adds a filter for this package.</p>
+                        <p>It then redirects you to the Vulnerabilities tab to display the matching vulnerabilities.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package Actions helper',
                 cell: info => (
                     <div className="flex items-center justify-center h-full">
                         <button
