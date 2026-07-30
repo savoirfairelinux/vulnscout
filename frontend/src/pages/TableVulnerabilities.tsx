@@ -1892,6 +1892,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <span className="h-6 border-l border-gray-400" aria-hidden="true" />
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
+                    getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation)}
                     triggerBanner={triggerBanner}
                     hideBanner={closeBanner}
                     nvdProgress={nvdProgress}
