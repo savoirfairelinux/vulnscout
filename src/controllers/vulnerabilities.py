@@ -420,6 +420,43 @@ class VulnerabilitiesController:
         tracker.complete()
         print(f"=== EPSS: done — enriched {nb_vuln}/{total} CVEs in {time.time() - start_time:.1f}s.", flush=True)
 
+    def fetch_euvd_data(self):
+        """Enrich the currently loaded CVEs from the cached ENISA EUVD data."""
+        from ..controllers.euvd_db import EUVD_DB
+
+        euvd = EUVD_DB()
+        full_map = euvd.get_full_mapping()
+        kev_map = euvd.get_mapping()
+        now = datetime.datetime.utcnow()
+
+        for vuln_id in self.vulnerabilities:
+            if not vuln_id.startswith("CVE-"):
+                continue
+            kev = kev_map.get(vuln_id)
+            euvd_id = full_map.get(vuln_id) or (kev.get("euvd_id") if kev else None)
+            if euvd_id is None:
+                continue
+            try:
+                rec = self._db_record_cache.get(vuln_id) or Vulnerability.get_by_id(vuln_id)
+                if rec is not None:
+                    rec.update_record(
+                        euvd_id=euvd_id,
+                        euvd_known_exploited=kev is not None,
+                        euvd_kev_sources=(kev.get("sources") or []) if kev else [],
+                        euvd_date_added=kev.get("date_added") if kev else None,
+                        euvd_fetched_at=now,
+                        euvd_data_updated_at=now,
+                        commit=False,
+                    )
+            except Exception as e:
+                verbose(f"[fetch_euvd_data {vuln_id!r}] {e}")
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            verbose(f"[fetch_euvd_data final commit] {e}")
+            db.session.rollback()
+
     @staticmethod
     def _fetch_ghsa_published(vuln_id: str) -> Optional[str]:
         """Fetch the published date for a single GHSA advisory (thread-safe)."""

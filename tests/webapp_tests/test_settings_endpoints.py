@@ -560,6 +560,7 @@ class TestSBOMUpload:
         data = {
             "project_id": pid,
             "variant_id": vid,
+            "refresh_sources": ["epss", "euvd"],
             "files": (io.BytesIO(content), "sbom.spdx.json"),
         }
         resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
@@ -568,6 +569,71 @@ class TestSBOMUpload:
         assert "upload_id" in body
         assert "scan_id" in body
         mock_thread.return_value.start.assert_called_once()
+        assert mock_thread.call_args.kwargs["args"][-1] == {"epss", "euvd"}
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_defaults_to_epss_refresh(self, mock_thread, client):
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "files": (io.BytesIO(_make_spdx_json()), "sbom.spdx.json"),
+        }
+
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 202
+        assert mock_thread.call_args.kwargs["args"][-1] == {"epss"}
+
+    def test_upload_rejects_unknown_refresh_source(self, client):
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "refresh_sources": "unknown",
+            "files": (io.BytesIO(_make_spdx_json()), "sbom.spdx.json"),
+        }
+
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 400
+        assert "Unknown refresh source" in resp.get_json()["error"]
+
+    @patch("src.routes.settings.threading.Thread")
+    def test_upload_none_sentinel_disables_all_refresh(self, mock_thread, client):
+        """The 'none' sentinel must not fall back to the epss default."""
+        mock_thread.return_value = MagicMock()
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "refresh_sources": "none",
+            "files": (io.BytesIO(_make_spdx_json()), "sbom.spdx.json"),
+        }
+
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 202
+        assert mock_thread.call_args.kwargs["args"][-1] == set()
+
+    def test_upload_rejects_none_mixed_with_other_sources(self, client):
+        pid = _get_project_id(client)
+        vid = _get_variant_id(client, pid)
+        data = {
+            "project_id": pid,
+            "variant_id": vid,
+            "refresh_sources": ["none", "epss"],
+            "files": (io.BytesIO(_make_spdx_json()), "sbom.spdx.json"),
+        }
+
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 400
+        assert "Unknown refresh source" in resp.get_json()["error"]
 
     @patch("src.routes.settings.threading.Thread")
     def test_upload_multiple_files(self, mock_thread, client):
@@ -2344,6 +2410,84 @@ class TestProcessSBOMBackgroundEpss:
             scan = Scan.create("", variant.id)
 
             upload_id = "epss-coverage-test"
+            _process_sbom_background(app, upload_id, [], scan.id, variant.id)
+
+            assert _upload_status[upload_id]["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: refresh sources are isolated from one another
+# ---------------------------------------------------------------------------
+
+class TestProcessSBOMBackgroundRefreshIsolation:
+
+    def test_one_source_failure_does_not_block_the_others(self, app, monkeypatch):
+        """A failure in one selected refresh source must not prevent the
+        remaining selected sources from running."""
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
+
+        called: list[str] = []
+
+        def fake_read_inputs(controllers, scan_id=None):
+            vuln = Vulnerability.create_record(id="CVE-PARTIAL-0001", description="partial")
+            db.session.commit()
+            controllers.vulnerabilities.vulnerabilities = {vuln.id: vuln}
+            controllers.vulnerabilities._encountered_this_run = {vuln.id}
+
+        def failing_post_treatment(controllers):
+            called.append("epss")
+            raise RuntimeError("epss down")
+
+        def fake_fetch_nvd_data(self):
+            called.append("nvd")
+
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", fake_read_inputs)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+        monkeypatch.setattr("src.bin.cmd_process.post_treatment", failing_post_treatment)
+        monkeypatch.setattr(
+            "src.controllers.vulnerabilities.VulnerabilitiesController.fetch_nvd_data",
+            fake_fetch_nvd_data,
+        )
+
+        with app.app_context():
+            project = Project.create("PartialFailProject")
+            variant = Variant.create("PartialFailVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            upload_id = "partial-fail-test"
+            _process_sbom_background(
+                app, upload_id, [], scan.id, variant.id, {"epss", "nvd"},
+            )
+
+            assert called == ["epss", "nvd"]
+            status = _upload_status[upload_id]
+            assert status["status"] == "done"
+            assert "EPSS refresh failed" in status["message"]
+
+    def test_no_arg_defaults_to_epss(self, app, monkeypatch):
+        """Callers that omit refresh_sources keep the historical epss-only default."""
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", lambda *a, **k: None)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+
+        with app.app_context():
+            project = Project.create("NoArgDefaultProject")
+            variant = Variant.create("NoArgDefaultVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            upload_id = "no-arg-default-test"
             _process_sbom_background(app, upload_id, [], scan.id, variant.id)
 
             assert _upload_status[upload_id]["status"] == "done"

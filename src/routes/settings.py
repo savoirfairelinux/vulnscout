@@ -51,6 +51,7 @@ class _CrudController(Protocol[_C]):
 # Tracks in-progress SBOM uploads: upload_id → {status, message, ts}
 _upload_status: dict[str, dict] = {}
 _UPLOAD_STATUS_TTL = 3600  # seconds – entries older than this are pruned
+_REFRESH_SOURCES = {"epss", "nvd", "euvd", "ghsa"}
 
 
 def _prune_upload_status() -> None:
@@ -167,9 +168,11 @@ def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, s
 
 def _process_sbom_background(
     app: Flask, upload_id: str, file_paths: list[str],
-    scan_id: uuid.UUID, variant_id: uuid.UUID,
+    scan_id: uuid.UUID, variant_id: uuid.UUID, refresh_sources: set[str] | None = None,
 ) -> None:
     """Run SBOM parsing in a background thread for one or more files."""
+    if refresh_sources is None:
+        refresh_sources = {"epss"}
     with app.app_context():
         try:
             _upload_status[upload_id] = {"status": "processing", "message": "Parsing SBOM file(s)..."}
@@ -194,16 +197,48 @@ def _process_sbom_background(
                 else ScanModel.get_by_id(uuid.UUID(str(scan_id)))
             populate_observations(scan, vulnCtrl, log_prefix="settings/upload")
 
-            # Run EPSS enrichment
+            encountered = vulnCtrl._encountered_this_run
+            all_vulnerabilities = vulnCtrl.vulnerabilities
+            failed_sources: list[str] = []
             try:
-                _upload_status[upload_id] = {"status": "processing", "message": "Enriching with EPSS scores..."}
-                post_treatment(controllers)
-            except Exception as e:
-                verbose(f"settings/upload: EPSS enrichment failed: {e}")
+                for source in ("epss", "nvd", "euvd", "ghsa"):
+                    if source not in refresh_sources:
+                        continue
+                    prefix = "GHSA-" if source == "ghsa" else "CVE-"
+                    vulnCtrl.vulnerabilities = {
+                        vuln_id: all_vulnerabilities[vuln_id]
+                        for vuln_id in encountered
+                        if vuln_id.startswith(prefix) and vuln_id in all_vulnerabilities
+                    }
+                    if not vulnCtrl.vulnerabilities:
+                        continue
+                    label = source.upper()
+                    _upload_status[upload_id] = {
+                        "status": "processing",
+                        "message": f"Refreshing {label} data...",
+                    }
+                    # Each source is isolated so one failure doesn't skip the rest.
+                    try:
+                        if source == "epss":
+                            post_treatment(controllers)
+                        elif source in {"nvd", "ghsa"}:
+                            vulnCtrl.fetch_nvd_data()
+                        else:
+                            vulnCtrl.fetch_euvd_data()
+                    except Exception as e:
+                        failed_sources.append(label)
+                        verbose(f"settings/upload: {label} enrichment failed: {e}")
+            finally:
+                vulnCtrl.vulnerabilities = all_vulnerabilities
+
+            done_message = "SBOM imported successfully."
+            if failed_sources:
+                unique_failed = list(dict.fromkeys(failed_sources))
+                done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
 
             _upload_status[upload_id] = {
                 "status": "done",
-                "message": "SBOM imported successfully.",
+                "message": done_message,
                 "ts": time.time(),
             }
 
@@ -1102,6 +1137,24 @@ def init_app(app: Flask) -> None:
 
         project_id = request.form.get('project_id', '').strip()
         variant_id = request.form.get('variant_id', '').strip()
+        requested_refresh_sources = request.form.getlist('refresh_sources')
+        normalized_refresh_sources = {
+            source.strip().lower() for source in requested_refresh_sources if source.strip()
+        }
+        if not requested_refresh_sources:
+            # Field omitted entirely (older clients): keep the historical default.
+            refresh_sources = {"epss"}
+        elif normalized_refresh_sources == {"none"}:
+            # Explicit sentinel sent when the user unchecked every source.
+            refresh_sources = set()
+        else:
+            refresh_sources = normalized_refresh_sources
+
+        unknown_refresh_sources = refresh_sources - _REFRESH_SOURCES
+        if unknown_refresh_sources:
+            return jsonify({
+                "error": f"Unknown refresh source(s): {', '.join(sorted(unknown_refresh_sources))}.",
+            }), 400
 
         if not project_id:
             return jsonify({"error": "project_id is required."}), 400
@@ -1205,7 +1258,7 @@ def init_app(app: Flask) -> None:
         # Process in background
         threading.Thread(
             target=_process_sbom_background,
-            args=(app, upload_id, tmp_paths, scan.id, variant.id),
+            args=(app, upload_id, tmp_paths, scan.id, variant.id, refresh_sources),
             name=f"sbom-upload-{upload_id}",
             daemon=True,
         ).start()

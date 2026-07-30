@@ -559,6 +559,7 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importRefreshSources, setImportRefreshSources] = useState<Set<string>>(new Set(["epss"]));
 
   useEffect(() => {
     if (!importProjectId) {
@@ -601,7 +602,8 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       const result = await Variants.uploadSBOM(
         importProjectId,
         importVariantId,
-        importFiles
+        importFiles,
+        Array.from(importRefreshSources),
       );
       onLoadingMessage?.("Processing SBOM...");
 
@@ -1348,6 +1350,29 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
                 (<code>.tar</code>, <code>.tar.gz</code>, <code>.tar.zst</code>) used for SPDX2.
               </p>
             </div>
+
+            <fieldset className="space-y-2">
+              <legend className="block text-sm text-zinc-300 mb-1">Refresh vulnerability data</legend>
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {(["epss", "nvd", "euvd", "ghsa"] as const).map((source) => (
+                  <label key={source} className="flex items-center gap-2 text-sm text-zinc-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      aria-label={source.toUpperCase()}
+                      checked={importRefreshSources.has(source)}
+                      disabled={importBusy}
+                      onChange={() => setImportRefreshSources((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(source)) next.delete(source); else next.add(source);
+                        return next;
+                      })}
+                      className="rounded accent-cyan-500"
+                    />
+                    {source.toUpperCase()}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
 
             {/* ---- Submit ---- */}
             <div className="flex items-center gap-3 pt-1">
