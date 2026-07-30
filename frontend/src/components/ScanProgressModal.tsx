@@ -1,11 +1,12 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBug, faShieldHalved, faLeaf, faCrosshairs, faXmark } from "@fortawesome/free-solid-svg-icons";
+import { faBug, faShieldHalved, faLeaf, faCrosshairs, faXmark, faArrowsRotate } from "@fortawesome/free-solid-svg-icons";
 import ScanProgressPanel from "./ScanProgressPanel";
 import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, dismiss as grypeDismiss } from "../handlers/grypeScanState";
 import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, dismiss as nvdDismiss } from "../handlers/nvdScanState";
 import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, dismiss as osvDismiss } from "../handlers/osvScanState";
 import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, dismiss as sccDismiss } from "../handlers/sccScanState";
+import { subscribeToRefreshQueue, getRefreshQueueSnapshot, dismissRefreshQueueEntry } from "../handlers/activeScanQueue";
 
 type Props = {
     isOpen: boolean;
@@ -16,6 +17,7 @@ const grypeColors = { border: "border-purple-700/60", headerBg: "bg-purple-900/4
 const nvdColors = { border: "border-orange-700/60", headerBg: "bg-orange-900/40", iconText: "text-orange-400", titleText: "text-orange-200", subtitleText: "text-orange-300/80", bar: "bg-orange-500" };
 const osvColors = { border: "border-green-700/60", headerBg: "bg-green-900/40", iconText: "text-green-400", titleText: "text-green-200", subtitleText: "text-green-300/80", bar: "bg-green-500" };
 const sccColors = { border: "border-sky-700/60", headerBg: "bg-sky-900/40", iconText: "text-sky-400", titleText: "text-sky-200", subtitleText: "text-sky-300/80", bar: "bg-sky-500" };
+const refreshColors = { border: "border-cyan-700/60", headerBg: "bg-cyan-900/40", iconText: "text-cyan-400", titleText: "text-cyan-200", subtitleText: "text-cyan-300/80", bar: "bg-cyan-500" };
 
 function ScanProgressModal({ isOpen, onClose }: Readonly<Props>) {
     const overlayRef = useRef<HTMLDivElement>(null);
@@ -23,6 +25,7 @@ function ScanProgressModal({ isOpen, onClose }: Readonly<Props>) {
     const nvdEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
     const osvEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const sccEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
+    const refreshEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -36,7 +39,7 @@ function ScanProgressModal({ isOpen, onClose }: Readonly<Props>) {
 
     if (!isOpen) return null;
 
-    const hasEntries = grypeEntries.length + nvdEntries.length + osvEntries.length + sccEntries.length > 0;
+    const hasEntries = grypeEntries.length + nvdEntries.length + osvEntries.length + sccEntries.length + refreshEntries.length > 0;
 
     return (
         <div
@@ -78,6 +81,9 @@ function ScanProgressModal({ isOpen, onClose }: Readonly<Props>) {
                             ))}
                             {sccEntries.map(entry => (
                                 <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
+                            ))}
+                            {refreshEntries.map(entry => (
+                                <ScanProgressPanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={dismissRefreshQueueEntry} />
                             ))}
                         </div>
                     ) : (

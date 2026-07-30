@@ -27,6 +27,7 @@ import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot } from "..
 import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot } from "../handlers/nvdScanState";
 import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot } from "../handlers/osvScanState";
 import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot } from "../handlers/sccScanState";
+import { subscribeToRefreshQueue, getRefreshQueueSnapshot } from "../handlers/activeScanQueue";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -77,7 +78,8 @@ function Explorer() {
     const nvdScanEntries = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
     const osvScanEntries = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
     const sccScanEntries = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
-    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries];
+    const refreshQueueEntries = useSyncExternalStore(subscribeToRefreshQueue, getRefreshQueueSnapshot);
+    const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries];
     const trackedScanCount = scanEntries.length;
     const finishedScanCount = scanEntries
         .filter(entry => entry.status === "done" || entry.status === "error").length;
