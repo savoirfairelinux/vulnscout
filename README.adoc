@@ -417,6 +417,10 @@ The following environment variables can be set via `vulnscout config` or exporte
 |`USER_GID`
 |GID used to write output files
 |current group
+
+|`VULNSCOUT_MAX_UPLOAD_MB`
+|Maximum upload/request body size accepted by the web API, in MB
+|`500`
 |===
 
 .Scan & enrichment
