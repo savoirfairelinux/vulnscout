@@ -17,6 +17,7 @@ import {
   faFolder,
   faGear,
   faRightLeft,
+  faCircleQuestion,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -68,12 +69,27 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
   const [configBusy, setConfigBusy] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configSaved, setConfigSaved] = useState<string | null>(null);
+  const [showAuthorHint, setShowAuthorHint] = useState(false);
+  const authorHintRef = useRef<HTMLDivElement>(null);
   const [configForm, setConfigForm] = useState({
     product_name: "",
     author_name: "",
     client_name: "",
     contact_email: "",
   });
+
+  useEffect(() => {
+    if (!showAuthorHint) return;
+
+    const closeHintOnOutsideClick = (event: MouseEvent) => {
+      if (!authorHintRef.current?.contains(event.target as Node)) {
+        setShowAuthorHint(false);
+      }
+    };
+
+    document.addEventListener("mousedown", closeHintOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeHintOnOutsideClick);
+  }, [showAuthorHint]);
 
   // ---- Grype settings ----
   const [grypeMemlimitInput, setGrypeMemlimitInput] = useState("");
@@ -875,9 +891,36 @@ function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props
               />
             </div>
 
-            <div>
-              <label className="block text-sm text-zinc-300 mb-1">AUTHOR_NAME</label>
+            <div ref={authorHintRef}>
+              <div className="flex items-center gap-1 mb-1">
+                <label htmlFor="author-name" className="text-sm text-zinc-300">AUTHOR_NAME</label>
+                <div className="relative">
+                  <button
+                    type="button"
+                    aria-label="Author name helper"
+                    title="Show author name hint"
+                    className="text-cyan-300 hover:text-cyan-100 transition-colors"
+                    onClick={() => setShowAuthorHint((current) => !current)}
+                  >
+                    <FontAwesomeIcon icon={faCircleQuestion} />
+                  </button>
+                  {showAuthorHint && (
+                    <div
+                      role="tooltip"
+                      className="absolute top-full mt-1 left-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <h3 className="font-bold text-white mb-2">Author Name</h3>
+                      <div className="space-y-1 text-gray-100">
+                        <p>Identifies the person or organization responsible for the report metadata.</p>
+                        <p>Also defines the author of custom CVE data entries.</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
               <input
+                id="author-name"
                 type="text"
                 value={configForm.author_name}
                 onChange={(e) => {

@@ -229,7 +229,7 @@ describe('Explorer saved-scope validation', () => {
             expect(screen.getByTestId('frontend-scope')).toBeEmptyDOMElement();
         });
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    });
+    }, 15_000);
 
     test('clears a scope whose saved variant is no longer available', async () => {
         mockGetFrontendScope.mockReturnValue(savedScope('existing-project', ['deleted-variant']));

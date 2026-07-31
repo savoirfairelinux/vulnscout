@@ -143,9 +143,13 @@ describe("Settings scoped project and variant views", () => {
     render(<Settings />);
 
     fireEvent.change(await screen.findByPlaceholderText("Product name embedded in reports and SBOMs"), { target: { value: "VulnScout" } });
+    fireEvent.change(screen.getByPlaceholderText("Author/company name embedded in reports"), { target: { value: "VulnScout Team" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
     expect(await screen.findByText("Report metadata settings saved.")).toBeInTheDocument();
-    expect(configPatch).toHaveBeenCalledWith(expect.objectContaining({ product_name: "VulnScout" }));
+    expect(configPatch).toHaveBeenCalledWith(expect.objectContaining({
+      product_name: "VulnScout",
+      author_name: "VulnScout Team",
+    }));
 
     fireEvent.change(screen.getByLabelText(/Memory Limit/), { target: { value: "4GiB" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Save" })[1]);
@@ -318,6 +322,26 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByText("No empty scans were found.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Analyze orphaned CVEs/ }));
     expect(await screen.findByText("Cleanup unavailable")).toBeInTheDocument();
+  });
+
+  test("toggles the AUTHOR_NAME hint and closes it when clicking outside", async () => {
+    render(<Settings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Author name helper" }));
+    const hint = await screen.findByRole("tooltip");
+    expect(hint).toHaveTextContent("Author Name");
+
+    fireEvent.mouseDown(hint);
+    fireEvent.click(hint);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Author name helper" }));
+    expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Author name helper" }));
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
   });
 
   test("navigates project and variant controls without committing destructive actions", async () => {
