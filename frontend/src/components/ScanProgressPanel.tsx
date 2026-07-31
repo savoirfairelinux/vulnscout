@@ -33,7 +33,7 @@ type Props = {
 
 export default function ScanProgressPanel({ entry, label, icon, colors, onDismiss }: Props) {
     const { status, variantName, variantPosition, variantCount, progress, logs, total, doneCount } = entry;
-    const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+    const pct = status === "done" ? 100 : total > 0 ? Math.max(0, Math.min(100, Math.round((doneCount / total) * 100))) : 0;
     const hasProgressContent = logs.length > 0 || total > 0 || doneCount > 0;
     const isActivelyScanning = status === "running" && hasProgressContent;
     const expandsForStatus = isActivelyScanning || status === "error";
@@ -57,6 +57,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
         status === "queued" || (status === "running" && !isActivelyScanning) ? "queued"
             : isActivelyScanning ? "in progress"
                 : status === "error" ? "failed"
+                    : status === "cancelled" ? "cancelled"
                     : "complete";
 
     return (
@@ -102,7 +103,7 @@ export default function ScanProgressPanel({ entry, label, icon, colors, onDismis
                 <div id={contentId}>
                     {/* Progress bar */}
                     <div className="w-full h-2 bg-neutral-800">
-                        {!isActivelyScanning && status !== "done" && status !== "error" ? (
+                        {!isActivelyScanning && status !== "done" && status !== "error" && status !== "cancelled" ? (
                             <div className="h-full w-full bg-neutral-600 animate-pulse" />
                         ) : (
                             <div

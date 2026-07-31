@@ -165,4 +165,45 @@ describe('ScanProgressPanel', () => {
         expect(onDismiss).toHaveBeenCalledTimes(1);
         expect(screen.getByText(/nvd scan – variant 1 complete/i)).toBeInTheDocument();
     });
+
+    it('renders zero-total completion at 100% and clamps excessive progress', async () => {
+        const user = userEvent.setup();
+        const { container, rerender } = render(
+            <ScanProgressPanel
+                entry={makeEntry('done', { total: 0, doneCount: 0 })}
+                label="NVD Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+        await user.click(screen.getByRole('button', { name: /nvd scan – variant 1 complete/i }));
+        expect(container.querySelector('.bg-green-500')).toHaveStyle({ width: '100%' });
+
+        rerender(
+            <ScanProgressPanel
+                entry={makeEntry('running', { total: 2, doneCount: 3, logs: ['Finishing'] })}
+                label="NVD Scan"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+        expect(container.querySelector('.bg-cyan-500')).toHaveStyle({ width: '100%' });
+    });
+
+    it('labels cancellation without a success indicator', () => {
+        render(
+            <ScanProgressPanel
+                entry={makeEntry('cancelled', { progress: 'Cancelled', doneCount: 1, total: 4 })}
+                label="Vulnerability Data Refresh"
+                icon={faCircleInfo}
+                colors={colors}
+                onDismiss={jest.fn()}
+            />,
+        );
+
+        expect(screen.getByRole('button', { name: /vulnerability data refresh – variant 1 cancelled/i })).toBeInTheDocument();
+        expect(screen.queryByLabelText('Complete')).not.toBeInTheDocument();
+    });
 });

@@ -7,6 +7,7 @@ import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, dismiss as nv
 import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, dismiss as osvDismiss } from "../handlers/osvScanState";
 import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, dismiss as sccDismiss } from "../handlers/sccScanState";
 import { subscribeToRefreshQueue, getRefreshQueueSnapshot, dismissRefreshQueueEntry } from "../handlers/activeScanQueue";
+import type { RefreshType } from "../handlers/activeScanQueue";
 
 type Props = {
     isOpen: boolean;
@@ -83,7 +84,7 @@ function ScanProgressModal({ isOpen, onClose }: Readonly<Props>) {
                                 <ScanProgressPanel key={`scc-${entry.variantId}`} entry={entry} label="sbom-cve-check Scan" icon={faCrosshairs} colors={sccColors} onDismiss={() => sccDismiss(entry.variantId)} />
                             ))}
                             {refreshEntries.map(entry => (
-                                <ScanProgressPanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={dismissRefreshQueueEntry} />
+                                <ScanProgressPanel key={entry.variantId} entry={entry} label="Vulnerability Data Refresh" icon={faArrowsRotate} colors={refreshColors} onDismiss={() => dismissRefreshQueueEntry(entry.variantId as RefreshType)} />
                             ))}
                         </div>
                     ) : (

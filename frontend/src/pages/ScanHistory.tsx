@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
-import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult, RunningScanEntry } from "../handlers/scans";
-import { subscribe, getSnapshot, setOnDone, queueScan as grypeQueueScan, startQueuedScan as grypeStartQueuedScan, waitForCompletion as grypeWaitForCompletion, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
+import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
+import { subscribe, getSnapshot, setOnDone, queueScan as grypeQueueScan, startQueuedScan as grypeStartQueuedScan, waitForCompletion as grypeWaitForCompletion } from "../handlers/grypeScanState";
 import {
     subscribe as nvdSubscribe,
     getSnapshot as nvdGetSnapshot,
@@ -10,7 +10,6 @@ import {
     queueScan as nvdQueueScan,
     startQueuedScan as nvdStartQueuedScan,
     waitForCompletion as nvdWaitForCompletion,
-    restoreFromStatus as nvdRestore,
 } from "../handlers/nvdScanState";
 import {
     subscribe as osvSubscribe,
@@ -19,7 +18,6 @@ import {
     queueScan as osvQueueScan,
     startQueuedScan as osvStartQueuedScan,
     waitForCompletion as osvWaitForCompletion,
-    restoreFromStatus as osvRestore,
 } from "../handlers/osvScanState";
 import {
     subscribe as sccSubscribe,
@@ -28,9 +26,9 @@ import {
     queueScan as sccQueueScan,
     startQueuedScan as sccStartQueuedScan,
     waitForCompletion as sccWaitForCompletion,
-    restoreFromStatus as sccRestore,
 } from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
+import { hasActiveRefreshes, restoreActiveRefreshes, waitForRefreshCompletion } from "../handlers/activeScanQueue";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
@@ -1135,15 +1133,15 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
     // Global NVD scan state — survives tab switches (per-variant)
     const nvdEntries: ScanManagerSnapshot = useSyncExternalStore(nvdSubscribe, nvdGetSnapshot);
-    const nvdRunning = nvdEntries.some(e => e.status === "running");
+    const nvdRunning = nvdEntries.some(e => e.status === "running" || e.status === "queued");
 
     // Global OSV scan state — survives tab switches (per-variant)
     const osvEntries: ScanManagerSnapshot = useSyncExternalStore(osvSubscribe, osvGetSnapshot);
-    const osvRunning = osvEntries.some(e => e.status === "running");
+    const osvRunning = osvEntries.some(e => e.status === "running" || e.status === "queued");
 
     // Global SCC scan state — survives tab switches (per-variant)
     const sccEntries: ScanManagerSnapshot = useSyncExternalStore(sccSubscribe, sccGetSnapshot);
-    const sccRunning = sccEntries.some(e => e.status === "running");
+    const sccRunning = sccEntries.some(e => e.status === "running" || e.status === "queued");
 
     const refreshScans = useCallback(() => {
         ScansHandler.list(variantId, projectId)
@@ -1229,29 +1227,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         if (sccEntries.some(e => e.status === 'done')) refreshScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    // After variants are loaded, probe the backend once for any scan that was
-    // running before the page was refreshed and restore the progress panel.
-    useEffect(() => {
-        if (allVariants.length === 0) return;
-        const nameById = new Map(allVariants.map(v => [v.id, v.name]));
-        let cancelled = false;
-
-        ScansHandler.getRunningScans().then(running => {
-            if (cancelled) return;
-            const toEntries = (list: RunningScanEntry[]) =>
-                list
-                    .filter(s => nameById.has(s.variant_id))
-                    .map(s => ({ variantId: s.variant_id, name: nameById.get(s.variant_id)!, status: s }));
-
-            grypeRestore(toEntries(running.grype));
-            nvdRestore(toEntries(running.nvd));
-            osvRestore(toEntries(running.osv));
-            sccRestore(toEntries(running['sbom-cve-check']));
-        });
-
-        return () => { cancelled = true; };
-    }, [allVariants]);
 
     // Fetch variants scoped to the current view for the scan menu
     useEffect(() => {
@@ -1341,10 +1316,13 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
             ['scc', sccQueueScan, sccStartQueuedScan, sccWaitForCompletion],
         ] as const;
 
+        await restoreActiveRefreshes();
+        const refreshAheadOfScans = hasActiveRefreshes();
         await Promise.all(scanQueue.map(async ([scanType, queueScan]) => {
             if (selectedScanTypes.has(scanType)) await queueScan(variants, opts);
         }));
 
+        if (refreshAheadOfScans) await waitForRefreshCompletion();
         for (const [scanType, , startQueuedScan, waitForCompletion] of scanQueue) {
             if (!selectedScanTypes.has(scanType)) continue;
             await startQueuedScan();

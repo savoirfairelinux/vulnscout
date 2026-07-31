@@ -17,7 +17,7 @@ export type ScanEntryState = {
     variantName: string;
     variantPosition?: number;
     variantCount?: number;
-    status: "idle" | "queued" | "running" | "done" | "error";
+    status: "idle" | "queued" | "running" | "done" | "error" | "cancelled";
     error: string | null;
     progress: string | null;
     logs: string[];
@@ -45,6 +45,8 @@ type StatusResponse = {
     done_count?: number;
 };
 
+const MAX_CONSECUTIVE_STATUS_FAILURES = 10;
+
 // ---- manager class ----
 
 export class ScanStateManager {
@@ -53,6 +55,9 @@ export class ScanStateManager {
 
     /** Single poll timer – polls all running variants */
     private pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    /** Prevents slow status requests from creating overlapping poll ticks. */
+    private pollInFlight = false;
 
     /** Listeners registered via subscribe() */
     private listeners = new Set<() => void>();
@@ -77,6 +82,9 @@ export class ScanStateManager {
 
     /** Options forwarded to every triggerFn call of the current run */
     private currentOptions: ScanTriggerOptions = {};
+
+    /** Consecutive unavailable/invalid status responses per running variant. */
+    private pollFailureCounts = new Map<string, number>();
 
     constructor(
         /** Function to trigger a scan for one variant */
@@ -120,7 +128,7 @@ export class ScanStateManager {
      * the entire global queue before allowing its turn to begin.
      */
     queueScan = async (variants: Array<{ id: string; name: string }>, opts: ScanTriggerOptions = {}) => {
-        if (variants.length === 0) return;
+        if (variants.length === 0 || this.hasActiveWork()) return;
 
         this.currentOptions = opts;
         this.completionPromise = new Promise(resolve => {
@@ -160,7 +168,10 @@ export class ScanStateManager {
 
     /** Dismiss one variant's panel */
     dismiss = (variantId: string) => {
+        const state = this.states.get(variantId);
+        if (!state || state.status === "running" || state.status === "queued") return;
         this.states.delete(variantId);
+        this.pollFailureCounts.delete(variantId);
         this.rebuildSnapshot();
         // Stop the timer if nothing is left to poll
         if (![...this.states.values()].some((s) => s.status === "running")) {
@@ -170,9 +181,13 @@ export class ScanStateManager {
 
     /** Dismiss all panels */
     dismissAll = () => {
-        this.stopPolling();
-        this.states.clear();
+        for (const [variantId, state] of this.states) {
+            if (state.status === "running" || state.status === "queued") continue;
+            this.states.delete(variantId);
+            this.pollFailureCounts.delete(variantId);
+        }
         this.rebuildSnapshot();
+        if (!this.hasActiveWork()) this.stopPolling();
     };
 
     /**
@@ -216,6 +231,11 @@ export class ScanStateManager {
         }
 
         if (anyRestored) {
+            if (!this.completionPromise) {
+                this.completionPromise = new Promise(resolve => {
+                    this.resolveCompletion = resolve;
+                });
+            }
             this.rebuildSnapshot();
             this.startPolling();
         }
@@ -229,7 +249,7 @@ export class ScanStateManager {
      * the rest are queued and started one-by-one as each finishes.
      */
     triggerScan = async (variants: Array<{ id: string; name: string }>, opts: ScanTriggerOptions = {}) => {
-        if (variants.length === 0) return;
+        if (variants.length === 0 || this.hasActiveWork()) return;
 
         this.currentOptions = opts;
         this.completionPromise = new Promise(resolve => {
@@ -258,7 +278,7 @@ export class ScanStateManager {
 
             // Trigger only the first variant
             const first = variants[0];
-            const result = await this.triggerFn(first.id, this.currentOptions);
+            const result = await this.invokeTrigger(first.id);
             if (!result.ok) {
                 this.setVariantState(first.id, {
                     status: "error",
@@ -298,7 +318,7 @@ export class ScanStateManager {
 
         // Trigger each scan sequentially (avoids overwhelming the backend)
         for (const v of variants) {
-            const result = await this.triggerFn(v.id, this.currentOptions);
+            const result = await this.invokeTrigger(v.id);
             if (!result.ok) {
                 this.setVariantState(v.id, {
                     status: "error",
@@ -328,11 +348,28 @@ export class ScanStateManager {
         this.emit();
     }
 
+    private hasActiveWork() {
+        return this.pendingQueue.length > 0 || [...this.states.values()].some(
+            state => state.status === "running" || state.status === "queued",
+        );
+    }
+
     private setVariantState(variantId: string, patch: Partial<ScanEntryState>) {
         const current = this.states.get(variantId);
         if (!current) return;
         this.states.set(variantId, { ...current, ...patch });
         this.rebuildSnapshot();
+    }
+
+    private async invokeTrigger(variantId: string): Promise<{ ok: boolean; error?: string }> {
+        try {
+            return await this.triggerFn(variantId, this.currentOptions);
+        } catch (error) {
+            return {
+                ok: false,
+                error: error instanceof Error ? error.message : `Failed to start ${this.label} scan`,
+            };
+        }
     }
 
     private stopPolling() {
@@ -347,9 +384,11 @@ export class ScanStateManager {
         if (hasRunningScan || this.pendingQueue.length > 0) return;
 
         this.stopPolling();
-        this.resolveCompletion?.();
+        if (!this.completionPromise) return;
+        const resolveCompletion = this.resolveCompletion;
         this.resolveCompletion = null;
         this.completionPromise = null;
+        resolveCompletion?.();
         this.onDoneCallback?.();
     }
 
@@ -364,7 +403,7 @@ export class ScanStateManager {
             progress: "starting",
             logs: [],
         });
-        this.triggerFn(next.id, this.currentOptions).then((result) => {
+        this.invokeTrigger(next.id).then((result) => {
             if (!result.ok) {
                 this.setVariantState(next.id, {
                     status: "error",
@@ -381,6 +420,8 @@ export class ScanStateManager {
     private startPolling() {
         this.stopPolling();
         this.pollTimer = setInterval(async () => {
+            if (this.pollInFlight) return;
+            this.pollInFlight = true;
             try {
                 // Only poll variants that are actually running (not queued)
                 const activeIds = [...this.states.entries()]
@@ -397,8 +438,12 @@ export class ScanStateManager {
 
                 const results = await Promise.all(
                     activeIds.map(async (vid) => {
-                        const status = await this.statusFn(vid);
-                        return { vid, status };
+                        try {
+                            const status = await this.statusFn(vid);
+                            return { vid, status };
+                        } catch {
+                            return { vid, status: null };
+                        }
                     }),
                 );
 
@@ -408,6 +453,26 @@ export class ScanStateManager {
                 for (const { vid, status } of results) {
                     const current = this.states.get(vid);
                     if (!current || current.status !== "running") continue;
+
+                    if (!status || !["running", "done", "idle", "error"].includes(status.status)) {
+                        const failures = (this.pollFailureCounts.get(vid) ?? 0) + 1;
+                        this.pollFailureCounts.set(vid, failures);
+                        if (failures >= MAX_CONSECUTIVE_STATUS_FAILURES) {
+                            const message = `Lost ${this.label} scan status`;
+                            this.states.set(vid, {
+                                ...current,
+                                status: "error",
+                                error: message,
+                                progress: null,
+                                logs: [...current.logs, message],
+                            });
+                            this.pollFailureCounts.delete(vid);
+                            anyChanged = true;
+                            anyJustFinished = true;
+                        }
+                        continue;
+                    }
+                    this.pollFailureCounts.delete(vid);
 
                     if (status.status === "error") {
                         this.states.set(vid, {
@@ -461,6 +526,8 @@ export class ScanStateManager {
                 }
             } catch {
                 // Network hiccup — keep polling
+            } finally {
+                this.pollInFlight = false;
             }
         }, 3000);
     }

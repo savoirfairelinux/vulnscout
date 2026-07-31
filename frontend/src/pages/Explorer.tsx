@@ -23,11 +23,13 @@ import type { AppConfig } from "../handlers/config";
 import type { FrontendScope } from "../handlers/config";
 import Projects from '../handlers/project';
 import Variants from '../handlers/variant';
-import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot } from "../handlers/grypeScanState";
-import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot } from "../handlers/nvdScanState";
-import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot } from "../handlers/osvScanState";
-import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot } from "../handlers/sccScanState";
-import { subscribeToRefreshQueue, getRefreshQueueSnapshot } from "../handlers/activeScanQueue";
+import ScansHandler from '../handlers/scans';
+import type { RunningScanEntry } from '../handlers/scans';
+import { subscribe as grypeSubscribe, getSnapshot as grypeGetSnapshot, restoreFromStatus as grypeRestore } from "../handlers/grypeScanState";
+import { subscribe as nvdSubscribe, getSnapshot as nvdGetSnapshot, restoreFromStatus as nvdRestore } from "../handlers/nvdScanState";
+import { subscribe as osvSubscribe, getSnapshot as osvGetSnapshot, restoreFromStatus as osvRestore } from "../handlers/osvScanState";
+import { subscribe as sccSubscribe, getSnapshot as sccGetSnapshot, restoreFromStatus as sccRestore } from "../handlers/sccScanState";
+import { subscribeToRefreshQueue, getRefreshQueueSnapshot, restoreActiveRefreshes } from "../handlers/activeScanQueue";
 
 const tabLabels: Record<string, string> = {
         metrics: 'Metrics',
@@ -82,7 +84,7 @@ function Explorer() {
     const scanEntries = [...grypeScanEntries, ...nvdScanEntries, ...osvScanEntries, ...sccScanEntries, ...refreshQueueEntries];
     const trackedScanCount = scanEntries.length;
     const finishedScanCount = scanEntries
-        .filter(entry => entry.status === "done" || entry.status === "error").length;
+        .filter(entry => entry.status === "done" || entry.status === "error" || entry.status === "cancelled").length;
     const activeScanCount = scanEntries
         .filter(entry => entry.status === "queued" || entry.status === "running").length;
 
@@ -92,6 +94,22 @@ function Explorer() {
         }
         hadActiveScans.current = activeScanCount > 0;
     }, [activeScanCount]);
+
+    useEffect(() => {
+        let cancelled = false;
+        void restoreActiveRefreshes();
+        Promise.all([Variants.listAll().catch(() => []), ScansHandler.getRunningScans()]).then(([variants, running]) => {
+            if (cancelled) return;
+            const nameById = new Map(variants.map(variant => [variant.id, variant.name]));
+            const toEntries = (entries: RunningScanEntry[]) => entries
+                .map(entry => ({ variantId: entry.variant_id, name: nameById.get(entry.variant_id) ?? entry.variant_id, status: entry }));
+            grypeRestore(toEntries(running.grype));
+            nvdRestore(toEntries(running.nvd));
+            osvRestore(toEntries(running.osv));
+            sccRestore(toEntries(running['sbom-cve-check']));
+        }).catch(() => undefined);
+        return () => { cancelled = true; };
+    }, []);
 
     const triggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
