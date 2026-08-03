@@ -1340,6 +1340,62 @@ def test_import_custom_data_assessments_with_variant_name(client):
     assert result["assessments_imported"] >= 1
 
 
+def test_import_custom_data_foreign_variant_id_falls_back_to_name(client):
+    """A ``variant_id`` from another VulnScout instance never matches a local
+    variant (each instance mints its own UUIDs). Importing it as-is used to
+    attach the assessment to a variant_id no query would ever find, so it
+    silently disappeared from the Review page while remaining in the DB.
+    The import must fall back to the ``variant`` name field instead.
+    """
+    foreign_variant_id = str(uuid.uuid4())
+    assert foreign_variant_id != str(VARIANT_UUID)
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": foreign_variant_id,
+        "variant": "default",
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    result = json.loads(resp.data)
+    assert result["status"] == "success"
+    assert result["assessments_imported"] == 1
+
+    # Visible through the same variant-scoped query the Review page uses.
+    listing = client.get(f"/api/assessments/review?variant_id={VARIANT_UUID}")
+    assert listing.status_code == 200
+    vuln_ids = [a["vuln_id"] for a in json.loads(listing.data)]
+    assert "CVE-2020-35492" in vuln_ids
+
+
+def test_import_custom_data_foreign_variant_id_without_name_is_rejected(client):
+    """A foreign variant_id with no local ``variant`` name to fall back to
+    must be reported as an error instead of silently attaching to a
+    variant_id that does not exist in this database.
+    """
+    foreign_variant_id = str(uuid.uuid4())
+    payload = _custom_data_payload(assessments=[{
+        "vuln_id": "CVE-2020-35492",
+        "status": "affected",
+        "packages": ["cairo@1.16.0"],
+        "variant_id": foreign_variant_id,
+    }])
+    resp = client.post(
+        "/api/assessments/review/import-custom-data",
+        json=payload,
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    result = json.loads(resp.data)
+    assert result["assessments_imported"] == 0
+    assert any(foreign_variant_id in e.get("error", "") for e in result["errors"])
+
+
 def test_import_custom_data_duplicate_skipped(client):
     """Same assessment imported twice → second is skipped."""
     payload = _custom_data_payload(assessments=[{
