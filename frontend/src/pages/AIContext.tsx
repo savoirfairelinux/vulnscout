@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import type { ReactNode, RefObject } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner, faRobot, faBook, faFileExport, faFileImport, faChevronDown, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
@@ -8,7 +9,6 @@ import Context from "../handlers/context";
 import type { VariantContextData, ContextExport, ImportResult } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import { useDocUrl } from "../helpers/useDocUrl";
-import type { RefObject } from "react";
 
 /**
  * Dismisses an open popover/menu when the user clicks outside of `ref` or
@@ -93,7 +93,7 @@ function AIContext() {
     // UI state
     const [busy, setBusy] = useState(false);
     const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-    const [bannerMsg, setBannerMsg] = useState<string>('');
+    const [bannerMsg, setBannerMsg] = useState<ReactNode>('');
     const [bannerType, setBannerType] = useState<'success' | 'error'>('success');
     const [bannerVisible, setBannerVisible] = useState(false);
 
@@ -107,7 +107,7 @@ function AIContext() {
     const importHelpRef = useRef<HTMLDivElement | null>(null);
     const importInputRef = useRef<HTMLInputElement | null>(null);
 
-    const showBanner = (msg: string, type: 'success' | 'error') => {
+    const showBanner = (msg: ReactNode, type: 'success' | 'error') => {
         setBannerMsg(msg);
         setBannerType(type);
         setBannerVisible(true);
@@ -242,7 +242,21 @@ function AIContext() {
             }
         }
         if (!unmountedRef.current) {
-            showBanner("Context saved successfully.", "success");
+            showBanner(
+                <>
+                    Context saved successfully. To use this context in AI-assisted CVE assessments,
+                    clone and configure{' '}
+                    <a
+                        href="https://github.com/savoirfairelinux/vulnscout-mcp/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline hover:text-green-100"
+                    >
+                        vulnscout-mcp
+                    </a>, the Model Context Protocol server that connects your AI client to VulnScout.
+                </>,
+                "success"
+            );
             setBusy(false);
         }
     };
@@ -330,8 +344,8 @@ function AIContext() {
         "rounded px-2 py-1.5 text-sm bg-slate-900/60 border border-slate-600 text-white focus:outline-none focus:border-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed";
     const btnPrimary =
         "px-4 py-2 rounded-lg bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
-    const btnSecondary =
-        "px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 focus:ring-4 focus:outline-none focus:ring-slate-500 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
+    const btnTransfer =
+        "bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white border border-green-500 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-150";
     const cardHeader =
         "bg-gradient-to-r from-slate-700 to-slate-800 px-4 py-2.5 flex items-center gap-2 rounded-t-lg border-b border-slate-600/60";
     const cardBody =
@@ -339,14 +353,18 @@ function AIContext() {
 
     return (
         <div className="w-full space-y-6">
-            <MessageBanner
-                type={bannerType}
-                message={bannerMsg}
-                isVisible={bannerVisible}
-                onClose={() => setBannerVisible(false)}
-            />
+            {bannerVisible && (
+                <div className="sticky top-0 z-10">
+                    <MessageBanner
+                        type={bannerType}
+                        message={bannerMsg}
+                        isVisible={bannerVisible}
+                        onClose={() => setBannerVisible(false)}
+                    />
+                </div>
+            )}
 
-            <div className="flex items-center justify-start gap-4">
+            <div className="flex items-center gap-4">
                 <h1 className="text-3xl font-bold text-white mb-2">AI Assessment Context</h1>
                 <a
                     href={docUrl}
@@ -354,7 +372,7 @@ function AIContext() {
                     rel="noopener noreferrer"
                     aria-label="documentation"
                     title="Open documentation"
-                    className="hover:text-blue-400 transition-colors"
+                    className="text-white hover:text-blue-300 transition-colors"
                     >
                     <FontAwesomeIcon icon={faBook} size='lg' />
                 </a>
@@ -369,7 +387,7 @@ function AIContext() {
                             aria-expanded={exportMenuOpen}
                             onClick={() => setExportMenuOpen(o => { const next = !o; if (next) loadAllVariants(); return next; })}
                             disabled={ioBusy}
-                            className={btnSecondary + " flex items-center gap-2"}
+                            className={btnTransfer}
                         >
                             <FontAwesomeIcon icon={faFileExport} />
                             Export
@@ -428,7 +446,7 @@ function AIContext() {
                         aria-label="Import context"
                         onClick={() => importInputRef.current?.click()}
                         disabled={ioBusy}
-                        className={btnSecondary + " flex items-center gap-2"}
+                        className={btnTransfer}
                     >
                         <FontAwesomeIcon icon={faFileImport} />
                         Import
