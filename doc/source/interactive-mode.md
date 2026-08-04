@@ -126,16 +126,16 @@ Each row has a checkbox on the left. Selecting one or more rows reveals the **mu
 
 ### Refreshing Vulnerability Data
 
-The multi-edit bar also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the **currently selected rows**, so select the vulnerabilities you want to update before opening the dropdown.
+The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown offers a checkbox per data source plus a **Start** button. Each refresh runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. Each refresh runs in the background; a progress banner appears below the toolbar with a live counter, and a per-source **Cancel** button lets you stop a run in progress. Because every source runs independently, several refreshes can be active at once.
 
 The available sources are:
 
-- **NVD** — re-fetches the publication date and other metadata from NIST's National Vulnerability Database for the selected CVEs. This is what makes the **Published Date** column and filter usable.
-- **EPSS** — updates the Exploit Prediction Scoring System probability for each selected CVE, feeding the EPSS column and filter.
-- **GHSA** — refreshes the publication date of selected GitHub Security Advisory (`GHSA-…`) identifiers via the GitHub Advisory API.
-- **ENISA EUVD** — annotates the selected CVEs from the European Union Vulnerability Database (see below). This option is only enabled when the selection contains at least one CVE identifier.
+- **NVD** — re-fetches the publication date and other metadata from NIST's National Vulnerability Database for CVEs in the current scope. This is what makes the **Published Date** column and filter usable.
+- **EPSS** — updates the Exploit Prediction Scoring System probability for CVEs in the current scope, feeding the EPSS column and filter.
+- **GHSA** — refreshes the publication date of GitHub Security Advisory (`GHSA-…`) identifiers in the current scope via the GitHub Advisory API.
+- **ENISA EUVD** — annotates CVEs in the current scope from the European Union Vulnerability Database (see below). This option is only available when the scope contains at least one CVE identifier.
 
 ### ENISA EUVD Enrichment
 
