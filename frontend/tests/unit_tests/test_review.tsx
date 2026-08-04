@@ -1184,6 +1184,14 @@ describe('Review — Time Estimates & Custom CVSS tab navigation', () => {
 // ===========================================================================
 
 describe('Review — filters, search and keyboard', () => {
+    test('does not provide a variants filter', async () => {
+        mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v2')]);
+        render(<Review projectId="proj1" />);
+
+        await screen.findByText('CVE-2020-1111');
+        expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
+    });
+
     test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
         const mixedOutdated = {
             ...makeAssessment('outdated', 'v1'),

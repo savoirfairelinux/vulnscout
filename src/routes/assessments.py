@@ -880,13 +880,29 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         query format string optional Response format such as list or dict.
+        query project_id uuid optional Restrict results to one project.
         response 200 JsonObject Assessment collection for the vulnerability.
         """
+        project_uuid: UUID | None = None
+        project_id = request.args.get('project_id')
+        if project_id:
+            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
+            if err:
+                return err
+
+        project_variant_ids: set[UUID] | None = None
+        if project_uuid is not None:
+            project_variant_ids = set(db.session.execute(
+                select(DBVariant.id).where(DBVariant.project_id == project_uuid)
+            ).scalars())
+
         # Get findings for this vulnerability then load their assessments
         findings = Finding.get_by_vulnerability(vuln_id)
         assessments = []
         for f in findings:
             for a in DBAssessment.get_by_finding(f.id):
+                if project_variant_ids is not None and a.variant_id not in project_variant_ids:
+                    continue
                 assessments.append(a.to_dict())
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":

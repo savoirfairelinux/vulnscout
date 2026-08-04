@@ -176,7 +176,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
-    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
@@ -416,29 +415,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
-    const variantList = useMemo(() => {
-        const set = new Set<string>();
-        for (const a of [...assessments, ...aiAssessments]) {
-            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
-            for (const vid of vids) {
-                const name = variantNames[vid];
-                if (name) set.add(name);
-            }
-        }
-        return [...set].sort();
-    }, [assessments, aiAssessments, variantNames]);
-
-    // All variants are checked by default; a variant only leaves the selection
-    // once the user explicitly unchecks it. Deriving the selection during render
-    // (instead of populating it from an effect) prevents a first-render flash.
-    const selectedVariants = useMemo(
-        () => variantList.filter(v => !deselectedVariants.includes(v)),
-        [variantList, deselectedVariants]
-    );
-    const setSelectedVariants = useCallback((values: string[]) => {
-        setDeselectedVariants(variantList.filter(v => !values.includes(v)));
-    }, [variantList]);
-
     const filteredAssessments = useMemo(() => assessments.filter((a) => {
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
@@ -453,13 +429,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
-        {
-            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
-            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
-            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
-        }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedVariants, variantNames, showOnlyOutdated]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -482,7 +453,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         setSelectedStatuses([]);
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
-        setSelectedVariants(variantList);
         setShowOnlyOutdated(false);
     };
 
@@ -1361,11 +1331,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             const rowSuppliers = a.packages.map(p => extractSupplierName(splitPkgId(p).supplier));
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
-        {
-            const vids = (a as any)._variantIds ?? (a.variant_id ? [a.variant_id] : []);
-            const rowVariants = vids.map((vid: string) => variantNames[vid]).filter(Boolean);
-            if (rowVariants.length && !selectedVariants.some(v => rowVariants.includes(v))) return false;
-        }
         return true;
     });
 
@@ -1480,15 +1445,6 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                                 options={supplierList}
                                 selected={selectedSuppliers}
                                 setSelected={setSelectedSuppliers}
-                            />
-                        )}
-
-                        {variantList.length > 0 && (
-                            <FilterOption
-                                label="Variants"
-                                options={variantList}
-                                selected={selectedVariants}
-                                setSelected={setSelectedVariants}
                             />
                         )}
 

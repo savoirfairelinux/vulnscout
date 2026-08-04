@@ -2548,12 +2548,14 @@ describe('Vulnerability Modal', () => {
             ]
         };
 
-        render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        render(<VulnModal vuln={vulnWithVariantAssessments} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} projectId="proj1" />);
 
-        // Wait for variant tags to render (variant names now appear both in the
-        // per-variant recap and on the assessment history entries)
-        expect((await screen.findAllByText('Production')).length).toBeGreaterThan(0);
-        expect(screen.getAllByText('Staging').length).toBeGreaterThan(0);
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getByText(/Production/)).toBeInTheDocument();
+            expect(within(history).getByText(/Staging/)).toBeInTheDocument();
+        });
+        expect(fetchMock.mock.calls.some(([url]) => String(url).includes('assessments?project_id=proj1'))).toBe(true);
     });
 
     test('recap shows the latest status for each variant', async () => {

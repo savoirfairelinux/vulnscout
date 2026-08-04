@@ -442,10 +442,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
     const [selectedSources, setSelectedSources] = useState<string[]>([]);
     const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
-    // Track variants the user has explicitly unchecked. All variants (including
-    // any discovered later) are considered selected unless present here, which
-    // avoids a first-render flash where variant rows briefly disappear.
-    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [publishedDateFilterType, setPublishedDateFilterType] = useState<string>('');
     const [publishedDateValue, setPublishedDateValue] = useState<string>('');
     const [publishedDaysValue, setPublishedDaysValue] = useState<string>('');
@@ -761,25 +757,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         () => sources_list.map(formatSourceName),
         [sources_list]
     );
-
-    const variants_list = useMemo(() => vulnerabilities.reduce((acc: string[], vuln) => {
-        vuln.variants.forEach(variant => {
-            if (!acc.includes(variant) && variant != '')
-                acc.push(variant)
-        });
-        return acc.sort();
-    }, []), [vulnerabilities])
-
-    // All variants are checked by default; a variant only leaves the selection
-    // once the user explicitly unchecks it. Deriving the selection during render
-    // (instead of populating it from an effect) prevents a first-render flash.
-    const selectedVariants = useMemo(
-        () => variants_list.filter(v => !deselectedVariants.includes(v)),
-        [variants_list, deselectedVariants]
-    );
-    const setSelectedVariants = useCallback((values: string[]) => {
-        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
-    }, [variants_list]);
 
     // Distinct raw package ids across all vulnerabilities, sorted by display label.
     // Currently selected packages are always included so a stale or absent
@@ -1296,7 +1273,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
             if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
-            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -1388,7 +1364,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             return true;
         });
-    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, selectedVariants, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
         ...vuln,
@@ -1471,7 +1447,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setSelectedSeverities([]);
         setSelectedStatuses([]);
         setSelectedPackages([]);
-        setSelectedVariants(variants_list);
         setPublishedDateFilterType('');
         setPublishedDateValue('');
         setPublishedDaysValue('');
@@ -1710,15 +1685,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 searchable
                 formatLabel={formatPkgId}
             />
-
-            {variants_list.length > 0 && (
-                <FilterOption
-                    label="Variants"
-                    options={variants_list}
-                    selected={selectedVariants}
-                    setSelected={setSelectedVariants}
-                />
-            )}
 
             {/* Published Date Filter Dropdown */}
             <PublishedDateFilter

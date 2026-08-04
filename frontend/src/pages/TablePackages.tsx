@@ -1,6 +1,6 @@
 import type { Package, VulnCounts } from "../handlers/packages";
 import { createColumnHelper, Row } from '@tanstack/react-table'
-import { useMemo, useState, useRef, useEffect, useCallback } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
@@ -53,10 +53,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
     const [matchCondition, setMatchCondition] = useState('');
     const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
     const [matchConditionError, setMatchConditionError] = useState('');
-    // Track variants the user has explicitly unchecked. All variants (including
-    // any discovered later) are considered selected unless present here, which
-    // avoids a first-render flash where variant rows briefly disappear.
-    const [deselectedVariants, setDeselectedVariants] = useState<string[]>([]);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [showMatchConditionHelper, setShowMatchConditionHelper] = useState(false);
@@ -194,25 +190,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         return acc.sort();
     }, []), [packages])
 
-    const variants_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
-        for (const variant of pkg.variants) {
-            if (variant !== '' && !acc.includes(variant))
-                acc.push(variant);
-        }
-        return acc.sort();
-    }, []), [packages])
-
-    // All variants are checked by default; a variant only leaves the selection
-    // once the user explicitly unchecks it. Deriving the selection during render
-    // (instead of populating it from an effect) prevents a first-render flash.
-    const selectedVariants = useMemo(
-        () => variants_list.filter(v => !deselectedVariants.includes(v)),
-        [variants_list, deselectedVariants]
-    );
-    const setSelectedVariants = useCallback((values: string[]) => {
-        setDeselectedVariants(variants_list.filter(v => !values.includes(v)));
-    }, [variants_list]);
-
     // Matched IDs are a snapshot of a server-side evaluation; drop them whenever
     // the vulnerability data changes so the filter never shows stale results.
     useEffect(() => {
@@ -267,7 +244,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
         setSelectedSources([]);
         setSelectedSbomDocs([]);
         setSelectedSuppliers([]);
-        setSelectedVariants(variants_list);
         setMatchCondition('');
         setMatchingVulnerabilityIds(null);
         setMatchConditionError('');
@@ -501,12 +477,9 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
             if (selectedSuppliers.length && !selectedSuppliers.includes(extractSupplierName(el.supplier))) {
                 return false;
             }
-            if (el.variants.length && !selectedVariants.some(variant => el.variants.includes(variant))) {
-                return false;
-            }
             return true;
         });
-    }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers, selectedVariants]);
+    }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers]);
 
     return (<>
         {showOnlyOutdated && outdatedLoading && (
@@ -655,15 +628,6 @@ function TablePackages({ packages, vulnerabilities = [], onShowVulns, onLoadOutd
                 selected={selectedSbomDocs}
                 setSelected={setSelectedSbomDocs}
             />
-
-            {variants_list.length > 0 && (
-                <FilterOption
-                    label="Variants"
-                    options={variants_list}
-                    selected={selectedVariants}
-                    setSelected={setSelectedVariants}
-                />
-            )}
 
             <ToggleSwitch
                 enabled={showOnlyOutdated}

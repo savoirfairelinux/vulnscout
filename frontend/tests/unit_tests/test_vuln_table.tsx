@@ -659,37 +659,12 @@ describe('Vulnerability Table', () => {
         expect(pkg_xyz).toBeInTheDocument();
     })
 
-    test('filter by variant', async () => {
-        // ARRANGE
+    test('does not provide a variant filter', async () => {
         const vulnerabilitiesWithVariants = vulnerabilities.map((vuln, index) => ({
             ...vuln,
             variants: index === 0 ? ['variant-a'] : index === 1 ? ['variant-b'] : ['variant-a', 'variant-b']
         }));
         render(<TableVulnerabilities vulnerabilities={vulnerabilitiesWithVariants} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-
-        const user = userEvent.setup();
-        const variantBtn = await screen.getByRole('button', { name: /^variants$/i });
-        expect(variantBtn).toBeInTheDocument();
-        await user.click(variantBtn);
-
-        // All variants are checked by default; unchecking variant-a removes rows
-        // that belong only to variant-a (the first vuln). Rows that also belong to
-        // variant-b stay visible.
-        const variantCheckbox = await screen.getByRole('checkbox', { name: 'variant-a' });
-        expect(variantCheckbox).toBeChecked();
-        await user.click(variantCheckbox);
-
-        await waitFor(() => {
-            expect(screen.queryByRole('cell', {name: /CVE-2010-1234/})).toBeNull();
-        }, { timeout: 5000 });
-
-        expect(await screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
-        expect(await screen.getByRole('cell', {name: /CVE-2024-56730/})).toBeInTheDocument();
-    })
-
-    test('variant filter is hidden when no vulnerability has variants', async () => {
-        // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     })

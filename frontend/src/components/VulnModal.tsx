@@ -184,12 +184,13 @@ type VariantScopedSnapshot = {
         return () => controller.abort();
     }, [vuln.id, projectId]);
 
-    // Fetch ALL assessments for this vuln (unfiltered) so variant tags are
-    // complete even when a variant filter is active in the explorer.
+    // Fetch all assessments for this vulnerability in the current project so
+    // its history remains complete when the Explorer is variant-scoped.
     useEffect(() => {
         const controller = new AbortController();
         setAllVulnAssessments([]);
-        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments`, { mode: 'cors', signal: controller.signal })
+        const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
                 if (Array.isArray(data)) {
@@ -203,7 +204,7 @@ type VariantScopedSnapshot = {
             })
             .catch(() => {});
         return () => controller.abort();
-    }, [vuln]);
+    }, [vuln, projectId]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {
@@ -911,7 +912,13 @@ type VariantScopedSnapshot = {
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     };
 
-    const groupedAssessments = groupAssessments(vuln.assessments);
+    // Prefer the project-wide response so history includes every variant. The
+    // scoped vulnerability rows remain a fallback for unavailable or empty
+    // history responses.
+    const groupedAssessments = groupAssessments(
+        (allVulnAssessments.length > 0 ? allVulnAssessments : vuln.assessments)
+            .filter(assessment => assessment.origin !== 'ai')
+    );
     const pendingAiAssessments = allVulnAssessments.filter(a =>
         a.origin === "ai" && (!variantId || a.variant_id === variantId));
     const pendingAiByVariant = new Map<string, Assessment[]>();

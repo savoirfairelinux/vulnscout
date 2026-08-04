@@ -239,6 +239,39 @@ class TestOutdatedFlag:
         assert custom[0]["outdated"] is True
         assert custom[0]["superseded_by"] == ["firefox@2.0"]
 
+    def test_list_assess_by_vuln_scopes_to_project(self):
+        """Project-scoped history includes all of its variants, not other projects."""
+        other_project_id = uuid.UUID("99999999-9999-9999-9999-999999999999")
+        other_variant_id = uuid.UUID("88888888-8888-8888-8888-888888888888")
+        other_assessment_id = uuid.UUID("77777777-7777-7777-7777-777777777777")
+        with self.app.app_context():
+            other_project = Project(id=other_project_id, name="other")
+            other_variant = Variant(id=other_variant_id, name="other", project_id=other_project_id)
+            finding = Finding.get_by_vulnerability(CVE_ID)[0]
+            other_assessment = Assessment(
+                id=other_assessment_id,
+                status="affected",
+                simplified_status="Exploitable",
+                origin="custom",
+                source="analyst",
+                status_notes="",
+                justification="",
+                impact_statement="",
+                responses=[],
+                workaround="",
+                finding_id=finding.id,
+                variant_id=other_variant_id,
+                timestamp=datetime(2024, 1, 3, tzinfo=timezone.utc),
+            )
+            _db.session.add_all([other_project, other_variant, other_assessment])
+            _db.session.commit()
+
+        resp = self.client.get(f"/api/vulnerabilities/{CVE_ID}/assessments?project_id={PROJECT_ID}")
+        assert resp.status_code == 200
+        assessment_ids = {item["id"] for item in json.loads(resp.data)}
+        assert str(self.assess_id) in assessment_ids
+        assert str(other_assessment_id) not in assessment_ids
+
     def test_outdated_flag_always_present(self):
         """Every assessment dict returned has the 'outdated' key."""
         resp = self.client.get(f"/api/assessments?variant_id={VARIANT_ID}")

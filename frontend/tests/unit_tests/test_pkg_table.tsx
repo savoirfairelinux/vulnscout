@@ -418,8 +418,7 @@ describe('Packages Table', () => {
         });
     })
 
-    test('filter by variant', async () => {
-        // ARRANGE: packages spread across two variants
+    test('does not provide a variants filter', () => {
         const packagesWithVariants: Package[] = [
             { ...packages[0], variants: ['variant-a'] },
             { ...packages[1], variants: ['variant-b'] },
@@ -427,38 +426,6 @@ describe('Packages Table', () => {
         ];
         render(<TablePackages packages={packagesWithVariants} />);
 
-        const user = userEvent.setup();
-
-        // Open the "Variants" filter dropdown
-        const variants_btn = await screen.getByRole('button', { name: /^variants$/i });
-        await user.click(variants_btn);
-
-        // All variants are checked by default. ACT: uncheck "variant-a"
-        const variantACheckbox = await screen.getByRole('checkbox', { name: /variant-a/i });
-        await user.click(variantACheckbox);
-
-        // aaabbbccc is only in variant-a, so it must disappear
-        await waitFor(() => {
-            expect(document.body.innerHTML).not.toContain('aaabbbccc');
-        }, { timeout: 2000 });
-
-        // xxxyyyzzz (variant-b) and dddeeefff (variant-a + variant-b) remain
-        expect(screen.getAllByRole('cell', { name: /xxxyyyzzz/ }).length).toBeGreaterThan(0);
-        expect(screen.getAllByRole('cell', { name: /dddeeefff/ }).length).toBeGreaterThan(0);
-
-        // REVERT CHANGE: re-check "variant-a"
-        await user.click(variantACheckbox);
-
-        await waitFor(() => {
-            expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
-        });
-    })
-
-    test('variant filter is hidden when no package has variants', async () => {
-        // ARRANGE: the default packages have no variants
-        render(<TablePackages packages={packages} />);
-
-        // ASSERT: the "Variants" filter button is not rendered
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     })
 
