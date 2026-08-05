@@ -158,7 +158,7 @@ export class ScanStateManager {
     startQueuedScan = async () => {
         if (!this.serial || this.pendingQueue.length === 0) return;
 
-        this.triggerNextInQueue();
+        await this.triggerNextInQueue();
         if ([...this.states.values()].some((state) => state.status === "running")) {
             this.startPolling();
         } else {
@@ -285,7 +285,7 @@ export class ScanStateManager {
                     error: result.error ?? `Failed to start ${this.label} scan`,
                     progress: null,
                 });
-                this.triggerNextInQueue();
+                await this.triggerNextInQueue();
             }
 
             // Start polling (will also advance the queue as variants finish)
@@ -394,8 +394,13 @@ export class ScanStateManager {
 
     /**
      * (Serial mode only) Trigger the next queued variant, if any.
+     *
+     * Awaits the trigger request so callers only begin polling once the POST
+     * has been accepted. Otherwise a status endpoint polled while the trigger
+     * is still in flight can report ``idle`` (no scan yet), which the poll loop
+     * would wrongly treat as terminal and use to advance the queue.
      */
-    private triggerNextInQueue() {
+    private async triggerNextInQueue(): Promise<void> {
         if (!this.serial || this.pendingQueue.length === 0) return;
         const next = this.pendingQueue.shift()!;
         this.setVariantState(next.id, {
@@ -403,18 +408,16 @@ export class ScanStateManager {
             progress: "starting",
             logs: [],
         });
-        this.invokeTrigger(next.id).then((result) => {
-            if (!result.ok) {
-                this.setVariantState(next.id, {
-                    status: "error",
-                    error: result.error ?? `Failed to start ${this.label} scan`,
-                    progress: null,
-                });
-                // Keep going — try next in queue
-                this.triggerNextInQueue();
-            }
-            // Polling is already running, will pick up the new running variant
-        });
+        const result = await this.invokeTrigger(next.id);
+        if (!result.ok) {
+            this.setVariantState(next.id, {
+                status: "error",
+                error: result.error ?? `Failed to start ${this.label} scan`,
+                progress: null,
+            });
+            // Keep going — try next in queue
+            await this.triggerNextInQueue();
+        }
     }
 
     private startPolling() {
@@ -514,7 +517,7 @@ export class ScanStateManager {
 
                 // In serial mode, advance the queue when a scan finishes
                 if (anyJustFinished) {
-                    this.triggerNextInQueue();
+                    await this.triggerNextInQueue();
                 }
 
                 // If nothing is running and nothing queued, stop and fire onDone

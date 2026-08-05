@@ -91,6 +91,10 @@ type Props = {
     baseVariantId?: string;
     /** 'difference' or 'intersection' when compare mode is active */
     compareOperation?: string;
+    /** Selected variants when a multi-variant (union/intersection/difference) view is active */
+    variantIds?: string[];
+    /** Multi-variant set operation ('union' | 'intersection' | 'difference') */
+    multiOperation?: string;
     /** Called when an NVD, EPSS, or GHSA bulk refresh completes, so the parent can reload data */
     onRefreshComplete?: () => void;
     missingEuvdDataBannerDismissed?: boolean;
@@ -363,7 +367,7 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
-function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
+function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
 
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-table");
     const [modalVuln, setModalVuln] = useState<Vulnerability|undefined>(undefined);
@@ -1892,7 +1896,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <span className="h-6 border-l border-gray-400" aria-hidden="true" />
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
-                    getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation)}
+                    getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
                     triggerBanner={triggerBanner}
                     hideBanner={closeBanner}
                     nvdProgress={nvdProgress}

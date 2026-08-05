@@ -467,6 +467,8 @@ function Explorer() {
                     projectId={currentProjectId}
                     baseVariantId={currentBaseVariantId}
                     compareOperation={currentOperation}
+                    variantIds={currentVariantIds}
+                    multiOperation={currentMultiOperation}
                     onRefreshComplete={handleRefreshComplete}
                     missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
                     onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}

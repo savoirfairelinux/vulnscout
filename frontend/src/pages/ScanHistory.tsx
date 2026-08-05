@@ -28,7 +28,7 @@ import {
     waitForCompletion as sccWaitForCompletion,
 } from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
-import { hasActiveRefreshes, restoreActiveRefreshes, waitForRefreshCompletion } from "../handlers/activeScanQueue";
+import { hasActiveRefreshes, restoreActiveRefreshes, waitForActiveScans, waitForRefreshCompletion } from "../handlers/activeScanQueue";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
@@ -1318,11 +1318,18 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
         await restoreActiveRefreshes();
         const refreshAheadOfScans = hasActiveRefreshes();
+        // Capture any scan managers that are already active (e.g. a scan
+        // restored by Explorer or triggered by a previous action) BEFORE we
+        // queue the newly selected batches. Their completion must be part of
+        // the global barrier so a pre-existing scan in an unselected manager
+        // never overlaps with the batch we are about to start.
+        const preExistingScans = waitForActiveScans();
         await Promise.all(scanQueue.map(async ([scanType, queueScan]) => {
             if (selectedScanTypes.has(scanType)) await queueScan(variants, opts);
         }));
 
         if (refreshAheadOfScans) await waitForRefreshCompletion();
+        await preExistingScans;
         for (const [scanType, , startQueuedScan, waitForCompletion] of scanQueue) {
             if (!selectedScanTypes.has(scanType)) continue;
             await startQueuedScan();
