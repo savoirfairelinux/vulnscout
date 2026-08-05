@@ -665,6 +665,61 @@ describe('Vulnerability Table', () => {
         });
     })
 
+    test('re-runs a restored description search when scoped vulnerabilities load', async () => {
+        // A persisted search containing a description term must be evaluated
+        // against the current scope's vulnerabilities. Explorer loads data
+        // asynchronously and can initially render the previous scope's rows, so
+        // the restored search has to re-run once the correct vulnerabilities
+        // arrive instead of staying stuck on the stale evaluation.
+        const scopeKey = 'restore-regression';
+        window.localStorage.setItem(
+            `vulnscout.tables.vulnerabilities.${scopeKey}.draftSearch`,
+            JSON.stringify('authentification'),
+        );
+        window.localStorage.setItem(
+            `vulnscout.tables.vulnerabilities.${scopeKey}.search`,
+            JSON.stringify('authentification'),
+        );
+
+        const staleVulnerabilities = [{
+            ...vulnerabilities[0],
+            id: 'CVE-1999-0001',
+            texts: [],
+            details_loaded: false,
+        }] as Vulnerability[];
+        const scopedVulnerabilities = vulnerabilities.map(vuln => ({
+            ...vuln,
+            texts: [],
+            details_loaded: false,
+        }));
+
+        // Any description search resolves to a match on CVE-2010-1234 only.
+        fetchMock.mockResponse(JSON.stringify({ matches: { authentification: ['CVE-2010-1234'] } }));
+
+        // Initial render uses the stale scope, so the first restore evaluates the
+        // search against IDs that do not belong to the current scope.
+        const view = render(<TableVulnerabilities key={scopeKey} preferenceScopeKey={scopeKey} vulnerabilities={staleVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+        // The current scope's data arrives, replacing the stale rows in place.
+        view.rerender(<TableVulnerabilities key={scopeKey} preferenceScopeKey={scopeKey} vulnerabilities={scopedVulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // The restored search re-runs against the freshly loaded vulnerabilities.
+        await waitFor(() => {
+            const calls = fetchMock.mock.calls;
+            const lastBody = JSON.parse(calls[calls.length - 1][1]?.body as string);
+            expect(lastBody.vulnerability_ids).toContain('CVE-2010-1234');
+        });
+
+        // And the table ends up filtered to the matching vulnerability only.
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+
+        window.localStorage.clear();
+    })
+
     test('filter by source', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);

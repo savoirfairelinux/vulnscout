@@ -485,7 +485,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [aiSuggestionVulnIds, setAiSuggestionVulnIds] = useState<Set<string>>(new Set());
 
     const searchInputRef = useRef<HTMLInputElement>(null);
-    const hasRestoredSearch = useRef(false);
     const descriptionSearchController = useRef<AbortController | null>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
     const shortcutDropdownRef = useRef<HTMLDivElement>(null);
@@ -1422,11 +1421,22 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         }
     }, [draftSearch, vulnerabilities, variantId, projectId, setSearch]);
 
+    const applySearchRef = useRef(applySearch);
+    applySearchRef.current = applySearch;
+
+    // Re-run the persisted/restored search whenever the scoped vulnerability
+    // data changes. Explorer loads vulnerabilities asynchronously and may
+    // initially render the previous scope's rows, so restoring only once on
+    // mount would evaluate the search against stale or empty IDs and leave an
+    // incorrectly filtered table. Re-running on data changes keeps
+    // descriptionMatches consistent with the current scope; applySearch aborts
+    // any in-flight description request before starting a new one. Depending on
+    // `vulnerabilities` (not `draftSearch`) avoids firing a description search
+    // on every keystroke.
     useEffect(() => {
-        if (hasRestoredSearch.current) return;
-        hasRestoredSearch.current = true;
-        if (draftSearch.trim()) void applySearch();
-    }, [applySearch, draftSearch]);
+        if (draftSearch.trim()) void applySearchRef.current();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [vulnerabilities]);
 
     useEffect(() => () => descriptionSearchController.current?.abort(), []);
 
