@@ -1570,7 +1570,9 @@ describe('Review — import and export', () => {
 
         await screen.findByText(/Imported:/);
         const importCall = postCalls().find(call => String(call[0]).includes('/api/assessments/review/import-custom-data'));
-        expect(JSON.parse(String((importCall?.[1] as RequestInit).body)).timestamp_policy).toBe('current');
+        const importPayload = JSON.parse(String((importCall?.[1] as RequestInit).body));
+        expect(importPayload.timestamp_policy).toBe('current');
+        expect(importPayload.project_id).toBe('proj1');
     });
 
     test('imports OpenVEX into one selected variant without using the filename', async () => {

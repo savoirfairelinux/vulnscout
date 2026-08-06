@@ -565,8 +565,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             return;
         }
 
-        // VulnScout JSON carries its own variant IDs, so no target selection
-        // or override is sent with the request.
+        // VulnScout JSON carries its own variant IDs, while the active project
+        // constrains name-based fallback for exports from other instances.
         const reader = new FileReader();
         reader.onload = async () => {
             try {
@@ -585,7 +585,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     method: 'POST',
                     mode: 'cors',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...parsed, timestamp_policy: importTimestampPolicy }),
+                    body: JSON.stringify({
+                        ...parsed,
+                        project_id: projectId,
+                        timestamp_policy: importTimestampPolicy,
+                    }),
                 });
                 const data = await result.json() as ImportResult;
 

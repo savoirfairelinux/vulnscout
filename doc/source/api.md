@@ -630,7 +630,9 @@ Accepts either:
 - `multipart/form-data` with a `file` field containing a `.json` file.
 - `application/json` body with the custom-data payload directly.
 
-The records keep the variant identifiers embedded in the file.
+The JSON body must include the destination `project_id` UUID. Variant IDs in
+the file are resolved only within that project; a foreign ID falls back to its
+variant name in the selected project.
 
 **Response:**
 ```json
