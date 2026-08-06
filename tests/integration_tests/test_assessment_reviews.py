@@ -131,3 +131,112 @@ def test_deleting_assessment_cascades_to_review(finding, variant):
 
     # Assert
     assert AssessmentReview.get_by_assessment(assessment_id) is None
+
+
+@pytest.fixture
+def client():
+    # Reuse the app already created (and bound to the in-memory db with
+    # tables) by the autouse ``flask_app_ctx`` fixture in conftest.py,
+    # rather than creating a second Flask app: a second app would get its
+    # own separate ``sqlite:///:memory:`` database with no tables, and
+    # wouldn't see the assessments created via the ``finding``/``variant``
+    # fixtures above. Bypass the "scan not finished" 503 guard since no
+    # real scan status file is involved here.
+    from flask import current_app
+    app = current_app._get_current_object()
+    app._INT_SCAN_FINISHED = True
+    return app.test_client()
+
+
+def test_put_review_creates_and_returns_it(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+
+    # Act
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "openssl 3.0.8 is in the rootfs"},
+    )
+
+    # Assert
+    assert resp.status_code == 200
+    body = resp.get_json()["review"]
+    assert body["status"] == "affected"
+    assert body["verdict"] == "differs"
+    assert body["assessment_id"] == str(assessment.id)
+
+
+def test_put_review_rejects_non_custom_origin(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant, origin="sbom")
+
+    # Act
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Assert
+    assert resp.status_code == 409
+    assert "custom" in resp.get_json()["error"]
+
+
+def test_put_review_rejects_invalid_status(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "banana", "rationale": "r"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_put_review_requires_rationale(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    resp = client.put(f"/api/assessments/{assessment.id}/review", json={"status": "affected"})
+
+    assert resp.status_code == 400
+
+
+def test_put_review_overwrites_existing(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "first"},
+    )
+
+    # Act
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "fixed", "rationale": "second"},
+    )
+
+    # Assert
+    assert resp.status_code == 200
+    assert resp.get_json()["review"]["rationale"] == "second"
+    assert len(AssessmentReview.get_for_variants([variant.id])) == 1
+
+
+def test_get_review_404_when_absent(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    assert client.get(f"/api/assessments/{assessment.id}/review").status_code == 404
+
+
+def test_delete_review_removes_it(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Act
+    resp = client.delete(f"/api/assessments/{assessment.id}/review")
+
+    # Assert
+    assert resp.status_code == 200
+    assert AssessmentReview.get_by_assessment(assessment.id) is None
