@@ -20,6 +20,7 @@ import pytest
 from src.bin.webapp import create_app
 from src.extensions import db as _db
 from src.models.assessment import Assessment
+from src.models.assessment_review import AssessmentReview
 from src.models.finding import Finding
 from src.models.metrics import Metrics
 from src.models.observation import Observation
@@ -332,6 +333,29 @@ class TestOutdatedFlag:
         assert package_response.status_code == 200
         assert json.loads(package_response.data) == []
 
+    def test_delete_outdated_data_cascades_to_assessment_review(self):
+        """The bulk-delete cleanup path also removes the assessment's AI review.
+
+        ``delete_outdated_data`` removes ``Assessment`` rows via a Core-level
+        bulk ``DELETE`` (``_delete_in_chunks``), which bypasses the ORM
+        ``delete-orphan`` cascade wired on ``Assessment.review``. Exercise
+        that exact path (not ``db.session.delete()``) to confirm reviews
+        don't leak.
+        """
+        with self.app.app_context():
+            AssessmentReview.upsert(
+                assessment_id=self.assess_id, status="not_affected", rationale="agrees with analyst"
+            )
+            assert AssessmentReview.get_by_assessment(self.assess_id) is not None
+
+        response = self._delete_outdated_data()
+
+        assert response.status_code == 200
+        assert json.loads(response.data)["assessments_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Assessment, self.assess_id) is None
+            assert AssessmentReview.get_by_assessment(self.assess_id) is None
+
     def test_outdated_data_preview_lists_the_records_to_delete(self):
         """The preview exposes the same stale package data and assessment."""
         response = self.client.get("/api/outdated-data")
@@ -610,6 +634,40 @@ class TestOutdatedFlag:
             assert _db.session.get(Vulnerability, orphaned_cve) is None
             assert _db.session.get(Assessment, orphaned_assessment_id) is None
             assert _db.session.get(Vulnerability, CVE_ID) is not None
+
+    def test_delete_orphaned_vulnerabilities_cascades_to_assessment_review(self):
+        """The orphaned-vulnerability bulk-delete path also removes AI reviews.
+
+        ``delete_orphaned_vulnerabilities`` removes ``Assessment`` rows via a
+        Core-level bulk ``DELETE`` keyed on ``Assessment.finding_id``, which
+        also bypasses the ORM ``delete-orphan`` cascade. Exercise that path
+        directly to confirm reviews don't leak.
+        """
+        orphaned_cve = "CVE-2024-00005"
+        orphaned_assessment_id = uuid.UUID("15151515-1515-1515-1515-151515151515")
+        with self.app.app_context():
+            Vulnerability.create_record(id=orphaned_cve, description="Orphaned with review", status="low")
+            package = Package.find_or_create("orphaned-reviewed", "1.0", [], [], "")
+            finding = Finding.get_or_create(package.id, orphaned_cve)
+            _db.session.add(Assessment(
+                id=orphaned_assessment_id,
+                origin="custom",
+                status="not_affected",
+                finding_id=finding.id,
+                variant_id=VARIANT_ID,
+            ))
+            _db.session.commit()
+            AssessmentReview.upsert(
+                assessment_id=orphaned_assessment_id, status="not_affected", rationale="agrees"
+            )
+            assert AssessmentReview.get_by_assessment(orphaned_assessment_id) is not None
+
+        response = self._delete_orphaned_vulnerabilities()
+        assert response.status_code == 200
+        assert json.loads(response.data)["assessments_deleted"] == 1
+        with self.app.app_context():
+            assert _db.session.get(Assessment, orphaned_assessment_id) is None
+            assert AssessmentReview.get_by_assessment(orphaned_assessment_id) is None
 
     def test_orphaned_vulnerabilities_preserve_variant_owned_data(self):
         """Variant metrics and time estimates keep their CVEs out of cleanup."""
