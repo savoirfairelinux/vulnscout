@@ -9,8 +9,11 @@ import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
 import Assessments from "../../src/handlers/assessments";
+import type { Assessment } from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
+import AssessmentReviews from "../../src/handlers/assessmentReviews";
+import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
 
 describe('Vulnerability Modal', () => {
@@ -259,6 +262,7 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -302,9 +306,10 @@ describe('Vulnerability Modal', () => {
         await user.type(inputWorkaround, 'upgrade layer version');
         await user.click(btn);
 
-        // ASSERT: 3 mount fetches + the create POST + the groups refresh that
-        // makes the new assessment appear in history immediately.
-        expect(thisFetch).toHaveBeenCalledTimes(5);
+        // ASSERT: 4 mount fetches (adds the reviews fetch) + the create POST +
+        // the groups refresh that makes the new assessment appear in history
+        // immediately.
+        expect(thisFetch).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
@@ -315,6 +320,7 @@ describe('Vulnerability Modal', () => {
      */
     const submitAssessment = async (postResponse: object) => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -366,6 +372,7 @@ describe('Vulnerability Modal', () => {
 
     test('an invalid create adds nothing and displays only the API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -455,6 +462,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit effort estimations', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             {
                 id: 'variant-1',
@@ -496,12 +504,13 @@ describe('Vulnerability Modal', () => {
         await user.click(btn);
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(5);
+        expect(fetchMock).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
         alertSpy.mockRestore();
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -523,7 +532,7 @@ describe('Vulnerability Modal', () => {
         await user.click(addBtn);
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/the vector string is invalid/i);
@@ -534,6 +543,7 @@ describe('Vulnerability Modal', () => {
 
     test('custom CVSS API error shows alert (error branch lines 80-93)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -563,7 +573,7 @@ describe('Vulnerability Modal', () => {
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
         expect(appendCVSS).toHaveBeenCalledTimes(1);
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save cvss/i);
@@ -576,6 +586,7 @@ describe('Vulnerability Modal', () => {
 
     test('custom CVSS success updates vulnerability and closes (lines 83-89)', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -615,7 +626,7 @@ describe('Vulnerability Modal', () => {
         await user.type(vectorInput, 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
         await user.click(await screen.getByRole('button', { name: /^add$/i }));
 
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
         expect(patchVuln).toHaveBeenCalledTimes(1);
 
         // Check for success banner instead of alert
@@ -629,6 +640,7 @@ describe('Vulnerability Modal', () => {
         // vulnerability in the current (project) scope. This guards that
         // refresh path (commit "fix CVSS refresh").
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -792,6 +804,7 @@ describe('Vulnerability Modal', () => {
 
     test('addAssessment API failure shows error banner', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -815,7 +828,7 @@ describe('Vulnerability Modal', () => {
         await user.type(inputStatus, 'patched');
         await user.click(btn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
         expect(updateCb).not.toHaveBeenCalled();
         expect(patchVuln).not.toHaveBeenCalled();
 
@@ -969,6 +982,7 @@ describe('Vulnerability Modal', () => {
     test('save estimation failure triggers alert (lines 121-122)', async () => {
         fetchMock.resetMocks();
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -998,7 +1012,7 @@ describe('Vulnerability Modal', () => {
         const saveBtn = await screen.getByText(/save estimation/i);
         await user.click(saveBtn);
 
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
 
         // Check for error banner instead of alert
         const errorBanner = await screen.findByText(/failed to save estimation/i);
@@ -1516,6 +1530,7 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -1559,6 +1574,7 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -1636,6 +1652,7 @@ describe('Vulnerability Modal', () => {
 
     test('deleting a grouped assessment calls remove with the assessment id', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([{
@@ -1680,6 +1697,7 @@ describe('Vulnerability Modal', () => {
 
     test('clearing a variant-scoped group reconciles an explicit empty target set', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'variant-1', name: 'Variant A', project_id: 'proj-1' }
         ])); // variants mount fetch
@@ -1767,6 +1785,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment success', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -1840,6 +1859,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment API error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -1883,6 +1903,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment invalid response', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -1929,6 +1950,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment network error', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -2192,6 +2214,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment invalid assessment data', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -2238,6 +2261,7 @@ describe('Vulnerability Modal', () => {
 
     test('edit assessment data mismatch', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -2369,6 +2393,7 @@ describe('Vulnerability Modal', () => {
 
     test('delete assessment with remaining assessments updates status from most recent', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -2428,6 +2453,7 @@ describe('Vulnerability Modal', () => {
 
     test('recomputes the status summary after deleting an assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -2497,6 +2523,7 @@ describe('Vulnerability Modal', () => {
 
     test('breaks down the current status by variant and package', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' }
         ]));
@@ -2906,6 +2933,7 @@ describe('Vulnerability Modal', () => {
 
     test('copy assessment id button copies "assessment:<id>" for an ungrouped history entry', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch (empty -> fallback)
@@ -2947,6 +2975,7 @@ describe('Vulnerability Modal', () => {
 
     test('copy group id button copies "group:<id>" when the assessment endpoint returns a multi-target assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([{
@@ -2986,6 +3015,7 @@ describe('Vulnerability Modal', () => {
 
     test('adding assessment to multiple variants shows multi-variant success message', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns two variants
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant Alpha', project_id: 'proj1' },
@@ -3066,6 +3096,7 @@ describe('Vulnerability Modal', () => {
 
     test('renders variant tags on assessments when variants are available', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Return variants for this vuln
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
@@ -3139,6 +3170,7 @@ describe('Vulnerability Modal', () => {
 
     test('recap shows the latest status for each variant', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
             { id: 'var-2', name: 'Staging', project_id: 'proj1' }
@@ -3187,6 +3219,7 @@ describe('Vulnerability Modal', () => {
 
     test('recap shows "No status" for affected variants without an assessment', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'var-1', name: 'Production', project_id: 'proj1' },
             { id: 'var-2', name: 'Staging', project_id: 'proj1' }
@@ -3222,6 +3255,7 @@ describe('Vulnerability Modal', () => {
 
     test('projectId prop filters variants to only show those from the current project', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns variants from two different projects
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
@@ -3250,6 +3284,7 @@ describe('Vulnerability Modal', () => {
 
     test('without projectId prop all variants are shown', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         // Variants endpoint returns variants from two different projects
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v1', name: 'Variant A', project_id: 'proj-alpha' },
@@ -3274,6 +3309,7 @@ describe('Vulnerability Modal', () => {
 
     test('packages_current scopes available packages to current project', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3304,6 +3340,7 @@ describe('Vulnerability Modal', () => {
 
     test('falls back to all packages when packages_current is empty', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3389,6 +3426,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3423,6 +3461,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         };
 
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3451,6 +3490,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows "Updated" success cue after a successful refresh', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3469,6 +3509,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows error message when NVD and EPSS refresh APIs are unavailable', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3487,6 +3528,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows rate-limit hint with NVD_API_KEY suggestion when server returns 429 and no key', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3508,6 +3550,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows exhausted-key hint when 429 and api key is already configured', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3529,6 +3572,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('single refresh always sends mode "api" to the nvd-refresh endpoint', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3555,6 +3599,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows API-key-rejected message when NVD returns unauthorized', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3576,6 +3621,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
 
     test('shows API-unavailable hint when NVD is unavailable', async () => {
         fetchMock.resetMocks();
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups mount fetch
@@ -3830,6 +3876,7 @@ describe('Refresh button', () => {
 
     test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
         // Mount fetches
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
@@ -3860,6 +3907,7 @@ describe('Refresh button', () => {
     });
 
     test('NVD rate-limited shows error message', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
@@ -3886,6 +3934,7 @@ describe('Refresh button', () => {
     });
 
     test('NVD + EPSS both unavailable shows combined error', async () => {
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
@@ -3919,6 +3968,7 @@ describe('Refresh button', () => {
             namespace: 'github:advisory',
         };
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
@@ -3952,6 +4002,7 @@ describe('Refresh button', () => {
             namespace: 'github:advisory',
         };
 
+        fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment groups
@@ -3971,5 +4022,161 @@ describe('Refresh button', () => {
             expect(screen.getByText(/GitHub Advisory Database refresh failed/i)).toBeInTheDocument();
         });
         expect(patchVuln).not.toHaveBeenCalled();
+    });
+});
+
+describe("VulnModal AI review block", () => {
+    const baseVulnerability: Vulnerability = {
+        id: 'CVE-2020-0001',
+        aliases: [],
+        related_vulnerabilities: [],
+        namespace: 'nvd:cve',
+        found_by: ['hardcoded'],
+        datasource: '',
+        packages: ['pkgA@1.0.0'],
+        packages_current: [],
+        urls: [],
+        texts: [],
+        severity: {
+            severity: 'low',
+            min_score: 3,
+            max_score: 3,
+            cvss: []
+        },
+        epss: {
+            score: undefined,
+            percentile: undefined
+        },
+        effort: {
+            optimistic: new Iso8601Duration('PT4H'),
+            likely: new Iso8601Duration('P1DT2H'),
+            pessimistic: new Iso8601Duration('P1W2D')
+        },
+        fix: {
+            state: 'unknown'
+        },
+        simplified_status: 'active',
+        variants: [],
+        assessments: []
+    };
+
+    let currentReviews: Record<string, AssessmentReview> = {};
+
+    // Sets the review payload the next render will receive from
+    // AssessmentReviews.fetchForScope (mocked via the /api/assessment-reviews route).
+    const mockReviews = (data: Record<string, AssessmentReview>) => {
+        currentReviews = data;
+    };
+
+    // Renders VulnModal with a single assessment, wiring the file's fetch-mock
+    // conventions (per-URL responses) so the reviews loader and assessment
+    // history both resolve deterministically.
+    const renderModalWithAssessment = async (overrides: Partial<Assessment> & { id: string; origin: string }) => {
+        const assessment: Assessment = {
+            vuln_id: baseVulnerability.id,
+            packages: ['pkgA@1.0.0'],
+            status: 'affected',
+            simplified_status: 'active',
+            justification: '',
+            impact_statement: '',
+            status_notes: '',
+            workaround: '',
+            timestamp: '2026-08-06T09:00:00Z',
+            responses: [],
+            ...overrides,
+        };
+
+        fetchMock.resetMocks();
+        fetchMock.mockResponse((req) => {
+            if (req.url.includes('/api/assessment-reviews')) {
+                return Promise.resolve(JSON.stringify(currentReviews));
+            }
+            if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(baseVulnerability.id)}/assessments`)) {
+                return Promise.resolve(JSON.stringify([assessment]));
+            }
+            return Promise.resolve(JSON.stringify([]));
+        });
+
+        render(
+            <VulnModal
+                vuln={{ ...baseVulnerability, assessments: [assessment] }}
+                isEditing={true}
+                onClose={() => {}}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+            />
+        );
+
+        await screen.findByText(baseVulnerability.id);
+    };
+
+    const review = {
+        id: "r1",
+        assessment_id: "assess-1",
+        status: "affected",
+        status_notes: "reachable from the network. confidence level: high",
+        justification: "",
+        impact_statement: "",
+        workaround: "",
+        responses: [],
+        rationale: "openssl 3.0.8 ships in the rootfs",
+        timestamp: "2026-08-06T10:00:00Z",
+        verdict: "differs" as const,
+        is_stale: false,
+    };
+
+    test("renders the review beneath its assessment with the differs verdict", async () => {
+        // Arrange
+        mockReviews({ "assess-1": review });
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        // Assert
+        expect(await screen.findByText(/AI review/i)).toBeInTheDocument();
+        expect(screen.getByText(/differs/i)).toBeInTheDocument();
+        expect(screen.getByText(/openssl 3.0.8 ships in the rootfs/)).toBeInTheDocument();
+    });
+
+    test("shows the stale banner when the assessment changed after the review", async () => {
+        mockReviews({ "assess-1": { ...review, is_stale: true } });
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        expect(await screen.findByText(/edited after this review/i)).toBeInTheDocument();
+    });
+
+    test("renders no review block for an assessment without one", async () => {
+        mockReviews({});
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+
+        expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument();
+    });
+
+    test("shows a copyable id for custom assessments only", async () => {
+        mockReviews({});
+
+        await renderModalWithAssessment({ id: "assess-1", origin: "sbom" });
+
+        expect(screen.queryByText(/^id assess-1$/)).not.toBeInTheDocument();
+    });
+
+    test("discarding a review removes the block", async () => {
+        // Arrange
+        mockReviews({ "assess-1": review });
+        const removeSpy = jest.spyOn(AssessmentReviews, "remove").mockResolvedValue(undefined);
+
+        // Act
+        await renderModalWithAssessment({ id: "assess-1", origin: "custom" });
+        await userEvent.click(await screen.findByRole("button", { name: /discard review/i }));
+        await userEvent.click(await screen.findByRole("button", { name: /confirm/i }));
+
+        // Assert
+        expect(removeSpy).toHaveBeenCalledWith("assess-1");
+        await waitFor(() => expect(screen.queryByText(/AI review/i)).not.toBeInTheDocument());
+
+        removeSpy.mockRestore();
     });
 });
