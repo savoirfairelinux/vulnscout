@@ -3,7 +3,7 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import orm, Text, DateTime, JSON
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
@@ -15,6 +15,9 @@ from .vulnerability import Vulnerability
 from .package import Package
 from .finding import Finding
 from .assessment_target import AssessmentTarget, GroupInvariantError, validate_targets
+
+if TYPE_CHECKING:
+    from .assessment_review import AssessmentReview
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +133,9 @@ class Assessment(Base):
         back_populates="assessment",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+    review: Mapped["AssessmentReview | None"] = relationship(
+        back_populates="assessment", cascade="all, delete-orphan", uselist=False
     )
 
     # ------------------------------------------------------------------
