@@ -16,6 +16,7 @@ import {
   faChevronRight,
   faFolder,
   faGear,
+  faRightLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import Projects from "../handlers/project";
 import type { Project } from "../handlers/project";
@@ -28,19 +29,21 @@ import type { EmptyScanPreview, OrphanedVulnerabilityPreview, OutdatedDataPrevie
 import ConfirmationModal from "../components/ConfirmationModal";
 import MessageBanner from "../components/MessageBanner";
 import Popup from "../components/Popup";
+import Transfer from "./Transfer";
 
 type Props = {
   onDataChanged?: (message?: string) => void;
   onLoadingMessage?: (message: string | null) => void;
+  projectId?: string;
 };
 
-type SettingsTab = "general" | "projects" | "variants";
+type SettingsTab = "general" | "transfer" | "projects" | "variants";
 type FeedbackMsg = { text: string; type: "success" | "error" } | null;
 type AdditionalCleanup =
   | { kind: "empty-scans"; scans: EmptyScanPreview[] }
   | { kind: "orphaned-vulnerabilities"; vulnerabilities: OrphanedVulnerabilityPreview[] };
 
-function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
+function Settings({ onDataChanged, onLoadingMessage, projectId }: Readonly<Props>) {
   // ---- Active category tab ----
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
 
@@ -710,6 +713,9 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
       pageTitle = variantProjectId ? "Add Variant" : "Variants";
       if (variantProjectId) crumbs.push("Add Variant");
     }
+  } else if (activeTab === "transfer") {
+    crumbs.push("Transfer");
+    pageTitle = "Transfer Assessments";
   } else {
     crumbs.push("General Settings");
   }
@@ -732,6 +738,17 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
             >
               <FontAwesomeIcon icon={faGear} className="w-4 text-sky-400" aria-hidden="true" />
               General Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("transfer")}
+              aria-current={activeTab === "transfer" ? "page" : undefined}
+              className={`mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                activeTab === "transfer" ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              <FontAwesomeIcon icon={faRightLeft} className="w-4 text-sky-400" aria-hidden="true" />
+              Transfer Assessments
             </button>
 
             <div className="my-3 border-t border-slate-700" />
@@ -1313,6 +1330,10 @@ function Settings({ onDataChanged, onLoadingMessage }: Readonly<Props>) {
         </>
         )}
         </>
+        )}
+
+        {activeTab === "transfer" && (
+          <Transfer projectId={projectId} onDataChanged={onDataChanged} />
         )}
 
         {/* ======== Variants Settings tab ======== */}

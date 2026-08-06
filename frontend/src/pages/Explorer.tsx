@@ -15,7 +15,6 @@ import ScanHistory from "./ScanHistory";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
-import Transfer from './Transfer';
 import AIContext from './AIContext';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -37,7 +36,6 @@ const tabLabels: Record<string, string> = {
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
         review: 'Review',
-        transfer: 'Transfer',
         exports: 'Export',
         settings: 'Settings',
         ai: 'AI Context',
@@ -486,16 +484,12 @@ function Explorer() {
                 {tab === 'scans' && <ScanHistory variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onScanComplete={handleScanComplete} />}
                 {tab === 'review' && <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} />}
                 {tab === 'exports' && <Exports variantId={currentVariantId} projectId={currentProjectId} variantIds={currentVariantIds} />}
-                {tab === 'transfer' && <Transfer projectId={currentProjectId} onDataChanged={(message) => {
-                    if (message) setLoadingMessage(message);
-                    loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} />}
                 {tab === 'settings' && <Settings onDataChanged={(message) => {
                     if (message) setLoadingMessage(message);
                     Config.get().then(config => setDefaultConfig(config)).catch(() => {});
                     setSelectorKey(k => k + 1);
                     loadData(currentVariantId, currentVariantId ? undefined : currentProjectId, undefined, undefined, currentVariantIds, currentMultiOperation);
-                }} onLoadingMessage={(msg) => {
+                }} projectId={currentProjectId} onLoadingMessage={(msg) => {
                     if (msg) {
                         setLoadingMessage(msg);
                         setIsLoadingData(true);
