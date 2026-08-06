@@ -106,11 +106,6 @@ function NavigationBar({ tab, changeTab, defaultProject, defaultVariant, default
         </button>
       </li>
 
-      {/* === Divider === */}
-      <li className="flex items-center mx-3">
-        <div className="border-l h-8 dark:border-neutral-300"></div>
-      </li>
-
       {/* === Export === */}
       <li className={[bgHoverColor, tab == 'exports' && bgActiveColor].join(' ')}>
         <button
