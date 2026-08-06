@@ -22,6 +22,7 @@ from sqlalchemy.engine import CursorResult
 
 from ..extensions import db, write_lock
 from ..models.assessment import Assessment
+from ..models.assessment_review import AssessmentReview
 from ..models.assessment_target import AssessmentTarget
 from ..models.finding import Finding
 from ..models.metrics import Metrics
@@ -55,6 +56,18 @@ def _chunked(values: Iterable[T]) -> Iterator[list[T]]:
 def _delete_in_chunks(model: type[Any], column: Any, values: Iterable[Any]) -> None:
     for chunk in _chunked(values):
         db.session.execute(db.delete(model).where(column.in_(chunk)))
+
+
+def _delete_assessment_reviews(assessment_ids: Iterable[uuid.UUID]) -> None:
+    """Delete ``assessment_reviews`` rows for the given assessment ids.
+
+    Bulk ``DELETE`` on ``Assessment`` bypasses the ORM's ``delete-orphan``
+    cascade wired on ``Assessment.review``, so reviews must be removed
+    explicitly before (or alongside) removing their parent assessments —
+    the same pattern used for ``Metrics``/``VulnRefresh`` in
+    ``_delete_orphaned_vulnerabilities``.
+    """
+    _delete_in_chunks(AssessmentReview, AssessmentReview.assessment_id, assessment_ids)
 
 
 def _active_identities_by_variant() -> dict[uuid.UUID, set[PackageIdentity]]:
@@ -553,9 +566,11 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
             if remove_target(assessment_id, variant_id, finding_id):
                 targets_removed += 1
         # Bulk DELETE bypasses the ORM's cascade="all, delete-orphan" on
-        # Assessment.target_rows (sqlite foreign_keys stay off), so the
-        # target rows for these assessments are cleared explicitly first —
-        # otherwise they'd be left dangling, pointing at a deleted assessment.
+        # Assessment.target_rows/.review (sqlite foreign_keys stay off), so
+        # the target rows and reviews for these assessments are cleared
+        # explicitly first — otherwise they'd be left dangling, pointing at a
+        # deleted assessment.
+        _delete_assessment_reviews(fully_stale_ids)
         _delete_in_chunks(AssessmentTarget, AssessmentTarget.assessment_id, fully_stale_ids)
         _delete_in_chunks(Assessment, Assessment.id, fully_stale_ids)
         _delete_in_chunks(Observation, Observation.id, stale_observation_ids)
@@ -711,6 +726,9 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
                 .where(AssessmentTarget.finding_id.in_(finding_id_chunk))
             ).tuples().all())
         candidate_assessment_ids = {assessment_id for assessment_id, _, _ in target_triples}
+        # remove_target deletes an emptied assessment through the ORM, so
+        # cascade="all, delete-orphan" on Assessment.review already removes
+        # its review; no explicit cleanup needed here.
         for assessment_id, variant_id, finding_id in target_triples:
             remove_target(assessment_id, variant_id, finding_id)
         # An assessment is deleted only once every one of its targets has been
