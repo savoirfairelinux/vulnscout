@@ -257,3 +257,101 @@ def test_delete_review_removes_it(client, finding, variant):
     # Assert
     assert resp.status_code == 200
     assert AssessmentReview.get_by_assessment(assessment.id) is None
+
+
+def test_list_custom_assessments_excludes_other_origins(client, finding, variant):
+    # Arrange
+    make_assessment(finding, variant, origin="custom")
+    make_assessment(finding, variant, origin="sbom")
+
+    # Act
+    resp = client.get(f"/api/custom-assessments?variant_id={variant.id}")
+
+    # Assert
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    assert len(rows) == 1
+    assert rows[0]["origin"] == "custom"
+    assert rows[0]["has_review"] is False
+
+
+def test_list_custom_assessments_has_review_filter(client, finding, variant):
+    # Arrange
+    reviewed = make_assessment(finding, variant)
+    make_assessment(finding, variant, status_notes="second")
+    client.put(
+        f"/api/assessments/{reviewed.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Act
+    with_review = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&has_review=true"
+    ).get_json()
+    without_review = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&has_review=false"
+    ).get_json()
+
+    # Assert
+    assert [r["id"] for r in with_review] == [str(reviewed.id)]
+    assert str(reviewed.id) not in [r["id"] for r in without_review]
+
+
+def test_list_custom_assessments_limit_and_order(client, finding, variant):
+    # Arrange
+    older = make_assessment(finding, variant, status_notes="older")
+    newer = make_assessment(finding, variant, status_notes="newer")
+    older.timestamp = newer.timestamp - timedelta(hours=1)
+    db.session.commit()
+
+    # Act
+    rows = client.get(
+        f"/api/custom-assessments?variant_id={variant.id}&order=timestamp_desc&limit=1"
+    ).get_json()
+
+    # Assert
+    assert len(rows) == 1
+    assert rows[0]["id"] == str(newer.id)
+
+
+def test_list_custom_assessments_rejects_bad_limit(client, variant):
+    resp = client.get(f"/api/custom-assessments?variant_id={variant.id}&limit=0")
+
+    assert resp.status_code == 400
+
+
+def test_bulk_reviews_keyed_by_assessment_id(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Act
+    body = client.get(f"/api/assessment-reviews?variant_id={variant.id}").get_json()
+
+    # Assert
+    assert str(assessment.id) in body
+    assert body[str(assessment.id)]["status"] == "affected"
+
+
+def test_single_assessment_embeds_its_review(client, finding, variant):
+    # Arrange
+    assessment = make_assessment(finding, variant)
+    client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "affected", "rationale": "r"},
+    )
+
+    # Act
+    body = client.get(f"/api/assessments/{assessment.id}").get_json()
+
+    # Assert
+    assert body["review"]["status"] == "affected"
+
+
+def test_single_assessment_review_is_none_when_absent(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    assert client.get(f"/api/assessments/{assessment.id}").get_json()["review"] is None
