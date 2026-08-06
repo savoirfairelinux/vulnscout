@@ -147,6 +147,7 @@ type VariantScopedSnapshot = {
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
+    const [showCpeHint, setShowCpeHint] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
@@ -165,6 +166,19 @@ type VariantScopedSnapshot = {
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
     const projectPackages = (vuln.packages_current?.length > 0) ? vuln.packages_current : vuln.packages;
+
+    useEffect(() => {
+        const closeCpeHint = (event: MouseEvent) => {
+            const target = event.target;
+            if (target instanceof Element && !target.closest('[data-cpe-hint]')) {
+                setShowCpeHint(false);
+            }
+        };
+        if (showCpeHint) {
+            document.addEventListener('mousedown', closeCpeHint);
+        }
+        return () => document.removeEventListener('mousedown', closeCpeHint);
+    }, [showCpeHint]);
 
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
@@ -1697,6 +1711,42 @@ type VariantScopedSnapshot = {
                                 ))}
                             </ul>
                         </div>
+
+                        {(vuln.cpes?.length ?? 0) > 0 && (
+                            <div className="mb-6 mt-6">
+                                <div className="relative mb-2 flex items-center gap-2">
+                                    <h3 className="font-bold">Affected CPEs ({vuln.cpes?.length})</h3>
+                                    <button
+                                        aria-label="About affected CPEs"
+                                        type="button"
+                                        data-cpe-hint
+                                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                                        onClick={() => setShowCpeHint(current => !current)}
+                                    >
+                                        <FontAwesomeIcon icon={faCircleQuestion} />
+                                    </button>
+                                    {showCpeHint && (
+                                        <div
+                                            role="tooltip"
+                                            data-cpe-hint
+                                            className="absolute top-full mt-1 left-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
+                                        >
+                                            <h3 className="font-bold text-white mb-2">Affected CPEs</h3>
+                                            <div className="space-y-1 text-gray-100">
+                                                <p>These CPEs are provided by NVD for this vulnerability.</p>
+                                                <p>They describe all NVD-reported affected products, not only packages in the current scope.</p>
+                                                <p>They do not indicate whether the current project, variant, or scan is affected.</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <ul className="max-h-64 overflow-y-auto space-y-1 rounded-lg bg-gray-800 p-3 text-sm">
+                                    {vuln.cpes?.map(cpe => (
+                                        <li key={cpe}><code className="break-all">{cpe}</code></li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
 
                         <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor

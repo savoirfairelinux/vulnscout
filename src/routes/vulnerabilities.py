@@ -843,6 +843,7 @@ def init_app(app: Flask) -> None:
                 for vuln in vulns.values():
                     vuln.pop("texts", None)
                     vuln.pop("urls", None)
+                    vuln.pop("cpes", None)
                     vuln["details_loaded"] = False
                     cvss_entries = vuln.get("severity", {}).get("cvss", [])
                     vuln["severity"]["cvss"] = [

@@ -390,6 +390,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             ...summary,
             texts: details.texts,
             urls: details.urls,
+            cpes: details.cpes,
             severity: { ...summary.severity, cvss: details.severity.cvss },
             details_loaded: true,
         } : { ...summary, details_loaded: true };
@@ -415,6 +416,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     ...summary,
                     texts: details.texts,
                     urls: details.urls,
+                    cpes: details.cpes,
                     severity: {
                         ...summary.severity,
                         cvss: details.severity.cvss,

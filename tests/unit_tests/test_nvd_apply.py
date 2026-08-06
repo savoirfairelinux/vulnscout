@@ -21,6 +21,7 @@ class FakeVuln:
         self.attack_vector = kwargs.get("attack_vector", None)
         self.links = kwargs.get("links", [])
         self.weaknesses = kwargs.get("weaknesses", [])
+        self.cpes = kwargs.get("cpes", [])
         self.publish_date = kwargs.get("publish_date", None)
         self.nvd_last_modified = kwargs.get("nvd_last_modified", None)
         self.nvd_fetched_at = None
@@ -78,6 +79,16 @@ def test_apply_nvd_update_partial_fields():
     assert vuln.attack_vector == "NETWORK"
     assert vuln.status == "low"  # unchanged
     assert vuln.nvd_data_updated_at == NOW
+
+
+def test_apply_nvd_update_persists_affected_cpes():
+    vuln = FakeVuln(cpes=["cpe:2.3:a:example:old:*:*:*:*:*:*:*"])
+    details = {"cpes": ["cpe:2.3:a:example:new:*:*:*:*:*:*:*"]}
+
+    changed = apply_nvd_update(vuln, details, NOW)
+
+    assert changed is True
+    assert vuln.cpes == ["cpe:2.3:a:example:new:*:*:*:*:*:*:*"]
 
 
 def test_apply_nvd_update_empty_details():

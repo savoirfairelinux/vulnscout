@@ -35,6 +35,7 @@ type Vulnerability = {
     packages_current: string[];
     variants: string[];
     urls: string[];
+    cpes?: string[];
     published?: string;
     data_fetched_at?: string;
     data_updated_at?: string;
@@ -236,6 +237,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
         packages_current: asStringArray(data?.packages_current),
         variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
+        cpes: asStringArray(data?.cpes),
         texts: [],
         severity: {
             severity: "unknown",

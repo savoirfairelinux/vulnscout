@@ -25,6 +25,7 @@ describe('Vulnerability Modal', () => {
         packages: ['aaabbbccc@1.0.0'],
         packages_current: [],
         urls: ['https://security-tracker.debian.org/tracker/CVE-2010-1234'],
+        cpes: ['cpe:2.3:a:example:service:1.0:*:*:*:*:*:*:*'],
         texts: [
             {
                 title: 'description',
@@ -117,6 +118,13 @@ describe('Vulnerability Modal', () => {
         expect(url).toBeInTheDocument();
         // datasource is metadata, not a link — it should NOT appear in the Links section
         expect(screen.queryByText(/nvd\.nist\.gov\/vuln\/detail\/CVE-2010-1234/i)).not.toBeInTheDocument();
+    })
+
+    test('render all affected CPEs', async () => {
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        expect(await screen.findByText('Affected CPEs (1)')).toBeInTheDocument();
+        expect(screen.getByText('cpe:2.3:a:example:service:1.0:*:*:*:*:*:*:*')).toBeInTheDocument();
     })
 
     test('render efforts estimations', async () => {
