@@ -157,9 +157,11 @@ class Assessment(Base):
 
     @property
     def vuln_id(self) -> str:
-        # _vuln_id is always initialised by _init_transient / new_dto; avoid
-        # the repeated hasattr overhead in hot ingestion loops.
-        val = self._vuln_id
+        # _vuln_id is normally initialised by _init_transient / new_dto, but
+        # objects constructed directly (bypassing both) and never reloaded
+        # from the DB never get the SQLAlchemy 'load' event that would set
+        # it, so fall back defensively instead of assuming it is present.
+        val = getattr(self, "_vuln_id", "")
         if val:
             return val
         try:
