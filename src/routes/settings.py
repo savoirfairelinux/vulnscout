@@ -220,11 +220,13 @@ def _process_sbom_background(
                     # Each source is isolated so one failure doesn't skip the rest.
                     try:
                         if source == "epss":
-                            post_treatment(controllers)
+                            result = post_treatment(controllers)
                         elif source in {"nvd", "ghsa"}:
-                            vulnCtrl.fetch_nvd_data()
+                            result = vulnCtrl.fetch_nvd_data()
                         else:
-                            vulnCtrl.fetch_euvd_data()
+                            result = vulnCtrl.fetch_euvd_data()
+                        if result is not None and not result.completed:
+                            failed_sources.append(label)
                     except Exception as e:
                         failed_sources.append(label)
                         verbose(f"settings/upload: {label} enrichment failed: {e}")

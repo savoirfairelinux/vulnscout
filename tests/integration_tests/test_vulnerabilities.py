@@ -210,11 +210,29 @@ def test_fetch_nvd_data_ghsa_http_error(mock_urlopen, vuln_controller, vuln_ghsa
         url="...", code=404, msg="Not Found", hdrs={}, fp=None
     )
 
-    # Execute - should not raise exception
-    vuln_controller.fetch_nvd_data()
+    # Execute - should not raise exception, but report the refresh failure.
+    result = vuln_controller.fetch_nvd_data()
 
     # Assertions
     assert vuln_ghsa.published is None
+    assert result.failed >= 1
+    assert not result.completed
+
+
+def test_fetch_euvd_data_empty_mappings_reports_failure(vuln_controller, monkeypatch):
+    """An EUVD download fallback with no cached data reports an incomplete refresh."""
+    vuln_controller.add(Vulnerability("CVE-2022-0001", ["test"], "test", "test"))
+    monkeypatch.setattr(
+        "src.controllers.euvd_db.EUVD_DB.get_full_mapping", lambda self: {},
+    )
+    monkeypatch.setattr(
+        "src.controllers.euvd_db.EUVD_DB.get_mapping", lambda self: {},
+    )
+
+    result = vuln_controller.fetch_euvd_data()
+
+    assert result.failed == 1
+    assert not result.completed
 
 
 # ---------------------------------------------------------------------------

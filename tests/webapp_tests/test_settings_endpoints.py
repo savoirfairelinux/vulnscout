@@ -2421,6 +2421,42 @@ class TestProcessSBOMBackgroundEpss:
 
 class TestProcessSBOMBackgroundRefreshIsolation:
 
+    def test_provider_reported_failure_is_in_upload_status(self, app, monkeypatch):
+        """A provider that swallows a lookup failure still marks its refresh incomplete."""
+        from src.routes.settings import _process_sbom_background, _upload_status
+        from src.models.project import Project
+        from src.models.variant import Variant
+        from src.models.scan import Scan
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
+        monkeypatch.setenv("IGNORE_PARSING_ERRORS", "true")
+
+        def fake_read_inputs(controllers, scan_id=None):
+            vuln = Vulnerability.create_record(id="CVE-PROVIDER-0001", description="provider")
+            db.session.commit()
+            controllers.vulnerabilities.vulnerabilities = {vuln.id: vuln}
+            controllers.vulnerabilities._encountered_this_run = {vuln.id}
+
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", fake_read_inputs)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "src.controllers.vulnerabilities.get_cve_json",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("local data unavailable")),
+        )
+
+        with app.app_context():
+            project = Project.create("ProviderResultProject")
+            variant = Variant.create("ProviderResultVariant", project.id)
+            scan = Scan.create("", variant.id)
+
+            upload_id = "provider-result-failure-test"
+            _process_sbom_background(app, upload_id, [], scan.id, variant.id, {"nvd"})
+
+            status = _upload_status[upload_id]
+            assert status["status"] == "done"
+            assert "NVD refresh failed" in status["message"]
+
     def test_one_source_failure_does_not_block_the_others(self, app, monkeypatch):
         """A failure in one selected refresh source must not prevent the
         remaining selected sources from running."""

@@ -67,7 +67,7 @@ def _ts_key(ts) -> str:
 
 def post_treatment(controllers: ControllersCache, documents=None):
     """Enrich vulnerabilities with EPSS scores."""
-    controllers.vulnerabilities.fetch_epss_scores()
+    return controllers.vulnerabilities.fetch_epss_scores()
 
 
 def evaluate_condition(
