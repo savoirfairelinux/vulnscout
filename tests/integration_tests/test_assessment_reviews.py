@@ -192,6 +192,17 @@ def test_put_review_rejects_invalid_status(client, finding, variant):
     assert resp.status_code == 400
 
 
+def test_put_review_rejects_invalid_justification(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    resp = client.put(
+        f"/api/assessments/{assessment.id}/review",
+        json={"status": "not_affected", "justification": "banana", "rationale": "r"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_put_review_requires_rationale(client, finding, variant):
     assessment = make_assessment(finding, variant)
 
@@ -224,6 +235,12 @@ def test_get_review_404_when_absent(client, finding, variant):
     assessment = make_assessment(finding, variant)
 
     assert client.get(f"/api/assessments/{assessment.id}/review").status_code == 404
+
+
+def test_delete_review_404_when_absent(client, finding, variant):
+    assessment = make_assessment(finding, variant)
+
+    assert client.delete(f"/api/assessments/{assessment.id}/review").status_code == 404
 
 
 def test_delete_review_removes_it(client, finding, variant):
