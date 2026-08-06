@@ -536,6 +536,12 @@ describe("assessmentReviews handler", () => {
         await expect(AssessmentReviews.fetchForScope("v1")).resolves.toEqual({});
     });
 
+    test("fetchForScope returns an empty map when fetch itself rejects", async () => {
+        jest.spyOn(global, "fetch").mockRejectedValue(new Error("network down"));
+
+        await expect(AssessmentReviews.fetchForScope("v1")).resolves.toEqual({});
+    });
+
     test("remove issues a DELETE for the assessment", async () => {
         // Arrange
         jest.spyOn(global, "fetch").mockResolvedValue({
