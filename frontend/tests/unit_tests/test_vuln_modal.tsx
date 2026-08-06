@@ -121,10 +121,19 @@ describe('Vulnerability Modal', () => {
     })
 
     test('render all affected CPEs', async () => {
+        const user = userEvent.setup();
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByText('Affected CPEs (1)')).toBeInTheDocument();
+        expect(screen.queryByText('cpe:2.3:a:example:service:1.0:*:*:*:*:*:*:*')).not.toBeInTheDocument();
+
+        const toggle = screen.getByRole('button', { name: 'Expand affected CPEs' });
+        await user.click(toggle);
+        expect(toggle).toHaveAttribute('aria-expanded', 'true');
         expect(screen.getByText('cpe:2.3:a:example:service:1.0:*:*:*:*:*:*:*')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Collapse affected CPEs' }));
+        expect(screen.queryByText('cpe:2.3:a:example:service:1.0:*:*:*:*:*:*:*')).not.toBeInTheDocument();
     })
 
     test('render efforts estimations', async () => {

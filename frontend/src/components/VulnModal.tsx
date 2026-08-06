@@ -14,7 +14,7 @@ import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBox, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
+import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
@@ -148,6 +148,7 @@ type VariantScopedSnapshot = {
     const [groupToDelete, setGroupToDelete] = useState<AssessmentGroup | null>(null);
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showCpeHint, setShowCpeHint] = useState(false);
+    const [showCpeList, setShowCpeList] = useState(false);
     const [availableVariants, setAvailableVariants] = useState<Variant[]>([]);
     const [variantsLoadedForVulnId, setVariantsLoadedForVulnId] = useState<string | null>(null);
     const [allVulnAssessments, setAllVulnAssessments] = useState<Assessment[]>([]);
@@ -1725,6 +1726,16 @@ type VariantScopedSnapshot = {
                                     >
                                         <FontAwesomeIcon icon={faCircleQuestion} />
                                     </button>
+                                    <button
+                                        aria-expanded={showCpeList}
+                                        aria-label={showCpeList ? "Collapse affected CPEs" : "Expand affected CPEs"}
+                                        title={showCpeList ? "Collapse affected CPEs" : "Expand affected CPEs"}
+                                        type="button"
+                                        className="text-sky-300 hover:text-sky-100 transition-colors"
+                                        onClick={() => setShowCpeList(current => !current)}
+                                    >
+                                        <FontAwesomeIcon className={showCpeList ? "rotate-180 transition-transform" : "transition-transform"} icon={faChevronDown} />
+                                    </button>
                                     {showCpeHint && (
                                         <div
                                             role="tooltip"
@@ -1740,11 +1751,13 @@ type VariantScopedSnapshot = {
                                         </div>
                                     )}
                                 </div>
-                                <ul className="max-h-64 overflow-y-auto space-y-1 rounded-lg bg-gray-800 p-3 text-sm">
-                                    {vuln.cpes?.map(cpe => (
-                                        <li key={cpe}><code className="break-all">{cpe}</code></li>
-                                    ))}
-                                </ul>
+                                {showCpeList && (
+                                    <ul className="max-h-64 overflow-y-auto space-y-1 rounded-lg bg-gray-800 p-3 text-sm">
+                                        {vuln.cpes?.map(cpe => (
+                                            <li key={cpe}><code className="break-all">{cpe}</code></li>
+                                        ))}
+                                    </ul>
+                                )}
                             </div>
                         )}
 
