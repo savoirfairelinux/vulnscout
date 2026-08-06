@@ -16,6 +16,8 @@ import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
+import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
+import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import Variants from '../handlers/variant';
@@ -160,6 +162,8 @@ type VariantScopedSnapshot = {
     const [snapshotVersion, setSnapshotVersion] = useState(0);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingGroup, setEditingGroup] = useState<AssessmentGroup | null>(null);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
+    const [reviewToDiscard, setReviewToDiscard] = useState<string | null>(null);
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
@@ -177,6 +181,15 @@ type VariantScopedSnapshot = {
         }
         return () => document.removeEventListener('mousedown', closeCpeHint);
     }, [showCpeHint]);
+
+    // Reviews are keyed by assessment ID and rendered beneath their assessment.
+    useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId, vuln.id]);
 
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
@@ -657,6 +670,22 @@ type VariantScopedSnapshot = {
     const handleDeleteAssessment = (group: AssessmentGroup) => {
         setGroupToDelete(group);
         setShowDeleteConfirm(true);
+    };
+
+    const handleDiscardReview = async (assessmentId: string) => {
+        try {
+            await AssessmentReviews.remove(assessmentId);
+            setReviews(prev => {
+                const next = { ...prev };
+                delete next[assessmentId];
+                return next;
+            });
+            showMessage("Review discarded.", "success");
+        } catch (e) {
+            showMessage(`Failed to discard review: ${escape(String(e))}`, "error");
+        } finally {
+            setReviewToDiscard(null);
+        }
     };
 
     const handleApproveAiAssessment = async (group: AssessmentGroup) => {
@@ -2179,6 +2208,61 @@ type VariantScopedSnapshot = {
                                                     )}
                                                 </div>
                                             </div>
+                                            {(group.origin === "custom" ? group.assessment_ids : [])
+                                                .map(assessmentId => {
+                                                    const review = reviews[assessmentId];
+                                                    const verdict = verdictOf(review);
+                                                    return (
+                                                        <div key={`review-${assessmentId}`} className="mt-3">
+                                                            <div className="flex items-center gap-2 text-xs text-gray-400">
+                                                                <span className="font-mono">id {assessmentId.slice(0, 8)}</span>
+                                                                <button
+                                                                    type="button"
+                                                                    title="Copy assessment id"
+                                                                    onClick={() => navigator.clipboard.writeText(assessmentId)}
+                                                                    className="hover:text-gray-200 transition-colors"
+                                                                >
+                                                                    <FontAwesomeIcon icon={faCopy} className="w-3 h-3" />
+                                                                </button>
+                                                            </div>
+                                                            {review && (
+                                                                <div className="mt-2 ml-4 p-3 rounded-lg border border-sky-700 bg-sky-950/30">
+                                                                    <div className="flex items-center justify-between mb-2">
+                                                                        <span className="inline-flex items-center gap-2 text-sky-300 font-semibold text-sm">
+                                                                            <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
+                                                                            AI review
+                                                                            <span className={verdict === "agrees" ? "text-green-400" : "text-amber-400"}>
+                                                                                · {verdict === "agrees" ? "✓ agrees" : verdict === "stale" ? "⚠ stale" : "⚠ differs"}
+                                                                            </span>
+                                                                        </span>
+                                                                        {isEditing && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setReviewToDiscard(assessmentId)}
+                                                                                className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
+                                                                            >
+                                                                                Discard review
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    <p className="text-sm text-gray-200 whitespace-pre-line">
+                                                                        <strong>{review.status}</strong>
+                                                                        {review.justification && <> · {review.justification}</>}<br/>
+                                                                        {review.impact_statement && <>{review.impact_statement}<br/></>}
+                                                                        {review.status_notes && <>{review.status_notes}<br/></>}
+                                                                        {review.workaround && <>{review.workaround}<br/></>}
+                                                                        <span className="text-gray-400">why: {review.rationale}</span>
+                                                                    </p>
+                                                                    {review.is_stale && (
+                                                                        <p className="mt-2 text-xs text-amber-400">
+                                                                            ⚠ Assessment was edited after this review was generated.
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
                                             {isBeingEdited && (
                                                 <div className="mt-3">
                                                     <EditAssessment
@@ -2275,6 +2359,17 @@ type VariantScopedSnapshot = {
                 showTitleIcon={true}
                 onConfirm={handleConfirmDelete}
                 onCancel={handleCancelDelete}
+            />
+
+            <ConfirmationModal
+                isOpen={reviewToDiscard !== null}
+                title="Discard AI review?"
+                message="The review will be removed. The assessment itself is unchanged."
+                confirmText="Confirm"
+                cancelText="Cancel"
+                showTitleIcon={true}
+                onConfirm={() => reviewToDiscard && handleDiscardReview(reviewToDiscard)}
+                onCancel={() => setReviewToDiscard(null)}
             />
         </div>
     );
