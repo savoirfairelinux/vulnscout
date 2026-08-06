@@ -52,9 +52,13 @@ class AssessmentReviews {
         if (variantId) url.searchParams.set("variant_id", variantId);
         else if (projectId) url.searchParams.set("project_id", projectId);
 
-        const response = await fetch(url.toString(), { mode: "cors" });
-        if (!response.ok) return {};
-        return await response.json();
+        try {
+            const response = await fetch(url.toString(), { mode: "cors" });
+            if (!response.ok) return {};
+            return await response.json();
+        } catch {
+            return {};
+        }
     }
 
     /** Discard the review attached to an assessment. */
