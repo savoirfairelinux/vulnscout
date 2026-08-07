@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Text, DateTime, JSON, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import Mapped, relationship, mapped_column
+from sqlalchemy.orm import Mapped, relationship, mapped_column, contains_eager
 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
@@ -109,7 +109,7 @@ class AssessmentReview(Base):
     def get_for_variants(variant_ids: list[uuid.UUID] | None = None) -> list["AssessmentReview"]:
         query = db.select(AssessmentReview).join(
             Assessment, AssessmentReview.assessment_id == Assessment.id
-        )
+        ).options(contains_eager(AssessmentReview.assessment))
         if variant_ids:
             query = query.where(
                 Assessment.target_rows.any(AssessmentTarget.variant_id.in_(variant_ids))
