@@ -305,11 +305,27 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
 
+    // Read inside the mount effect's `.then()` below so that callback — whose
+    // closure is fixed at the moment the effect was created, since the effect
+    // itself must not depend on `reviews` (see comment on that effect) — always
+    // sees whichever `reviews` value is freshest *at the time it actually runs*,
+    // not whatever `reviews` happened to be when the closure was created. A
+    // plain state read there would be permanently stale.
+    const reviewsRef = useRef<Record<string, AssessmentReview>>({});
+
     useEffect(() => {
         let cancelled = false;
         AssessmentReviews.fetchForScope(variantId, projectId)
-            .then(data => { if (!cancelled) setReviews(data); })
-            .catch(() => { if (!cancelled) setReviews({}); });
+            .then(data => {
+                if (cancelled) return;
+                reviewsRef.current = data;
+                setReviews(data);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                reviewsRef.current = {};
+                setReviews({});
+            });
         return () => { cancelled = true; };
     }, [variantId, projectId]);
 
@@ -323,8 +339,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
             .then(([reviewData, aiData, teData, cvssData]) => {
-                setAssessments(groupAssessments(reviewData, reviews));
-                setAiAssessments(groupAssessments(aiData, reviews));
+                setAssessments(groupAssessments(reviewData, reviewsRef.current));
+                setAiAssessments(groupAssessments(aiData, reviewsRef.current));
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
@@ -352,19 +368,22 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 setError("Failed to load review data");
                 setLoading(false);
             });
-        // Deliberately excludes `reviews`: the reviews fetch (above) races
-        // this one, and re-running this effect on every reviews update would
-        // re-trigger the loading spinner and unmount the table mid-render.
-        // Regrouping once reviews resolve is handled by the effect below.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // Deliberately reads `reviewsRef.current` (not `reviews` state) above:
+        // the reviews fetch (previous effect) races this one, and re-running
+        // this whole effect on every reviews update would re-trigger the
+        // loading spinner and unmount the table mid-render. The ref makes
+        // whichever fetch resolves second still see the other's up-to-date
+        // result. If the reviews fetch resolves *after* this one instead, the
+        // effect below catches up without re-fetching or reloading.
     }, [variantId, projectId]);
 
-    // Once reviews resolve (which may be after the assessments themselves,
-    // since the two fetches race), re-split any newly-reviewed assessment out
-    // of its group without re-fetching or touching the loading state — doing
-    // that here via a functional update avoids remounting the table (and any
-    // element a test or user is mid-interaction with) purely to reflect a
-    // review the user didn't ask to see yet.
+    // Once reviews resolve after the assessments themselves already grouped
+    // (the two fetches race — see the ref comment above), re-split any
+    // newly-reviewed assessment out of its group without re-fetching or
+    // touching the loading state — doing that here via a functional update
+    // avoids remounting the table (and any element a test or user is
+    // mid-interaction with) purely to reflect a review the user didn't ask to
+    // see yet.
     useEffect(() => {
         const regroup = (rows: Assessment[]) => {
             const raw = rows.flatMap(row => (row as Partial<ReviewRow>)._assessments ?? [row]);
