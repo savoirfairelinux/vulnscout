@@ -1563,11 +1563,13 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             setEnabled={setShowOnlyOutdated}
                             label="Outdated"
                         />
-                        <ToggleSwitch
-                            enabled={showOnlyReviewed}
-                            setEnabled={setShowOnlyReviewed}
-                            label="Reviewed"
-                        />
+                        {activeTab === 'assessments' && (
+                            <ToggleSwitch
+                                enabled={showOnlyReviewed}
+                                setEnabled={setShowOnlyReviewed}
+                                label="Reviewed"
+                            />
+                        )}
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
                         </div>

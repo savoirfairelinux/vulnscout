@@ -5,7 +5,10 @@
 
 import uuid
 import pytest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import event
 
 from src.extensions import db
 from src.models.assessment import Assessment
@@ -355,3 +358,41 @@ def test_single_assessment_review_is_none_when_absent(client, finding, variant):
     assessment = make_assessment(finding, variant)
 
     assert client.get(f"/api/assessments/{assessment.id}").get_json()["review"] is None
+
+
+@contextmanager
+def count_queries():
+    """Count SELECT statements issued against ``db.engine`` in the block."""
+    counter = {"n": 0}
+
+    def _on_execute(*_args, **_kwargs):
+        counter["n"] += 1
+
+    event.listen(db.engine, "before_cursor_execute", _on_execute)
+    try:
+        yield counter
+    finally:
+        event.remove(db.engine, "before_cursor_execute", _on_execute)
+
+
+def test_get_for_variants_query_count_does_not_scale_with_n(finding, variant):
+    # Arrange: several reviews so an N+1 on ``.assessment`` would show up as
+    # extra queries proportional to the number of reviews.
+    variant_id = variant.id
+    for i in range(5):
+        assessment = make_assessment(finding, variant, status_notes=f"row-{i}")
+        AssessmentReview.upsert(assessment_id=assessment.id, status="affected", rationale="r")
+
+    # Act: warm the identity map first (and grab the id above, before
+    # expiring) so only the queries triggered by get_for_variants +
+    # to_dict() itself are counted, not an unrelated refresh of the
+    # ``variant`` fixture object.
+    db.session.expire_all()
+    with count_queries() as counter:
+        reviews = AssessmentReview.get_for_variants([variant_id])
+        [r.to_dict() for r in reviews]
+
+    # Assert: eager-loaded assessment means exactly one query for the
+    # reviews (join), independent of how many rows come back.
+    assert len(reviews) == 5
+    assert counter["n"] == 1
