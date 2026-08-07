@@ -12,6 +12,8 @@ import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
+import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -116,6 +118,11 @@ const COPIED_FEEDBACK_MS = 2000;
 const rowCopyKey = (row: ReviewRow) =>
     row.group_id ? `group:${row.group_id}` : `assessment:${row.assessment_ids[0]}`;
 
+/** The reviews attached to a row's assessments. A group's members share the
+ *  same assessment text, so any member's review speaks for the whole row. */
+const rowReviews = (row: ReviewRow, reviews: Record<string, AssessmentReview>) =>
+    row.assessment_ids.map(id => reviews[id]).filter((r): r is AssessmentReview => Boolean(r));
+
 /** Copies a row's group/assessment id, confirming inline like VulnModal does.
  *  Same styles and confirmation as the copy button in the assessment history,
  *  so the two views stay recognisably the same control. */
@@ -216,6 +223,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [showOnlyReviewed, setShowOnlyReviewed] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -339,6 +348,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         })();
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
+
+    useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
 
     useEffect(() => {
         setLoading(true);
@@ -466,6 +483,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
+        if (showOnlyReviewed && !rowReviews(a, reviews).length) return false;
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -477,7 +495,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated, showOnlyReviewed, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -1236,6 +1254,34 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             ),
         }),
         columnHelper.display({
+            id: "assessment_id",
+            header: "ID",
+            cell: ({ row }) => {
+                const ids = row.original.assessment_ids;
+                if (ids.length !== 1) {
+                    return <span className="text-gray-400 text-xs">{ids.length} assessments</span>;
+                }
+                return <span className="font-mono text-xs">{ids[0].slice(0, 8)}</span>;
+            },
+        }),
+        columnHelper.display({
+            id: "ai_review",
+            header: "AI review",
+            cell: ({ row }) => {
+                const verdict = verdictOf(rowReviews(row.original, reviews)[0]);
+                if (verdict === "none") {
+                    return <span title="Not reviewed" className="text-gray-500">—</span>;
+                }
+                if (verdict === "agrees") {
+                    return <span title="AI review agrees" className="text-green-400">✓</span>;
+                }
+                if (verdict === "stale") {
+                    return <span title="AI review is stale" className="text-amber-400">⚠ stale</span>;
+                }
+                return <span title="AI review differs" className="text-amber-400">⚠</span>;
+            },
+        }),
+        columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
             size: 140,
@@ -1259,7 +1305,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId]);
+    ], [handleVulnClickWithNav, variantNames, copiedRowKey, copyRowId, reviews]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
@@ -1581,6 +1627,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             enabled={showOnlyOutdated}
                             setEnabled={setShowOnlyOutdated}
                             label="Outdated"
+                        />
+                        <ToggleSwitch
+                            enabled={showOnlyReviewed}
+                            setEnabled={setShowOnlyReviewed}
+                            label="Reviewed"
                         />
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
