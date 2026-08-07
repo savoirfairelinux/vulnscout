@@ -21,6 +21,8 @@ def _load_assessment(assessment_id: str):
     assessment_uuid, err = parse_uuid_or_400(assessment_id, "assessment_id")
     if err:
         return None, err
+    if assessment_uuid is None:
+        return None, ({"error": "Internal error"}, 500)
     assessment = Assessment.get_by_id(assessment_uuid)
     if assessment is None:
         return None, ({"error": "Assessment not found"}, 404)
@@ -35,11 +37,15 @@ def _scoped_variant_ids() -> "tuple[list[UUID] | None, ResponseReturnValue | Non
         variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
         if err:
             return None, err
+        if variant_uuid is None:
+            return None, ({"error": "Internal error"}, 500)
         return [variant_uuid], None
     if project_id:
         project_uuid, err = parse_uuid_or_400(project_id, "project_id")
         if err:
             return None, err
+        if project_uuid is None:
+            return None, ({"error": "Internal error"}, 500)
         return [v.id for v in Variant.get_by_project(project_uuid)], None
     return None, None
 
