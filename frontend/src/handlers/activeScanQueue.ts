@@ -283,7 +283,14 @@ export function queueVulnerabilityRefresh({ refreshTypes, nvdMode, loadVulnerabi
         }
         const cveIds = vulnerabilities.map(vulnerability => vulnerability.id).filter(id => id.toUpperCase().startsWith("CVE-"));
         const ghsaIds = vulnerabilities.map(vulnerability => vulnerability.id).filter(id => id.toUpperCase().startsWith("GHSA-"));
-        for (const type of selectedTypes) {
+        const applicableTypes = selectedTypes.filter(type => type === "ghsa" ? ghsaIds.length > 0 : cveIds.length > 0);
+        const skippedTypes = selectedTypes.filter(type => !applicableTypes.includes(type));
+        if (skippedTypes.length > 0) {
+            // Drop only our own entries: the map is shared with restoreActiveRefreshes().
+            skippedTypes.forEach(type => refreshEntries.delete(type));
+            publishRefreshEntries();
+        }
+        for (const type of applicableTypes) {
             try {
                 await runRefresh(type, cveIds, ghsaIds, nvdMode);
             } catch (error) {

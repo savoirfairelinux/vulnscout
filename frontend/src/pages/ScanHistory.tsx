@@ -28,17 +28,21 @@ import {
     waitForCompletion as sccWaitForCompletion,
 } from "../handlers/sccScanState";
 import type { ScanManagerSnapshot } from "../handlers/scanStateManager";
-import { hasActiveRefreshes, restoreActiveRefreshes, waitForActiveScans, waitForRefreshCompletion } from "../handlers/activeScanQueue";
+import { hasActiveRefreshes, queueVulnerabilityRefresh, restoreActiveRefreshes, waitForActiveScans, waitForRefreshCompletion } from "../handlers/activeScanQueue";
+import type { RefreshType } from "../handlers/activeScanQueue";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { extractSupplierName } from "../helpers/pkgId";
 import { formatSourceName } from "../helpers/sourceNames";
 import { downloadJson } from "../helpers/exportJson";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { faPencil, faCheck, faXmark, faBug, faFilter, faShieldHalved, faLeaf, faFile, faCrosshairs, faTrash, faPlay, faBook, faDownload, faMagnifyingGlass, faBox, faClipboardCheck } from "@fortawesome/free-solid-svg-icons";
 import type { IconDefinition } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "../components/ConfirmationModal";
+import RunScansWizard from "../components/RunScansWizard";
+import { refreshSourcesForScans } from "../helpers/refreshSources";
 import Variants from "../handlers/variant";
 import type { Variant } from "../handlers/variant";
+import Vulnerabilities from "../handlers/vulnerabilities";
 
 type Props = {
     variantId?: string;
@@ -1116,15 +1120,14 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
     const exportMenuRef = useRef<HTMLDivElement>(null);
     const exportAllMenuRef = useRef<HTMLDivElement>(null);
 
-    // Scan menu state
-    const [scanMenuOpen, setScanMenuOpen] = useState(false);
+    // Scan wizard state
+    const [scanWizardOpen, setScanWizardOpen] = useState(false);
     const [allVariants, setAllVariants] = useState<Variant[]>([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState<Set<string>>(new Set());
     const [selectedScanTypes, setSelectedScanTypes] = useState<Set<string>>(new Set(['grype', 'nvd', 'osv', 'scc']));
-    // Scan options
+    const [selectedRefreshTypes, setSelectedRefreshTypes] = useState<Set<RefreshType>>(new Set());
+    const [refreshMode, setRefreshMode] = useState<'complete' | 'custom'>('complete');
     const [excludeKernel, setExcludeKernel] = useState(true);
-    const [showKernelHelp, setShowKernelHelp] = useState(false);
-    const scanMenuRef = useRef<HTMLDivElement>(null);
 
     // Global Grype scan state — survives tab switches (per-variant)
     const grypeEntries: ScanManagerSnapshot = useSyncExternalStore(subscribe, getSnapshot);
@@ -1247,19 +1250,6 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         });
     }, [variantId, projectId]);
 
-    // Close scan menu on outside click
-    useEffect(() => {
-        function handleClickOutside(e: MouseEvent) {
-            if (scanMenuRef.current && !scanMenuRef.current.contains(e.target as Node)) {
-                setScanMenuOpen(false);
-            }
-        }
-        if (scanMenuOpen) {
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }
-    }, [scanMenuOpen]);
-
     // Close export menus on outside click
     useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
@@ -1301,12 +1291,21 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
         });
     }
 
-    async function handleRunSelectedScans() {
+    function toggleRefreshType(t: string) {
+        if (t !== 'nvd' && t !== 'epss' && t !== 'euvd') return;
+        setSelectedRefreshTypes(prev => {
+            const next = new Set(prev);
+            if (next.has(t)) next.delete(t); else next.add(t);
+            return next;
+        });
+    }
+
+    async function runSelectedScans() {
         const variants = allVariants
             .filter(v => selectedVariantIds.has(v.id))
             .map(v => ({ id: v.id, name: v.name }));
         if (variants.length === 0 || selectedScanTypes.size === 0) return;
-        setScanMenuOpen(false);
+        setScanWizardOpen(false);
         const opts = { excludeKernel };
         const scanQueue = [
             ['grype', grypeQueueScan, grypeStartQueuedScan, grypeWaitForCompletion],
@@ -1329,11 +1328,39 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
 
         if (refreshAheadOfScans) await waitForRefreshCompletion();
         await preExistingScans;
+
+        const applicableRefreshTypes = refreshSourcesForScans(selectedScanTypes);
+        const refreshTypes = (refreshMode === 'complete' ? [...applicableRefreshTypes] : [...selectedRefreshTypes])
+            .filter(type => applicableRefreshTypes.has(type));
+        const targetVariantIds = variants.map(variant => variant.id);
+        const loadSelectedVulnerabilities = () => targetVariantIds.length > 1
+            ? Vulnerabilities.list(undefined, projectId, undefined, undefined, targetVariantIds, 'union')
+            : Vulnerabilities.list(targetVariantIds[0], projectId);
+        // An unavailable baseline must never block the scans: fall back to refreshing the whole selected scope.
+        const existingVulnerabilityIds = new Set(refreshTypes.length === 0 ? [] : (
+            await loadSelectedVulnerabilities().catch(() => [])
+        ).map(vulnerability => vulnerability.id));
+
         for (const [scanType, , startQueuedScan, waitForCompletion] of scanQueue) {
             if (!selectedScanTypes.has(scanType)) continue;
             await startQueuedScan();
             await waitForCompletion();
         }
+        if (refreshTypes.length === 0) return;
+
+        // A refresh may have started while the scans were running; queueing is rejected while one is active.
+        await waitForRefreshCompletion();
+        const queued = queueVulnerabilityRefresh({
+            refreshTypes,
+            nvdMode: 'local',
+            loadVulnerabilities: async () => (await loadSelectedVulnerabilities())
+                .filter(vulnerability => !existingVulnerabilityIds.has(vulnerability.id)),
+        });
+        if (!queued) throw new Error('Scans finished, but the vulnerability data refresh could not be queued because another refresh is running.');
+    }
+
+    function handleRunSelectedScans() {
+        runSelectedScans().catch(err => setError(err instanceof Error ? err.message : 'Failed to run the selected scans.'));
     }
 
     useEffect(() => {
@@ -1531,11 +1558,11 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                     </div>
                 )}
 
-                {/* Run Scans dropdown */}
+                {/* Run scans wizard */}
                 {canTriggerScan && (
-                    <div className="relative" ref={scanMenuRef}>
+                    <>
                         <button
-                            onClick={() => setScanMenuOpen(o => !o)}
+                            onClick={() => setScanWizardOpen(true)}
                             disabled={allRunning || loading}
                             className={[
                                 "inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm font-semibold transition-colors",
@@ -1547,126 +1574,25 @@ function ScanHistory({ variantId, projectId, onScanComplete }: Readonly<Props>) 
                             <FontAwesomeIcon icon={faPlay} />
                             {allRunning ? 'Scanning…' : 'Run Scans'}
                         </button>
-
-                        {scanMenuOpen && (
-                            <div className="absolute right-0 top-full mt-1 z-50 w-72 rounded-lg border border-sky-700/60 bg-neutral-900 shadow-xl p-3">
-
-                                {/* Scan types */}
-                                <div className="mb-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Scan types</div>
-                                    {([
-                                        { key: 'grype', label: 'Grype', icon: faBug, color: 'purple' },
-                                        { key: 'nvd', label: 'NVD CPE', icon: faShieldHalved, color: 'orange' },
-                                        { key: 'osv', label: 'OSV', icon: faLeaf, color: 'green' },
-                                        { key: 'scc', label: 'sbom-cve-check', icon: faCrosshairs, color: 'sky' },
-                                    ] as const).map(({ key, label, icon, color }) => (
-                                        <div key={key}>
-                                            <label className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedScanTypes.has(key)}
-                                                    onChange={() => toggleScanType(key)}
-                                                    className="rounded accent-cyan-500"
-                                                />
-                                                <FontAwesomeIcon icon={icon} className={`text-${color}-400 w-4`} />
-                                                <span className="text-neutral-200">{label}</span>
-                                            </label>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {/* Variants */}
-                                <div className="mb-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Variants</div>
-                                    <div className="max-h-40 overflow-y-auto">
-                                        {allVariants.length === 0 && (
-                                            <span className="text-xs text-neutral-500 italic">No variants found</span>
-                                        )}
-                                        {allVariants.map(v => (
-                                            <label
-                                                key={v.id}
-                                                className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 cursor-pointer text-sm"
-                                            >
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedVariantIds.has(v.id)}
-                                                    onChange={() => toggleVariant(v.id)}
-                                                    className="rounded accent-cyan-500"
-                                                />
-                                                <span className="text-neutral-200 truncate">{v.name}</span>
-                                            </label>
-                                        ))}
-                                    </div>
-                                    {allVariants.length > 1 && (
-                                        <div className="flex gap-2 mt-1">
-                                            <button
-                                                onClick={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
-                                                className="text-xs text-sky-400 hover:text-sky-300"
-                                            >Select all</button>
-                                            <button
-                                                onClick={() => setSelectedVariantIds(new Set())}
-                                                className="text-xs text-sky-400 hover:text-sky-300"
-                                            >Select none</button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Options */}
-                                <div className="mb-3">
-                                    <div className="text-xs font-semibold text-sky-300 mb-1.5">Options</div>
-                                    <div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-sky-900/40 text-sm">
-                                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                                            <input
-                                                type="checkbox"
-                                                checked={excludeKernel}
-                                                onChange={() => setExcludeKernel(v => !v)}
-                                                className="rounded accent-cyan-500"
-                                            />
-                                            <span className="text-neutral-200 truncate">Deactivate kernel scan</span>
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowKernelHelp(v => !v)}
-                                            className="text-sky-400 hover:text-sky-300 transition-colors shrink-0"
-                                            title="Why deactivate kernel scan?"
-                                            aria-label="Why deactivate kernel scan?"
-                                        >
-                                            <FontAwesomeIcon icon={faCircleQuestion} className="w-3.5" />
-                                        </button>
-                                    </div>
-                                    {showKernelHelp && (
-                                        <div className="mt-1 p-2 rounded bg-sky-900/30 border border-sky-700/40 text-xs text-sky-200 leading-relaxed">
-                                            A Yocto kernel recipe expands into the real kernel package
-                                            (e.g. <span className="font-mono text-sky-100">linux-*</span>) plus many
-                                            companion packages (<span className="font-mono text-sky-100">kernel-6.6.x</span>,
-                                            {' '}<span className="font-mono text-sky-100">kernel-modules</span>,
-                                            {' '}<span className="font-mono text-sky-100">kernel-devicetree</span>,
-                                            {' '}<span className="font-mono text-sky-100">kernel-module-*</span> …) that all
-                                            inherit the same kernel CPE. Scanning them attributes the entire kernel CVE set
-                                            to every companion, producing thousands of duplicate findings and slow scans.
-                                            The real kernel package is still scanned, so kernel CVEs remain covered.
-                                            Leave this on unless you specifically need to scan each kernel sub-package.
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Run button */}
-                                <button
-                                    onClick={handleRunSelectedScans}
-                                    disabled={selectedVariantIds.size === 0 || selectedScanTypes.size === 0}
-                                    className={[
-                                        "w-full py-1.5 rounded text-sm font-semibold transition-colors",
-                                        selectedVariantIds.size === 0 || selectedScanTypes.size === 0
-                                            ? "bg-neutral-700 text-neutral-500 cursor-not-allowed"
-                                            : "bg-cyan-700 hover:bg-cyan-600 text-white",
-                                    ].join(' ')}
-                                >
-                                    <FontAwesomeIcon icon={faPlay} className="mr-1" />
-                                    Run {selectedScanTypes.size} scan{selectedScanTypes.size !== 1 ? 's' : ''} on {selectedVariantIds.size} variant{selectedVariantIds.size !== 1 ? 's' : ''}
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                        <RunScansWizard
+                            isOpen={scanWizardOpen}
+                            variants={allVariants}
+                            selectedVariantIds={selectedVariantIds}
+                            selectedScanTypes={selectedScanTypes}
+                            selectedRefreshTypes={selectedRefreshTypes}
+                            refreshMode={refreshMode}
+                            excludeKernel={excludeKernel}
+                            onClose={() => setScanWizardOpen(false)}
+                            onToggleVariant={toggleVariant}
+                            onToggleScanType={toggleScanType}
+                            onToggleRefreshType={toggleRefreshType}
+                            onRefreshModeChange={setRefreshMode}
+                            onSelectAllVariants={() => setSelectedVariantIds(new Set(allVariants.map(v => v.id)))}
+                            onSelectNoVariants={() => setSelectedVariantIds(new Set())}
+                            onExcludeKernelChange={setExcludeKernel}
+                            onLaunch={handleRunSelectedScans}
+                        />
+                    </>
                 )}
             </div>
         </div>

@@ -349,7 +349,27 @@ describe('active scan queue', () => {
         });
     });
 
-    it('finishes sources with no matching IDs and rejects a duplicate active queue', async () => {
+    it('drops inapplicable sources without stalling the remaining ones', async () => {
+        (BulkNvdRefreshHandler.trigger as jest.Mock).mockResolvedValue({ total: 1 });
+        (NVDProgressHandler.getProgress as jest.Mock)
+            .mockResolvedValueOnce(idleProgress)
+            .mockResolvedValueOnce({ ...idleProgress, phase: 'completed', current: 1, total: 1, started_at: 'nvd-cycle' });
+
+        expect(queueVulnerabilityRefresh({
+            refreshTypes: ['nvd', 'ghsa'],
+            nvdMode: 'local',
+            loadVulnerabilities: async () => [{ id: 'CVE-2024-0001' }] as never,
+        })).toBe(true);
+
+        await jest.advanceTimersByTimeAsync(0);
+        expect(getRefreshQueueSnapshot().map(entry => entry.variantId)).toEqual(['nvd']);
+
+        await jest.advanceTimersByTimeAsync(3000);
+        expect(getRefreshQueueSnapshot()[0]).toMatchObject({ status: 'done' });
+        expect(hasActiveRefreshes()).toBe(false);
+    });
+
+    it('does not queue sources with no matching IDs and rejects a duplicate active queue', async () => {
         expect(queueVulnerabilityRefresh({
             refreshTypes: ['ghsa'],
             nvdMode: 'local',
@@ -362,9 +382,7 @@ describe('active scan queue', () => {
         })).toBe(false);
 
         await jest.advanceTimersByTimeAsync(0);
-        expect(getRefreshQueueSnapshot()[0]).toMatchObject({
-            status: 'done',
-            progress: 'No matching vulnerabilities',
-        });
+        expect(getRefreshQueueSnapshot()).toEqual([]);
+        expect(BulkNvdRefreshHandler.trigger).not.toHaveBeenCalled();
     });
 });
