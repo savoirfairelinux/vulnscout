@@ -10,8 +10,10 @@ import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy } from '@fortawesome/free-solid-svg-icons';
 import { downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
+import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
+import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
@@ -101,7 +103,10 @@ function createSelectionColumn<DataType>() {
  * workaround and impact into a single row — merging packages, variants and
  * keeping the most recent timestamp.
  */
-function groupAssessments(assessments: Assessment[]): Assessment[] {
+function groupAssessments(
+    assessments: Assessment[],
+    reviews: Record<string, AssessmentReview> = {},
+): Assessment[] {
     const groups = new Map<string, Assessment>();
     const allIds = new Map<string, string[]>();
     const variantIds = new Map<string, Set<string>>();
@@ -114,6 +119,9 @@ function groupAssessments(assessments: Assessment[]): Assessment[] {
             a.status_notes ?? '',
             a.impact_statement ?? '',
             a.workaround ?? '',
+            // A reviewed assessment keys to its own row so its review and id
+            // stay unambiguous. Unreviewed assessments group as before.
+            reviews[a.id] ? a.id : '',
         ].join('\0');
         const existing = groups.get(key);
         if (existing) {
@@ -177,6 +185,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [showOnlyReviewed, setShowOnlyReviewed] = useState(false);
+    const [reviews, setReviews] = useState<Record<string, AssessmentReview>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
     const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -296,6 +306,14 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
     }, [editVariants, editingRow]);
 
     useEffect(() => {
+        let cancelled = false;
+        AssessmentReviews.fetchForScope(variantId, projectId)
+            .then(data => { if (!cancelled) setReviews(data); })
+            .catch(() => { if (!cancelled) setReviews({}); });
+        return () => { cancelled = true; };
+    }, [variantId, projectId]);
+
+    useEffect(() => {
         setLoading(true);
         setError(null);
         Promise.all([
@@ -305,8 +323,8 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
             .then(([reviewData, aiData, teData, cvssData]) => {
-                setAssessments(groupAssessments(reviewData));
-                setAiAssessments(groupAssessments(aiData));
+                setAssessments(groupAssessments(reviewData, reviews));
+                setAiAssessments(groupAssessments(aiData, reviews));
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
@@ -334,7 +352,27 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 setError("Failed to load review data");
                 setLoading(false);
             });
+        // Deliberately excludes `reviews`: the reviews fetch (above) races
+        // this one, and re-running this effect on every reviews update would
+        // re-trigger the loading spinner and unmount the table mid-render.
+        // Regrouping once reviews resolve is handled by the effect below.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [variantId, projectId]);
+
+    // Once reviews resolve (which may be after the assessments themselves,
+    // since the two fetches race), re-split any newly-reviewed assessment out
+    // of its group without re-fetching or touching the loading state — doing
+    // that here via a functional update avoids remounting the table (and any
+    // element a test or user is mid-interaction with) purely to reflect a
+    // review the user didn't ask to see yet.
+    useEffect(() => {
+        const regroup = (rows: Assessment[]) => {
+            const raw = rows.flatMap(row => (row as Partial<ReviewRow>)._assessments ?? [row]);
+            return groupAssessments(raw, reviews);
+        };
+        setAssessments(prev => (prev.length ? regroup(prev) : prev));
+        setAiAssessments(prev => (prev.length ? regroup(prev) : prev));
+    }, [reviews]);
 
     const applySearch = () => setSearch(draftSearch.trim());
 
@@ -419,6 +457,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
             return false;
         }
+        if (showOnlyReviewed && !reviews[a.id]) return false;
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
             return false;
         }
@@ -430,7 +469,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, showOnlyOutdated, showOnlyReviewed, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -548,7 +587,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 .then(response => response.json() as Promise<ImportResult>)
                 .then(result => {
                     if (result.status === 'success') {
-                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                        Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d, reviews)));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
                         showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
@@ -590,7 +629,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 const data = await result.json() as ImportResult;
 
                 if (data.status === 'success') {
-                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d)));
+                    Assessments.listReview(variantId, projectId).then(d => setAssessments(groupAssessments(d, reviews)));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
                     const cvssImported = data.cvss_imported ?? 0;
@@ -618,7 +657,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy, reviews]);
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -636,7 +675,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
         if (!anyError) {
             const updated = await Assessments.listReview(variantId, projectId);
-            setAssessments(groupAssessments(updated));
+            setAssessments(groupAssessments(updated, reviews));
             onAssessmentChanged?.({ type: 'delete', vulnId: rowToDelete.vuln_id, ids: rowToDelete._allIds });
             showMessage('Assessment deleted successfully!', 'success');
         } else {
@@ -644,7 +683,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         }
 
         setRowToDelete(null);
-    }, [rowToDelete, variantId, projectId, onAssessmentChanged, showMessage]);
+    }, [rowToDelete, variantId, projectId, onAssessmentChanged, showMessage, reviews]);
 
     /** Refetch both the handmade and AI-pending assessment lists (used after
      * approving/rejecting a pending AI assessment from the AI Assessments
@@ -654,9 +693,9 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             Assessments.listReview(variantId, projectId),
             Assessments.listReviewAi(variantId, projectId),
         ]);
-        setAssessments(groupAssessments(reviewData));
-        setAiAssessments(groupAssessments(aiData));
-    }, [variantId, projectId]);
+        setAssessments(groupAssessments(reviewData, reviews));
+        setAiAssessments(groupAssessments(aiData, reviews));
+    }, [variantId, projectId, reviews]);
 
     const handleApproveAiRow = useCallback(async (row: ReviewRow) => {
         try {
@@ -706,7 +745,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                     { method: 'DELETE', mode: 'cors' }
                 )));
                 if (responses.some(response => !response.ok)) throw new Error('Assessment deletion failed');
-                setAssessments(groupAssessments(await Assessments.listReview(variantId, projectId)));
+                setAssessments(groupAssessments(await Assessments.listReview(variantId, projectId), reviews));
                 for (const row of rows) {
                     const assessmentRow = row as ReviewRow;
                     onAssessmentChanged?.({
@@ -768,6 +807,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
         selectedTimeEstimates,
         showMessage,
         variantId,
+        reviews,
     ]);
 
     const handleSaveEdit = useCallback(async (data: EditAssessmentData) => {
@@ -878,7 +918,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
 
         if (!anyError) {
             const updated = await Assessments.listReview(variantId, projectId);
-            setAssessments(groupAssessments(updated));
+            setAssessments(groupAssessments(updated, reviews));
             setEditingRow(null);
             onAssessmentChanged?.({ type: 'update', vulnId: editingRow.vuln_id, ids: editingRow._allIds, data });
             showMessage('Assessment updated successfully!', 'success');
@@ -886,7 +926,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             showMessage('Failed to update assessment.', 'error');
         }
         setEditSubmitting(false);
-    }, [editingRow, variantId, projectId, onAssessmentChanged, showMessage]);
+    }, [editingRow, variantId, projectId, onAssessmentChanged, showMessage, reviews]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
@@ -1100,6 +1140,50 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             ),
         }),
         columnHelper.display({
+            id: "assessment_id",
+            header: "ID",
+            cell: ({ row }) => {
+                const raw = (row.original as Partial<ReviewRow>)._assessments ?? [row.original];
+                if (raw.length > 1) {
+                    return <span className="text-gray-400 text-xs">{raw.length} assessments</span>;
+                }
+                const id = raw[0].id;
+                return (
+                    <span className="inline-flex items-center gap-1 text-xs">
+                        <span className="font-mono">{id.slice(0, 8)}</span>
+                        <button
+                            type="button"
+                            title="Copy assessment id"
+                            onClick={() => navigator.clipboard.writeText(id)}
+                            className="text-gray-400 hover:text-gray-200 transition-colors"
+                        >
+                            <FontAwesomeIcon icon={faCopy} className="w-3 h-3" />
+                        </button>
+                    </span>
+                );
+            },
+        }),
+        columnHelper.display({
+            id: "ai_review",
+            header: "AI review",
+            cell: ({ row }) => {
+                const raw = (row.original as Partial<ReviewRow>)._assessments ?? [row.original];
+                // A reviewed assessment is never grouped, so raw[0] is the only
+                // candidate that can carry a review.
+                const verdict = verdictOf(reviews[raw[0].id]);
+                if (verdict === "none") {
+                    return <span title="Not reviewed" className="text-gray-500">—</span>;
+                }
+                if (verdict === "agrees") {
+                    return <span title="AI review agrees" className="text-green-400">✓</span>;
+                }
+                if (verdict === "stale") {
+                    return <span title="AI review is stale" className="text-amber-400">⚠ stale</span>;
+                }
+                return <span title="AI review differs" className="text-amber-400">⚠</span>;
+            },
+        }),
+        columnHelper.display({
             id: 'actions',
             header: () => <div className="flex items-center justify-center">Actions</div>,
             size: 70,
@@ -1122,7 +1206,7 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                 </div>
             ),
         }),
-    ], [handleVulnClickWithNav, variantNames]);
+    ], [handleVulnClickWithNav, variantNames, reviews]);
 
     const aiActionsColumn = useMemo(() => columnHelper.display({
         id: 'ai-actions',
@@ -1452,6 +1536,11 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
                             enabled={showOnlyOutdated}
                             setEnabled={setShowOnlyOutdated}
                             label="Outdated"
+                        />
+                        <ToggleSwitch
+                            enabled={showOnlyReviewed}
+                            setEnabled={setShowOnlyReviewed}
+                            label="Reviewed"
                         />
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>

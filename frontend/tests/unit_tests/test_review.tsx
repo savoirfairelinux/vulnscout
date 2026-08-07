@@ -215,6 +215,8 @@ type NetworkOpts = {
     importResult?: Record<string, unknown>;
     vulnDetail?: unknown;
     vulnOk?: boolean;
+    /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
+    reviews?: Record<string, unknown>;
 };
 
 /**
@@ -236,6 +238,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         },
         vulnDetail = { id: 'CVE-2020-1111', version: '4.0', base_score: 5 },
         vulnOk = true,
+        reviews = {},
     } = opts;
 
     fetchMock.resetMocks();
@@ -255,6 +258,7 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
+            if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             if (/\/api\/vulnerabilities\/[^/]+\/assessments/.test(url)) return JSON.stringify([]);
@@ -1628,5 +1632,76 @@ describe('Review — import and export', () => {
         fireEvent.change(fileInput(), { target: { files: [file] } });
 
         await screen.findByText('Import failed — invalid file');
+    });
+});
+
+describe('Review page AI review column', () => {
+    // asAssessment() (frontend/src/handlers/assessments.ts) drops any raw
+    // object missing a string `timestamp`, so — unlike the brief's bare
+    // fixture — these need the same required fields as `makeAssessment`
+    // above (packages/timestamp/responses) or they're silently filtered out
+    // before grouping ever runs.
+    const twoIdenticalAssessments = [
+        {
+            id: 'assess-1', vuln_id: 'CVE-2024-0001', status: 'not_affected',
+            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        },
+        {
+            id: 'assess-2', vuln_id: 'CVE-2024-0001', status: 'not_affected',
+            origin: 'custom', packages: [], timestamp: '2024-01-01T00:00:00Z', responses: [],
+        },
+    ];
+
+    const differsReview = {
+        id: 'r1',
+        assessment_id: 'assess-1',
+        status: 'affected',
+        status_notes: '',
+        justification: '',
+        impact_statement: '',
+        workaround: '',
+        responses: [],
+        rationale: 'in rootfs',
+        timestamp: '2026-08-06T10:00:00Z',
+        verdict: 'differs' as const,
+        is_stale: false,
+    };
+
+    test('groups identical assessments into one row when neither has a review', async () => {
+        // Arrange
+        mockNetwork(twoIdenticalAssessments);
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(1);
+    });
+
+    test('splits a reviewed assessment out of its group', async () => {
+        // Arrange
+        mockNetwork(twoIdenticalAssessments, { reviews: { 'assess-1': differsReview } });
+
+        // Act
+        render(<Review projectId="proj1" />);
+
+        // Assert
+        expect(await screen.findAllByText('CVE-2024-0001')).toHaveLength(2);
+    });
+
+    test('renders a dash for assessments with no review', async () => {
+        mockNetwork([twoIdenticalAssessments[0]]);
+
+        render(<Review projectId="proj1" />);
+
+        expect(await screen.findByTitle(/not reviewed/i)).toBeInTheDocument();
+    });
+
+    test('shows a count instead of an id on a grouped row', async () => {
+        mockNetwork(twoIdenticalAssessments);
+
+        render(<Review projectId="proj1" />);
+
+        expect(await screen.findByText(/2 assessments/i)).toBeInTheDocument();
     });
 });
