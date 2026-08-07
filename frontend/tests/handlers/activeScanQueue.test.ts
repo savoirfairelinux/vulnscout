@@ -57,6 +57,7 @@ describe('active scan queue', () => {
     });
 
     it('queues separate sources and waits for backend completion before advancing', async () => {
+        const onRefreshComplete = jest.fn();
         (BulkNvdRefreshHandler.trigger as jest.Mock).mockResolvedValue({ total: 1 });
         (BulkEpssRefreshHandler.trigger as jest.Mock).mockResolvedValue({ total: 1 });
         (NVDProgressHandler.getProgress as jest.Mock)
@@ -72,6 +73,7 @@ describe('active scan queue', () => {
             refreshTypes: ['nvd', 'epss'],
             nvdMode: 'local',
             loadVulnerabilities: async () => [{ id: 'CVE-2024-0001' }] as never,
+            onRefreshComplete,
         })).toBe(true);
         expect(getRefreshQueueSnapshot().map(entry => [entry.variantId, entry.status])).toEqual([
             ['nvd', 'queued'],
@@ -90,9 +92,11 @@ describe('active scan queue', () => {
         await jest.advanceTimersByTimeAsync(3000);
         expect(BulkEpssRefreshHandler.trigger).toHaveBeenCalledTimes(1);
         expect(getRefreshQueueSnapshot().map(entry => entry.status)).toEqual(['done', 'running']);
+        expect(onRefreshComplete).not.toHaveBeenCalled();
 
         await jest.advanceTimersByTimeAsync(6000);
         expect(getRefreshQueueSnapshot().map(entry => entry.status)).toEqual(['done', 'done']);
+        expect(onRefreshComplete).toHaveBeenCalledTimes(1);
 
         dismissRefreshQueueEntry('nvd');
         expect(getRefreshQueueSnapshot().map(entry => entry.variantId)).toEqual(['epss']);

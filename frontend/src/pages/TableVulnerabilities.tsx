@@ -2006,6 +2006,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 <RefreshVulnerabilityData
                     vulnerabilities={vulnerabilities}
                     getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
+                    onRefreshComplete={onRefreshComplete}
                     triggerBanner={triggerBanner}
                     hideBanner={closeBanner}
                     nvdProgress={nvdProgress}

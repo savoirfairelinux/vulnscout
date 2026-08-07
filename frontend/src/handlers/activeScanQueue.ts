@@ -26,6 +26,7 @@ type QueueOptions = {
     refreshTypes: RefreshType[];
     nvdMode: "local" | "api";
     loadVulnerabilities: () => Promise<Vulnerability[]>;
+    onRefreshComplete?: () => void;
 };
 
 type RefreshSource = {
@@ -254,7 +255,7 @@ async function runRefresh(type: RefreshType, cveIds: string[], ghsaIds: string[]
     }
 }
 
-export function queueVulnerabilityRefresh({ refreshTypes, nvdMode, loadVulnerabilities }: QueueOptions): boolean {
+export function queueVulnerabilityRefresh({ refreshTypes, nvdMode, loadVulnerabilities, onRefreshComplete }: QueueOptions): boolean {
     if (refreshSnapshot.some(entry => isActive(entry.status))) return false;
     const selectedTypes = REFRESH_ORDER.filter(type => refreshTypes.includes(type));
     if (selectedTypes.length === 0) return false;
@@ -298,6 +299,7 @@ export function queueVulnerabilityRefresh({ refreshTypes, nvdMode, loadVulnerabi
                 setRefreshEntry(type, { status: "error", error: message, progress: null, logs: [message] });
             }
         }
+        onRefreshComplete?.();
     })();
     return true;
 }
