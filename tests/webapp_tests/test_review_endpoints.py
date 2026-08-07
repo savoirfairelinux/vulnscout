@@ -1894,7 +1894,10 @@ def test_import_custom_data_via_file_upload(client):
     data_bytes = json.dumps(payload).encode("utf-8")
     resp = client.post(
         "/api/assessments/review/import-custom-data",
-        data={"file": (io.BytesIO(data_bytes), "custom_data.json")},
+        data={
+            "file": (io.BytesIO(data_bytes), "custom_data.json"),
+            "project_id": str(PROJECT_UUID),
+        },
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
