@@ -1187,8 +1187,15 @@ function Review({ variantId, projectId, onAssessmentChanged }: Readonly<Props>) 
             header: "AI review",
             cell: ({ row }) => {
                 const raw = (row.original as Partial<ReviewRow>)._assessments ?? [row.original];
-                // A reviewed assessment is never grouped, so raw[0] is the only
-                // candidate that can carry a review.
+                // Once the reviews-dependent regroup effect has run, a reviewed
+                // assessment is never grouped, so raw[0] is the only candidate
+                // that can carry a review. `reviews` and `assessments` are set
+                // by separate effects, though: for the single render between
+                // `setReviews` committing and that regroup effect completing,
+                // raw[0] may still belong to a stale, ungrouped row. That gap
+                // self-corrects on the next paint, so this can show a verdict
+                // for a still-merged group for one frame — not a data-loss bug,
+                // just worth knowing when reading this cell in isolation.
                 const verdict = verdictOf(reviews[raw[0].id]);
                 if (verdict === "none") {
                     return <span title="Not reviewed" className="text-gray-500">—</span>;
