@@ -666,6 +666,26 @@ describe('Review — AI Assessments tab', () => {
         expect(screen.getByTitle('Reject AI suggestion')).toBeInTheDocument();
     });
 
+    test('hides the Reviewed toggle on the AI Assessments tab but shows it on Assessments', async () => {
+        // AI-origin assessments are never reviewed (the feature is gated to
+        // origin === "custom"), so the "Reviewed" filter is a no-op there;
+        // it should not render on that tab. "Outdated" has no such
+        // restriction and keeps rendering on both tabs.
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        expect(screen.getByRole('button', { name: 'Show Reviewed' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+
+        await user.click(screen.getByText('AI Assessments'));
+        await screen.findByTitle('Approve AI suggestion');
+
+        expect(screen.queryByRole('button', { name: /Reviewed/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+    });
+
     test('shows the AI assessments empty state when there are none pending', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [] });
         render(<Review projectId="proj1" />);
