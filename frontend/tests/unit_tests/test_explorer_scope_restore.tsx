@@ -217,7 +217,7 @@ describe('Explorer saved-scope validation', () => {
         jest.clearAllMocks();
     });
 
-    test('clears a stale project scope and shows a fallback banner', async () => {
+    test('clears a stale project scope and silently falls back to the default scope', async () => {
         mockGetFrontendScope.mockReturnValue(savedScope('deleted-project', ['old-variant']));
         mockProjectsList.mockResolvedValue([{ id: 'other-project', name: 'Other Project' }]);
 
@@ -227,8 +227,8 @@ describe('Explorer saved-scope validation', () => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
             expect(screen.getByTestId('frontend-scope')).toBeEmptyDOMElement();
-            expect(screen.getByRole('alert')).toHaveTextContent('Saved selection is no longer available');
         });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     test('clears a scope whose saved variant is no longer available', async () => {
@@ -241,8 +241,8 @@ describe('Explorer saved-scope validation', () => {
         await waitFor(() => {
             expect(mockClearFrontendScope).toHaveBeenCalledTimes(1);
             expect(screen.getByTestId('frontend-scope')).toBeEmptyDOMElement();
-            expect(screen.getByRole('alert')).toHaveTextContent('Saved selection is no longer available');
         });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     test('keeps a saved scope when an empty projects response cannot confirm its absence', async () => {
