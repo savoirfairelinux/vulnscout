@@ -1081,7 +1081,14 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
                 }
                 if (!published) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-400">Requires a NVD refresh</div>;
+                    // A published date is provided by the NVD refresh (CVEs) or the
+                    // GitHub Security Advisory refresh (GHSA ids). Show "-" only when
+                    // such a refresh has already run and still returned no date;
+                    // otherwise prompt the user to refresh the vulnerability data.
+                    const refreshed = Boolean(info.row.original.nvd_fetched_at || info.row.original.ghsa_fetched_at);
+                    return refreshed
+                        ? <div className="flex items-center justify-center h-full text-center text-gray-400">-</div>
+                        : <div className="flex items-center justify-center h-full text-center text-gray-400">Requires Refresh Vulnerability Data</div>;
                 }
                 const publishedDate = new Date(published);
                 const formattedDate = publishedDate.toLocaleDateString(undefined, {

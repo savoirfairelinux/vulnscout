@@ -2238,7 +2238,7 @@ describe('Vulnerability Table', () => {
         });
     });
 
-    test('published date column shows "Requires a NVD refresh" for vulnerabilities without published date', async () => {
+    test('published date column shows "Requires Refresh Vulnerability Data" for vulnerabilities never refreshed', async () => {
         const vulnsWithMissing: Vulnerability[] = [
             ...vulnerabilities,
             {
@@ -2268,7 +2268,7 @@ describe('Vulnerability Table', () => {
                 simplified_status: 'Pending Assessment',
                 assessments: [],
                 variants: [],
-                // no 'published' field
+                // no 'published' field and never refreshed (no nvd_fetched_at)
             }
         ];
 
@@ -2282,11 +2282,61 @@ describe('Vulnerability Table', () => {
         const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
         await user.click(publishedDateCheckbox);
 
-        // Now "Requires a NVD refresh" should appear for the vuln without published date
+        // "Requires Refresh Vulnerability Data" should appear for the never-refreshed vuln
         await waitFor(() => {
-            const refreshElements = screen.getAllByText('Requires a NVD refresh');
+            const refreshElements = screen.getAllByText('Requires Refresh Vulnerability Data');
             expect(refreshElements.length).toBeGreaterThan(0);
         });
+    });
+
+    test('published date column shows "-" when NVD refresh ran but found no published date', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-DATE',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nodatepkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No date vuln' }],
+                severity: {
+                    severity: 'medium',
+                    min_score: 5,
+                    max_score: 5,
+                    cvss: []
+                },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // refreshed against NVD, but still no published date found
+                nvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const user = userEvent.setup();
+
+        // Published Date column is hidden by default, so enable it first
+        const buttons = await screen.getAllByRole('button', { name: /columns/i });
+        await user.click(buttons[0]);
+
+        const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
+        await user.click(publishedDateCheckbox);
+
+        await waitFor(() => {
+            expect(screen.getByText('-')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Requires Refresh Vulnerability Data')).not.toBeInTheDocument();
     });
 
     test('published date filter type change clears previous date values', async () => {
