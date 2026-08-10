@@ -167,11 +167,13 @@ function Explorer() {
         Config.get()
             .then(async config => {
                 let scope = Config.getFrontendScope();
-                let discardedScope = false;
                 // Validate the saved scope against the live project/variant
                 // lists. A transient fetch failure here must not discard the
                 // successfully-loaded config: fall back to the server default
                 // scope while keeping the config and loading default data.
+                // When the saved scope simply no longer exists (e.g. after
+                // loading a different DB), silently fall back to the default
+                // scope without surfacing an error banner.
                 try {
                     if (scope) {
                         const projects = await Projects.list();
@@ -180,13 +182,11 @@ function Explorer() {
                         if (!projectExists && canConfirmProjectAbsence) {
                             Config.clearFrontendScope();
                             scope = null;
-                            discardedScope = true;
                         } else if (projectExists) {
                             const variants = await Variants.list(scope.project_id);
                             if (!Config.isFrontendScopeAvailable(scope, projects.map(project => project.id), variants.map(variant => variant.id))) {
                                 Config.clearFrontendScope();
                                 scope = null;
-                                discardedScope = true;
                             }
                         }
                     }
@@ -198,9 +198,6 @@ function Explorer() {
                 if (cancelled) return;
                 setDefaultConfig(config);
                 setFrontendScope(scope);
-                if (discardedScope) {
-                    triggerBanner("Saved selection is no longer available; using the default scope", "error");
-                }
                 const multiActive = scope?.mode === 'select' && scope.variant_ids.length >= 2;
                 const compareActive = scope?.mode === 'compare';
                 const variantId = compareActive
