@@ -603,11 +603,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
     const shouldShowMissingDataBanner = shouldShowMissingEuvdDataBanner || shouldShowMissingPublishedDateDataBanner;
 
-    const missingDataBannerMessage = shouldShowMissingEuvdDataBanner && shouldShowMissingPublishedDateDataBanner
-        ? <><strong className="font-bold">EU KEV data</strong> and <strong className="font-bold">published date data</strong> need updating. Use the "Refresh vulnerability data" button to update them.</>
-        : shouldShowMissingEuvdDataBanner
-            ? <><strong className="font-bold">EU KEV data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>
-            : <><strong className="font-bold">Published date data</strong> needs updating. Use the "Refresh vulnerability data" button to update it.</>;
+    const missingDataBannerMessage = <>Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.</>;
 
     const dismissMissingDataBanner = () => {
         if (shouldShowMissingEuvdDataBanner) setMissingEuvdDataBannerDismissed(true);

@@ -1641,16 +1641,15 @@ describe('Vulnerability Table', () => {
     // Published Date Feature Tests
     // =========================================================================
 
-    test('shows an EU KEV sync information banner when EU KEV data is absent', async () => {
+    test('shows an information banner when EU KEV data is absent', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'EU KEV data needs updating. Use the "Refresh vulnerability data" button to update it.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
     });
 
-    test('shows a published date sync information banner when published date data is absent', async () => {
+    test('shows an information banner when published date data is absent', async () => {
         const withEuvdData = vulnerabilities.map(v => ({
             ...v,
             published: undefined,
@@ -1665,22 +1664,19 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Published date data needs updating. Use the "Refresh vulnerability data" button to update it.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('Published date data').classList.contains('font-bold')).toBe(true);
     });
 
-    test('combines missing EU KEV and published date data into one banner', async () => {
+    test('shows a single information banner when both EU KEV and published date data are missing', async () => {
         const withoutPublishedDates = vulnerabilities.map(v => ({ ...v, published: undefined }));
         render(<TableVulnerabilities vulnerabilities={withoutPublishedDates} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const alerts = await screen.findAllByRole('alert');
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toHaveTextContent(
-            'EU KEV data and published date data need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
         );
-        expect(screen.getByText('EU KEV data').classList.contains('font-bold')).toBe(true);
-        expect(screen.getByText('published date data').classList.contains('font-bold')).toBe(true);
     });
 
     test('keeps a dismissed EU KEV banner hidden after the table remounts', async () => {
@@ -1703,7 +1699,7 @@ describe('Vulnerability Table', () => {
 
         render(<VulnerabilityTab />);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('EU KEV data needs updating');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Vulnerabilities are incomplete and need updating');
         fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
