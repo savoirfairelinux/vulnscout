@@ -547,9 +547,9 @@ def init_app(app: Flask) -> None:
 
                         kev = kev_map.get(cve_id)
                         euvd_id = full_map.get(cve_id) or (kev["euvd_id"] if kev else None)
-                        if euvd_id:
-                            rec = db.session.get(Vulnerability, cve_id)
-                            if rec is not None:
+                        rec = db.session.get(Vulnerability, cve_id)
+                        if rec is not None:
+                            if euvd_id:
                                 known_exploited = kev is not None
                                 rec.update_record(
                                     euvd_id=euvd_id,
@@ -563,6 +563,11 @@ def init_app(app: Flask) -> None:
                                 matched += 1
                                 if known_exploited:
                                     kev_matched += 1
+                            else:
+                                # No EUVD entry for this CVE, but still record that it
+                                # was checked during this refresh so the UI can tell
+                                # "synced, not on KEV list" apart from "never refreshed".
+                                rec.update_record(euvd_fetched_at=now, commit=False)
 
                         done += 1
                         EUVDProgressTracker.update(

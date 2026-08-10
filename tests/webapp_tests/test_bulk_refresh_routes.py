@@ -1898,7 +1898,7 @@ class TestBulkEuvdRefreshBackground:
         MockTracker.error.assert_called_once()
         MockTracker.complete.assert_not_called()
 
-    def test_run_skips_unmatched_cve(self, client):
+    def test_run_stamps_fetched_at_for_unmatched_cve(self, client):
         target = self._capture_target(client, ["CVE-2099-0001"])
         mock_rec = MagicMock()
 
@@ -1912,7 +1912,14 @@ class TestBulkEuvdRefreshBackground:
             mock_db.session.get.return_value = mock_rec
             target()
 
-        mock_rec.update_record.assert_not_called()
+        # Unmatched CVEs are still stamped so the UI can tell "synced, not on the
+        # KEV list" apart from "never refreshed"; only the fetch timestamp is set.
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_fetched_at") is not None
+        assert call_kwargs.get("commit") is False
+        assert "euvd_id" not in call_kwargs
+        assert "euvd_known_exploited" not in call_kwargs
         MockTracker.complete.assert_called_once()
 
     def test_run_stops_and_commits_when_cancelled(self, client):

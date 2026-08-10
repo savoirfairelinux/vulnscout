@@ -41,6 +41,7 @@ type Vulnerability = {
     data_updated_at?: string;
     nvd_fetched_at?: string;
     ghsa_fetched_at?: string;
+    euvd_fetched_at?: string;
     first_scan_date?: string;
     texts: {
         title: string;
@@ -281,6 +282,7 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     if (typeof data?.data_updated_at === "string") vuln.data_updated_at = data.data_updated_at
     if (typeof data?.nvd_fetched_at === "string") vuln.nvd_fetched_at = data.nvd_fetched_at
     if (typeof data?.ghsa_fetched_at === "string") vuln.ghsa_fetched_at = data.ghsa_fetched_at
+    if (typeof data?.euvd_fetched_at === "string") vuln.euvd_fetched_at = data.euvd_fetched_at
     if (typeof data?.first_scan_date === "string") vuln.first_scan_date = data.first_scan_date
     if (data?.euvd && typeof data.euvd === "object") {
         vuln.euvd = {

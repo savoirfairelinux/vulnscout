@@ -1087,7 +1087,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     // otherwise prompt the user to refresh the vulnerability data.
                     const refreshed = Boolean(info.row.original.nvd_fetched_at || info.row.original.ghsa_fetched_at);
                     return refreshed
-                        ? <div className="flex items-center justify-center h-full text-center text-gray-400">-</div>
+                        ? <div className="flex items-center justify-center h-full text-center text-gray-400">—</div>
                         : <div className="flex items-center justify-center h-full text-center text-gray-400">Requires Refresh Vulnerability Data</div>;
                 }
                 const publishedDate = new Date(published);
@@ -1236,16 +1236,26 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
             </>,
             cell: info => {
                 const euvd = info.getValue();
-                if (!euvd?.known_exploited) {
-                    return <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>;
+                if (euvd?.known_exploited) {
+                    return (
+                        <div className="flex items-center justify-center h-full">
+                            <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
+                                Known Exploited
+                            </span>
+                        </div>
+                    );
                 }
-                return (
-                    <div className="flex items-center justify-center h-full">
-                        <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-900/60 text-red-200">
-                            Known Exploited
-                        </span>
-                    </div>
-                );
+                const fetching = euvdProgress?.in_progress;
+                if (fetching) {
+                    return <div className="flex items-center justify-center h-full text-center"><span className="text-xs text-gray-500 italic">fetching…</span></div>;
+                }
+                // The EU KEV signal comes from the ENISA EUVD refresh. Show "-" only
+                // when that refresh has already run and the vulnerability was not on
+                // the KEV list; otherwise prompt the user to refresh the data.
+                const refreshed = Boolean(info.row.original.euvd_fetched_at);
+                return refreshed
+                    ? <div className="flex items-center justify-center h-full text-center text-gray-500">—</div>
+                    : <div className="flex items-center justify-center h-full text-center text-gray-400">Requires Refresh Vulnerability Data</div>;
             },
             sortingFn: (rowA, rowB) => {
                 const a = rowA.original.euvd?.known_exploited ? 1 : 0;
@@ -1277,7 +1287,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 size: 20
             })
         ]
-    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress]);
+    }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, euvdProgress]);
 
     const columns = useMemo(() => {
         const columnByDisplayName = new Map(

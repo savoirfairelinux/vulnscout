@@ -2318,8 +2318,9 @@ describe('Vulnerability Table', () => {
                 simplified_status: 'Pending Assessment',
                 assessments: [],
                 variants: [],
-                // refreshed against NVD, but still no published date found
+                // refreshed against NVD and EUVD, but still no published date found
                 nvd_fetched_at: '2026-01-01T00:00:00+00:00',
+                euvd_fetched_at: '2026-01-01T00:00:00+00:00',
             }
         ];
 
@@ -2333,8 +2334,82 @@ describe('Vulnerability Table', () => {
         const publishedDateCheckbox = await screen.getByRole('checkbox', { name: 'Published Date' });
         await user.click(publishedDateCheckbox);
 
+        // Both the published date and EU KEV columns render "—" for this row
         await waitFor(() => {
-            expect(screen.getByText('-')).toBeInTheDocument();
+            expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+        });
+        expect(screen.queryByText('Requires Refresh Vulnerability Data')).not.toBeInTheDocument();
+    });
+
+    test('EU KEV column shows "Requires Refresh Vulnerability Data" for vulnerabilities never refreshed', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-KEV',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nokevpkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No KEV vuln' }],
+                severity: { severity: 'medium', min_score: 5, max_score: 5, cvss: [] },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // never refreshed against EUVD (no euvd_fetched_at)
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // EU KEV column is visible by default
+        await waitFor(() => {
+            expect(screen.getByText('Requires Refresh Vulnerability Data')).toBeInTheDocument();
+        });
+    });
+
+    test('EU KEV column shows "-" when EUVD refresh ran but vuln is not on the KEV list', async () => {
+        const vulnsWithMissing: Vulnerability[] = [
+            {
+                id: 'CVE-NO-KEV',
+                aliases: [],
+                related_vulnerabilities: [],
+                namespace: 'nvd:cve',
+                found_by: ['hardcoded'],
+                datasource: 'test',
+                packages: ['nokevpkg@1.0.0'],
+                packages_current: [],
+                urls: [],
+                texts: [{ title: 'description', content: 'No KEV vuln' }],
+                severity: { severity: 'medium', min_score: 5, max_score: 5, cvss: [] },
+                epss: { score: undefined, percentile: undefined },
+                effort: {
+                    optimistic: new Iso8601Duration('PT1H'),
+                    likely: new Iso8601Duration('PT2H'),
+                    pessimistic: new Iso8601Duration('PT4H')
+                },
+                fix: { state: 'unknown' },
+                simplified_status: 'Pending Assessment',
+                assessments: [],
+                variants: [],
+                // refreshed against EUVD, but not on the KEV list
+                euvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            }
+        ];
+
+        render(<TableVulnerabilities vulnerabilities={vulnsWithMissing} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        await waitFor(() => {
+            expect(screen.getByText('—')).toBeInTheDocument();
         });
         expect(screen.queryByText('Requires Refresh Vulnerability Data')).not.toBeInTheDocument();
     });

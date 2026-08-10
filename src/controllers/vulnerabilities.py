@@ -457,21 +457,25 @@ class VulnerabilitiesController:
                 continue
             kev = kev_map.get(vuln_id)
             euvd_id = full_map.get(vuln_id) or (kev.get("euvd_id") if kev else None)
-            if euvd_id is None:
-                continue
             try:
                 rec = self._db_record_cache.get(vuln_id) or Vulnerability.get_by_id(vuln_id)
                 if rec is not None:
-                    rec.update_record(
-                        euvd_id=euvd_id,
-                        euvd_known_exploited=kev is not None,
-                        euvd_kev_sources=(kev.get("sources") or []) if kev else [],
-                        euvd_date_added=kev.get("date_added") if kev else None,
-                        euvd_fetched_at=now,
-                        euvd_data_updated_at=now,
-                        commit=False,
-                    )
-                    updated += 1
+                    if euvd_id is not None:
+                        rec.update_record(
+                            euvd_id=euvd_id,
+                            euvd_known_exploited=kev is not None,
+                            euvd_kev_sources=(kev.get("sources") or []) if kev else [],
+                            euvd_date_added=kev.get("date_added") if kev else None,
+                            euvd_fetched_at=now,
+                            euvd_data_updated_at=now,
+                            commit=False,
+                        )
+                        updated += 1
+                    else:
+                        # No EUVD entry for this CVE, but still record that it was
+                        # checked so the UI can tell "synced, not on KEV list" apart
+                        # from "never refreshed".
+                        rec.update_record(euvd_fetched_at=now, commit=False)
             except Exception as e:
                 verbose(f"[fetch_euvd_data {vuln_id!r}] {e}")
                 failed += 1
