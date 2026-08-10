@@ -47,6 +47,11 @@ _GHSA_SLEEP_INTERVAL = 1.0
 # EUVD enrichment annotates from already-cached ENISA dumps (no per-CVE network
 # call), so it is fast; commit in larger batches than the network-bound refreshes.
 _EUVD_COMMIT_EVERY = 200
+# Chunk size for the "which of these CVE IDs exist?" lookup. Kept well under
+# SQLite's 999 bound-parameter limit so the intersection can be done with
+# indexed ``WHERE id IN (...)`` queries bounded by the request size, instead of
+# materializing the whole vulnerabilities table.
+_DB_LOOKUP_CHUNK = 500
 
 
 def _nvd_sleep_interval() -> float:
@@ -220,9 +225,16 @@ def init_app(app: Flask) -> None:
 
         Body: ``{"cve_ids": ["CVE-A", "CVE-B", ...]}``
 
+        The submitted IDs are deduplicated and intersected with the CVEs stored
+        in the database, so the background work is bounded by the database size
+        regardless of how large the request body is. The singleton refresh is
+        reserved *before* any database access, so a request that arrives while a
+        refresh is already running returns 409 without querying the database.
+
         Returns 202 immediately and runs the refresh in a background thread.
         Returns 409 if a refresh is already in progress.
-        Returns 400 if cve_ids is empty or contains no valid CVE identifiers.
+        Returns 400 if cve_ids is empty, contains no valid CVE identifiers, or
+        none of the submitted CVEs exist in the database.
 
         OpenAPI:
         body JsonObject optional JSON body containing cve_ids.
@@ -235,17 +247,47 @@ def init_app(app: Flask) -> None:
         if not raw_ids or not isinstance(raw_ids, list):
             return jsonify({"error": "cve_ids must be a non-empty list"}), 400
 
+        # Cheap, request-bounded normalization and de-duplication (no DB access).
         cve_ids = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
-        cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
+        cve_ids = [c for c in dict.fromkeys(cve_ids) if _CVE_RE.match(c)]
         if not cve_ids:
             return jsonify({"error": "cve_ids must contain valid CVE identifiers (e.g. CVE-2024-1234)"}), 400
-        # No hard cap here: the refresh below chunks the CVE list into batches
-        # of _EPSS_BATCH_SIZE against the FIRST.org API, so an arbitrarily large
-        # database (which the frontend sends in full) is handled gracefully.
 
-        total = len(cve_ids)
+        # Reserve the singleton BEFORE touching the database. This endpoint is
+        # unauthenticated with permissive CORS, so a request that arrives while a
+        # refresh is already running must be rejected without doing any database
+        # work; otherwise a burst of concurrent requests could each scan the
+        # vulnerabilities table and multiply database/memory load.
         if not EPSSProgressTracker.start_if_idle("bulk_epss_refresh"):
             return jsonify({"error": "A bulk EPSS refresh is already in progress"}), 409
+
+        # Holding the reservation, exactly one request reaches this point at a
+        # time. Bound the work to CVEs that actually exist by intersecting the
+        # requested IDs with the database through chunked, primary-key-indexed
+        # ``IN`` lookups. Cost is bounded by the (deduplicated) request size, not
+        # the size of the whole vulnerabilities table, so it scales to the large
+        # databases this endpoint targets. Release the reservation if nothing
+        # remains so a later request is not wrongly rejected with 409.
+        known_ids: set[str] = set()
+        try:
+            for i in range(0, len(cve_ids), _DB_LOOKUP_CHUNK):
+                chunk = cve_ids[i:i + _DB_LOOKUP_CHUNK]
+                rows = db.session.query(Vulnerability.id).filter(Vulnerability.id.in_(chunk)).all()
+                known_ids.update(row[0] for row in rows)
+        except Exception as exc:
+            # The tracker is already reserved, so a failing lookup must release
+            # it; otherwise ``in_progress`` would stay true and every later EPSS
+            # refresh would be rejected with 409 until the process restarts.
+            db.session.rollback()
+            EPSSProgressTracker.error(str(exc)[:200])
+            print(f"[bulk EPSS refresh] lookup error: {exc}", flush=True)
+            return jsonify({"error": "Failed to look up CVEs in the database"}), 500
+        cve_ids = [c for c in cve_ids if c in known_ids]
+        if not cve_ids:
+            EPSSProgressTracker.complete("No known CVEs to refresh")
+            return jsonify({"error": "cve_ids must contain at least one known CVE identifier"}), 400
+
+        total = len(cve_ids)
         EPSSProgressTracker.update("bulk_epss_refresh", 0, total, f"Starting bulk EPSS refresh: 0/{total}")
 
         def _run() -> None:

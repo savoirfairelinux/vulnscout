@@ -243,7 +243,48 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.status_code == 409
         assert "already in progress" in resp.get_json()["error"]
 
-    def test_409_only_after_valid_input(self, client, existing_cve_id):
+    def test_busy_request_does_not_query_vulnerabilities(self, client, existing_cve_id):
+        """A request arriving while a refresh runs returns 409 without any DB work.
+
+        The singleton is reserved before the database is touched, so a burst of
+        concurrent requests cannot each scan the vulnerabilities table.
+        """
+        with patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.db") as MockDb, \
+             patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockTracker.start_if_idle.return_value = False
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 409
+        MockDb.session.query.assert_not_called()
+        MockThread.return_value.start.assert_not_called()
+
+    def test_lookup_failure_releases_tracker(self, client, existing_cve_id):
+        """A failing DB lookup rolls back and releases the reserved tracker.
+
+        The tracker is reserved before the lookup runs, so a query failure must
+        mark it errored and roll back the session; otherwise ``in_progress``
+        would stay true and every later refresh would be rejected with 409.
+        """
+        with patch("src.routes.bulk_refresh.EPSSProgressTracker") as MockTracker, \
+             patch("src.routes.bulk_refresh.db") as MockDb, \
+             patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockTracker.start_if_idle.return_value = True
+            MockDb.session.query.side_effect = RuntimeError("db is down")
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": [existing_cve_id]},
+            )
+        assert resp.status_code == 500
+        MockDb.session.rollback.assert_called_once()
+        MockTracker.error.assert_called_once()
+        MockThread.return_value.start.assert_not_called()
+
+
         """Invalid input returns 400, not 409, even when tracker is running."""
         with patch(
             "src.routes.bulk_refresh.EPSSProgressTracker.start_if_idle",
@@ -282,12 +323,13 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.status_code == 400
         assert "valid CVE" in resp.get_json()["error"]
 
-    def test_accepts_more_than_max_cve_ids(self, client):
-        """EPSS refresh has no hard cap: large CVE lists are batched, not rejected.
+    def test_rejects_large_body_of_unknown_cve_ids(self, client):
+        """A huge body of well-formed but unknown CVE IDs is rejected (400).
 
-        The frontend sends every CVE in the database, which can exceed
-        _MAX_CVE_IDS. The background job chunks the list against the FIRST.org
-        API, so the request must be accepted (202) rather than rejected (400).
+        The endpoint is unauthenticated, so it must not enqueue work
+        proportional to the request body. IDs that do not exist in the database
+        are dropped; when none remain the request is rejected instead of
+        starting a job.
         """
         from src.routes.bulk_refresh import _MAX_CVE_IDS
         ids = [f"CVE-2024-{i:05d}" for i in range(_MAX_CVE_IDS + 1)]
@@ -297,8 +339,26 @@ class TestBulkEpssRefreshEndpoint:
                 "/api/vulnerabilities/bulk-epss-refresh",
                 json={"cve_ids": ids},
             )
+        assert resp.status_code == 400
+        assert "known CVE" in resp.get_json()["error"]
+
+    def test_bounds_work_to_known_cves_and_deduplicates(self, client, existing_cve_id):
+        """Work is bounded by the database: unknown and duplicate IDs are dropped.
+
+        A body mixing many unknown IDs with the one known CVE repeated several
+        times is accepted, but the job total reflects only the single known,
+        de-duplicated CVE rather than the size of the request body.
+        """
+        unknown = [f"CVE-2024-{i:05d}" for i in range(500)]
+        ids = unknown + [existing_cve_id, existing_cve_id.lower(), existing_cve_id]
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": ids},
+            )
         assert resp.status_code == 202
-        assert resp.get_json()["total"] == len(ids)
+        assert resp.get_json()["total"] == 1
         MockThread.return_value.start.assert_called_once()
 
 
@@ -582,9 +642,19 @@ class TestBulkEpssRefreshBackground:
 
         MockTracker.complete.assert_called()
 
-    def test_run_processes_multiple_chunks(self, client):
+    def test_run_processes_multiple_chunks(self, app, client):
         """_run() batches CVEs into chunks of _EPSS_BATCH_SIZE (100)."""
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(150)]
+        # The route only refreshes CVEs that exist in the database, so persist
+        # the records first; this also exercises the real chunking path.
+        with app.app_context():
+            for cve in cve_ids:
+                Vulnerability.create_record(id=cve, description="test", status="low")
+            db.session.commit()
+
         target = self._capture_target(client, cve_ids)
 
         with patch("src.routes.bulk_refresh.EPSS_DB") as MockEPSS, \
@@ -837,9 +907,18 @@ class TestBulkEpssRefreshCancellation:
     def _capture_target(self, client, cve_ids):
         return _capture_refresh_target(client, "/api/vulnerabilities/bulk-epss-refresh", cve_ids)
 
-    def test_run_stops_and_commits_when_cancelled(self, client):
+    def test_run_stops_and_commits_when_cancelled(self, app, client):
         """_run() commits pending work and calls mark_cancelled when flag is set."""
+        from src.models.vulnerability import Vulnerability
+        from src.extensions import db
+
         cve_ids = [f"CVE-2024-{i:05d}" for i in range(150)]  # 2 chunks
+        # Only CVEs stored in the database are refreshed, so persist them first.
+        with app.app_context():
+            for cve in cve_ids:
+                Vulnerability.create_record(id=cve, description="test", status="low")
+            db.session.commit()
+
         target = self._capture_target(client, cve_ids)
 
         chunk_count = {"n": 0}
