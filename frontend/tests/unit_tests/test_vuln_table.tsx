@@ -335,6 +335,27 @@ describe('Vulnerability Table', () => {
         expect(source_header).toBeInTheDocument();
     })
 
+    test('renders columns in a fixed canonical order regardless of saved toggle order', async () => {
+        // ARRANGE - a scrambled visibleColumns order in local storage
+        window.localStorage.setItem(
+            'vulnscout.tables.vulnerabilities.unscoped.visibleColumns',
+            JSON.stringify(['Sources', 'ID', 'Attack Vector', 'EU KEV', 'Severity', 'EPSS Score']),
+        );
+
+        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // ACT - collect the rendered data column headers in DOM order
+        const headers = await screen.findAllByRole('columnheader');
+        const canonical = ['ID', 'Severity', 'EU KEV', 'EPSS Score', 'Attack Vector', 'Sources'];
+        const renderedOrder = headers
+            .map(header => header.textContent?.trim() ?? '')
+            .map(text => canonical.find(name => text === name || text.startsWith(name)))
+            .filter((name): name is string => Boolean(name));
+
+        // ASSERT - rendered order follows the canonical order, not the saved order
+        expect(renderedOrder).toEqual(canonical);
+    })
+
     test('restores visible columns from local storage', async () => {
         window.localStorage.setItem('vulnscout.tables.vulnerabilities.unscoped.visibleColumns', JSON.stringify(['ID']));
 

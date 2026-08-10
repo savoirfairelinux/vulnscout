@@ -369,6 +369,35 @@ function PublishedDateFilter({
 const SEVERITY_RANGE_MIN = 0;
 const SEVERITY_RANGE_MAX = 10;
 
+// Canonical, fixed order for the vulnerability table columns. The rendered
+// order and the "Columns" filter list both follow this array so a column
+// always appears in the same position regardless of the order in which the
+// user toggled it on. (The 'Select' and 'Actions' columns are always pinned
+// first and last respectively and are not part of this list.)
+const VULN_COLUMN_ORDER = [
+    'ID',
+    'Severity',
+    'EU KEV',
+    'EPSS Score',
+    'Attack Vector',
+    'SBOM Affected',
+    'Variants',
+    'Status',
+    'Published Date',
+    'Estimated Effort',
+    'Last Assessed',
+    'First Scan Date',
+    'Last Fetched',
+    'Last Updated',
+    'Sources',
+] as const;
+
+// Columns shown by default (a subset of VULN_COLUMN_ORDER, kept in the same
+// canonical order).
+const DEFAULT_VISIBLE_COLUMNS = [
+    'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed',
+];
+
 function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filterVulnerabilityIds, preferenceScopeKey = 'unscoped', appendAssessment, appendCVSS, patchVuln, variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation, onRefreshComplete, missingEuvdDataBannerDismissed, onMissingEuvdDataBannerDismissedChange, missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange }: Readonly<Props>) {
     const preferenceKey = `vulnscout.tables.vulnerabilities.${encodeURIComponent(preferenceScopeKey)}`;
 
@@ -470,7 +499,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [localMissingPublishedDateDataBannerDismissed, setLocalMissingPublishedDateDataBannerDismissed] = useState(false);
     const [searchFilteredData, setSearchFilteredData] = useState<Vulnerability[]>([]);
     const [visibleColumns, setVisibleColumns] = useLocalStorageState<string[]>(`${preferenceKey}.visibleColumns`, [
-        'ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed'
+        ...DEFAULT_VISIBLE_COLUMNS
     ]);
     const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
@@ -1254,7 +1283,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 column,
             ])
         );
-        const selectedColumns = visibleColumns.flatMap(displayName => {
+        const selectedColumns = VULN_COLUMN_ORDER.flatMap(displayName => {
+            if (!visibleColumns.includes(displayName)) return [];
             const column = columnByDisplayName.get(displayName);
             return column ? [column] : [];
         });
@@ -1479,7 +1509,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setPublishedDateFrom('');
         setPublishedDateTo('');
         setSelectedRows({});
-        setVisibleColumns(['ID', 'Severity', 'EU KEV', 'EPSS Score', 'SBOM Affected', 'Variants', 'Status', 'Last Assessed']);
+        setVisibleColumns([...DEFAULT_VISIBLE_COLUMNS]);
         setShowCustomSeverityFilter(false);
         setSeverityRange({ min: SEVERITY_RANGE_MIN, max: SEVERITY_RANGE_MAX });
         setShowCustomEpssFilter(false);
@@ -1646,23 +1676,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             <FilterOption
                 label="Columns"
-                options={[
-                    'ID',
-                    'Severity',
-                    'EPSS Score',
-                    'SBOM Affected',
-                    'Variants',
-                    'Attack Vector',
-                    'Status',
-                    'Estimated Effort',
-                    'Last Assessed',
-                    'Published Date',
-                    'First Scan Date',
-                    'Last Fetched',
-                    'Last Updated',
-                    'Sources',
-                    'EU KEV'
-                ]}
+                options={[...VULN_COLUMN_ORDER]}
                 selected={visibleColumns}
                 setSelected={setVisibleColumns}
             />
