@@ -282,16 +282,24 @@ class TestBulkEpssRefreshEndpoint:
         assert resp.status_code == 400
         assert "valid CVE" in resp.get_json()["error"]
 
-    def test_returns_400_when_count_exceeds_max(self, client):
-        """400 when more than _MAX_CVE_IDS valid IDs are submitted."""
+    def test_accepts_more_than_max_cve_ids(self, client):
+        """EPSS refresh has no hard cap: large CVE lists are batched, not rejected.
+
+        The frontend sends every CVE in the database, which can exceed
+        _MAX_CVE_IDS. The background job chunks the list against the FIRST.org
+        API, so the request must be accepted (202) rather than rejected (400).
+        """
         from src.routes.bulk_refresh import _MAX_CVE_IDS
         ids = [f"CVE-2024-{i:05d}" for i in range(_MAX_CVE_IDS + 1)]
-        resp = client.post(
-            "/api/vulnerabilities/bulk-epss-refresh",
-            json={"cve_ids": ids},
-        )
-        assert resp.status_code == 400
-        assert "at most" in resp.get_json()["error"]
+        with patch("src.routes.bulk_refresh.threading.Thread") as MockThread:
+            MockThread.return_value = MagicMock()
+            resp = client.post(
+                "/api/vulnerabilities/bulk-epss-refresh",
+                json={"cve_ids": ids},
+            )
+        assert resp.status_code == 202
+        assert resp.get_json()["total"] == len(ids)
+        MockThread.return_value.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

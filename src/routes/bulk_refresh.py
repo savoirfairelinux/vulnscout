@@ -239,8 +239,9 @@ def init_app(app: Flask) -> None:
         cve_ids = [c for c in cve_ids if _CVE_RE.match(c)]
         if not cve_ids:
             return jsonify({"error": "cve_ids must contain valid CVE identifiers (e.g. CVE-2024-1234)"}), 400
-        if len(cve_ids) > _MAX_CVE_IDS:
-            return jsonify({"error": f"cve_ids must contain at most {_MAX_CVE_IDS} entries"}), 400
+        # No hard cap here: the refresh below chunks the CVE list into batches
+        # of _EPSS_BATCH_SIZE against the FIRST.org API, so an arbitrarily large
+        # database (which the frontend sends in full) is handled gracefully.
 
         total = len(cve_ids)
         if not EPSSProgressTracker.start_if_idle("bulk_epss_refresh"):
