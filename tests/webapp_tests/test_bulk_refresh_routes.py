@@ -1901,6 +1901,11 @@ class TestBulkEuvdRefreshBackground:
     def test_run_stamps_fetched_at_for_unmatched_cve(self, client):
         target = self._capture_target(client, ["CVE-2099-0001"])
         mock_rec = MagicMock()
+        # This record has never had EUVD data, so nothing needs clearing.
+        mock_rec.euvd_id = None
+        mock_rec.euvd_known_exploited = False
+        mock_rec.euvd_kev_sources = []
+        mock_rec.euvd_date_added = None
 
         with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
              patch("src.routes.bulk_refresh.db") as mock_db, \
@@ -1913,13 +1918,51 @@ class TestBulkEuvdRefreshBackground:
             target()
 
         # Unmatched CVEs are still stamped so the UI can tell "synced, not on the
-        # KEV list" apart from "never refreshed"; only the fetch timestamp is set.
+        # KEV list" apart from "never refreshed"; only the fetch timestamp is set
+        # and no data-changed timestamp is bumped since nothing changed.
         mock_rec.update_record.assert_called_once()
         call_kwargs = mock_rec.update_record.call_args.kwargs
         assert call_kwargs.get("euvd_fetched_at") is not None
         assert call_kwargs.get("commit") is False
         assert "euvd_id" not in call_kwargs
         assert "euvd_known_exploited" not in call_kwargs
+        assert "euvd_data_updated_at" not in call_kwargs
+        MockTracker.complete.assert_called_once()
+
+    def test_run_clears_stale_kev_when_cve_no_longer_matched(self, client):
+        # A CVE previously flagged known-exploited is now absent from both the
+        # full mapping and the KEV mapping. The refresh must clear the stale
+        # EUVD/KEV fields so the UI stops showing "Known Exploited", not just
+        # advance the fetch timestamp.
+        cve = "CVE-2021-44228"
+        target = self._capture_target(client, [cve])
+        mock_rec = MagicMock()
+        mock_rec.euvd_id = "EUVD-2021-34768"
+        mock_rec.euvd_known_exploited = True
+        mock_rec.euvd_kev_sources = ["cisa_kev"]
+        mock_rec.euvd_date_added = "2025-10-06"
+
+        with patch("src.routes.bulk_refresh.EUVD_DB") as MockEuvd, \
+             patch("src.routes.bulk_refresh.db") as mock_db, \
+             patch("src.routes.bulk_refresh.EUVDProgressTracker") as MockTracker:
+            MockTracker.is_cancelled.return_value = False
+            instance = MockEuvd.return_value
+            instance.get_full_mapping.return_value = {"CVE-2099-9999": "EUVD-2099-0001"}
+            instance.get_mapping.return_value = {}
+            mock_db.session.get.return_value = mock_rec
+            target()
+
+        # Stale EUVD/KEV fields are cleared directly on the record.
+        assert mock_rec.euvd_id is None
+        assert mock_rec.euvd_known_exploited is False
+        assert mock_rec.euvd_kev_sources == []
+        assert mock_rec.euvd_date_added is None
+        # The refresh records both the sync time and a data-changed time.
+        mock_rec.update_record.assert_called_once()
+        call_kwargs = mock_rec.update_record.call_args.kwargs
+        assert call_kwargs.get("euvd_fetched_at") is not None
+        assert call_kwargs.get("euvd_data_updated_at") is not None
+        assert call_kwargs.get("commit") is False
         MockTracker.complete.assert_called_once()
 
     def test_run_stops_and_commits_when_cancelled(self, client):

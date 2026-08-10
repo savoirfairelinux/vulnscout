@@ -578,14 +578,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         if (missingPublishedDateDataBannerDismissed === undefined) setLocalMissingPublishedDateDataBannerDismissed(dismissed);
     }, [missingPublishedDateDataBannerDismissed, onMissingPublishedDateDataBannerDismissedChange]);
 
-    // The EU KEV column renders a badge only when a vulnerability is flagged
-    // known_exploited; every other row shows an empty placeholder. The backend
-    // also always serialises an `euvd` object (often with just an alias id and
-    // known_exploited=false), so object presence does not indicate KEV data.
-    // Mirror the column: KEV data "exists" only when at least one vulnerability
-    // is actually known-exploited.
     const hasAnyEuvdData = useMemo(
-        () => vulnerabilities.some(v => v.euvd?.known_exploited === true),
+        () => vulnerabilities.some(v => typeof v.euvd_fetched_at === "string" && v.euvd_fetched_at !== ""),
         [vulnerabilities]
     );
     const previousHasAnyEuvdData = useRef(hasAnyEuvdData);

@@ -235,6 +235,46 @@ def test_fetch_euvd_data_empty_mappings_reports_failure(vuln_controller, monkeyp
     assert not result.completed
 
 
+def test_fetch_euvd_data_clears_stale_kev_when_no_longer_matched(vuln_controller, monkeypatch):
+    """A CVE previously flagged known-exploited but now absent from both mappings
+    has its stale EUVD/KEV fields cleared (not just its fetch timestamp bumped),
+    so the UI stops showing 'Known Exploited'."""
+    cve = "CVE-2022-0001"
+    vuln_controller.add(Vulnerability(cve, ["test"], "test", "test"))
+
+    stale_rec = MagicMock()
+    stale_rec.euvd_id = "EUVD-2021-34768"
+    stale_rec.euvd_known_exploited = True
+    stale_rec.euvd_kev_sources = ["cisa_kev"]
+    stale_rec.euvd_date_added = "2025-10-06"
+    vuln_controller._db_record_cache[cve] = stale_rec
+
+    # Non-empty mapping (so the refresh runs) that no longer contains our CVE.
+    monkeypatch.setattr(
+        "src.controllers.euvd_db.EUVD_DB.get_full_mapping",
+        lambda self: {"CVE-2099-9999": "EUVD-2099-0001"},
+    )
+    monkeypatch.setattr(
+        "src.controllers.euvd_db.EUVD_DB.get_mapping", lambda self: {},
+    )
+
+    result = vuln_controller.fetch_euvd_data()
+
+    # Stale EUVD/KEV fields are cleared directly on the record.
+    assert stale_rec.euvd_id is None
+    assert stale_rec.euvd_known_exploited is False
+    assert stale_rec.euvd_kev_sources == []
+    assert stale_rec.euvd_date_added is None
+    # The record is stamped with both a sync time and a data-changed time.
+    stale_rec.update_record.assert_called_once()
+    kwargs = stale_rec.update_record.call_args.kwargs
+    assert kwargs.get("euvd_fetched_at") is not None
+    assert kwargs.get("euvd_data_updated_at") is not None
+    assert kwargs.get("commit") is False
+    assert result.completed
+
+
+
 # ---------------------------------------------------------------------------
 # DB-fallback and alias-chain paths
 # ---------------------------------------------------------------------------

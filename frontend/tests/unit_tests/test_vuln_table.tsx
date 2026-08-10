@@ -1649,6 +1649,29 @@ describe('Vulnerability Table', () => {
         );
     });
 
+    test('hides the EU KEV banner after a refresh even when no vulnerability is known-exploited', async () => {
+        // A successful EUVD sync stamps euvd_fetched_at on every processed CVE
+        // even when none of them are on the KEV list. The banner must clear
+        // based on that per-row timestamp rather than a positive known_exploited
+        // match, otherwise it would stay visible forever.
+        const refreshedNoKev = vulnerabilities.map(v => ({
+            ...v,
+            euvd_fetched_at: '2026-01-01T00:00:00+00:00',
+            euvd: {
+                id: null,
+                known_exploited: false,
+                sources: [],
+                date_added: null,
+                url: null,
+            },
+        }));
+        render(<TableVulnerabilities vulnerabilities={refreshedNoKev} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        // Let any async progress effects settle, then confirm no incomplete banner.
+        expect(await screen.findByText('CVE-2010-1234')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     test('shows an information banner when published date data is absent', async () => {
         const withEuvdData = vulnerabilities.map(v => ({
             ...v,

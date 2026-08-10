@@ -564,10 +564,24 @@ def init_app(app: Flask) -> None:
                                 if known_exploited:
                                     kev_matched += 1
                             else:
-                                # No EUVD entry for this CVE, but still record that it
-                                # was checked during this refresh so the UI can tell
-                                # "synced, not on KEV list" apart from "never refreshed".
-                                rec.update_record(euvd_fetched_at=now, commit=False)
+                                had_euvd_data = (
+                                    rec.euvd_id is not None
+                                    or rec.euvd_known_exploited
+                                    or rec.euvd_kev_sources
+                                    or rec.euvd_date_added is not None
+                                )
+                                if had_euvd_data:
+                                    rec.euvd_id = None
+                                    rec.euvd_known_exploited = False
+                                    rec.euvd_kev_sources = []
+                                    rec.euvd_date_added = None
+                                    rec.update_record(
+                                        euvd_fetched_at=now,
+                                        euvd_data_updated_at=now,
+                                        commit=False,
+                                    )
+                                else:
+                                    rec.update_record(euvd_fetched_at=now, commit=False)
 
                         done += 1
                         EUVDProgressTracker.update(
