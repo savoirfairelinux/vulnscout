@@ -1466,6 +1466,22 @@ describe('Review — deleting an assessment', () => {
 // ===========================================================================
 
 describe('Review — import and export', () => {
+    test('shows Import before Export on the Assessments and AI Assessments tabs', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        const transferActions = () => screen.getAllByRole('button')
+            .map(button => button.textContent?.trim())
+            .filter(label => label === 'Export' || label === 'Import');
+
+        await screen.findByTitle('Edit assessment');
+        expect(transferActions()).toEqual(['Import', 'Export']);
+
+        await user.click(screen.getByText('AI Assessments'));
+        expect(transferActions()).toEqual(['Import', 'Export']);
+    });
+
     test('exports selected variants as VulnScout JSON', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);

@@ -379,6 +379,24 @@ function AIContext() {
 
                 {/* Import / Export controls */}
                 <div className="ml-auto flex items-center gap-2">
+                    <button
+                        type="button"
+                        aria-label="Import context"
+                        onClick={() => importInputRef.current?.click()}
+                        disabled={ioBusy}
+                        className={btnTransfer}
+                    >
+                        <FontAwesomeIcon icon={faFileImport} />
+                        Import
+                    </button>
+                    <input
+                        ref={importInputRef}
+                        type="file"
+                        accept="application/json,.json"
+                        aria-label="Import context file"
+                        className="hidden"
+                        onChange={handleImportFile}
+                    />
                     <div className="relative" ref={exportMenuRef}>
                         <button
                             type="button"
@@ -441,24 +459,6 @@ function AIContext() {
                             </div>
                         )}
                     </div>
-                    <button
-                        type="button"
-                        aria-label="Import context"
-                        onClick={() => importInputRef.current?.click()}
-                        disabled={ioBusy}
-                        className={btnTransfer}
-                    >
-                        <FontAwesomeIcon icon={faFileImport} />
-                        Import
-                    </button>
-                    <input
-                        ref={importInputRef}
-                        type="file"
-                        accept="application/json,.json"
-                        aria-label="Import context file"
-                        className="hidden"
-                        onChange={handleImportFile}
-                    />
                     <div className="relative" ref={importHelpRef}>
                         <button
                             type="button"
