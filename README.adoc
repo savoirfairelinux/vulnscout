@@ -384,7 +384,7 @@ The following environment variables can be set via `vulnscout config` or exporte
 
 |`VULNSCOUT_IMAGE`
 |Docker image to use
-|`docker.io/sflinux/vulnscout:v0.19`
+|`docker.io/sflinux/vulnscout:v0.20`
 
 |`VULNSCOUT_BUILD_DIR`
 |Root build directory on the host (parent of `cache/` and `outputs/`)

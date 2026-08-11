@@ -19,7 +19,7 @@ When the container starts with no arguments, it enters **daemon mode** — it st
 
 ```bash
 # The container starts in daemon mode by default
-docker run -d --name vulnscout sflinux/vulnscout:v0.19
+docker run -d --name vulnscout sflinux/vulnscout:v0.20
 
 # Then send commands to it
 docker exec vulnscout /scan/src/entrypoint.sh --serve
